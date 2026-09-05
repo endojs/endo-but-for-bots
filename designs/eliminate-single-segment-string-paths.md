@@ -1,0 +1,1164 @@
+# Eliminate single-segment string paths
+
+| | |
+|---|---|
+| **Created** | 2026-09-04 |
+| **Updated** | 2026-09-05 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | Proposed |
+| **Source** | PR [#897](https://github.com/endojs/endo-but-for-bots/pull/897) inline review comment [3916282675](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3916282675) on `packages/daemon/src/help.md` (the `glob`/`glorp` section), with the sibling `entry()` thread [3916247285](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3916247285) / [3931325779](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3931325779) |
+
+## What is the Problem Being Solved?
+
+The daemon exposes two distinct name surfaces, each with its own guard code and
+its own path type:
+
+- The **petname registry** (`EndoHost` / `EndoGuest` / `EndoDirectory`), whose
+  canonical path is an array of names. A *petname* is Endo's term for a
+  locally-chosen name a party assigns to a capability it holds; a *petname path*
+  is an array of such names naming a nested entry, and "path" throughout this
+  document means that array.
+- The **EndoMount filesystem API** (`EndoMount` / `EndoMountEntry`), whose
+  canonical path is an array of segments. A *mount* is the capability-scoped
+  filesystem view defined in [daemon-mount](daemon-mount.md), and the *lineage* an
+  `EndoMountEntry` carries (the chain of parent mounts it was minted through, which
+  makes an entry a provenance-checked path capability rather than sugar) is defined
+  in [daemon-mount-capabilities](daemon-mount-capabilities.md); both are load-bearing
+  for the `entry()` discussion below.
+
+On both surfaces a path is conceptually an **array of segments** (for example
+`["src", "foo.js"]`), and on both surfaces a **bare string** is also accepted as a
+path, treated as a **single, literal segment**. The maintainer's
+review on PR #897 asks us to reconsider that convenience:
+
+> It may be noted that the "glob" expression for glob, glorp is an explicit
+> aberration on the array-of-segments petname path notation we use elsewhere,
+> where a single string is in the UNIX glob DSL. However, a path should always be
+> represented as petname path segments and a single string is always a single
+> segment. This will need to be called out in help text very clearly, since it is
+> not the norm. It may behoove us to completely eliminate support for single
+> segment pet name paths in order to ensure that a slash delimited string produces
+> an error. Please post a follow-up design to that effect.
+
+**The review's literal ask is already satisfied today, so it is worth stating up
+front what actually remains.** A slash-delimited string like `readText("src/foo.js")`
+*already* produces an error (see [Current Behavior](#current-behavior)), because a
+slash is an illegal character in a segment. What remains is narrower and has two
+parts:
+
+1. The **non-slash single string** (`readText("foo")`, `lookup("foo")`) still
+   silently coerces to `["foo"]`. That keeps two spellings of one path alive.
+2. The **type** still carries a bare-`M.string()` arm, so the surface advertises
+   "a string is a path here" even though a string is not a path anywhere the
+   review wants one to be treated as a path.
+
+The residual tension is that **two different arguments are string-shaped but mean
+opposite things**:
+
+- To a path-taking method (`readText`, `lookup`, `remove`, and the like), a
+  string is a *literal one-segment path*: `readText("foo")` reads the file named
+  `foo`.
+- To `glob` / `grep` / `glorp` (the mount's three search methods; `glorp` fuses a
+  glob and a grep in one call, defined under
+  [The Search Family](#the-search-family-glob--grep--glorp)), a string is a
+  *pattern in a different DSL*: a slash-separated UNIX glob (`glob("src/**/*.js")`)
+  or an ECMAScript RegExp source (`grep("^export")`). There the slashes are
+  structural and `*` / `**` are metacharacters.
+
+This design proposes making **array-of-segments the sole path spelling** at every
+path-*method* boundary, so that every bare-string argument to a path-taking method
+is rejected with one clear message. It does **not** claim that this leaves patterns
+as the only remaining string-shaped values in the surface: the search family also
+*returns* and *consumes* slash-joined path strings, and those need an explicit,
+sanctioned seam rather than a silent survival (see
+[The Search Family](#the-search-family-glob--grep--glorp)).
+
+**What this changes, in brief** (each expanded below):
+
+- Mount path methods reject a bare string; the one-segment path is spelled `["foo"]`.
+- The three caller-facing slash splitters collapse onto one pure free function,
+  `segmentsFromSlashString`, which is also the sanctioned way to feed a `glob` result
+  back into a path method.
+- `entry()` becomes an array-only, lineage-verified `EndoMountEntry` minter with its
+  slash-split branch deleted.
+- The petname registry is **unchanged pending [OQ4](#open-questions)** (whose
+  recommendation is to bring it into scope); `has` stays exempt (it accepts both
+  spellings). `glob` / `grep` / `glorp` keep their string *pattern* arguments.
+
+### Interface Guards
+
+One piece of vocabulary carries the argument below, so it is defined once here.
+
+**Interface guards.** A daemon object exposes its methods through an Endo *exo*
+whose interface is declared with `M.interface()`. Each method carries an argument
+*guard*: a pattern built from combinators like `M.string()` (matches a string),
+`M.arrayOf(...)` (matches an array whose elements match), and
+`M.or(A, B, ...)` (a union that admits an argument matching **any** arm). The
+guard runs **before** the method body: an argument that fails the pattern is
+rejected with a generated pattern-mismatch error and the body never executes. This
+is why "keep the `M.string()` arm" below is load-bearing: an `M.or(...)` union that
+still lists `M.string()` admits a string past the guard so the string reaches the
+body, where a hand-written directive can be thrown, instead of the guard rejecting
+it first with an unreadable serialized-pattern dump. That reject-before-body
+mechanism is the pivot of [The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments).
+
+### The Value-Identity Consequence
+
+Beyond ergonomics, `"foo"` and `["foo"]` are two spellings of **one value**. As
+long as both spellings are legal, a path cannot be compared, keyed, memoized, or
+logged canonically without first normalizing it, and any code that skips the
+normalization step has a latent bug. This is stated as a **preventive,
+value-representation argument**, not a cataloged defect: the design does not
+claim a specific site that keys or memoizes an un-normalized path today (no such
+instance was found by grep), so the argument is that the current shape *permits*
+that bug class rather than that it has already been hit. Even as a hygiene
+concern, reducing a path to a single representation is a value-representation fix,
+not only a teachability fix, and it is the change's most durable justification
+alongside the legibility one.
+
+**Scope qualifier.** This justification carries the same conditionality as
+[Registry Symmetry (OQ4)](#open-questions), and is stated here so the front-loaded
+claim is not read as unconditional. Under this design's committed default the
+change touches the **mount** surface only, so the value-identity benefit is fully
+realized on the mount but *not* on the petname registry: after this design ships
+without OQ4, `host.lookup("foo")` still silently coerces to `["foo"]`, so a path on
+the registry surface still has two spellings and is still not canonically
+comparable there. The value-identity argument is total across both coequal
+surfaces **only if** OQ4 resolves the registry into scope; scoped to the mount, it
+is a mount-local fix and the registry retains the bug class OQ4 itself concedes.
+
+## Current Behavior
+
+Two "path" concepts coexist and must be kept distinct.
+
+| World | Canonical path | Bare-string handling | Slash-string handling today |
+|---|---|---|---|
+| **Petname registry** (`EndoHost` / `EndoGuest` / `EndoDirectory` name hub) | array of names | coerced to a one-element array | **already errors**: `/` is illegal in a name |
+| **EndoMount filesystem API** (`EndoMount` / `EndoMountEntry`) | array of segments | coerced to a one-element segment array (never split) | **already errors**: `/` is illegal in a segment |
+
+### The Surface That Accepts String Paths
+
+**EndoMount path API.** Every path-bearing method accepts
+`string | string[] | EndoMountEntry`. Its entry-accepting runtime guard is
+`PathArgShape = M.or(M.string(), PathSegmentsShape, MountEntryShape)`
+(`packages/daemon/src/interfaces.js:693-695`, where
+`PathSegmentsShape = M.arrayOf(M.string())` and
+`MountEntryShape = M.remotable('EndoMountEntry')`) and applied to `lookup`,
+`maybeLookup`, `subView`, `write`, `copy`, `stat`, `readText`, `maybeReadText`,
+`writeText`, `makeDirectory`, `makeFile`, `remove`, and `move`
+(`interfaces.js:716-800`). The TypeScript face mirrors this as
+`string | readonly string[] | EndoMountEntry` (`packages/daemon/src/types.d.ts:1342-1428`).
+Three methods instead take **variadic segments** rather than one array argument:
+`has(...segments)`, `list(...segments)`, `followNameChanges(...segments)`. Two of
+them, `list` and `followNameChanges`, take one segment per argument and never a
+single joined string. `has` is a **special case that sits on neither side of the
+string-versus-array divide**: its guard is `M.call().rest(M.any())`
+(`interfaces.js:724`) and its body `segmentsFromHasArgs` (`mount.js:686-689`)
+dispatches a lone non-null *object* argument (an array included) into
+`segmentsFromPathArg`, while a lone *string* argument falls through to the
+variadic loop as one segment. So `has(".gitignore")`, `has([".gitignore"])`, and
+`has("dir", "file")` are **all** accepted today (verified against a live
+`makeMount`: `has(".gitignore")` and `has([".gitignore"])` both return `true`
+while `list([".gitignore"])` throws). `has` therefore already carries two
+spellings of a one-segment path and is not made single-spelling by this design's
+mount edits unless it is separately migrated; the design leaves it exempt and
+records the residue in [OQ5](#open-questions).
+
+**`PathArgShape` is not the only string-admitting guard family on this surface.**
+The `EndoMount` guard above is the entry-*widened* face; the ReadableTree base it
+widens declares its **own** string-admitting guard, and a third package carries a
+fourth. Any narrowing that touches only `PathArgShape` leaves these advertising
+`string | string[]` on the same method names, so the edit catalog must be
+enumerated **per guard family**, not per package:
+
+- `packages/platform/src/fs/interfaces.js:16` defines
+  `NameOrPathShape = M.or(M.string(), M.arrayOf(M.string()))` (a **distinct**
+  guard from the registry's identically named `daemon/src/type-guards.js:21-34`
+  one, so it does **not** move with [Registry Symmetry (OQ4)](#open-questions)) and
+  applies it to seven ReadableTree methods sharing the mount's names:
+  `lookup:49`, `maybeLookup:63`, `makeDirectory:72`, `readText:73`,
+  `maybeReadText:74`, `writeText:75`, and `listTree:149`, exported as
+  `DirectoryInterface` and re-exported by the daemon
+  (`daemon/src/interfaces.js`). `EndoMount` widens these to its entry-accepting
+  `PathArgShape`, but the base guard and its `.d.ts` still advertise
+  `string | string[]` on the ReadableTree surface a caller meets *beside* the
+  mount.
+- `packages/endo-fs-exec/src/type-guards.js:32` (`TreeViewInterface.lookup`)
+  carries another `M.or(M.string(), M.arrayOf(M.string()))`.
+
+Deleting the coercions while these guards and their `.d.ts` keep advertising
+`string | string[]` reproduces, on the exact ReadableTree surfaces this design
+warns about, the three-surface drift the design forbids. The implementation must
+narrow **every** guard family, not `PathArgShape` alone; these two are added to
+the edit catalog under
+[The Declared Type versus the Guard Shape](#the-declared-type-versus-the-guard-shape).
+
+**Petname registry API.** `lookup`, `identify`, `locate`, `storeIdentifier`,
+`storeLocator`, `remove`, `move`, `copy`, `readText`, `writeText`, `cancel`,
+`storeValue`, `sendValue`, and the variadic `...petNamePath` forms all accept a
+name or a name path. The shape family lives in `packages/daemon/src/type-guards.js:21-34`:
+`NameShape = M.string()`, `NamePathShape = M.arrayOf(NameShape)`,
+`NameOrPathShape = M.or(NameShape, NamePathShape)`, and
+`NamesOrPathsShape = M.arrayOf(NameOrPathShape)`. Its accurate method inventory
+matters for [Registry Symmetry](#open-questions) and is given there.
+
+### The Coercion Sites
+
+A bare string is turned into a one-element array in **at least fifteen**
+*production* **sites**. The count is stated here in one consistent unit
+(coercion *sites*, not numbered catalog items, since two items below hold two
+sites each) and derived from two greps. The first,
+`rg "typeof .* === 'string' \? \[.*\] : "` across `packages/`, returns
+**sixteen** hits; **four** of the sixteen are **test-harness coercion helpers**
+(`packages/workflow/test/fake-agent.js:22`,
+`packages/platform/test/from-mount.test.js:81`, and
+`packages/daemon/test/mount-platform-fs-conformance.test.js:366,385`), leaving
+**twelve** production `typeof` sites (the `agentry` code-mode variant at item 11
+is one of these twelve, not a separate exclusion; *code mode* is the repo's
+generated-declaration surface an LLM reads to call daemon methods, distinct from a
+human importing JS, and is why the model-facing generated declarations are a
+first-class edit target below). Adding the one literal-wrap
+site in `segmentsFromPathArg` (item 1, which carries no `typeof` and so is
+invisible to that grep) makes **thirteen** production sites in the catalog below.
+A second grep for the `Array.isArray` idiom (given after the catalog) adds
+**two** more, for **fifteen** production coercion sites in total. The four test
+helpers are **not** production coercion sites, so they are excluded from this
+catalog; they are not free, however. `mount-platform-fs-conformance.test.js:366`
+builds `segments = typeof pathArg === 'string' ? [pathArg] : pathArg`
+specifically to assert the string and array forms against one expected result,
+so it (and its siblings) must be **rewritten** to assert the string form now
+*errors*. They are accounted for under
+[Test impact](#migration-and-backward-compatibility), not dropped:
+
+1. `packages/daemon/src/mount.js:638` (`segmentsFromPathArg`), the literal-wrap
+   form `normalizeSegments(currentSegments, [pathArg], deniedSegments)`. Every
+   path-bearing mount method funnels through it, directly or via `resolvePathArg`
+   (`mount.js:705-706`).
+2. `packages/daemon/src/mount.js:1397`, the readable-tree wrapper's
+   `typeof petNamePath === 'string' ? [petNamePath] : petNamePath`.
+3. `packages/daemon/src/pet-name.js:149` (`namePathFrom`),
+   `typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath`.
+4. `packages/platform/src/fs/extended/shared/helpers.js:84` (`toSegments`).
+5. `packages/platform/src/fs/snapshot-tree.js:105`.
+6. `packages/platform/src/fs-node/local-tree.js:88` and `:147` (two sites).
+7. `packages/endo-fs-exec/src/tree-view.js:36`.
+8. `packages/exo-unzip/src/unzip.js:191` and `:241` (two sites).
+9. `packages/space-chat/src/inventory/tree-source.js:180`.
+10. `packages/space-chat/src/inventory/inventory.js:620`.
+11. `packages/agentry/src/code-mode-provision-policy.js:267`, a variant
+    (`typeof value === 'string' ? [value] : requireStringArray(value, label)`).
+
+Several of these (items 4 through 8) are ReadableTree-shaped surfaces a caller
+meets *beside* the mount, so a partial migration would make a bare string a path
+in one place and an error in the next. Any implementation must migrate the whole
+set together or state explicitly which surfaces keep the coercion and why. This is
+a **larger** edit than a one-file change, though still bounded and greppable.
+
+**The thirteen-site catalog above is a floor, not a closed set, because its grep
+matches a single idiom.** The `rg "typeof .* === 'string' \? \[.*\] : "` pattern
+only matches the `typeof x === 'string' ? [x] : x` spelling; a coercion written
+with `Array.isArray(x) ? x : [x]` is invisible to it. Running that second,
+independently shaped search (`rg "Array\.isArray\([a-zA-Z0-9_]+\) \? [a-zA-Z0-9_]+ : \["`,
+excluding the `? x : []` default-to-empty hits it also returns) surfaces two
+further *production* path-coercion sites the first grep cannot see:
+
+- `packages/daemon/src/secret-manager.js:595`, `const names = Array.isArray(path) ? path : [path];`
+  inside `SecretManagerDirectory`'s `lookup`, guarded by `NameOrPathShape`
+  (`interfaces.js:187`), squarely the petname-registry family, so it moves in or
+  out of scope with [Registry Symmetry (OQ4)](#open-questions).
+- `packages/spaces-util/src/browser-tree.js:167`,
+  `const names = Array.isArray(nameOrPath) ? nameOrPath : [nameOrPath];`, on an
+  explicit `string | readonly string[]` `lookup(nameOrPath)`.
+
+So the accurate count is **at least fifteen** across both idioms (the thirteen
+`typeof`-plus-literal-wrap sites cataloged above and these two `Array.isArray`
+sites), and an implementer must run **both** searches rather than treating the
+`typeof`-idiom catalog above as the checklist; treating it as exhaustive would
+leave at least one silent string-to-array coercion alive on a
+`NameOrPathShape`-guarded surface, defeating the one-representation invariant on a
+site this design set out to close. The implementation PR should re-run both greps
+and report the final catalog.
+
+Separately from the coercion sites, there is exactly **one** slash-*splitter*:
+`segmentsFromEntryPathArg` (`mount.js:649-661`), the body of `entry()`, which does
+`normalizeSegments(currentSegments, pathArg.split('/'), deniedSegments)`. It is a
+splitter into many segments, not a one-element coercion, and is discussed under
+[Interaction with `entry()`](#interaction-with-entry-and-endomountentry).
+
+### What Already Errors, and What Silently Works
+
+Segment validity is enforced *below* the coercion. Mount segments run through
+`assertValidSegment` (`mount.js:248-263`), which rejects any segment containing
+`/`, `\`, or a NUL byte. The rendered message a user actually sees (the source
+writes the backslashes escaped) is:
+
+```
+Path segment must not contain '/', '\', or '\0' (a string is one segment; pass ["dir", "file.txt"] or entry("dir/file.txt") for nested paths): "src/foo.js"
+```
+
+Registry names run through `isValidName` (`pet-name.js:15-23`), which rejects any
+name containing `/`, a NUL byte, or `@`, or equal to `.` or `..`.
+
+So the *slash* mistake the review names is **already an error today**:
+`readText("src/foo.js")` reaches `segmentsFromPathArg`, becomes `["src/foo.js"]`,
+and `assertValidSegment` throws; `lookup` even re-throws with a friendlier hint
+(`mount.js:900-906`). The help header already documents this (`help.md:728-733`).
+
+**Three surviving in-source directive messages point the caller at
+`entry("dir/file.txt")`, which this design turns into a throw, so they are edit
+locations too.** With `entry()` array-only (see
+[Interaction with `entry()`](#interaction-with-entry-and-endomountentry)), each of
+these now directs a user to a *failing* call and must be reworded to
+`entry(["dir", "file.txt"])` or `entry(segmentsFromSlashString("dir/file.txt"))`:
+
+- `assertValidSegment`'s message (`mount.js:261`): `pass ["dir", "file.txt"] or
+  entry("dir/file.txt") for nested paths`.
+- `lookup`'s friendly re-throw (`mount.js:900-906`): `use an array of path
+  segments or entry() for a slash-joined path` (the bare `entry()` mention now
+  needs the slash-string route named explicitly, `entry(segmentsFromSlashString(...))`).
+- `help.md:820` (the `lookup` help entry): `use lookup(entry("dir/file.txt")) or
+  pass lookup(["dir", "file.txt"])`.
+
+The "existing `assertValidSegment` slash tests remain valid" note under
+[Test impact](#migration-and-backward-compatibility) is true of the *throw* but
+not of its *wording*: the throw still fires on a slash-in-segment, but the message
+text above changes, so any test asserting the message string is updated with it.
+
+What is *not* yet an error is the **non-slash single string**: `readText("foo")`,
+`lookup("foo")`, and `remove("foo")` all silently coerce to `["foo"]`. That residue
+keeps two spellings of a one-segment path in the surface. This design removes the
+**coercion** (the silent treatment of a bare string as a one-segment path) at
+every path-method boundary. It deliberately does **not** remove the runtime guard's
+`M.string()` arm: as [The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments)
+explains, that arm is retained as a *routing affordance* so the method body can throw
+a legible directive rather than an unreadable union pattern dump. What *is* narrowed
+to array-only is the **declared** path type (the hand-authored `types.d.ts` union and
+the generated code-mode declarations), so the surface no longer *advertises* "a string
+is a path here" even though the runtime guard still structurally admits a string in
+order to reject it with a good message. The guard shape and the declared type
+therefore diverge on purpose; where that divergence is compensated for, per consumer,
+is spelled out under
+[The Declared Type versus the Guard Shape](#the-declared-type-versus-the-guard-shape).
+
+## The Search Family (`glob` / `grep` / `glorp`)
+
+`glob`, `grep`, and `glorp` take a single string that is **never a path
+argument**:
+
+- `glob(pattern)`: `pattern` is a slash-separated **glob** whose only
+  metacharacters are `*` and `**` (`mount.js:809`, `help.md:773-786`). The DSL is
+  parsed by splitting on `/` in the platform engine
+  (`packages/platform/src/fs/search.js:196`).
+- `grep(pattern, paths?, options?)`: `pattern` is an **ECMAScript RegExp source**,
+  evaluated as `new RegExp(pattern)` (`mount.js:849`, `help.md:788-801`).
+- `glorp(glob, grep, options?)`: a **glob string** and a **RegExp string** fused
+  (`mount.js:886`, `help.md:803-813`).
+
+**These string *patterns* are not the only string-shaped values left in the
+surface, however.** The search family also carries path *strings*, in two
+places:
+
+- `glob` **returns** a hardened `string[]` of slash-joined, mount-relative path
+  strings (`mount.js:809-828`, joined at `packages/platform/src/fs/search.js:294`
+  and `:314`).
+- `grep(pattern, paths?)` **consumes** that same `readonly string[]` of
+  slash-joined paths (`mount.js:846-856`, guarded as `M.arrayOf(M.string())` at
+  `interfaces.js:737-742`), and the engine slash-splits each one back into
+  segments (`packages/platform/src/fs/search.js:481`).
+
+So after this change, paths are arrays inbound to path methods but strings
+outbound from `glob` and inbound to `grep`. A caller who does
+`readText(globResult[0])` today would, under a naive change, be handed a string
+that a path method then rejects, and the common round trip breaks.
+
+**The sanctioned seam.** A glob result and a grep `paths` entry are **display path
+strings** in the search / pattern domain, explicitly *not* petname-path arguments.
+To bring a search result back into a path method, a caller passes it through the
+one canonical string-to-segments adapter this design introduces,
+`segmentsFromSlashString(s: string): string[]` (a pure value function that splits a
+slash-joined string into a segment array, defined fully under
+[The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments)):
+
+```
+readText(segmentsFromSlashString(globResult[0]))
+```
+
+The help text for `glob` / `grep` / `glorp` must state this seam explicitly, so
+the round trip is a documented one-liner rather than a hand-rolled `.split('/')` at
+every call site. Whether the search family should instead **return and consume
+segment arrays** (`glob(): string[][]`, `grep(pattern, paths?: readonly string[][])`),
+making the array-only invariant total at the cost of a larger change and a less
+display-friendly result, is left as an [open question](#open-questions); this
+design does not change the search argument or result shapes and picks the adapter
+seam as the interim answer.
+
+The glob *pattern* argument itself stays a string: a glob is inherently a string
+DSL, and forcing it into a segment array would be a category error, since segments
+cannot carry `*` / `**` across levels. The design makes the *contrast* legible in
+help text: path methods take arrays, patterns are strings, search results are
+display strings that re-enter path methods only through the named adapter.
+
+## The Proposed Rule: Paths Are Always Arrays of Segments
+
+**A path argument to any path-taking method is always an array of petname
+segments. A bare-string path argument is rejected with a single, human-legible
+directive message.** One named free function performs the string-to-segments
+translation for the callers (CLI, Git, and the like) that genuinely start from a
+slash string.
+
+Concretely:
+
+1. **A single normative rejection site: the method body.** The naive move, dropping
+   the bare-`M.string()` arm from the guard (interface guards, and why the arm is
+   load-bearing, are defined in
+   [Interface Guards](#interface-guards)) so
+   `PathArgShape = M.or(PathSegmentsShape, MountEntryShape)`, does **not** produce a
+   good error. Run against the two-arm union, a bare string yields a serialized
+   pattern dump, not a readable message (see [The Exact Error](#the-exact-error)),
+   and because the guard rejects *before* the method body runs, any directive
+   message drafted in the body would be dead code. So the guard **keeps** an
+   `M.string()` arm purely as a routing affordance, and the **method body** is the
+   single normative rejection site: it throws the directive message for any string.
+   Array and `EndoMountEntry` inputs are validated by the guard exactly as today.
+   This is one rule at one enforcement point, tested at that point. To keep that
+   "one enforcement point" literal across the thirteen path-bearing methods
+   (`lookup` through `move`, enumerated under [Current Behavior](#current-behavior))
+   rather than thirteen hand-copied throws that can drift, the rejection lives in a
+   **single shared assertion**, `assertPathIsSegments(arg, { example })`, that every
+   method body (or the shared `segmentsFromPathArg` funnel they already route through)
+   calls. **This shared assertion is homed in `@endo/platform`**, not `@endo/daemon`:
+   the coercion-site catalog it must serve spans `packages/daemon`,
+   `packages/platform`, `packages/exo-unzip`, and `packages/endo-fs-exec`, and the
+   dependency graph runs one way: `@endo/platform` depends on none of them, while
+   `daemon`, `exo-unzip`, and `endo-fs-exec` each depend on `@endo/platform`. A
+   function homed in `daemon` (where `segmentsFromPathArg` and `mount.js` live) would
+   be structurally unreachable from the platform-side and exo-unzip-side sites, so
+   "one message in one place" is only literally true if the host package sits low
+   enough in the graph for every call site to import it; `@endo/platform` is that
+   package, and `daemon` re-exports it where its own error text already references it.
+   The message *template* (its fixed wording, the glob pointer, the
+   `segmentsFromSlashString` pointer) lives in exactly one place; the only per-caller
+   variation is the optional `example` argument, a concrete correct call spelled for
+   that site (`entry(["dir", "file.txt"])` at `entry()`, `readText(["src", "foo.js"])`
+   at `readText`), interpolated into the fixed template. So "one message in one place"
+   is literal for the wording and the pointers, and the entry-specific phrasing named
+   in [Interaction with `entry()`](#interaction-with-entry-and-endomountentry) is *that
+   one `example` slot filled*, not a second hand-maintained message. This is the same
+   centralize-one-policy-in-one-named-function move the design applies to the
+   translation direction with `segmentsFromSlashString` (see
+   [Reconciling the Three Splitters](#reconciling-the-three-splitters)), applied
+   symmetrically to the reject direction.
+2. **The mount-side coercion sites delete their string branch.** `segmentsFromPathArg`
+   (`mount.js:638`) stops wrapping a string as `[pathArg]` and throws the directive;
+   the readable-tree wrapper (`mount.js:1397`) and the platform-fs / exo-unzip /
+   space-chat sites enumerated above drop theirs. Because the mount methods now reject
+   strings in the body, the `segmentsFromPathArg` throw *is* that body throw for the
+   mount surface; the other sites become defense in depth behind their own boundaries.
+   The registry-side coercion, `namePathFrom` (`pet-name.js:149`) dropping its
+   ternary, is **not** committed here: whether the petname registry migrates in
+   lockstep with the mount is
+   [open question 4 (Registry Symmetry)](#open-questions), and this step touches
+   `namePathFrom` **only if OQ4 resolves the registry into scope**. Scoping item 2
+   to the mount keeps that decision genuinely open rather than pre-empting it.
+3. **Variadic-segment methods are unaffected, and here is why.** `has("dir", "file")`,
+   `list("subdir")`, and the `...petNamePath` registry forms already take one
+   *segment* per argument, not a joined path. A single variadic argument like
+   `list("subdir")` has only **one** legal spelling, so it carries no
+   string-versus-array ambiguity to remove; that is the actual argument for exempting
+   them, not merely that "one segment is one element." (The resulting spelling
+   incoherence against the array-taking methods is real and is raised as an
+   [open question](#open-questions).)
+
+The one canonical translation function is `segmentsFromSlashString(s: string): string[]`,
+a **pure value function** with no mount, no lineage, and no capability: it splits a
+slash-joined human string into a segment array. It is the sole sanctioned
+string-to-path seam, it is what the search-result round trip uses, and it replaces
+the three divergent caller-facing private splitters cataloged below (a fourth,
+the search engine's internal re-parse of its own output, is exempt for reasons
+given there). Its name is deliberately
+**segments-first**, matching the noun the mount vocabulary already uses for this exact
+`string[]` shape (`segmentsFromPathArg`, `segmentsFromEntryPathArg`, `toSegments`,
+`PathSegmentsShape`); "path" is reserved throughout this design for the ambiguous union
+the document is disambiguating away from, so the new flagship export must not
+reintroduce it as the noun for a value that is plainly a segment array.
+
+**Where it lives, and its reachability.** Because the directive error message names
+`segmentsFromSlashString` as the fix a caller should call, the fix must be reachable
+from every surface that can hit the error, or the good error points at a name the
+reader cannot invoke. So:
+
+- **Host package:** `@endo/platform`, the same low-in-graph home as
+  `assertPathIsSegments`. Every current private splitter's package (`@endo/cli`,
+  `@endo/daemon`, `@endo/exo-git`) already depends on `@endo/platform`, so all three
+  can drop their copy and import the one function; a home in `daemon` would be
+  unreachable from `cli` and `exo-git` (`daemon` is above them, not below).
+- **Re-export:** `@endo/daemon` re-exports it under the same name so the mount help
+  text and daemon-side callers reference one stable path; the name does not change
+  across the re-export.
+- **Added to code-mode globals: yes.** Because the code-mode model reads the
+  generated declarations and is the audience the directive message is written for, a
+  model that hits the error must be able to call the named fix. So
+  `segmentsFromSlashString` is added as an invokable global in the code-mode global
+  declarations alongside the narrowed path shapes (see
+  [Help-Text Requirements](#help-text-requirements) item 6), not left reachable only
+  from JS imports a code-mode caller does not have.
+
+### Reconciling the Three Splitters
+
+The string-to-segments *policy* is today triplicated across three **caller-facing**
+splitters with three different semantics:
+
+- `packages/cli/src/pet-name.js:13` (`parsePetNamePath`) splits on `/` and
+  **throws** on an empty segment.
+- `packages/daemon/src/mount.js:657` (`segmentsFromEntryPathArg`) splits on `/` and
+  delegates empty-segment rejection to `assertValidSegment` (so an empty segment
+  also **errors**).
+- `packages/exo-git/src/git.js:484` splits on `/` and **drops** both empty segments
+  and `'.'` via `.filter(segment => segment !== '' && segment !== '.')`.
+
+**A fourth `.split('/')` exists but is deliberately *not* one of the three that
+collapse.** `packages/platform/src/fs/search.js:481` re-parses the slash-joined
+`paths` a caller hands `grep` back into segments, and it is a **third empty-segment
+discipline again**: `relPath.split('/').filter(segment => segment !== '')` drops
+empties but **keeps `'.'`** (where Git's `'drop'` drops both). It is exempt from the
+collapse, and the exemption is deliberate, not an oversight: it is the search
+engine's **internal** re-parse of path strings the engine *itself* produced
+(`glob`'s slash-joined output), not a splitter of a caller-supplied path argument,
+so it sits behind the search family rather than on the string-to-path seam
+`segmentsFromSlashString` sanctions. Folding it in would require either a *third*
+policy value (`'drop-empty-keep-dot'`) that no caller-facing boundary needs, or
+silently changing the search path's `'.'`-handling by routing it through the
+two-value enum, which would be a behavior change to `grep` this design does not
+intend. If the search family is later converted to segment arrays
+([OQ3](#open-questions)), this splitter disappears with the conversion rather than
+being reconciled; until then it stays an engine-private re-parse. (The `designs/README.md`
+index and status table describe the collapse as of the three caller-facing
+splitters for the same reason.)
+
+These three caller-facing splitters cannot collapse onto a single **fixed** policy,
+because Git's tolerant
+behavior is not reachable *after* an error-on-empty split: if the shared splitter
+threw on `"foo//bar"` or `"./foo/"`, Git could never reach its own drop step, so a
+"Git normalization layered on top of a throwing splitter" would be unreachable dead
+code. The reconciliation the design commits to is therefore an **explicit
+empty-segment policy parameter**, not composition by adjective:
+
+```
+segmentsFromSlashString(s: string, { onEmptySegment = 'throw' } = {})
+```
+
+`onEmptySegment: 'throw'` (the default) is what the CLI and mount-entry boundaries
+pass, preserving today's error-on-empty discipline. `onEmptySegment: 'drop'` is what
+Git passes, and it drops both empty segments **and** `'.'` before validating the
+rest. Both callers thus reach the *same* function and the same segment validation;
+the single point of divergence, whether an empty segment errors or is dropped, is a
+named argument rather than a forked copy. This is what "the three splitters collapse
+onto one" means precisely: one splitter with one explicit policy knob, not one
+splitter that magically serves incompatible empty-segment disciplines. Git's split
+site (`git.js:484`) and the `'.'`-dropping filter fold into the `'drop'` branch; the
+mount-entry and CLI splitters call it with the default.
+
+**The composition alternative, and why the enum is the interim answer.** A
+behavior-mode flag parameter is not the only decomposition. Because every existing
+splitter is already a *total* split producing a value followed by a *separate*
+policy step over that value (`git.js:484` splits then filters; `pet-name.js:13`
+splits then validates; `mount.js:657` splits then normalizes), the policy could
+stay a caller concern: one total `segmentsFromSlashString(s): string[]` plus named
+policy functions the caller applies (`assertNoEmptySegments(segments)` /
+`dropEmptyAndDot(segments)`). That is more data-first, since the intermediate
+segment array is a value both disciplines consume, and it absorbs a third or fourth
+discipline (including the search engine's drop-empty-keep-dot) as one more named
+function rather than one more enum arm. The design records this as the preferred
+shape *if* the implementation finds the policy set growing, and names one cost of
+collapsing CLI onto a shared `'throw'` branch either way: it replaces
+`parsePetNamePath`'s petname-specific empty-segment message with the shared one. The
+enum is chosen as the **interim** because the committed scope has exactly two
+caller-facing policies (`'throw'` and `'drop'`) and one call-site-visible name reads
+more simply than two composed calls at each of the three boundaries; the choice is a
+shape decision the implementation PR may revisit, not a load-bearing invariant.
+
+### The Exact Error
+
+The guard keeps its `M.string()` arm, so a bare string reaches the method body,
+where the single normative rejection throws a `TypeError`-class error. The message
+**echoes the received value** and **conditions the slash clause on whether the
+value actually contains a slash**, so it is specific to the mistake at hand rather
+than a generic template. This preserves the affordance the message it replaces
+already has: `assertValidSegment` today ends `: ${q(segment)}`, naming *which*
+value was rejected. Two renderings, for a non-slash string and a slash string:
+
+`readText("foo")` (no slash) throws:
+
+```
+Path must be an array of segments; a string is not a path. Pass an array like ["src", "foo.js"]. Received: "foo". See also: for pattern search, glob()/grep()/glorp() take a glob or RegExp string, not a path.
+```
+
+`readText("src/foo.js")` (slash) throws:
+
+```
+Path must be an array of segments; a string is not a path. Pass an array like ["src", "foo.js"]. Received: "src/foo.js" (a slash-joined string is never split; to translate this one, call segmentsFromSlashString("src/foo.js")). See also: for pattern search, glob()/grep()/glorp() take a glob or RegExp string, not a path.
+```
+
+The message is deliberately **two-tier and value-specific**, addressing the common
+failure first: the primary sentence is the bracket directive naming *the received
+value re-expressed as an array*, which is what nearly every caller who trips this
+needs (they forgot to wrap a value in brackets, or pasted a slash string). The
+slash-translation clause naming `segmentsFromSlashString` is **suppressed when the
+received string contains no `/`**, so the common `readText("foo")` case is not made
+to read a slash detour it has no use for; a caller who did paste a slash string
+gets the translation call spelled with *their* string interpolated, not a canned
+`"src/foo.js"`. The glob pointer is demoted to a trailing `See also:` line for the
+genuinely confused glob user. (The array example is the per-call `example` slot of
+[the shared assertion](#the-proposed-rule-paths-are-always-arrays-of-segments), the
+`Received:` echo and the conditional slash clause are computed from the rejected
+value, and the surrounding wording is fixed.)
+
+The reason the design does **not** enforce the rule at the guard by dropping the
+string arm is that the guard-only message is unusable. Executed against the
+proposed two-arm `M.or(PathSegmentsShape, MountEntryShape)`, a bare string produces
+a serialized pattern dump of the form
+`arg 0: "src/foo.js" - Must match one of "[...arrayOf(string)..., ...remotable...]"`,
+not the friendly `Must be a copyArray` message (that friendlier message is what
+a *single* `M.arrayOf(M.string())` arm gives; the union does not give it). A pattern
+dump is worse for a human and worse for a code-mode model. The body throw is both
+readable and testable, which is why it is the normative site.
+
+### The Declared Type versus the Guard Shape
+
+Retaining the guard's `M.string()` arm for routing (above) creates a deliberate
+divergence: the guard's **declared shape** structurally admits a string, but the
+**value set the method actually honors** is array-or-`EndoMountEntry` only. A string
+is always thrown back. A design that widens a declared shape past what it accepts must
+say where that gap is compensated for **every** consumer of the guard, or the "string
+is never a path" invariant leaks back in through the type surfaces that this design's
+own audience reads. The three consumers and their treatment:
+
+- **Hand-authored TypeScript (`types.d.ts:1342-1428`).** Narrowed to
+  `readonly string[] | EndoMountEntry`, dropping the `string` arm. This is the
+  edit that closes the second residual defect named in
+  [What is the Problem Being Solved?](#what-is-the-problem-being-solved) item 2: a
+  typed caller now gets a compile-time signal that a bare string is not a path,
+  rather than a type that silently permits a value the runtime always rejects. It is
+  narrowed independently of the guard because it is hand-maintained, not generated.
+- **The sibling string-admitting guard families and their `.d.ts`.** The
+  `PathArgShape` guard is not the only one advertising `string | string[]` on these
+  method names: the platform ReadableTree base (`NameOrPathShape`,
+  `packages/platform/src/fs/interfaces.js:16`, on `lookup` / `maybeLookup` /
+  `makeDirectory` / `readText` / `maybeReadText` / `writeText` / `listTree`) and
+  `packages/endo-fs-exec/src/type-guards.js:32` each carry their own, per
+  [The Surface That Accepts String Paths](#the-surface-that-accepts-string-paths).
+  Each keeps a routing `M.string()` arm the same way, but every **declared** face
+  they expose (the `DirectoryInterface`/`TreeViewInterface` `.d.ts`) is narrowed to
+  array-only alongside `types.d.ts`, or the leak simply moves one guard family over.
+- **Generated code-mode declarations (`fs-declarations.js`).** These are produced by a
+  generator, so narrowing them cannot rely on narrowing the guard (the guard keeps its
+  string arm). The generator input or a post-generation step must emit the array-only
+  shape directly, so the model-facing declarations read `readonly string[] |
+  MountEndoMountEntry` with no `string` arm; see
+  [Help-Text Requirements](#help-text-requirements) item 6, which is worded to match.
+- **CapTP / `M.interface()` introspection.** CapTP is Endo's capability-transport
+  protocol, the wire over which a remote party holds and invokes a reference to a
+  daemon object; part of what it exposes is the object's declared `M.interface()`
+  guard shape, so a remote consumer can read the argument patterns a method advertises
+  *before* calling it. That introspection reflects the live guard, so it will
+  continue to show the `M.string()` arm: a consumer introspecting the interface sees
+  a shape that accepts a string the method then rejects. This design accepts that
+  residual as the cost of the readable-error mechanism. **The exposed consumer is
+  not only human**: in this bots-first repo an LLM that introspects the *live*
+  interface (rather than the separately narrowed generated declarations) sees a
+  shape advertising string-as-valid with no structural signal it will be rejected
+  until it tries, so the gap is a real automated-consumer hazard, not a cosmetic
+  one, and OQ7 below weighs it as such. The cleaner alternative,
+  a guard-level combinator that keeps the declared shape array-only *and* intercepts
+  the `M.or` rejection to substitute the directive message, collapsing the divergence
+  entirely, is recorded as [open question 7](#open-questions); it is preferable in
+  principle but out of scope for the (B) option this design recommends.
+
+The net rule: the runtime guard is wide-and-rejecting for the sake of a good error;
+every *declared* surface a human or model reads is narrow (array-only); the one place
+the two cannot be reconciled without a new combinator (CapTP introspection) is named
+and deferred, not left implicit.
+
+### The Escape-Hatch Evaluation
+
+The review offers "completely eliminate" as the strong option; this design weighs
+three shapes:
+
+- **(A) Hard array-only, no escape hatch.** Every string is rejected everywhere;
+  the only way to spell a one-segment path is `["foo"]`, and callers that start from
+  a slash string hand-roll `.split('/')`. Maximally consistent, but it scatters the
+  same splitting logic the design is trying to centralize.
+- **(B) Array-only methods plus one named string-to-path adapter.** Path methods are
+  array-only; a single pure free function, `segmentsFromSlashString`, performs the
+  string-to-segments translation for the CLI, Git, and search-result round trips.
+  **This design recommends (B).**
+- **(C) Keep the coercion, sharpen the help text only.** Do not break anything;
+  document the glob exception loudly and leave `readText("foo")` coercing. The bug
+  class this forgoes preventing is the value-identity class named above (two
+  spellings of one path, so paths are not canonically comparable), plus the standing
+  string/DSL ambiguity in the type. Option (C) spends no migration cost but keeps
+  both defects, so the design rejects it while recording that the review's *literal*
+  ask (slash strings error) is already met, so (C) is not "do nothing," it is "do
+  nothing more."
+
+Recommendation (B) delivers the review's core invariant (a raw string is never a
+path at a method boundary) while keeping the string-to-segments translation in one
+greppable, capability-free place. Critically, **the adapter is the free function
+`segmentsFromSlashString`, not `entry()`**: `entry()` becomes array-only (see the next
+section), so the recommendation is realizable from its own decision list without
+contradiction. The remaining fork, whether to keep `segmentsFromSlashString` as a free
+function or fold it back into a string-accepting `entry()`, is an
+[open question](#open-questions); the recommended answer is the free function,
+because folding it into `entry()` would re-complect a pure value translation with
+capability minting (see [Interaction with `entry()`](#interaction-with-entry-and-endomountentry)).
+
+## Interaction with `entry()` and `EndoMountEntry`
+
+*(The PR #897 review thread carried two requests. The primary one, eliminating
+single-segment string paths, is the subject of this whole design; the review
+additionally asked, in the comment it labeled "ask A", to reconsider `entry()`.
+This section addresses that second request. The review's own "A" label is preserved
+here only so the cross-reference to the source comment is unambiguous; it does not
+imply a prior "ask B".)*
+
+The review separately called `entry()` "superfluous"
+([3916247285](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3916247285))
+and asked to remove it, but investigation
+([3931325779](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3931325779))
+found it **load-bearing**:
+
+- `mount.entry()` (`mount.js:966-969`) is the **sole public minter** of an
+  `EndoMountEntry`; the only other producer is `EndoMountEntry.child()`, reachable
+  only from an entry a caller already holds.
+- `@endo/exo-git` consumes `EndoMountEntry` as a **lineage-verified path
+  capability**, not mere sugar. A *mount lineage* is the chain of parent mounts an
+  entry was minted through; carrying it lets Git accept a path capability **minted
+  for this worktree** while rejecting one minted by a **different** mount, so a
+  caller cannot smuggle a path that resolves inside an unrelated worktree into a Git
+  operation on this one. A plain string carries no such provenance. `GitPathDesignator
+  = string | PathEntry` and the `entries` option on checkin/commit opts are the public
+  Git surface; the lineage check is `entryToRepoSegments`
+  (`packages/exo-git/src/git.js:397-410`, `lineageOf(entry)` plus `E(entry).segments()`).
+  `git.js` also mints entries internally so string and caller-supplied designators
+  share one lineage-checked path (`designatorsToRepoPaths`).
+
+So `entry()` today has **two** jobs, and this design separates them:
+
+1. **String-splitting sugar.** `entry("dir/file.txt")` splits on `/`. This is the
+   one remaining slash-splitter in the mount surface, and it is exactly what the
+   review wants gone from the interface.
+2. **Minting a lineage-verified `EndoMountEntry` capability.** Needed by Git,
+   independent of strings.
+
+**The reconciliation this design commits to: `entry()` becomes an array-only
+capability minter** (`entry(segments: string[]) -> EndoMountEntry`), with its
+string-split branch **deleted**. The string-to-segments translation that job 1 used
+to fold in lives in the free function `segmentsFromSlashString`, so a caller who wants
+the translation as a plain value gets it *without* also minting a capability, and a
+caller who wants a capability calls `entry(segmentsFromSlashString("dir/file.txt"))` or,
+more usually, `entry(["dir", "file.txt"])`. This keeps the two jobs unbraided: parse
+is a pure value function; mint is a capability method. It satisfies the review's "no
+string-splitting in the Exo interface" (an exo method no longer splits), keeps Git's
+lineage capability alive, and gives option (B) its home in the free function rather
+than back inside `entry()`.
+
+**`entry()` is guarded separately from the other path methods, and that guard is
+its own edit location.** Unlike the thirteen path methods above, `entry()` is not
+guarded by `PathArgShape` in `packages/daemon/src/interfaces.js`. Its guard is
+`pathEntryIssuerMethodGuards.entry = M.call(M.or(M.string(),
+M.arrayOf(M.string()))).returns(M.remotable('PathEntry'))` in
+`packages/platform/src/fs/interfaces.js:223-225`, a **two-arm** union in the
+platform package, spread into `MountInterface` via `...pathEntryIssuerMethodGuards`
+(`daemon/src/interfaces.js:717`). The same guard-keeps-string-arm, body-rejects
+pattern applies here and *especially* here: `entry()` is precisely the method whose
+whole prior purpose was slash-string convenience, so it is the single most likely
+site for a caller to reflexively pass a string post-migration. If its guard were
+narrowed to a bare `M.arrayOf(M.string())` arm, that caller would get the plain
+guard-level "Must be a copyArray" message (see [The Exact Error](#the-exact-error))
+instead of the rich directive that names `entry(segmentsFromSlashString(...))` and
+points at glob/grep, the least helpful error at exactly the site that most needs
+the most helpful one. So `pathEntryIssuerMethodGuards.entry` **keeps** its
+`M.string()` arm as the same routing affordance, and `segmentsFromEntryPathArg`'s
+body throws the shared `assertPathIsSegments` directive with `example` filled for
+`entry()` (`entry(["dir", "file.txt"])`, and `entry(segmentsFromSlashString("dir/file.txt"))`
+for the slash-string case). This is the one shared message's per-call `example` slot,
+not a second entry-specific message (see
+[The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments) item 1).
+This makes
+`packages/platform/src/fs/interfaces.js` an explicit edit location alongside
+`daemon/src/interfaces.js` and `types.d.ts`.
+
+The larger alternative the maintainer named in
+[3931325779](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3931325779)
+is to **retire `EndoMountEntry` / `PathEntry` entirely** and have Git switch to
+strings-only, dropping `entryToRepoSegments` and `lineageOf`. That is a bigger
+base-code and Git-interface change, and it *loses* the lineage-verification property
+described above. This design does not recommend it but records it as the competing
+fork (see [Open Questions](#open-questions)).
+
+## Help-Text Requirements
+
+The review demands the glob exception be "called out in help text very clearly."
+The help text needs edits in the following places, and the catalog must include the
+**model-facing generated surfaces**, which an LLM in this bots-first repo reads
+directly and which no amount of `help.md` editing reaches on its own:
+
+1. **The mount interface header** (`help.md:728-733`), restated in its stronger
+   form: a path is an array of segments (`["src", "foo.js"]`), a string is never a
+   path (even a single name is `["config.json"]`), so `readText("src/foo.js")` and
+   `readText("config.json")` both error; to search by pattern use `glob` / `grep` /
+   `glorp`, whose string argument is a glob or RegExp; to translate a slash string,
+   call `segmentsFromSlashString`. The header must also **name the exemption
+   explicitly**, so the split reads as documented contrast rather than a
+   rediscovered inconsistency (OQ5): the variadic-segment methods `has`, `list`,
+   and `followNameChanges` (and the registry's `...petNamePath` forms) take one
+   *segment* per argument, so `list("subdir")` still accepts the exact
+   single-segment string that `readText("subdir")` / `lookup("subdir")` /
+   `remove("subdir")` now reject. So that the OQ5 asymmetry is never met undocumented,
+   the same contrast line is carried not only in the header but in **each** affected
+   method's own help entry. `list` and `followNameChanges` each state "takes one
+   segment per argument, so a bare single-segment string is accepted here though it
+   is rejected by the array-taking path methods." `has` needs its **own** distinct
+   sentence, because it accepts both spellings: "accepts variadic segments
+   (`has("dir", "file")`), a single segment array (`has(["dir", "file"])`), or a
+   lone segment string (`has("dir")`); it is the one path method that accepts both a
+   bare string and an array, so it is exempt from the array-only rule." Documenting
+   the split once at the header and leaving the per-method entries silent is what
+   this item forbids.
+2. **Each `glob` / `grep` / `glorp` entry** (`help.md:773-813`), each gaining a
+   one-line banner that its string argument is a glob pattern or RegExp source, not a
+   path, **and** that its result / `paths` entries are display path strings that
+   re-enter a path method only through `segmentsFromSlashString`. `grep`'s banner must
+   additionally **call out the shape collision** named in [OQ3](#open-questions): its
+   `paths` argument is a **list of display path strings** (`grep("x", ["src", "foo.js"])`
+   searches *two* files, `src` and `foo.js`), which is the same `string[]` runtime
+   shape as a two-segment path (`readText(["src", "foo.js"])`) but the opposite
+   meaning, so a caller must not hand a segment-array path to `grep` expecting one
+   file, and must convert a `grep` display path back with `segmentsFromSlashString`
+   before passing it to a path method.
+3. **The `entry()` entry** (`help.md:753-759`), rewritten to describe an
+   array-taking capability minter, with `segmentsFromSlashString` documented beside it as
+   the one place a slash-joined string is translated, explicitly analogous to
+   `fileURLToPath` (the review's own analogy,
+   [3910555461](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3910555461)).
+4. **The `lookup` help entry and the two in-source directive messages** that today
+   point the caller at `entry("dir/file.txt")` (the `lookup` help block at
+   `help.md:820`, `assertValidSegment`'s message at `mount.js:261`, and `lookup`'s
+   re-throw at `mount.js:900-906`), each reworded to name the array form or
+   `entry(segmentsFromSlashString("dir/file.txt"))` rather than a slash string to
+   the now-array-only `entry()` (enumerated under
+   [What Already Errors](#what-already-errors-and-what-silently-works)).
+5. **`help-text-data.js`**, generated from `help.md` (per PR #897's must-fix item on
+   regenerating the help data table), regenerated after the edits;
+   `helpdown.test.js` guards the round trip.
+6. **The generated code-mode declarations**, which independently republish the path
+   shape to the model: `packages/agent-tools/generated/code-mode-globals/fs-declarations.js`
+   types paths as `string | readonly string[]` at lines 40, 42, 50, 259, 283, and
+   `string | string[] | MountEndoMountEntry` at 325-326, and the adjacent extended
+   `Filesystem` / `Directory` surface coerces the same way. Because the runtime guard
+   **keeps** its `M.string()` arm (see
+   [The Declared Type versus the Guard Shape](#the-declared-type-versus-the-guard-shape)),
+   these declarations **cannot** be narrowed simply by narrowing the guard; the
+   generator input or a post-generation step must emit the array-only shape
+   (`readonly string[] | MountEndoMountEntry`, dropping the `string` arm) directly, so
+   the model-facing declarations advertise "path is an array" even though the guard
+   still routes a string to a body rejection. The design must list them so this
+   narrowing is not forgotten.
+
+   **Drift warning: "a string is not a path" is now asserted in three independently
+   authored places**: the runtime guard (deliberately wide, keeps `M.string()`), the
+   hand-authored `types.d.ts` (narrowed by hand), and the generated
+   `fs-declarations.js` (narrowed by a generator change). The compile-time pin tests
+   under [Test impact](#migration-and-backward-compatibility) catch a re-widening of the
+   two narrowed surfaces, but the standing rule for a contributor is explicit:
+   **adding a new path-bearing method means touching all three surfaces**, not just the
+   guard. A method added to the guard family without narrowing both declared surfaces
+   silently re-opens the string-is-a-path leak on the surfaces this design's own
+   audience reads.
+
+## Migration and Backward Compatibility
+
+**What breaks.** Any daemon-facing caller that passes a bare string to a path-taking
+method: `readText("x")`, `lookup("x")`, `remove("x")`, registry `storeValue(v, "x")`,
+and the like. Slash strings already break today; this extends the break to non-slash
+strings. Variadic calls (`has("a", "b")`, `list("sub")`) and array calls are
+unaffected.
+
+**How callers migrate.**
+
+- **In-repo call sites** become array form mechanically: `"x"` becomes `["x"]`, and
+  a human slash string becomes `segmentsFromSlashString("a/b")` or the literal
+  `["a", "b"]`. The coercion sites and their callers are enumerated under
+  [The Coercion Sites](#the-coercion-sites); this is a bounded but non-trivial edit
+  across daemon, platform-fs, exo-unzip, and space-chat, not a one-file change.
+- **The CLI keeps taking human slash strings** and translates at its boundary,
+  exactly the layering the review endorsed
+  ([3910555461](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3910555461)).
+  The CLI already splits via `parsePetNamePath` (`packages/cli/src/pet-name.js:13`)
+  before calling the daemon, so `endo cat src/foo.js` still works. Note, however,
+  that `parsePetNamePath` does **not** cover every CLI call: `commands/list.js:129,236,254`,
+  `commands/make.js:114`, and `commands/inbox.js:13` (`locate('@self')`) pass bare
+  strings straight through. So "no human-facing regression" holds **only if** those
+  registry-facing sites are either migrated or the registry is kept out of scope (see
+  [Registry Symmetry](#open-questions)); the claim is conditional, not absolute, and
+  the implementation must route those sites through the shared splitter (or the
+  registry's own translation) to keep it true.
+- **`@endo/exo-git`** migrates per the `entry()` decision above: `entry()` is
+  array-only, Git's internal `designatorsToRepoPaths` mints from segments, and its
+  public `GitPathDesignator` keeps the `PathEntry` variant; a string designator, if
+  still accepted at the Git boundary, is translated there through the shared
+  `segmentsFromSlashString` called with `onEmptySegment: 'drop'` (which performs Git's
+  `'.'`-and-empty dropping inside the shared splitter, per
+  [Reconciling the Three Splitters](#reconciling-the-three-splitters)), not by the mount.
+
+**Test impact.** The tests that build paths via `mount.entry("a/b")` or a bare
+string path (the true count depends on how much of the registry
+[open question 4 (Registry Symmetry)](#open-questions) pulls in, and the
+implementation PR should report the grep)
+must be re-expressed as arrays or `entry(["a", "b"])`. This includes the **four test-harness
+coercion helpers** disclosed under [The Coercion Sites](#the-coercion-sites)
+(`packages/workflow/test/fake-agent.js:22`,
+`packages/platform/test/from-mount.test.js:81`, and
+`packages/daemon/test/mount-platform-fs-conformance.test.js:366,385`): they hard-code
+the `typeof x === 'string' ? [x] : x` coercion in order to assert bare-string and
+array inputs against one expected result, so they must be **rewritten** to assert the
+string form *errors* rather than merely re-expressing inputs as arrays. Add tests that
+a string argument to each path method throws the directive message (these assert the
+*break* is enforced), and tests that variadic, array, and `entry` forms still succeed
+(these assert valid forms still work). Add a dedicated test for `segmentsFromSlashString`
+itself (the design's one sanctioned string-to-path seam), covering **both** empty-segment
+policy branches (`onEmptySegment: 'throw'` rejecting `"foo//bar"` / `"./foo/"`, and
+`onEmptySegment: 'drop'` yielding `["foo", "bar"]` / `["foo"]`), leading-slash handling,
+the **zero-segment inputs** `""` and `"/"` (which under `'throw'` reject as an empty
+segment and under `'drop'` yield the empty array `[]`), and the glob-result round trip,
+so the function's reconciliation of the three divergent
+splitters, and the policy parameter that lets one function serve incompatible
+empty-segment disciplines, are pinned at its own boundary rather than only implied by the
+callers. **Compile-time negative tests for the narrowed declared surfaces.** The
+declared-type narrowing is the actual defense against the model-facing hazard (OQ7), and
+a runtime throw test does not pin it: a later refactor could silently re-widen the
+declared union back to including `string` with no runtime test catching it. So the
+test-impact set must add a `@ts-expect-error`-style compile-time pin for **each** of the
+two narrowed declared surfaces, asserting `readText("foo")` (and an `entry("a/b")`)
+fails to typecheck against the narrowed union: one against the hand-authored
+`types.d.ts`, and one against the generated `fs-declarations.js` (an
+`expectType`/`@ts-expect-error` fixture compiled in the type-test pass). Without both, a
+regression that re-adds the `string` arm to either surface, the exact leak this design
+exists to prevent, would go uncaught. The existing `assertValidSegment` slash *throw*
+remains valid, since a slash inside an array segment is still illegal, but its message
+text and the two other in-source directive messages named under
+[What Already Errors](#what-already-errors-and-what-silently-works)
+(`mount.js:261`, `mount.js:900-906`, `help.md:820`) change, so any test asserting
+those message strings is updated with them. `helpdown.test.js`
+re-baselines against the reworded help.
+
+## Design Decisions
+
+1. **Array-only path arguments, string rejection in the method body.** The exo guard
+   keeps an `M.string()` arm as a routing affordance so the body can throw one
+   human-legible directive message; dropping the arm produces an unusable union
+   pattern dump. The body is the single normative, tested rejection site. The
+   *declared* type surfaces diverge from the guard on purpose: the hand-authored
+   `types.d.ts` union and the generated code-mode declarations are both narrowed to
+   array-only (`readonly string[] | EndoMountEntry`), so no human- or model-facing type
+   advertises a string as a path even though the runtime guard still admits one to
+   reject it well (see
+   [The Declared Type versus the Guard Shape](#the-declared-type-versus-the-guard-shape)).
+2. **`glob` / `grep` / `glorp` keep their string *pattern* arguments; their path
+   *strings* get a named seam.** A glob pattern is a DSL, not a path. But glob's
+   results and grep's `paths` are slash-joined path strings, so the design names
+   `segmentsFromSlashString` as the sanctioned way to re-enter a path method from a search
+   result, and documents it at both ends rather than pretending patterns are the only
+   strings left.
+3. **`entry()` is repurposed, not deleted** (its array-only-vs-overloaded spelling is
+   still [OQ1](#open-questions)). What is *settled* here is that `entry()` survives and
+   keeps its lineage-verified-capability job as a capability minter, preserving
+   `@endo/exo-git` provenance while removing the last in-interface slash-splitter. What
+   is *not* settled (and is deliberately left to OQ1, not asserted as a conclusion
+   here) is whether the minter is strictly array-only (the recommended shape, with the
+   string-to-segments job living in the free `segmentsFromSlashString`) or whether the
+   string branch is folded back into a string-accepting `entry()`. This decision item
+   records the settled half; OQ1 owns the open half.
+4. **One canonical string-to-segments free function.** `segmentsFromSlashString` replaces
+   the three divergent private splitters (CLI, mount, Git) and is the escape hatch of
+   option (B). It is a pure value function, so parse and mint stay unbraided.
+5. **The CLI is the human-string translation layer.** Human slash strings are
+   translated to segment arrays at the CLI boundary, so eliminating daemon-side string
+   paths carries no human-facing regression, conditional on the registry-facing CLI
+   sites named in Migration being covered.
+6. **Non-slash single strings are in scope.** The design deliberately eliminates
+   `readText("foo")`, not just `readText("a/b")`. A single spelling for a one-segment
+   path (`["foo"]`) is the whole point (see the value-identity argument); leaving the
+   non-slash string would keep the ambiguity the review is ending.
+
+## Open Questions
+
+1. **Free-function adapter versus string-accepting `entry()`.** The design recommends the
+   pure free function `segmentsFromSlashString` as the sole string-to-path seam, leaving
+   `entry()` array-only. The alternative folds the string branch back into a
+   string-accepting `entry()`. The recommendation keeps parse (a value) and mint (a
+   capability) unbraided; is that separation worth one extra exported name over a
+   single overloaded `entry()`? A second axis weighs against the free function and is
+   not purity-versus-convenience: **reachability from a remote reference.** The
+   daemon's defining consumer holds a mount over CapTP and **cannot import
+   `@endo/platform`**, so a free `segmentsFromSlashString` is unreachable to it and its
+   only recourse is the hand-rolled `.split('/')` this design set out to eliminate;
+   `entry()` is the sole translation seam *on the object* a remote holder can invoke.
+   The directive error names `segmentsFromSlashString` as the fix, so if the deciding
+   audience is a remote-only caller, the fix it points at is uncallable for them. Weigh
+   this reachability cost, or state that remote-only callers are out of the seam's
+   audience (they receive `EndoMountEntry` capabilities and never start from a raw
+   slash string).
+2. **`entry()` / `EndoMountEntry` disposition.** Keep `entry()` as an array-taking
+   lineage-capability minter (recommended, preserves Git provenance), or take the
+   maintainer's larger option from
+   [3931325779](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3931325779)
+   and retire `EndoMountEntry` / `PathEntry` entirely with Git going strings-only
+   (loses lineage verification)?
+3. **Search-family shape.** Keep `glob` returning and `grep` consuming slash-joined
+   display path strings, bridged by `segmentsFromSlashString`, or convert the search
+   family to segment arrays (`glob(): string[][]`,
+   `grep(pattern, paths?: readonly string[][])`) so the array-only invariant is total?
+   A **third option** is `glob` returning `EndoMountEntry[]` (the lineage-verified path
+   capability this design retains), making the round trip `readText(globResult[0])`
+   with no adapter, since `PathArgShape` already admits `MountEntryShape`
+   (`interfaces.js:695`); the cost to weigh is that `grep`'s `paths` guard
+   (`M.await(M.arrayOf(M.string()))`) would widen and the documented
+   `grep(pattern, glob(g))` pipe must keep working.
+   **A cost this design's recommendation *creates*, which must be named here:** keeping
+   the slash strings does not merely *forgo* the total invariant, it introduces a
+   **silent-misread hazard on `grep`**. After this design, on one `EndoMount`,
+   `readText(["src", "foo.js"])` is one two-segment path while
+   `grep("x", ["src", "foo.js"])` is **two** slash-joined display paths
+   (`interfaces.js:737-742`, split at `platform/src/fs/search.js:481`): the *same
+   runtime shape* (`string[]`) with the *opposite reading*, and the confusion returns
+   wrong results with **no error**. The design teaches "`string[]` is the path
+   spelling," which makes that mistake *likelier*, so this is a real cost of the
+   recommended interim, not only of the alternatives.
+   **Recommended:** keep the slash-joined display strings bridged by the adapter, the
+   smaller change with display-friendly results, **while documenting the grep
+   collision explicitly** (see [Help-Text Requirements](#help-text-requirements) item
+   2); converting the search family to segment arrays or `EndoMountEntry[]` makes
+   strings-are-never-paths hold with no exception and closes the collision, but at the
+   cost of a bigger change and a less readable result.
+4. **Registry symmetry, and the teachability cost of splitting it.** The petname
+   registry shares the `string | string[]` shape. Its accurate method inventory
+   (`interfaces.js`, shapes from `type-guards.js:21-34`): `move` / `copy` are already
+   array-only positional (`NamePathShape`); `remove` / `identify` / `locate` /
+   `listIdentifiers` / `listLocators` are already variadic-only rest of array paths;
+   only `storeIdentifier` / `storeLocator` / `storeValue` / `sendValue` / `cancel`,
+   the `lookup` family, and `evaluate` still take `NameOrPathShape`, and `evaluate`'s
+   endowment list is typed `NamesOrPathsShape` (`interfaces.js:57-64`), where
+   array-only bites hardest (`evaluate(undefined, src, ["counter"], [["counter"]])`).
+   The cost of scoping the change to the mount only is that the rule becomes
+   unteachable: `host.lookup("foo")` would stay legal while `mount.lookup("foo")`
+   errors, the same-shaped argument on adjacent faces. Since the entire justification
+   is legibility, a partial adoption spends the breakage and forfeits the benefit. Do
+   we change the registry in lockstep (consistent, larger blast radius, and it makes
+   the value-identity fix total), or scope to the mount and accept the split with eyes
+   open? **Recommended:** resolve to **registry lockstep**, because the design's lead
+   justification is value-identity and (as
+   [The Value-Identity Consequence](#the-value-identity-consequence) and decomplector's
+   receiver-property objection both note) a mount-only scope makes path spelling a
+   property of the receiver rather than the value, leaving `host.lookup("foo")` legal
+   while `mount.lookup("foo")` errors. The mount-only *default* named elsewhere in this
+   document is the conservative fallback **only** if the registry blast radius proves
+   too large to land in one change; taking that fallback demotes value-identity from the
+   lead justification to a mount-local hygiene fix, and the design must say so rather
+   than keep value-identity as its flagship while scoping it out. **This is the one
+   implementation-blocking open question:** it changes the coercion-site catalog (the
+   `NameOrPathShape` and `Array.isArray` registry sites move in or out of scope), the
+   "no human-facing regression" CLI claim, and the test count, so it must be answered
+   *before* implementation, unlike OQ3/OQ7, which need not be.
+5. **Sibling spelling incoherence.** After the change, `readText(["src"])` is legal and
+   `readText("src")` errors, while `list("src")` is legal and `list(["src"])` errors
+   (`list` is `.rest(PathSegmentsShape)` at `interfaces.js:723`). Today the one-segment
+   call works across both families; afterward the same one-segment call
+   spells oppositely per method. (`has` is exempt from even this framing: as
+   [Current Behavior](#current-behavior) records, its `segmentsFromHasArgs`
+   dispatch accepts `has("x")`, `has(["x"])`, and `has("a", "b")` all at once, so
+   it retains two spellings of a one-segment path regardless of this design unless
+   separately migrated; the incoherence below is between the array-taking family
+   and the strictly-variadic `list` / `followNameChanges`, not `has`.) Do we accept
+   that, make all path methods variadic
+   (`readText("src", "foo.js")`), which yields the same array-only invariant with a
+   cheaper common case and a uniform spelling, or take a **cheap third option**: widen
+   the variadic family to *also* accept a single array, exactly as `has` already does
+   via `segmentsFromHasArgs`. Widening `list` / `followNameChanges` the same way makes
+   `["src"]` legal on every path method with **zero existing-call-site churn**, and it
+   does **not** reintroduce two spellings of one path *value* (both `list("src")` and
+   `list(["src"])` yield the same segment array; only arity differs), while it deletes
+   the per-method contrast banners [Help-Text Requirements](#help-text-requirements)
+   item 1 is otherwise forced to add. **Recommended:** accept the split for
+   this design and keep the array-taking / variadic-`.rest()` families as they are. The
+   uniform-variadic alternative is attractive but is a *strictly larger* interface
+   change, and the claim is grounded, not asserted: `rg 'M\.call\(PathArgShape'
+   packages/daemon/src/interfaces.js` returns **thirteen** array-taking method guards that
+   would each have their guard and TypeScript face rewritten to `.rest(PathSegmentsShape)`,
+   and `rg -n '\.(lookup|maybeLookup|subView|write|copy|stat|readText|maybeReadText|writeText|makeDirectory|makeFile|remove|move)\(\s*\['
+   packages/` returns **393** array-literal call sites (**347** in tests, **46** in
+   production) that would each migrate from array to spread form. Against the
+   [coercion-site catalog](#the-coercion-sites)'s fifteen-plus production edits, converting to
+   uniform-variadic is an order of magnitude more call-site churn, which is what
+   "strictly larger" means here concretely. It would balloon the blast radius past the
+   one the migration section scopes; the
+   spelling incoherence is a legibility wart, not a correctness one, and is best paid
+   down separately if the uniform-variadic direction is later adopted wholesale.
+6. **Deprecation window.** Reject strings immediately (clean, breaking), or first ship
+   a phase that still coerces but logs a warning, giving out-of-repo consumers a
+   migration window before the hard error? **Recommended:** reject immediately. The
+   review asks for a hard error, the primary consumers are in-repo and bots-first (they
+   read the narrowed declarations rather than depending on a warning phase), and a
+   coerce-but-warn phase keeps the value-identity bug class alive for the duration of
+   the window, which is the defect this design exists to close; a warning phase is worth
+   revisiting only if a concrete out-of-repo consumer is identified before landing.
+7. **Guard-level combinator versus wide-guard-plus-narrow-declaration.** This design
+   keeps the guard's `M.string()` arm and narrows the declared surfaces separately (see
+   [The Declared Type versus the Guard Shape](#the-declared-type-versus-the-guard-shape)),
+   accepting that CapTP / `M.interface()` introspection still shows a string arm the
+   method rejects. The cleaner alternative is a custom guard combinator that declares an
+   array-only shape *and* intercepts the underlying `M.or` rejection to substitute the
+   directive message, collapsing the guard-vs-declaration divergence at every consumer
+   at once, at the cost of a new pattern-combinator primitive. Ship the split now and
+   treat the combinator as a scheduled fast-follow, or build the combinator up front?
+   **Recommended:** ship the
+   wide-guard/narrow-declaration split (B) now and treat the combinator as a scheduled
+   fast-follow, not an indefinite deferral, because the gap this design itself calls a
+   real (not cosmetic) automated-consumer hazard should not be left open without a
+   resolution posture. The interim is defensible on one specific ground: the hazard's
+   primary audience path is already closed. The bots-first consumer the severity
+   language is about reads the *generated code-mode declarations*, which this design
+   narrows to array-only (see [Help-Text Requirements](#help-text-requirements) item 6);
+   only a consumer introspecting the *live* `M.interface()` guard directly still sees
+   the string arm, and that consumer is rejected at the body with the directive message
+   the moment it tries. So the interim mitigation is "narrowed declarations cover the
+   named audience; the residual live-guard arm is a good-error rejection, not a silent
+   accept," and the combinator is the follow-up that removes even that residual. That
+   keeps OQ7's resolution posture consistent with its own stated severity rather than
+   deferring a named hazard as a fully symmetric open question.
+
+## Prompt
+
+> Write a design doc proposing to **eliminate support for single-segment string
+> petname paths** in the mount/daemon path API, so that a slash-delimited string
+> like `"src/foo.js"` produces an **error** rather than being silently treated as
+> one literal segment. Cover: (1) current behavior and the surface that accepts
+> string paths; (2) the proposed array-only rule and the exact error a string
+> yields, evaluating a string escape hatch; (3) the glob/glorp aberration:
+> `glob`/`glorp`'s single-string argument IS the UNIX glob DSL, deliberately unlike
+> petname paths, and how help text must call it out "very clearly"; (4) interaction
+> with the `entry()` wrapper (PR #897 review ask A): with entry() reconsidered and
+> strings rejected, what mints/represents a path; (5) migration/back-compat: what
+> breaks, how callers and help text migrate, test impact; (6) open questions for
+> kriskowal to decide. This is a DESIGN deliverable, not a code change.
+>
+> Source: kriskowal review comment on PR #897, inline comment 3916282675 on
+> `packages/daemon/src/help.md`:
+> *"It may be noted that the 'glob' expression for glob, glorp is an explicit
+> aberration on the array-of-segments petname path notation we use elsewhere, where
+> a single string is in the UNIX glob DSL. However, a path should always be
+> represented as petname path segments and a single string is always a single
+> segment. This will need to be called out in help text very clearly, since it is
+> not the norm. It may behoove us to completely eliminate support for single segment
+> pet name paths in order to ensure that a slash delimited string produces an error.
+> Please post a follow-up design to that effect."*

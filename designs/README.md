@@ -6,6 +6,14 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[eliminate-single-segment-string-paths](eliminate-single-segment-string-paths.md)
+(added 2026-09-04 and revised 2026-09-05; proposes that a petname path is always an
+array of segments, so a bare-string path argument to any path-taking mount (and, by
+open question, registry) method is rejected in the method body with one directive
+message; names one pure free function, `segmentsFromSlashString`, as the sanctioned
+string-to-segments seam and search-result round trip; repurposes `entry()` to an
+array-only, lineage-verified `EndoMountEntry` minter with its slash-split branch
+deleted; lands as a review-PR surface for its open questions),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
 2026-09-03; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
@@ -283,6 +291,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [eliminate-single-segment-string-paths](eliminate-single-segment-string-paths.md) | 2026-09-04 | 2026-09-05 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
@@ -707,6 +716,7 @@ flowchart TD
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
         dmcap[daemon-mount-capabilities]
+        essp[eliminate-single-segment-string-paths<br/><i>PROPOSED</i>]
         dgit[daemon-git-capability]
         dgitfollow[exo-git-follow-root-advancement]
         dgitremote[daemon-git-remotes]
@@ -749,6 +759,8 @@ flowchart TD
         enetfetch -.-> dtools
         enetfetch --> dgitremote
         dmount --> dcsgc
+        dmount --> essp
+        essp -.-> dgit
         dsecret --> dbank
         dsand --> dbank
         dfs --> dbank
@@ -967,6 +979,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
 | daemon-mount-capabilities | Proposed | Complete `EndoMount`: snapshot bridge, mount-scoped descriptors, `makeFile` sibling, entry overloads on `has`/`stat`/`lookup`, trusted backing provenance |
+| eliminate-single-segment-string-paths | Proposed | Follow-up to the PR #897 review: a path argument is always an array of segments, so a bare-string path argument is rejected in the method body with one directive message; the fifteen-plus string-to-one-element coercion sites lose their string branch; the three divergent caller-facing CLI/mount/Git splitters collapse onto one pure `segmentsFromSlashString` free function (also the sanctioned seam for feeding a `glob` result back into a path method); and `entry()` narrows to an array-only, lineage-verified `EndoMountEntry` minter for `@endo/exo-git` with its slash-split branch deleted. Review-PR surface with open questions (PR [#1151](https://github.com/endojs/endo-but-for-bots/pull/1151)). |
 | daemon-worker-import-from-mount | Proposed | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
 | registry-capability | Deprecated | Shipped bespoke `EndoRegistry.resolve` / `fetch` / `lookup` / `list` capability shape; retained as a migration record and superseded by `npm-registry-as-directory-tree` |
 | npm-registry-as-directory-tree | Not Started | Re-incarnate `@registry` as an enumerable registry root containing non-enumerable npm/scope hubs, enumerable exact-version directories, and immutable package-content trees; identical Node and Endor adapters over existing mechanics |
@@ -1630,6 +1643,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
+| eliminate-single-segment-string-paths | M | ~1 week | 3 | Array-only path arguments across the mount surface: body-throw rejection with one directive message, deletion of eleven-plus string-to-one-element coercion sites, the pure `segmentsFromSlashString` splitter unifying the CLI/mount/Git splitters, `entry()` narrowed to an array-only lineage-capability minter, plus help.md + generated code-mode declarations. M (not S) because the break spans daemon + platform-fs + exo-git + exo-unzip + space-chat + the test suite; open questions (registry lockstep, search-family shape, all-variadic methods) can pull it toward L. Review-PR surface (PR [#1151](https://github.com/endojs/endo-but-for-bots/pull/1151)) |
 | daemon-worker-import-from-mount | S-M | 3-4 days | 3 | **Integration layer** of the four-layer stack (decomposed 2026-06-02). `makeFromPackage` host method + `makeFromMount` dispatcher + CLI `endo run <mount>` / `endo make <mount>` + XS bridging deferral. Driven by the three preceding layers (`registry-capability`, `mvs-resolver`, `snapshot-mapper`); first cut limited to MVS; lockfile honoring deferred. Does not depend on the Rust subsystem (separate lane). |
 | ~~registry-capability~~ | S-M | n/a | 3 | Deprecated method-call capability shape; implementation is the compatibility source for the directory-tree adapters |
 | npm-registry-as-directory-tree | M-L | 1-1.5 weeks | 3 | Factor `LookupTreeInterface`, add Node and Endor adapters plus shared conformance tests, move MVS and mapper late binding to traversal, and retain a temporary legacy method adapter |
