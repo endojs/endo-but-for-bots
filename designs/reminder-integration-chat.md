@@ -127,7 +127,7 @@ sending to `@host`, not the user reminding itself.
   `E(scheduler).makeReminder(label, periodMs, opts)` on the `ReminderScheduler`
   facet. `label` becomes the reminder text; `periodMs` the cadence;
   `firstDelayMs` a lead time.
-- **Recurring, not one-shot.** Every reminder that `makeReminder` creates
+- **Recurring, not one-shot:** every reminder that `makeReminder` creates
   **recurs on a start-to-start schedule until it is cancelled**; `firstDelayMs`
   only offsets the *first* firing. There is no one-shot primitive in the merged
   plugin: "remind me in two hours" becomes a permanent two-hourly message, not a
@@ -137,7 +137,7 @@ sending to `@host`, not the user reminding itself.
   scope for the baseline** and named as a follow-up (§ Open questions): it needs
   either a plugin-side `oneShot` flag that self-cancels after the first
   `resolve()`, or a courier that cancels the reminder by id on first delivery,
-  which requires the `getReminder(id)` getter the next bullet introduces.
+  which requires the `reminder(id)` getter the next bullet introduces.
 - **How it is cancelled and listed:** the plugin's current surface cannot do it
   from Chat, so the baseline adds a getter. `makeReminder` returns a live
   `Reminder` exo whose `cancel()` / `setPeriod()` / `info()` / `period()` are the
@@ -146,16 +146,16 @@ sending to `@host`, not the user reminding itself.
   'cancelled') return;`, `scheduler.js:640-642`). A browser drops that remote
   handle on reload or reconnect, and the `ReminderScheduler` facet exposes only
   `makeReminder`, `list`, `help`; `list()` returns plain hardened data records,
-  **not** handles (`scheduler.js:761-770`), and there is **no `getReminder(id)`**.
+  **not** handles (`scheduler.js:761-770`), and there is **no `reminder(id)`**.
   So after one page refresh a reminder is unstoppable except by
   `ReminderControl.revoke()`, which kills the whole service and which this plan
   withholds from the UI. `maxActive` then throttles new reminders with no
   user-reachable way to free a slot (`scheduler.js:684-687`). The baseline resolves
-  this with the **minimum viable addition**: a single **`getReminder(id)`** verb on
+  this with the **minimum viable addition**: a single **`reminder(id)`** verb on
   `ReminderScheduler` that re-derives a fresh live `Reminder` handle from the stored
   entry (`makeReminderHandle(entry)` is already a pure function of the entry,
   `scheduler.js:620`), so the UI takes the stable `reminderId` that `list()`
-  already returns, calls `getReminder(id)`, and drives the handle's existing
+  already returns, calls `reminder(id)`, and drives the handle's existing
   `cancel()` / `setPeriod()` / `info()` verbs. One getter subsumes cancel, retune,
   inspect, and every future per-reminder verb, so no second id-keyed vocabulary is
   invented and there is no same-package verb collision (the one a mirrored
@@ -163,7 +163,7 @@ sending to `@host`, not the user reminding itself.
   **inherits the handle's established
   semantics for free**: `cancel()` stays idempotent, so a double-click or
   stale-list cancel is *success*, not an error, matching the live handle rather
-  than contradicting it. `getReminder(id)` itself **throws** only for an
+  than contradicting it. `reminder(id)` itself **throws** only for an
   unresolvable (unknown or already-collected) id, and it throws a plain **`Error`**,
   not `TypeError`: the package's error vocabulary reserves `TypeError` for a
   wrong-*type* argument (`scheduler.js:603,678`), `RangeError` for an out-of-band
@@ -238,10 +238,10 @@ The powers namehub the plugin resolves must carry exactly two names:
   agent mints one with `E(host).provideScratchMount('reminder-store')` (a
   top-level `provideMount(mountPath, 'reminder-store')` is *also* resolvable back
   to a host path, via `getMountHostPath`, so the two differ not in path-leakage
-  but in that a scratch mount is daemon-managed and GC-reaped:
-  `reclaimCollectedStorage` unlinks its backing dir on collection, so durability
-  depends on keeping the pet name, which is a second reason `setup-reminder.js`
-  must be idempotent on that name). Despite the word "scratch", the mount is a
+  but in that a scratch mount is daemon-managed and GC-reaped). `reclaimCollectedStorage`
+  unlinks its backing dir on collection, so durability depends on keeping the pet
+  name; that is a second reason `setup-reminder.js` must be idempotent on that name.
+  Despite the word "scratch", the mount is a
   **persistent daemon-managed** `state/mounts/<n>` directory, not a tmpdir; it is
   what the plugin's restart story rests on.
 
@@ -293,18 +293,18 @@ The powers namehub the plugin resolves must carry exactly two names:
 
 ```mermaid
 flowchart LR
-    Agent["Chat @agent (launcher)"]
-    Prov["provisioning guest (agentName,<br/>removable after setup)"]
-    Agent -->|"provideGuest(agentName)"| Prov
-    Prov -->|provideScratchMount| Store["reminder-store: VFS dir"]
-    Prov -->|provideGuest| Guest["courier guest: send to @host"]
+    Agent["Chat @agent HOST (launcher,<br/>performs every mint)"]
+    Prov["provisioning guest (agentName,<br/>forgotten as setup's last step)"]
+    Agent -->|"provideScratchMount"| Store["reminder-store: VFS dir"]
+    Agent -->|"provideGuest (courier guest: send to @host)"| Guest["courier guest"]
     Guest -->|"held privately by"| Courier["reminder courier caplet: notify only"]
-    subgraph powersName["attenuated powers namehub (on provisioning guest)"]
+    Agent -->|"provideGuest(agentName,<br/>introducedNames seed Store + Courier)"| Prov
+    subgraph powersName["attenuated powers namehub (the provisioning guest,<br/>seeded by the host via introducedNames)"]
       Store
       Courier
     end
-    Prov -->|"makeUnconfined @endo/reminder<br/>dedicated worker<br/>resultName @pins/reminder"| Service["ReminderService"]
-    Service -.->|"control facet retained"| Prov
+    Agent -->|"makeUnconfined @endo/reminder<br/>powersName=agentName, dedicated worker<br/>resultName @pins/reminder"| Service["ReminderService"]
+    Service -.->|"control facet stored under the provisioning guest"| Prov
     Service -->|"scheduler facet stored as reminder-scheduler"| Scheduler["reminder-scheduler"]
     Agent -.->|"lookup only"| Scheduler
 ```
@@ -312,29 +312,58 @@ flowchart LR
 Initial `maxActive` / `minPeriodMs` arrive via `env`; thereafter the store is
 authoritative. The service is pinned with `resultName: ['@pins', 'reminder']`.
 
-**Real attenuation needs two distinct principals, and a `--powers @agent` recipe
-*can* mint the second one in its own body: the split is achievable in the
-baseline cut, not deferred.** The earlier premise ("`--powers @agent` cannot
-provide two principals") was wrong. `packages/fae/setup.js:20-42` (itself an
-`endo run --UNCONFINED ... --powers AGENT` script) already does exactly this: from
-inside the invoking agent it calls `provideGuest(name, { agentName })` to mint a
-**separate guest principal**, then `makeUnconfined('@main', spec, { powersName:
-agentName })` to run the caplet on **that guest's** namehub, not the invoking
-host's. `setup-reminder.js` follows the same shape: though it is launched under
-Chat's own `@agent` (the host Chat holds, `packages/chat/connection.js:112-118`),
-it provisions the `ReminderService`, the `reminder-store` mount, and `@pins/reminder`
-under a **dedicated provisioning guest** it mints, and hands the Chat UI **only**
-the `ReminderScheduler` facet, stored as a bare capability (`reminder-scheduler`)
-the UI can `lookup` while `ReminderControl`, the store mount, and `@pins/reminder`
-stay on the provisioning guest, unreachable from Chat's `@agent`.
+**Real attenuation needs two distinct principals, and the invoking `@agent` is a
+*host*, which *can* mint the second principal in its own body: the split is
+achievable in the baseline cut, not deferred.** The mint is a **host** authority,
+not a guest one, and this is the load-bearing correction: `provideGuest`,
+`provideScratchMount`, and `makeUnconfined` live **only** on `HostInterface`
+(`packages/daemon/src/interfaces.js:383,468,480`); `GuestInterface`
+(`:215-316`) exposes none of them, so a *guest* could not mint the store, a further
+guest, or the service. The provisioning is therefore driven by the **host** Chat
+holds (`@agent`, `packages/chat/connection.js:112-118`), not by the provisioning
+guest it creates: the provisioning guest is a *target* the host seeds, never an
+actor that mints. `packages/fae/setup.js:20-42` (itself an
+`endo run --UNCONFINED ... --powers AGENT` script whose `AGENT` is a **host**) shows
+the shape: from the invoking host it calls `provideGuest(name, { agentName })` to
+mint a **separate guest principal**, then `makeUnconfined('@main', spec, {
+powersName: agentName })` to run the caplet on **that guest's** namehub, not the
+invoking host's. `setup-reminder.js` follows the same shape with one addition the
+fae precedent already demonstrates: the plugin's powers namehub must carry
+`reminder-store` and `reminder-recipient`, so the **host** mints both first (the
+mount via `provideScratchMount`, the courier guest via `provideGuest`) under its own
+pet names, then mints the provisioning guest with
+`provideGuest(reminderProvName, { agentName, introducedNames: harden({
+'reminder-store': <host-name>, 'reminder-recipient': <host-name> }) })` so those two
+names are **seeded into the provisioning guest's namehub at creation** (exactly the
+`introducedNames` seeding fae uses for `@agent`, `setup.js:33`), and finally
+`makeUnconfined(spec, { powersName: agentName })` runs the service against that
+seeded namehub (`agentName` is the option that names the guest's control handle, as
+in fae, and the pet name the host forgets afterward). The host
+hands the Chat UI **only** the `ReminderScheduler` facet, stored as a bare
+capability (`reminder-scheduler`) the UI can `lookup`, while `ReminderControl`, the
+store mount, and `@pins/reminder` stay on the provisioning guest, unreachable from
+Chat's `@agent`. **Caveat, honestly flagged:** that the host can seed a namehub with
+*already-minted* capabilities via `introducedNames` (rather than only names the new
+guest itself later creates) is read off the fae precedent's own usage but is **not
+yet verified against the full `EndoGuest`/`provideGuest` surface**; if `introducedNames`
+turns out to accept only host-agent introductions and not arbitrary pet-name seeds,
+the fallback is for the host to write the two names into the guest's name hub through
+the guest's own name-hub mutation surface after creation, which reaches the same end
+state by a different call. Either way the mint stays a host act; the achievability
+claim rests on the host, not on any guest-side minting.
 
 The residual is narrow, not "no attenuation": the invoking `@agent` retains
 `agentName` as a pet name (a handle to the provisioning guest) for the duration
-of provisioning, and that handle is **removable after provisioning** (the invoking
-host need not keep reach to the provisioning guest's control surface once the
-scheduler facet is stored). That is the real cost of the single-launcher recipe,
-and it is far smaller than surrendering the whole split; it does **not** force
-accepting the config-corruption brick risk.
+of provisioning. Forgetting that handle is **`setup-reminder.js`'s own last step**,
+not a manual chore left to an operator: after the `reminder-scheduler` facet is
+stored, the script calls `E(agent).remove(agentName)` (or the equivalent name-hub
+delete) so the invoking host keeps no reach to the provisioning guest's control
+surface. Until that step runs the residual is exactly as wide as the
+single-principal case, which is why the design assigns the removal to a concrete
+step rather than describing the handle as merely "removable". That transient
+residual is the real cost of the single-launcher recipe, far smaller than
+surrendering the whole split, and it does **not** force accepting the
+config-corruption brick risk.
 
 The store, not `env`, is authoritative for the limits, and `readConfig`
 (`packages/reminder/src/store.js:87`) is deliberately **not** corruption-tolerant
@@ -355,16 +384,20 @@ This section is a list of the three **sides** that change. Mailbox retention,
 which is Chat-side follow-up work rather than a side, is folded into the Chat side
 below.
 
-**Reminder side (`@endo/reminder`): two small read-only getters.** The plugin's
+**Reminder side (`@endo/reminder`): two small read-only getters.** The *why* for
+these getters (a browser drops the live handle on reload, so a reminder is
+uncancellable without a re-derivation path) is argued once in § What a reminder
+means in Chat, the lifecycle bullet; this section states only *what* changes and
+does not re-litigate that rationale. The plugin's
 Phase 2/3 delivery surface (`notify`-to-recipient delivery, VFS store, `@pins`
 revival) is used unchanged. The baseline needs two new `ReminderScheduler` verbs:
-**`getReminder(id)`**, which re-derives a fresh live `Reminder` handle from the
+**`reminder(id)`**, which re-derives a fresh live `Reminder` handle from the
 stored entry (`makeReminderHandle(entry)` is already a pure function of the entry,
 `scheduler.js:620`) so the UI can drive the handle's existing `cancel()` /
 `setPeriod()` / `info()` after a reload loses the original handle; and
 **`limits()`** returning `{ maxActive, minPeriodMs, maxPeriodMs }`, so the affordance can
 read the live cadence band rather than hardcode a runtime-mutable floor (§ What a
-reminder means in Chat, the lifecycle bullet). `getReminder(id)` is the **minimum
+reminder means in Chat, the lifecycle bullet). `reminder(id)` is the **minimum
 viable** addition: one getter subsumes cancel, retune, and inspect, so no
 id-keyed mutator vocabulary is invented and there is no same-package verb collision.
 It inherits the handle's established semantics: `cancel()` stays idempotent,
@@ -372,8 +405,27 @@ and an unresolvable id throws a plain **`Error`** (a state violation), not a
 `TypeError` (which the package reserves for wrong-type arguments). Without a
 reload-safe cancel path a reminder is uncancellable from Chat after one refresh,
 which contradicts the whole self-reminders story. Both are read-only additions on
-top of the existing `entries` map / config, not a redesign; they are the only
-reminder-side changes the baseline requests. The one capability the baseline still
+top of the existing `entries` map / config, not a redesign. **Both follow the
+package's bare-noun getter convention** (`list()`, `help()`, `info()`, `period()`;
+setters are `set`-prefixed to stand apart): `reminder(id)` and `limits()` are named
+without a `get` prefix so the two new getters spell alike and match the existing
+surface rather than introducing the package's first `get`-prefixed verb. They are
+the only reminder-side changes the baseline *requires*.
+
+One **optional** reminder-side refinement is offered alongside, not required by the
+baseline (§ Open questions): make `messageTimeoutMs` a *value that remembers whether
+it was pinned*. Because `setPeriod` recomputes it to `periodMs / 2` on every retune
+(§ Chat side, the retry-deadline caveat), an override the courier sets to widen the
+catch-up deadline is silently dropped on the next retune, forcing the courier to
+re-assert it at every future mutation site. Adding a companion boolean (a
+`messageTimeoutPinned` flag alongside the numeric field, surfaced through the same
+getters) so `setPeriod` leaves a pinned value alone turns a place-oriented
+"re-push everywhere" workaround into one value the store can tell apart from a
+bare default. This is a small change but touches mutation semantics rather than
+being purely read-only, so it is named as an alternative to weigh rather than folded
+into the required pair.
+
+The one capability the baseline still
 cannot carry (an *actionable* response inside the delivered message) is the
 plugin's own gated Phase 4 (§ The interactive-response gap), not a change this plan
 requests.
@@ -399,14 +451,24 @@ sibling plans.
    receives on each firing has this shape, so the whole spec reads against one
    picture:
 
+   This is the **actual** `deliverMessage` payload (`scheduler.js:310-321`), not a
+   reduced picture: it carries `periodMs`, `scheduledAt`, and `actualAt`, but it
+   **does not carry `messageTimeoutMs`** (the field the retry-deadline argument
+   below leans on), which is why the courier must fetch that value separately rather
+   than read it off the message.
+
    | Field | Meaning |
    |---|---|
    | `label` | the reminder text, delivered verbatim and opaque. |
    | `reminderId` | the reminder's stable id; a **capability key, not a bearer token** (see § The interactive-response gap). |
+   | `periodMs` | the reminder's current cadence, carried on every firing. |
    | `messageNumber` | per-firing counter, but **not unique per delivery**: a backoff retry re-delivers under the same `messageNumber` (`scheduler.js:442-448`), so it must not be used to key a retained response (§ The interactive-response gap). |
+   | `scheduledAt` | `nextTickAt - periodMs`, the tick this firing is for. |
+   | `actualAt` | wall-clock delivery time. |
    | `missedMessages` | count of firings coalesced into this one after downtime (0 in the steady state). |
    | `annotation` | present on *every* message; `annotation: 'count'` yields a number, `annotation: 'timestamps'` a list; the formatter handles both. |
    | `reminderResponse` | the one-shot `resolve()` / `reschedule()` exo (§ The interactive-response gap). |
+   | *(absent)* `messageTimeoutMs` | **not** in the payload; the courier reads the effective value via `E(scheduler).reminder(reminderId).info()` (§ the retry-deadline paragraph below). |
 
    The courier is a hardened exo (`makeExo` + an `M.interface` guard exposing
    exactly `notify(message)`, validating that `reminder-message` shape rather than
@@ -459,7 +521,21 @@ sibling plans.
    **The retry has a deadline the courier must beat, and the margin is numeric.**
    The per-firing latch is *also* consumed by the plugin's message-deadline timer,
    which auto-resolves the response at `messageTimeoutMs` (default `periodMs / 2`,
-   `packages/reminder/src/scheduler.js:326-333`). A `send` that resolves or rejects
+   `packages/reminder/src/scheduler.js:326-333`). **The courier cannot read
+   `messageTimeoutMs` off the `notify` payload** (it is absent, § the message-shape
+   table above); because this design recommends *overriding* it away from the
+   `periodMs / 2` default (two paragraphs down, precisely to widen the catch-up
+   deadline), the courier must not assume the default either. It learns the
+   **effective** value by calling `E(scheduler).reminder(reminderId).info()` before
+   it computes its self-imposed send deadline: `info()` returns the entry verbatim
+   (`harden({ ...entry })`, `scheduler.js:656`), so `messageTimeoutMs` is exposed
+   there even though it never rides the message. That fetch **races a concurrent
+   `setPeriod` retune**, which recomputes `messageTimeoutMs` to `periodMs / 2`
+   (`scheduler.js:628`): the value can go stale between the read and the send, so the
+   courier must treat a fetched deadline as advisory to the *current* firing only and
+   re-`info()` on each retry rather than caching it across firings. (This is one more
+   reason the sticky-override problem below matters: a retune both invalidates the
+   cached deadline and drops the widened timeout.) A `send` that resolves or rejects
    *later* than that deadline (a stalled CapTP-over-WebSocket link on a
    browser-attached daemon, the ordinary degraded case, and only 15 s at the 30 s
    floor) hits an already-consumed latch: the firing is counted **delivered**, and
@@ -486,17 +562,26 @@ sibling plans.
    invariant without these numeric margins makes it inert exactly when it is needed.
    (Caveat: an explicitly-set `messageTimeoutMs` is **not sticky**: the handle's
    `setPeriod` recomputes it to `periodMs / 2` unconditionally, `scheduler.js:628`,
-   so a later retune through `getReminder(id)` must re-assert it.)
+   so a later retune through `reminder(id)` must re-assert it. Requiring every future
+   caller to re-push the override on every mutation site is a place-oriented
+   workaround; the cleaner reminder-side fix, offered as an alternative below (§
+   Reminder side) and in § Open questions, is to have the field itself distinguish a
+   *default-derived* timeout from an *explicitly-pinned* one, so `setPeriod` leaves a
+   pinned value alone.)
 2. **`setup-reminder.js`.** An `endo run --UNCONFINED ...` script that, launched
-   under Chat's own `@agent`, mints a **dedicated provisioning guest** (via
-   `provideGuest`, mirroring `packages/fae/setup.js:20-42`), then under that guest's
-   namehub mints the store mount, provisions the courier and mutual pet names,
-   composes the `reminder-store` + `reminder-recipient` powers namehub,
-   `makeUnconfined`s the service pinned into `@pins`, and hands the Chat UI **only**
+   under Chat's own `@agent` (a **host**), mints the store mount
+   (`provideScratchMount`) and the courier guest (`provideGuest`) under host pet
+   names, then mints a **dedicated provisioning guest** whose namehub is
+   **seeded** with `reminder-store` + `reminder-recipient` via `provideGuest`'s
+   `introducedNames` (mirroring `packages/fae/setup.js:20-42`; every mint is a
+   host act, § Provisioning), `makeUnconfined`s the service (`powersName` = the
+   provisioning guest) pinned into `@pins`, and hands the Chat UI **only**
    the `ReminderScheduler` facet stored as `reminder-scheduler` (§ Provisioning).
    The baseline is therefore **attenuated**: `ReminderControl`, the store mount, and
-   `@pins/reminder` stay unreachable from Chat's `@agent`, and the invoking agent's
-   transient `agentName` handle is removable after provisioning. It is
+   `@pins/reminder` stay unreachable from Chat's `@agent`. As its **last step** the
+   script **forgets `agentName`** (`E(agent).remove(agentName)`), so the invoking
+   host retains no reach to the provisioning guest's control surface; the removal is
+   an assigned step of the script, not an operator chore. It is
    **idempotent on its durable pet names**: a second run adopts the existing
    `reminder-store` / `reminder-recipient` / `@pins/reminder` and re-binds the same
    "Reminders" space config to the same courier pet name, rather than re-minting a
@@ -532,15 +617,19 @@ sibling plans.
      hardcoding the 30 s default, which is runtime-mutable via
      `ReminderControl.setMinPeriodMs` (`scheduler.js:801`) and would go stale, or
      forcing the user to learn the floor only by submitting an invalid value.
-   - **A listing + cancel affordance, not create-only.** `/remind-every` never
+   - **Add a listing + cancel affordance** (not create-only): `/remind-every` never
      shows the user a `reminderId`, so with only that command the reminder is
      uncancellable from Chat after one refresh: the exact dead-end the
-     `getReminder(id)` verb exists to close. Add a companion command that `list()`s
+     `reminder(id)` verb exists to close. Add a companion command that `list()`s
      the scheduler and renders each reminder's label + cadence with an inline
-     cancel wired to `getReminder(id).cancel()`. Do **not** name it `cancel`: the
+     cancel wired to `reminder(id).cancel()`. Do **not** name it `cancel`: the
      registry already binds `cancel` to a system verb (cancel a value/formula,
-     `command-registry.js:931`), so use a distinct token such as `/reminders` (a
-     list whose rows are individually cancellable).
+     `command-registry.js:931`), so use a distinct **verb-first** token such as
+     `/list-reminders` (mirroring the existing `list` command's shape), whose rows
+     are individually cancellable. A bare plural noun (`/reminders`) is rejected
+     because every one of the ~40 existing `command-registry.js` entries is
+     verb-first (`adopt-locator`, `mkhost`, `checkin`, and `/remind-every` itself),
+     so a noun-shaped name would be the only one and break the menu's scannability.
    - Handle the **un-provisioned** case: `lookup('reminder-scheduler')` rejects
      until `setup-reminder.js` has run, so the command is **hidden from the menu
      until `reminder-scheduler` resolves** (and, if invoked anyway, shows a
@@ -657,12 +746,16 @@ neither of the later two.
   resolves, and calls `reschedule()` when the stub `send` rejects.
 - **Slow-send deadline test (the ordinary degraded case):** drive the courier
   with a stub `send` that resolves *later* than the courier's self-imposed
-  deadline (shorter than `messageTimeoutMs`) and assert the courier fires
-  `reschedule()` on its own deadline (before the plugin's latch is auto-consumed),
-  not a late `resolve()`. This guards the § What has to change retry-deadline
-  invariant, which the design names the expected failure mode of a
-  browser-attached daemon rather than an exotic one; the happy-path and
-  immediate-rejection cases in the courier unit test do not cover it.
+  deadline and assert the courier fires `reschedule()` on its own deadline (before
+  the plugin's latch is auto-consumed), not a late `resolve()`. Stub the scheduler
+  so `reminder(reminderId).info()` returns an **overridden** `messageTimeoutMs`
+  (not the `periodMs / 2` default) and assert the courier's self-imposed deadline is
+  derived from that fetched value, *not* from an assumed default: this is the exact
+  case the § What has to change retry-deadline paragraph exists for (the courier
+  cannot read `messageTimeoutMs` off the payload, so a courier that assumed the
+  default would compute the wrong deadline). The design names this the expected
+  failure mode of a browser-attached daemon rather than an exotic one; the
+  happy-path and immediate-rejection cases in the courier unit test do not cover it.
 - **Opaque-label test:** a label containing `@name` round-trips verbatim (is
   *not* lifted into `petNames`) and delivery does not throw `Unknown pet name`.
   The same test must additionally cover the two hazards the courier's
@@ -684,10 +777,10 @@ neither of the later two.
   baseline cut (which is attenuated, not attenuation-free).
 - **Lifecycle (get/cancel/list) test:** after `makeReminder`, drop the returned
   live handle (simulate a page reload), then `list()` the scheduler, take the
-  returned `reminderId`, `getReminder(id)`, and assert the re-derived handle's
+  returned `reminderId`, `reminder(id)`, and assert the re-derived handle's
   `cancel()` stops it (a subsequent `list()` omits it and no further firing
   arrives); assert a second cancel through a re-fetched handle is **idempotent**
-  (succeeds, does not throw), and that `getReminder(id)` on an unknown or
+  (succeeds, does not throw), and that `reminder(id)` on an unknown or
   already-collected id throws a plain **`Error`** (not `TypeError`). This is the
   test that guards the § What a reminder means in Chat lifecycle claim.
 - **Clock seam:** the plugin's injectable `setTimeout` / `now` seam is on
@@ -709,6 +802,16 @@ neither of the later two.
 - **Space provisioning:** assert `setup-reminder.js` creates the "Reminders"
   space config and that the courier's messages then land in that single-sender
   space view (`@endo/space-chat`), not merely the `home` view.
+- **Provisioning idempotency (second-run adoption):** the load-bearing "must be
+  idempotent on the durable pet names" invariant (§ Provisioning, § What has to
+  change item 2) needs its own assertion, not just the first-run config check above.
+  Run `setup-reminder.js` **twice** against the same agent and assert the second run
+  **adopts** the existing `reminder-store`, `reminder-recipient`, and
+  `@pins/reminder` (the same formula identifiers / pet names resolve, and the same
+  "Reminders" space config binds to the same courier pet name) rather than minting
+  fresh ones. The failure this guards is a re-minted courier guest (a new sender)
+  silently splitting reminder history across two "Reminders" space views; a test
+  that only checks the first run cannot catch it.
 - **Playwright e2e:** for the `/remind-every` affordance once it exists,
   including an out-of-band duration (below the live `minPeriodMs` floor, 30 s by
   default, or above 24 h) surfacing as chat-bar feedback, and the un-provisioned
@@ -795,12 +898,22 @@ per plan.
   integration. Tightening `ReminderStoreDirectory` off `any`
   (`packages/reminder/src/types.d.ts:82`) is the type-level check that would have
   caught it.
-- **Do the plugin maintainers accept the `getReminder(id)` / `limits()` scheduler
+- **Do the plugin maintainers accept the `reminder(id)` / `limits()` scheduler
   getters** the baseline needs (§ What has to change, Reminder side)? Both are
   small, read-only additions, but they are changes to a *merged* package; if they
   are rejected, the self-reminders story has no reload-safe cancel path and the
   integration would have to withhold `/remind-every` until a courier-held handle
   registry is designed.
+- **Should `messageTimeoutMs` distinguish a pinned override from a default-derived
+  value** (§ What has to change, Reminder side, the optional refinement)? Today
+  `setPeriod` recomputes it to `periodMs / 2` on every retune, silently dropping the
+  widened catch-up deadline the courier relies on and forcing the courier to
+  re-assert the override at every mutation site. A companion `messageTimeoutPinned`
+  boolean (surfaced through the same getters) would let `setPeriod` leave a pinned
+  value alone, replacing a place-oriented "re-push everywhere" workaround with one
+  value the store can tell apart from a bare default. It is a mutation-semantics
+  change rather than a read-only one, so it is weighed here rather than folded into
+  the required getter pair.
 - What is the minimum viable scheduling affordance: a `/remind-every` chat-bar
   command (registered in `command-registry.js`, with its `<label>` remainder taken
   verbatim, *not* run through `message-parse.js`; see § What has to change on each
