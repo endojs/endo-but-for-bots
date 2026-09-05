@@ -79,9 +79,14 @@ delivers to **`@host`**, the user's own handle, never `@self`. `@self` is the
 host, `host.js:484`), so a courier that sends to `@self` deposits every reminder
 in its own mailbox and the user never sees it. The courier must send to `@host`
 (the user's handle in the courier's namespace). The scheduling half is now the
-external `@endo/reminder` plugin rather than an in-process `Timer` callback, so
-the courier is the piece that holds the send authority the plugin deliberately
-does not.
+external `@endo/reminder` plugin rather than an in-process `Timer` callback. The
+plugin delivers by calling `notify` on a recipient it resolves by name and is handed
+**no mailbox `send` power and no guest**: its `makeUnconfined` powers namehub carries
+only `reminder-store` (write) and `reminder-recipient` (the courier, `notify`-only),
+and although its worker holds ambient *Node* authority, that is not Endo mailbox
+authority — § Provisioning keeps the two on separate axes. So the delivery-to-`@host`
+capability lives on the courier alone; the courier is the piece that holds the mailbox
+send authority the plugin's deliver-by-`notify` design deliberately does not take.
 
 ```mermaid
 sequenceDiagram
@@ -113,8 +118,8 @@ derived automatically from the arrival of a new sender: spaces are explicit
 configs created only through `addSpace` / the modal and persisted under the
 `spaces` pet-store directory (`packages/chat/spaces-gutter.js:410`), and
 `InboxRoot` takes an explicit `conversationId` / `conversationPetName`
-(`packages/space-chat/src/inbox.js:1386`). So `setup-reminder.js` (§ What
-changes) must **provision the "Reminders" space config**; until it does, reminder
+(`packages/space-chat/src/inbox.js:1386`). So `setup-reminder.js` (§ What has to
+change on each side) must **provision the "Reminders" space config**; until it does, reminder
 messages surface only in the unfiltered `home` view (`chat/chat.js`). The one
 thing that would silently *fail* is self-to-self delivery: a message whose
 sender is the user's own handle is dropped from every named conversation view
@@ -168,7 +173,16 @@ sending to `@host`, not the user reminding itself.
   not `TypeError`: the package's error vocabulary reserves `TypeError` for a
   wrong-*type* argument (`scheduler.js:603,678`), `RangeError` for an out-of-band
   value (`:606,611`), and plain `Error` for a state violation (`:593` revoked,
-  `:684` maxActive), and an unresolvable id is a state condition. The baseline adds
+  `:684` maxActive), and an unresolvable id is a state condition. A **cancelled but
+  not-yet-collected** id is *not* unresolvable: `cancel()` sets `status: 'cancelled'`
+  but leaves the entry in the `entries` map (`scheduler.js:639-654`), so `reminder(id)`
+  still returns a live handle whose `cancel()` is an idempotent no-op and whose `info()`
+  reports the cancelled status — `reminder(id)` throws only once the entry is truly gone (unknown
+  id, or the whole service collected/revoked). `list()` *does* filter cancelled entries
+  out (`scheduler.js:766`), so a cancelled reminder disappears from the listing yet
+  stays resolvable by id — which is exactly why a stale-list `reminder(id).cancel()`
+  (the id was listed before another client cancelled it) is *success*, not a throw. The
+  baseline adds
   one more read-only verb, **`limits()`** returning `{ maxActive, minPeriodMs,
   maxPeriodMs }`, so the affordance can display the **live** cadence band instead of hardcoding a
   runtime-mutable floor (§ What has to change item 3); `help()` reports these values
@@ -216,12 +230,20 @@ This is also why "so the browser can drive it" is bounded: the browser has no
 portable way to compute a daemon-host path, so specifier resolution happens in the
 script on the daemon host, not in the UI. The plan follows that precedent with a **`setup-reminder.js`** script
 (§ What has to change on each side), leaving an in-UI "enable reminders"
-affordance as a later convenience. `setup-reminder.js` must be **idempotent on
-the durable pet names** it mints: a second run must adopt the existing
-`reminder-store`, `reminder-recipient`, and `@pins/reminder` rather than mint
-fresh ones, because a re-minted courier guest is a new sender and would silently
-split reminder history across two "Reminders" space views (§ What has to change,
-courier). Provision the service in a **dedicated named worker** (an explicit
+affordance as a later convenience. `setup-reminder.js` must be **idempotent**, but
+its idempotency **cannot** key on the pet names it mints — the last step forgets them
+(`reminder-store-src`, `reminder-sender-guest`, `reminder-recipient-src`, `agentName`;
+see below), so a second run cannot re-resolve them by name to "adopt" them. Instead it
+keys on the **one durable name the host keeps**: it checks whether
+`reminder-scheduler` (equivalently `@pins/reminder`) already resolves and, if so,
+**early-exits without minting anything** (the fae precedent's own shape,
+`E(agent).has('llm-provider-factory')` → skip, `packages/fae/setup.js:21-26`). The
+already-provisioned store, courier, service, and "Reminders" space config persist
+untouched on the provisioning guest and in the spaces pet store, so a second run adds
+nothing. The property this protects is that a re-minted courier guest would be a **new
+sender** and would silently split reminder history across two "Reminders" space views
+(§ What has to change, courier); early-exit-on-`reminder-scheduler` prevents exactly
+that without needing to retain — and thereby leak — any of the forgotten seed names. Provision the service in a **dedicated named worker** (an explicit
 `workerName`), not the shared `@node` worker: `makeUnconfined` grants the plugin
 ambient Node authority in its worker, and defaulting `workerName` (`host.js`)
 would co-locate the reminder plugin's ambient authority with every other
@@ -274,7 +296,11 @@ The powers namehub the plugin resolves must carry exactly two names:
   (`packages/reminder/src/types.d.ts:82`); tightening that alias to the extended-fs
   `Directory` type would have surfaced the divergence at compile time and is named
   integration work.
-- **`reminder-recipient`:** the reminder courier caplet (below). "Durable" here
+- **`reminder-recipient`:** the reminder courier caplet (below) — the confined
+  `notify`-only exo, **not** the courier guest. Its send authority (the courier guest)
+  is **not** bound here; it lives in the caplet's *own* `powersName` namehub (bound as
+  `sender`), so the plugin's namehub carries only `notify` and never the guest (§ What
+  has to change, the courier caplet). "Durable" here
   means it survives a daemon restart so `revivePins()`-driven recovery re-resolves
   it **by name**, which requires it to be a **daemon-side formula**, not a bare
   `makeExo` in a transient script or the browser: an exo with no daemon formula
@@ -294,12 +320,13 @@ The powers namehub the plugin resolves must carry exactly two names:
 ```mermaid
 flowchart LR
     Agent["Chat @agent HOST (launcher,<br/>performs every mint)"]
-    Prov["provisioning guest (agentName,<br/>forgotten as setup's last step)"]
-    Agent -->|"provideScratchMount"| Store["reminder-store: VFS dir"]
-    Agent -->|"provideGuest (courier guest: send to @host)"| Guest["courier guest"]
-    Guest -->|"held privately by"| Courier["reminder courier caplet: notify only"]
-    Agent -->|"provideGuest(agentName,<br/>introducedNames seed Store + Courier)"| Prov
-    subgraph powersName["attenuated powers namehub (the provisioning guest,<br/>seeded by the host via introducedNames)"]
+    Prov["provisioning guest (agentName +<br/>store/guest/caplet seed names,<br/>all forgotten as setup's last step)"]
+    Agent -->|"provideScratchMount (reminder-store-src)"| Store["reminder-store: VFS dir"]
+    Agent -->|"provideGuest (reminder-sender-guest: send to @host)"| Guest["courier guest"]
+    Agent -->|"makeArchive/makeFromTree (reminder-recipient-src)"| Courier["reminder courier caplet: notify only"]
+    Guest -->|"bound as 'sender' in caplet's OWN powersName,<br/>never in the plugin's namehub"| Courier
+    Agent -->|"provideGuest(agentName,<br/>introducedNames seed Store + Caplet only)"| Prov
+    subgraph powersName["plugin powers namehub (the provisioning guest,<br/>seeded via introducedNames: store + caplet, NOT the guest)"]
       Store
       Courier
     end
@@ -329,16 +356,36 @@ mint a **separate guest principal**, then `makeUnconfined('@main', spec, {
 powersName: agentName })` to run the caplet on **that guest's** namehub, not the
 invoking host's. `setup-reminder.js` follows the same shape with one addition the
 fae precedent already demonstrates: the plugin's powers namehub must carry
-`reminder-store` and `reminder-recipient`, so the **host** mints both first (the
-mount via `provideScratchMount`, the courier guest via `provideGuest`) under its own
-pet names, then mints the provisioning guest with
+`reminder-store` and `reminder-recipient`, so the **host** mints the pieces first,
+each under its **own** pet name: (1) the store mount via
+`provideScratchMount('reminder-store-src')`; (2) the courier **guest** — the
+send-to-`@host` authority — via `provideGuest('reminder-sender-guest')`; and (3) the
+courier **caplet**, the confined `notify`-only exo built from the stored archive (§ the
+`reminder-recipient` bullet above), whose *own* `powersName` binds that courier guest as
+`sender`, stored as `reminder-recipient-src`. **Only the store mount and the courier
+*caplet* — never the courier *guest* — are seeded into the plugin's namehub;** the guest
+stays inside the caplet's own powers namehub, which is the whole point of the courier's
+structural attenuation (§ What has to change, the courier caplet). So the host then mints
+the provisioning guest with
 `provideGuest(reminderProvName, { agentName, introducedNames: harden({
-'reminder-store': <host-name>, 'reminder-recipient': <host-name> }) })` so those two
-names are **seeded into the provisioning guest's namehub at creation** (exactly the
-`introducedNames` seeding fae uses for `@agent`, `setup.js:33`), and finally
-`makeUnconfined(spec, { powersName: agentName })` runs the service against that
-seeded namehub (`agentName` is the option that names the guest's control handle, as
-in fae, and the pet name the host forgets afterward). The host
+'reminder-store-src': 'reminder-store', 'reminder-recipient-src': 'reminder-recipient'
+}) })` so those two names are **seeded into the provisioning guest's namehub at
+creation**. **The `introducedNames` mapping direction is `{ <name in the host's own
+pet store>: <name to bind in the new guest> }`, not the reverse:**
+`introduceNamesToAgent` looks the **key** up in the inviting host's store
+(`petStore.identifyLocal`) and `storeIdentifier`s it into the guest under the
+**value** (`packages/daemon/src/host.js:1860-1873`; fae seeds
+`{ '@agent': 'host-agent' }`, `setup.js:33`). Getting the direction backwards
+(guest-facing name as key) **fails silently** — `identifyLocal` returns `undefined`
+for a name the host does not hold, so the entry is skipped with no error, and the
+plugin's later `reminder-store` / `reminder-recipient` lookup then finds nothing. So
+the host's seed pet names (`reminder-store-src`, `reminder-recipient-src`) are the
+**keys** and the plugin-facing names are the **values**. Finally
+`makeUnconfined(spec, { powersName: agentName, workerName: reminderWorkerName })` runs
+the service against that seeded namehub in its **dedicated** worker (§ Provisioning
+forbids the shared `@node` worker; `agentName` names the guest's control handle, as in
+fae, and the host forgets it — together with the store, courier-guest, and
+courier-caplet seed pet names — afterward, see below). The host
 hands the Chat UI **only** the `ReminderScheduler` facet, stored as a bare
 capability (`reminder-scheduler`) the UI can `lookup`, while `ReminderControl`, the
 store mount, and `@pins/reminder` stay on the provisioning guest, unreachable from
@@ -352,18 +399,27 @@ the guest's own name-hub mutation surface after creation, which reaches the same
 state by a different call. Either way the mint stays a host act; the achievability
 claim rests on the host, not on any guest-side minting.
 
-The residual is narrow, not "no attenuation": the invoking `@agent` retains
-`agentName` as a pet name (a handle to the provisioning guest) for the duration
-of provisioning. Forgetting that handle is **`setup-reminder.js`'s own last step**,
-not a manual chore left to an operator: after the `reminder-scheduler` facet is
-stored, the script calls `E(agent).remove(agentName)` (or the equivalent name-hub
-delete) so the invoking host keeps no reach to the provisioning guest's control
-surface. Until that step runs the residual is exactly as wide as the
-single-principal case, which is why the design assigns the removal to a concrete
-step rather than describing the handle as merely "removable". That transient
-residual is the real cost of the single-launcher recipe, far smaller than
-surrendering the whole split, and it does **not** force accepting the
-config-corruption brick risk.
+The residual is narrow, not "no attenuation", but it is wider than a single handle:
+minting the store, the courier guest, and the courier caplet under the host's own
+`reminder-store-src` / `reminder-sender-guest` / `reminder-recipient-src` pet names
+(minting is a host authority, and `introducedNames`' keys must be names the host itself
+holds) means the invoking `@agent` **transiently holds all four** — those three seed
+names **and** `agentName` — for the duration of provisioning. Left in place, the seed
+names would **falsify the attenuation claim outright**: the `reminder-store` mount, the
+courier guest, and the courier caplet would stay reachable from Chat's `@agent` exactly
+as in the single-principal case, regardless of what the provisioning guest holds. So
+forgetting **all four** is **`setup-reminder.js`'s own last step**, not a manual chore
+left to an operator: after the `reminder-scheduler` facet is stored, the script calls
+`E(agent).remove(agentName)`, `E(agent).remove('reminder-store-src')`,
+`E(agent).remove('reminder-sender-guest')`, and
+`E(agent).remove('reminder-recipient-src')` (or the equivalent name-hub deletes) so the
+invoking host keeps no reach to the provisioning guest's control surface, the store
+mount, the courier guest, or the courier caplet. Until that
+step runs the residual is exactly as wide as the single-principal case, which is why the
+design assigns each removal to a concrete step rather than describing the handles as
+merely "removable". That transient residual is the real cost of the single-launcher
+recipe, far smaller than surrendering the whole split, and it does **not** force
+accepting the config-corruption brick risk.
 
 The store, not `env`, is authoritative for the limits, and `readConfig`
 (`packages/reminder/src/store.js:87`) is deliberately **not** corruption-tolerant
@@ -454,11 +510,14 @@ sibling plans.
    This is the **actual** `deliverMessage` payload (`scheduler.js:310-321`), not a
    reduced picture: it carries `periodMs`, `scheduledAt`, and `actualAt`, but it
    **does not carry `messageTimeoutMs`** (the field the retry-deadline argument
-   below leans on), which is why the courier must fetch that value separately rather
-   than read it off the message.
+   below leans on). The courier does **not** compensate by fetching that value: the
+   retry-deadline invariant is met by *provisioning* the reminder with a wide
+   `messageTimeoutMs` (§ the retry-deadline paragraph below), so the courier needs no
+   scheduler reference and stays a `notify`-only exo.
 
    | Field | Meaning |
    |---|---|
+   | `type` | the literal `'reminder-message'` discriminant; the courier's `notify` guard validates it (`scheduler.js:311`). |
    | `label` | the reminder text, delivered verbatim and opaque. |
    | `reminderId` | the reminder's stable id; a **capability key, not a bearer token** (see § The interactive-response gap). |
    | `periodMs` | the reminder's current cadence, carried on every firing. |
@@ -466,14 +525,23 @@ sibling plans.
    | `scheduledAt` | `nextTickAt - periodMs`, the tick this firing is for. |
    | `actualAt` | wall-clock delivery time. |
    | `missedMessages` | count of firings coalesced into this one after downtime (0 in the steady state). |
-   | `annotation` | present on *every* message; `annotation: 'count'` yields a number, `annotation: 'timestamps'` a list; the formatter handles both. |
+   | `annotation` | present on *every* message, as a discriminated **object**, not a bare scalar (`computeAnnotation`, `scheduler.js:254-264`): the reminder's `entry.annotation` config `'count'` yields `{ kind: 'count', count }` (where `count = missedMessages + 1`), and `'timestamps'` yields `{ kind: 'timestamps', scheduledTimes: number[] }`; the formatter switches on `.kind` and handles both. |
    | `reminderResponse` | the one-shot `resolve()` / `reschedule()` exo (§ The interactive-response gap). |
-   | *(absent)* `messageTimeoutMs` | **not** in the payload; the courier reads the effective value via `E(scheduler).reminder(reminderId).info()` (§ the retry-deadline paragraph below). |
+   | *(absent)* `messageTimeoutMs` | **not** in the payload, and the courier does **not** read it: reliability rests on the reminder being *provisioned* with a wide `messageTimeoutMs` at creation (§ the retry-deadline paragraph below), so the courier holds no scheduler reference. |
 
    The courier is a hardened exo (`makeExo` + an `M.interface` guard exposing
    exactly `notify(message)`, validating that `reminder-message` shape rather than
-   trusting the sender's record). It **closes over** a guest privately; that held
-   guest, never itself reachable from the powers namehub, is the trust boundary.
+   trusting the sender's record). Its send authority is the courier **guest**, which
+   it obtains — not as an ambient JS closure over a pre-existing reference (a confined
+   caplet built from a stored archive has no such scope), but by resolving it **once
+   at construction from its own attenuated powers namehub**. Concretely: the courier
+   is made confined (`makeArchive` / `makeFromTree`, § Provisioning) with a
+   `powersName` naming a namehub that binds **only** the courier guest (e.g. under
+   `sender`); the courier looks `sender` up once, retains it in module scope, and
+   **never re-exports it**. The trust boundary is that this guest is reachable from the
+   *courier's own* powers namehub but **never from the *plugin's* powers namehub** —
+   which binds only `reminder-recipient` (the courier exo, `notify`-only) and
+   `reminder-store` (§ Provisioning), so nothing the plugin resolves reaches the guest.
    The distinction is load-bearing: a bare guest is **not** "send-to-self only".
    `provideGuest` yields the full `GuestInterface` (the whole name-hub read *and
    mutation* surface, directory file I/O, the entire mailbox (`request`, `adopt`,
@@ -518,74 +586,80 @@ sibling plans.
    that auto-acks anyway would drop the reminder and suppress the plugin's retry).
    Do not resolve before the send is confirmed.
 
-   **The retry has a deadline the courier must beat, and the margin is numeric.**
-   The per-firing latch is *also* consumed by the plugin's message-deadline timer,
-   which auto-resolves the response at `messageTimeoutMs` (default `periodMs / 2`,
-   `packages/reminder/src/scheduler.js:326-333`). **The courier cannot read
-   `messageTimeoutMs` off the `notify` payload** (it is absent, § the message-shape
-   table above); because this design recommends *overriding* it away from the
-   `periodMs / 2` default (two paragraphs down, precisely to widen the catch-up
-   deadline), the courier must not assume the default either. It learns the
-   **effective** value by calling `E(scheduler).reminder(reminderId).info()` before
-   it computes its self-imposed send deadline: `info()` returns the entry verbatim
-   (`harden({ ...entry })`, `scheduler.js:656`), so `messageTimeoutMs` is exposed
-   there even though it never rides the message. That fetch **races a concurrent
-   `setPeriod` retune**, which recomputes `messageTimeoutMs` to `periodMs / 2`
-   (`scheduler.js:628`): the value can go stale between the read and the send, so the
-   courier must treat a fetched deadline as advisory to the *current* firing only and
-   re-`info()` on each retry rather than caching it across firings. (This is one more
-   reason the sticky-override problem below matters: a retune both invalidates the
-   cached deadline and drops the widened timeout.) A `send` that resolves or rejects
+   **The retry has a deadline the courier cannot beat on its own — so the deadline
+   is provisioned wide instead.** The per-firing latch is *also* consumed by the
+   plugin's message-deadline timer, which auto-resolves the response at
+   `messageTimeoutMs` (default `periodMs / 2`,
+   `packages/reminder/src/scheduler.js:326-333`). A `send` that resolves or rejects
    *later* than that deadline (a stalled CapTP-over-WebSocket link on a
-   browser-attached daemon, the ordinary degraded case, and only 15 s at the 30 s
+   browser-attached daemon — the ordinary degraded case, and only 15 s at the 30 s
    floor) hits an already-consumed latch: the firing is counted **delivered**, and
    the courier's later `E(reminderResponse).reschedule()` is silently inert, so the
    failure is dropped with no backoff and no signal beyond the plugin's
-   `console.warn`. Bounding the courier's `send` with a self-imposed deadline is
-   necessary but **not sufficient**, because `reschedule()` itself gives up when
-   `now() + backoffDelay >= scheduledAt + messageTimeoutMs` (`scheduler.js:420-434`):
-   the courier must call `reschedule()` early enough that a **first backoff delay**
-   of `min(1000, periodMs / 10)` (`backoff.js:41`) still fits before the plugin's
-   deadline, or no retry fires at all. So the courier's self-imposed deadline must
-   be shorter than `messageTimeoutMs` by **at least** that first backoff delay (plus
-   the firing's own age), not merely shorter than `messageTimeoutMs`. Worse, on a
-   **coalesced catch-up** delivery (recovery after downtime), the plugin advances
-   `nextTickAt` past the missed ticks *before* delivering (`scheduler.js:557,584`),
-   so the effective `scheduledAt` (`nextTickAt - periodMs`) is up to `periodMs` in
-   the past and `scheduledAt + messageTimeoutMs` can already lie at or before
-   `now()` when the message is delivered: `reschedule()` then gives up
-   **immediately** and a failed catch-up delivery is counted delivered with no retry
-   possible. For both windows the reliable fix is the second lever: provision the
-   reminder with an explicit `messageTimeoutMs` **exceeding the send budget plus the
-   first backoff delay**, so the deadline is wide enough to admit a retry; a
-   courier-side timer alone cannot rescue the catch-up case. Stating the retry
-   invariant without these numeric margins makes it inert exactly when it is needed.
-   (Caveat: an explicitly-set `messageTimeoutMs` is **not sticky**: the handle's
-   `setPeriod` recomputes it to `periodMs / 2` unconditionally, `scheduler.js:628`,
-   so a later retune through `reminder(id)` must re-assert it. Requiring every future
-   caller to re-push the override on every mutation site is a place-oriented
-   workaround; the cleaner reminder-side fix, offered as an alternative below (§
-   Reminder side) and in § Open questions, is to have the field itself distinguish a
-   *default-derived* timeout from an *explicitly-pinned* one, so `setPeriod` leaves a
-   pinned value alone.)
+   `console.warn`. The obvious repair — have the courier read the effective
+   `messageTimeoutMs` and self-impose a shorter send deadline — is **rejected**,
+   because it would break the courier's attenuation on two counts. `messageTimeoutMs`
+   is absent from the `notify` payload (§ the message-shape table above); the only
+   surface that exposes it is `E(scheduler).reminder(id).info()`, and holding the
+   scheduler would (a) widen the courier far past the `notify`-only exo the whole
+   attenuation story rests on (§ Provisioning, the courier caplet), and (b) create a
+   **provisioning cycle** — the scheduler is created by `makeUnconfined` *against a
+   powers namehub that already binds the courier as `reminder-recipient`*, so the
+   courier cannot close over a scheduler that does not yet exist when the courier is
+   built. The reliable fix needs the courier to hold **nothing** extra: provision each
+   reminder with an explicit `messageTimeoutMs` **exceeding the worst-case send budget
+   plus the first backoff delay** of `min(1000, periodMs / 10)` (`backoff.js:41`), so
+   the latch is still open when the courier's `send` settles and its `reschedule()` on
+   a rejection is still live (`reschedule()` itself gives up once
+   `now() + backoffDelay >= scheduledAt + messageTimeoutMs`, `scheduler.js:420-434`, so
+   the margin must clear that first backoff delay, not merely `messageTimeoutMs`). This
+   is set **at creation, by the scheduling affordance** that calls
+   `makeReminder(label, periodMs, { messageTimeoutMs })` (§ What has to change item 3):
+   the UI holds the scheduler; the courier never does. The **coalesced catch-up**
+   delivery makes the wide-provisioned timeout not merely preferable but necessary: on
+   recovery after downtime the plugin advances `nextTickAt` past the missed ticks
+   *before* delivering (`scheduler.js:557,584`), so the effective `scheduledAt`
+   (`nextTickAt - periodMs`) is up to `periodMs` in the past and
+   `scheduledAt + messageTimeoutMs` can already lie at or before `now()` when the
+   message arrives; a *default* `periodMs / 2` timeout then leaves `reschedule()` to
+   give up **immediately**, so only a timeout provisioned wide enough to still straddle
+   `now()` after the catch-up advance admits a retry at all. A courier-side timer could
+   not rescue this case even with the scheduler in hand — a second reason to drop that
+   coupling. Stating the retry invariant without this provisioned numeric margin makes
+   it inert exactly when it is needed. (Caveat: an explicitly-set `messageTimeoutMs` is
+   **not sticky** — the handle's `setPeriod` recomputes it to `periodMs / 2`
+   unconditionally, `scheduler.js:628` — so a later retune through `reminder(id)` must
+   re-assert it; that re-assertion is likewise the **UI's** job, on the same scheduler
+   handle it already drives, never the courier's. Requiring every future caller to
+   re-push the override on every mutation site is a place-oriented workaround; the
+   cleaner reminder-side fix, offered as an alternative below (§ Reminder side) and in
+   § Open questions, is to have the field itself distinguish a *default-derived* timeout
+   from an *explicitly-pinned* one, so `setPeriod` leaves a pinned value alone.)
 2. **`setup-reminder.js`.** An `endo run --UNCONFINED ...` script that, launched
    under Chat's own `@agent` (a **host**), mints the store mount
-   (`provideScratchMount`) and the courier guest (`provideGuest`) under host pet
+   (`provideScratchMount`), the courier guest (`provideGuest`), and the courier
+   caplet (the confined `notify`-only exo from the stored archive) under host pet
    names, then mints a **dedicated provisioning guest** whose namehub is
-   **seeded** with `reminder-store` + `reminder-recipient` via `provideGuest`'s
-   `introducedNames` (mirroring `packages/fae/setup.js:20-42`; every mint is a
-   host act, § Provisioning), `makeUnconfined`s the service (`powersName` = the
-   provisioning guest) pinned into `@pins`, and hands the Chat UI **only**
-   the `ReminderScheduler` facet stored as `reminder-scheduler` (§ Provisioning).
-   The baseline is therefore **attenuated**: `ReminderControl`, the store mount, and
-   `@pins/reminder` stay unreachable from Chat's `@agent`. As its **last step** the
-   script **forgets `agentName`** (`E(agent).remove(agentName)`), so the invoking
-   host retains no reach to the provisioning guest's control surface; the removal is
-   an assigned step of the script, not an operator chore. It is
-   **idempotent on its durable pet names**: a second run adopts the existing
-   `reminder-store` / `reminder-recipient` / `@pins/reminder` and re-binds the same
-   "Reminders" space config to the same courier pet name, rather than re-minting a
-   guest (a new sender) and splitting reminder history across two space views.
+   **seeded** with `reminder-store` + `reminder-recipient` (the store mount and the
+   courier *caplet*, **never** the courier guest) via `provideGuest`'s
+   `introducedNames` (mirroring `packages/fae/setup.js:20-42`, correct-direction
+   `{ hostOwnName: guestName }`; every mint is a host act, § Provisioning),
+   `makeUnconfined`s the service (`powersName` = the provisioning guest,
+   `workerName` = a dedicated worker) pinned into `@pins`, and hands the Chat UI
+   **only** the `ReminderScheduler` facet stored as `reminder-scheduler` (§ Provisioning).
+   The baseline is therefore **attenuated**: `ReminderControl`, the store mount, the
+   courier guest, and `@pins/reminder` stay unreachable from Chat's `@agent`. As its
+   **last step** the script **forgets `agentName` and every `-src`/guest seed pet name**
+   (`E(agent).remove(agentName)` plus the store, courier-guest, and courier-caplet seed
+   names), so the invoking host retains no reach to the provisioning guest's control
+   surface, the store mount, the courier guest, or the courier caplet; the removals are
+   assigned steps of the script, not an operator chore. It is **idempotent**, keyed on
+   the **one name it keeps**: a second run checks whether `reminder-scheduler`
+   (equivalently `@pins/reminder`) already resolves and, if so, **early-exits without
+   minting anything** — it does *not* re-resolve the forgotten seed names to "adopt"
+   them (it cannot; they are gone), it simply leaves the already-provisioned service and
+   "Reminders" space config untouched. This prevents the re-minted courier guest (a new
+   sender) that would otherwise split reminder history across two space views.
    Mirrors `setup-lal.js` in shape.
 3. **A scheduling affordance.** Minimal first cut: a chat-bar command **registered
    in the house `command-registry.js` slash-command surface**
@@ -630,6 +704,16 @@ sibling plans.
      because every one of the ~40 existing `command-registry.js` entries is
      verb-first (`adopt-locator`, `mkhost`, `checkin`, and `/remind-every` itself),
      so a noun-shaped name would be the only one and break the menu's scannability.
+   - **Provision a reliable retry deadline.** When it calls
+     `E(scheduler).makeReminder(label, periodMs, opts)`, the affordance passes an
+     explicit `messageTimeoutMs` in `opts`, wide enough to clear the worst-case send
+     budget plus the first backoff delay (§ What has to change item 1, the
+     retry-deadline paragraph); and because `setPeriod` recomputes `messageTimeoutMs`
+     to `periodMs / 2` on every retune, the listing/cancel affordance **re-asserts**
+     the override whenever it drives `reminder(id).setPeriod(...)`. The courier holds
+     no scheduler, so setting and re-asserting this value is the **affordance's** job,
+     not the courier's — this is the assigned owner of the "provision the reminder with
+     a wide `messageTimeoutMs`" lever the retry-deadline paragraph names.
    - Handle the **un-provisioned** case: `lookup('reminder-scheduler')` rejects
      until `setup-reminder.js` has run, so the command is **hidden from the menu
      until `reminder-scheduler` resolves** (and, if invoked anyway, shows a
@@ -745,17 +829,20 @@ neither of the later two.
   the `count` and `timestamps` shapes; it resolves the response only after `send`
   resolves, and calls `reschedule()` when the stub `send` rejects.
 - **Slow-send deadline test (the ordinary degraded case):** drive the courier
-  with a stub `send` that resolves *later* than the courier's self-imposed
-  deadline and assert the courier fires `reschedule()` on its own deadline (before
-  the plugin's latch is auto-consumed), not a late `resolve()`. Stub the scheduler
-  so `reminder(reminderId).info()` returns an **overridden** `messageTimeoutMs`
-  (not the `periodMs / 2` default) and assert the courier's self-imposed deadline is
-  derived from that fetched value, *not* from an assumed default: this is the exact
-  case the § What has to change retry-deadline paragraph exists for (the courier
-  cannot read `messageTimeoutMs` off the payload, so a courier that assumed the
-  default would compute the wrong deadline). The design names this the expected
-  failure mode of a browser-attached daemon rather than an exotic one; the
-  happy-path and immediate-rejection cases in the courier unit test do not cover it.
+  with a stub `send` that rejects after a delay (and, separately, one that resolves
+  after a delay) and assert that with a **wide-provisioned `messageTimeoutMs`** the
+  plugin's per-firing latch is still open when the courier settles, so its
+  `E(reminderResponse).reschedule()` on the rejection actually re-arms the backoff
+  (and `resolve()` on success actually acks) rather than hitting an already-consumed
+  latch. Assert the **negative** too: with the *default* `periodMs / 2` timeout and a
+  send slower than it, the latch is auto-consumed and the courier's later
+  `reschedule()` is inert — the exact failure the wide-provisioned timeout exists to
+  prevent. The courier is driven with **no scheduler reference**; the reliability
+  lever is the provisioned timeout, set by the scheduling affordance at `makeReminder`
+  time (§ What has to change item 3, retry-deadline paragraph), not a value the courier
+  fetches. The design names this the expected failure mode of a browser-attached daemon
+  rather than an exotic one; the happy-path and immediate-rejection cases in the courier
+  unit test do not cover it.
 - **Opaque-label test:** a label containing `@name` round-trips verbatim (is
   *not* lifted into `petNames`) and delivery does not throw `Unknown pet name`.
   The same test must additionally cover the two hazards the courier's
@@ -802,16 +889,20 @@ neither of the later two.
 - **Space provisioning:** assert `setup-reminder.js` creates the "Reminders"
   space config and that the courier's messages then land in that single-sender
   space view (`@endo/space-chat`), not merely the `home` view.
-- **Provisioning idempotency (second-run adoption):** the load-bearing "must be
-  idempotent on the durable pet names" invariant (§ Provisioning, § What has to
-  change item 2) needs its own assertion, not just the first-run config check above.
-  Run `setup-reminder.js` **twice** against the same agent and assert the second run
-  **adopts** the existing `reminder-store`, `reminder-recipient`, and
-  `@pins/reminder` (the same formula identifiers / pet names resolve, and the same
-  "Reminders" space config binds to the same courier pet name) rather than minting
-  fresh ones. The failure this guards is a re-minted courier guest (a new sender)
-  silently splitting reminder history across two "Reminders" space views; a test
-  that only checks the first run cannot catch it.
+- **Provisioning idempotency (second-run early-exit):** the load-bearing
+  idempotency invariant (§ Provisioning, § What has to change item 2) needs its own
+  assertion, not just the first-run config check above. Run `setup-reminder.js`
+  **twice** against the same agent and assert the second run **early-exits on the
+  retained `reminder-scheduler`** (equivalently `@pins/reminder`) and mints nothing:
+  the service's formula identifier is unchanged, the "Reminders" space config still
+  binds to the same courier sender, and — the point of the forget step — the second
+  run does **not** re-mint a courier guest even though the first run's `-src` seed
+  names are gone (`reminder-scheduler` resolving, not a retained seed name, is what
+  the second run keys on). Additionally assert the first run left **no** `-src`/guest
+  seed pet names on the invoking `@agent` (the forget step ran). The failure this
+  guards is a re-minted courier guest (a new sender) silently splitting reminder
+  history across two "Reminders" space views; a test that only checks the first run
+  cannot catch it.
 - **Playwright e2e:** for the `/remind-every` affordance once it exists,
   including an out-of-band duration (below the live `minPeriodMs` floor, 30 s by
   default, or above 24 h) surfacing as chat-bar feedback, and the un-provisioned
