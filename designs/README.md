@@ -521,8 +521,8 @@ unchanged.
 
 The 2026-09-04 rebase adds [endo-zone](endo-zone.md) (Proposed) to M10 as the
 portable Zone prerequisite for `@endo/ertp`, increasing Proposed from 39 to 40
-and the design count from 196 to 197. Its M-size (3-4 day) estimate is small
-enough to absorb within M10's existing 14-20 week range, so the milestone
+and the design count from 196 to 197. Its M-sized (3-4-day) estimate is small
+enough to absorb within M10's existing 14-20-week range, so the milestone
 aggregate and total-remaining week bands are unchanged; only the constituent
 count (7 to 8) and the total-remaining design count (65 to 66) move.
 
