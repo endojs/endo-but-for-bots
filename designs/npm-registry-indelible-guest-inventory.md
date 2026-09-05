@@ -33,6 +33,10 @@ configuration, credential, raw-network, or content-store administration surface.
 Once the underlying tree design ships, the Node-hosted Endo daemon projects this
 name; Rust-hosted Endor will match the same tree contract at that point, and adds
 the inventory projection once it grows an agent and guest model.
+Endor is the Rust backend: today it is only an npm resolver and assembler, with no
+agent, guest, formula-graph, or inventory model of its own, which is why the
+Goals and Non-goals below stage every inventory-side requirement as Node-now and
+Endor-later (see Node and Endor parity).
 
 ## The problem being solved
 
@@ -136,16 +140,27 @@ one public registry policy.
 write-once `registry` slot at formulation, not a live alias each guest tracks.
 Rotating the default (out of scope per Non-goals) therefore leaves already-seated
 guests on their original identifier while newly formulated guests take the new
-one; the only reconvergence path is a fresh per-guest migration that reuses the
-Phase 2 idempotent-rewrite mechanism. This copy-once fragmentation-after-rotation
-is a deliberate, named limitation, not a silent one.
+one. Because the `registry` field is write-once, there is no in-place
+reconvergence for an already-seated guest: the migration pass (Phase 2, defined
+below under Implementation phases and tests) fills only an *absent* field and by
+construction skips a guest that already carries one. Reconverging an existing
+guest onto a rotated default therefore means formulating a *fresh* guest against
+it and migrating its ordinary pet names by hand (the broken-root recovery path in
+Persistence, reachability, and inspection), not rewriting the seated field. This
+copy-once fragmentation-after-rotation is a deliberate, named limitation, not a
+silent one.
 A daemon that needs guest-specific accounting may formulate attenuating roots
 with the same tree interfaces, but the slot remains required and the guest
 cannot select a wider root.
 The formulation-time mechanism by which an operator seats a non-default per-guest
 root (a guest-maker registry-root parameter or override argument) is left to the
-implementation build and is not specified here; this design names only the
-resulting capability shape, not the API surface that seats it.
+implementation build and is not fully specified here; this design names only the
+resulting capability shape, not the exact API surface that seats it. It does fix
+one minimal element of that shape, because a later section leans on it: the
+seating hook accepts, alongside the root override, an optional cancellation-wiring
+callback, so an operator seating a 1:1 per-guest root can opt that guest into
+dying with its root (see Persistence, reachability, and inspection). The build
+chooses the callback's spelling; this design only requires that the seam exists.
 
 The floor contract at the required slot is fixed regardless of which root an
 operator seats there, so a caller never branches on coverage: `@registry` always
@@ -249,7 +264,10 @@ shared root's aggregate origin traffic is therefore a **required property of the
 backend an operator seats at the mandatory slot** (it must carry the
 daemon-owned cancellation, size, and concurrency limits named above), and this
 design records it as an open constraint on the seated root rather than an
-already-owned one. An operator needing per-guest accounting seats a distinct
+already-owned one. The test catalog gates that constraint (Implementation phases
+and tests: a lookup exceeding the seated bound is refused or canceled at the root,
+and no guest method relaxes it) so the requirement is asserted by a test rather
+than by prose alone. An operator needing per-guest accounting seats a distinct
 attenuating root per guest rather than the shared default.
 
 The first configured child is `npm`, backed by unauthenticated public reads.
@@ -369,8 +387,9 @@ directory-tree design's registry failure family at each call) rather than
 canceling the guest. Uniform wiring keeps the slot's lifecycle contract identical
 regardless of which root an operator seats, so a caller never has to reason about
 whether a given guest's root death is fatal. An operator who instead wants a
-per-guest root's death to cancel its guest wires that cancellation explicitly at
-formulation rather than relying on the slot.
+per-guest root's death to cancel its guest passes the optional cancellation-wiring
+callback named on the seating hook in Placement and name, wiring that cancellation
+explicitly at formulation rather than relying on the slot.
 The write-once slot has no in-place repair for a permanently-broken per-guest
 root: repointing that guest's `registry` field is out of scope (Non-goals, root
 rotation), so recovery means formulating a fresh guest against a working root and
@@ -394,7 +413,9 @@ missing `@registry` inventory name.
 ## Migration and compatibility
 
 Existing persisted guest formulas do not have a `registry` field.
-Both daemons run an idempotent upgrade before exposing guests:
+The Node daemon runs an idempotent upgrade before exposing guests (Endor has no
+persisted `GuestFormula` records to migrate under this design, per Node and Endor
+parity, so it has no Phase 2 deliverable now):
 
 1. formulate or locate the daemon's guest-safe public registry root;
 2. find each local `GuestFormula` without `registry`;
@@ -408,9 +429,9 @@ required-field migration for `HostFormula.registry`, but the shipped daemon chos
 the opposite policy and fails fast when a host formula lacks `registry`
 (`manager.js` throws `Host formula missing registry (@registry required)`); there
 is no migration runner in the codebase today.
-Phase 2 therefore builds the daemon's first formula-rewriting upgrade:
-enumerate persisted guest formulas, rewrite each in place, and update the graph
-transactionally.
+Phase 2 (Implementation phases and tests, below) therefore builds the daemon's
+first formula-rewriting upgrade: enumerate persisted guest formulas, rewrite each
+in place, and update the graph transactionally.
 It fills only an absent field, preserves an existing field, and makes a second
 start a no-op.
 The transactional boundary is per-guest, not per-enumeration: a single guest
@@ -487,6 +508,13 @@ The tests cover:
   guest lookup, and a private-only package is reported as absent through the
   mandatory root, indistinguishable from an unpublished package (the deliberate
   confidentiality choice recorded under Design decisions);
+- a guest lookup that would exceed the seated root's daemon-owned bound (a
+  size, concurrency, or cancellation limit named under Authority and attenuation)
+  is refused or canceled at the root rather than passed through unbounded to the
+  origin, and the guest holds no tree method that relaxes that bound; this gates
+  the "required property of the backend an operator seats" assumption the
+  shared-root aggregate-exposure argument rests on, rather than leaving it merely
+  asserted;
 - reflection and method-guard tests find no publish, grant, credential,
   configuration, raw HTTP, registry-table mutation, or CAS-write method; and
 - Node returns the tree contract's names, path objects, ordering, content
