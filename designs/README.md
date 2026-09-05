@@ -6,6 +6,14 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[npm-registry-indelible-guest-inventory](npm-registry-indelible-guest-inventory.md)
+(added 2026-09-04; makes the package-registry directory tree an indelible member
+of every guest inventory under the special name `@registry`, via a required
+`GuestFormula.registry` formula field projected through the special-name overlay;
+present by construction, GC-reachable, and impossible for the guest to remove,
+rename, rebind, or shadow; a credential-free guest-safe public-read attenuation
+of the host tree, with a Node inventory projection now and Endor deferred to a
+later agent/guest model),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
 2026-09-03; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
@@ -333,6 +341,7 @@ LLM-agent stack).*
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |
 | [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | 2026-08-29 | Not Started |
+| [npm-registry-indelible-guest-inventory](npm-registry-indelible-guest-inventory.md) | 2026-09-04 | 2026-09-04 | Proposed |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
@@ -511,6 +520,11 @@ This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
 from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
+
+The 2026-09-04 update adds
+[npm-registry-indelible-guest-inventory](npm-registry-indelible-guest-inventory.md)
+(Proposed) to M3, increasing Proposed from 39 to 40 and the design count from 195
+to 196.
 
 ## Roadmap
 
@@ -721,6 +735,7 @@ flowchart TD
         dwimp[daemon-worker-import-from-mount<br/><i>integration layer</i>]
         dwicap[registry-capability<br/><i>DEPRECATED</i>]
         nrtree[npm-registry-as-directory-tree]
+        nrindel[npm-registry-indelible-guest-inventory<br/><i>PROPOSED</i>]
         dwimvs[mvs-resolver]
         dwisnap[snapshot-mapper]
         ernpm[endor-npm-registry-proxy<br/><i>COMPLETE</i>]
@@ -765,6 +780,9 @@ flowchart TD
         dwisnap --> dwimp
         dwicap -.-> npubatten
         ernpm -.-> npubatten
+        nrtree --> nrindel
+        dwicap -.-> nrindel
+        npubatten -.-> nrindel
         dmount --> nrtree
         dmcap --> nrtree
         dmkar --> nrtree
@@ -970,6 +988,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | daemon-worker-import-from-mount | Proposed | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
 | registry-capability | Deprecated | Shipped bespoke `EndoRegistry.resolve` / `fetch` / `lookup` / `list` capability shape; retained as a migration record and superseded by `npm-registry-as-directory-tree` |
 | npm-registry-as-directory-tree | Not Started | Re-incarnate `@registry` as an enumerable registry root containing non-enumerable npm/scope hubs, enumerable exact-version directories, and immutable package-content trees; identical Node and Endor adapters over existing mechanics |
+| npm-registry-indelible-guest-inventory | Proposed | Make the directory-tree registry an indelible member of every guest inventory under `@registry`, via a required `GuestFormula.registry` field projected through the special-name overlay; present by construction, GC-reachable, immutable to guest removal/rename/shadow; a credential-free guest-safe public-read attenuation of the host tree. Node inventory projection now; Endor deferred to a later agent/guest model. Blocked on `npm-registry-as-directory-tree` shipping |
 | mvs-resolver | Proposed | Layer 2 of 4. JS reference implementation of Go-like Minimum Version Selection adapted to npm versioning (greatest mentioned minor per major; major-version coexistence admitted). Eager single-pass resolution shape (no per-import bus roundtrips). Lockfile honoring deferred as a follow-up constraint pass |
 | snapshot-mapper | Proposed | Layer 3 of 4. `mapSnapshot` lane in `packages/daemon/` that translates `(RegistryResolution, EndoMount)` into a `CompartmentMap` via `compartment-mapper`'s package-descriptor walker (one new extension point in `compartment-mapper`). `makeMountReadPowers` and the compartment-mapper archive-precedent layout (top-level `compartment-map.json` plus peer directories named by package; `<name>@<version>/` for registry-resolved entries, bare `<name>/` for workspace members) |
 | daemon-git-capability | Proposed | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
@@ -1633,6 +1652,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | daemon-worker-import-from-mount | S-M | 3-4 days | 3 | **Integration layer** of the four-layer stack (decomposed 2026-06-02). `makeFromPackage` host method + `makeFromMount` dispatcher + CLI `endo run <mount>` / `endo make <mount>` + XS bridging deferral. Driven by the three preceding layers (`registry-capability`, `mvs-resolver`, `snapshot-mapper`); first cut limited to MVS; lockfile honoring deferred. Does not depend on the Rust subsystem (separate lane). |
 | ~~registry-capability~~ | S-M | n/a | 3 | Deprecated method-call capability shape; implementation is the compatibility source for the directory-tree adapters |
 | npm-registry-as-directory-tree | M-L | 1-1.5 weeks | 3 | Factor `LookupTreeInterface`, add Node and Endor adapters plus shared conformance tests, move MVS and mapper late binding to traversal, and retain a temporary legacy method adapter |
+| npm-registry-indelible-guest-inventory | S-M | 3-4 days | 3 | Required `GuestFormula.registry` field + `@registry` special-name projection in the guest maker, `extractLabeledDeps`/inspection wiring, a novel pre-exposure formula-rewriting migration (no shipped precedent; host `registry` fails fast), help-text surface, and a Node inventory fixture over the tree conformance suite. Blocked on `npm-registry-as-directory-tree`; Endor projection deferred |
 | mvs-resolver | S-M | 3-4 days | 3 | Layer 2 of 4. JS reference MVS algorithm, eager single-pass resolution producing `RegistryResolution` (content-addressed `resolutionHash`). Multi-major coexistence under distinct `<name>@<version>` keys. Lockfile follow-up tracked as constraint-pass insertion point |
 | snapshot-mapper | M | 4-5 days | 3 | Layer 3 of 4. `packages/daemon/src/map-snapshot.js` + `packages/daemon/src/worker-import.js` (`makeMountReadPowers`) + small extension point in `packages/compartment-mapper` for the archive-precedent peer-directory layout. The one cross-package change in the four-layer stack |
 | ~~filesystem-watchers~~ (design) | S | — | 3 | ✅ Design merged (PR #115); implementation TBD |
