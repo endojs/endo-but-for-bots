@@ -900,15 +900,17 @@ one later release-hygiene row is filed here as a convenience, per the Status
 note below.
 
 **Status:** The original six rows reached **Complete** on `llm` as of
-2026-06-15, and that exit criterion remains met. The remaining
-upstream-ferry effort (PR #235 mirroring the cuts to master) is
-tracked separately and is not a blocker for M2's exit criterion on
-`llm`. **Reopened 2026-07-10**
-with one additive row, `release-automation-major-bump-exports-trigger`
-(Not Started): a release-automation reminder is exactly this bucket's
-kind of substrate hygiene. It rides the in-flight
-`exports-extensionless-migration` design (PR #663); that design will
-add its own separate M2 row when it merges.
+2026-06-15, and that exit criterion **remains met** — this note does not
+reopen it. The remaining upstream-ferry effort (PR #235 mirroring the cuts to
+master) is tracked separately and is not a blocker for M2's exit criterion on
+`llm`. **One convenience row was added 2026-07-10**,
+`release-automation-major-bump-exports-trigger` (Not Started): a
+release-automation reminder is exactly this bucket's kind of substrate hygiene,
+so it is filed here for discoverability rather than by opening a new milestone.
+Being Not Started, it does not bear on M2's already-met exit criterion (an
+added convenience row is not a re-opening of the milestone). It is inert until
+the in-flight `exports-extensionless-migration` design (PR #663) it rides
+lands; that design will add its own separate M2 row when it merges.
 
 ---
 
@@ -1763,7 +1765,7 @@ date of this pass.
 | Milestone | Items remaining | Effort Estimate | Plus Review Queue (current rate) |
 |-----------|-----------------|-----------------|----------------------------------|
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
-| M2: Project Hygiene (was M½) | 1 (`release-automation-major-bump-exports-trigger`; reopened 2026-07-10, original six rows Complete; the in-flight `exports-extensionless-migration` design PR #663 adds its own M2 row on merge) | ~1-2 days | — |
+| M2: Project Hygiene (was M½) | 1 (`release-automation-major-bump-exports-trigger`; convenience row added 2026-07-10, original six rows Complete and exit criterion still met; the in-flight `exports-extensionless-migration` design PR #663 adds its own M2 row on merge) | ~1-2 days | — |
 | M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
 | M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
@@ -1844,7 +1846,7 @@ dates project from that anchor at the upper-bound effort.
 | Milestone | Duration | Cumulative | Target Date |
 |-----------|----------|------------|-------------|
 | M1: AI Agent Experience (was M0) | 18 days (actual) | **Complete** | March 5, 2026 |
-| M2: Project Hygiene (was M½) | ~1-2 days (reopened 2026-07-10 with `release-automation-major-bump-exports-trigger`; original scope Complete 2026-06-15) | — | — |
+| M2: Project Hygiene (was M½) | ~1-2 days (convenience row `release-automation-major-bump-exports-trigger` added 2026-07-10; original scope Complete 2026-06-15, exit criterion still met) | — | — |
 | M3: Remote Access & Tools (was M1) | 8-10 weeks | 8-10 weeks | Late July to early August 2026 |
 | M4: Networking (was M2) | 5-6 weeks | 13-16 weeks | Late August to mid September 2026 |
 | M5: Public Hosting & Billing (was M7) | 4-6 weeks (designs + impl) + AWS-stack merge cadence | 17-22 weeks | Late September to mid November 2026 (gated by M3 gateway-package merge cadence and PRs #343 / #356) |
