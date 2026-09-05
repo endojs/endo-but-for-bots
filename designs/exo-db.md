@@ -866,13 +866,25 @@ Updates then use this crash-safe asymmetric protocol:
 4. in the main daemon database, atomically release removed retentions, delete
    their ledger rows, and clear the pending-mutation intent for this
    `(database formula, table ordinal, key)`; and
-5. on startup, before exposing the database exo, replay only the surviving
-   pending-mutation intents (a crash can leave at most the mutations that were
-   in flight uncleared): for each intent, open the sidecar named by its database
-   formula and, within it, the table named by its ordinal, read that one key's
-   committed row, compute the set of formulas the row actually justifies, drop
-   any ledgered row (and its retention) for that `(database formula, table
-   ordinal, key)` the committed row does not justify, then delete the intent.
+5. on startup, before exposing a given database exo, replay only *that
+   formula's* surviving pending-mutation intents (a crash can leave at most the
+   mutations that were in flight uncleared): for each intent, open the sidecar
+   named by its database formula and, within it, the table named by its ordinal,
+   read that one key's committed row, compute the set of formulas the row
+   actually justifies, drop any ledgered row (and its retention) for that
+   `(database formula, table ordinal, key)` the committed row does not justify,
+   then delete the intent.
+
+Reconciliation is gated per formula, not process-wide.
+Although every `exo-database` formula's intents share the one main
+`endo.sqlite`, the intent's `(database formula, table ordinal, row key)` key lets
+the daemon select exactly one formula's surviving intents, so exposing formula
+B's admin facet blocks only on replaying B's own in-flight intents, never on
+formula A's reconciliation.
+Opening one database is therefore independent of every other database on the same
+daemon, and the O(mutations in flight) restart cost is per formula: one formula's
+stalled or large sidecar recovery cannot delay any unrelated database from
+becoming available.
 
 `delete` runs the same five steps, with the "new row" language read at its empty
 limit: the add-set is empty and the remove-set is the entire set of formulas the
@@ -892,6 +904,32 @@ an empty justified set, and drops every ledger row and retention for that
 `(database formula, table ordinal, key)`, exactly the release the interrupted
 delete owed.
 
+`dropTable` releases retention at table scope, not one row key: dropping a table
+would otherwise permanently leak every durable reference held by its rows, an
+unbounded leak that nothing revisits, worse than the bounded, self-healing
+over-retention the per-row protocol tolerates.
+It reuses the per-row machinery lifted one level, keyed on the table ordinal
+rather than a single row key.
+In one transaction on the main daemon database it records a table-scoped
+pending-drop intent naming the `(database formula, table ordinal)` and,
+having nothing to add, retains nothing new; it then removes the logical table
+from the per-database sidecar; then, in a final transaction, it walks the
+`(database formula, table ordinal, *, *)` ledger slice for that ordinal, releases
+every retention that slice names, deletes those ledger rows, and clears the
+pending-drop intent.
+Startup reconciliation (step 5) covers a crash across the drop the same way it
+covers a `delete`: a surviving pending-drop intent tells reconciliation to open
+that formula's sidecar, observe that the named table ordinal no longer exists
+(the empty case of "formulas the committed table justifies"), release the whole
+ledger slice for that ordinal, and clear the intent; a crash before the sidecar
+table is removed leaves the table present, so reconciliation finds it still
+justifies its ledgered formulas, drops nothing, and the drop re-runs on the next
+call.
+A live (non-crash) failure of the final release transaction recovers by the same
+step-4 path as a per-row write: the intent is not cleared until release succeeds,
+so the drop retries with backoff and any surviving pending-drop intent is drained
+by the periodic in-process reconciliation sweep.
+
 Steps 3 and 5 cover a process crash, but the ordinary *synchronous* failure of a
 live write is compensated inline rather than deferred to the next restart.
 If step 3 rejects synchronously (`insert`'s `RowExistsError`, `update`'s
@@ -904,6 +942,25 @@ So a routine rejected write releases its provisional retention at once rather
 than leaking it until the daemon's next restart; step 5's restart-time
 reconciliation remains the backstop for a genuine crash between steps 2 and 3,
 not for an ordinary rejected call.
+Step 4 is itself a live provider call on the same throttle-prone substrate, and
+it runs after step 3 has already committed the row and the caller has already
+been told the write completed, so its own live (non-crash) failure needs a stated
+recovery path rather than the step-3 compensation (compensating step 2 here would
+be wrong, since the row is already durably written).
+Because step 4 does not clear the pending-mutation intent until it succeeds, a
+failed step 4 leaves exactly the same surviving-intent, over-retention state a
+crash between steps 2 and 3 leaves, and the step-5 reconciliation pass is the
+identical, idempotent repair for it.
+The daemon therefore does not depend on a restart to recover: the mutation-queue
+turn retries step 4 with backoff (it is idempotent, releasing only the still-
+ledgered removed retentions), and any intent still surviving after the bounded
+retry budget is drained by a periodic in-process reconciliation sweep, which runs
+the same step-5 pass over that formula's surviving intents on a bounded timer, not
+only at open time.
+A long-lived daemon that never restarts thus still converges back from an
+over-retention left by a failed step 4, and the acceptance of decision 8 (a
+transient leak toward over-retention, never dangling authority) extends to the
+step-4-failure case explicitly, not only to the crash case.
 Reconciliation therefore costs O(mutations in flight at crash time), bounded by
 the mutation queue's concurrency rather than by table size, because a completed
 or synchronously-failed mutation clears its own intent (in step 4 or the
@@ -1025,6 +1082,24 @@ resource names, formula identifiers, row bodies, or reference slots.
 - Drive an ephemeral (non-durable) reference through a `passable` cell write and
   assert it is rejected with `UndurableReferenceError` before any mutation,
   distinct from a `KeyError` on a malformed key.
+- Assert the query, schema, and table-management error surface produces its named
+  hardened error rather than a silent fallback, on both SQLite and the DynamoDB
+  plan compiler: a selector or predicate outside the portable subset raises
+  `QueryError`; an invalid or non-portable schema raises `SchemaError`; a row,
+  key, schema, or index over a versioned limit raises `LimitExceededError`; a
+  duplicate `createTable` raises `TableExistsError` and an `openTable`/`dropTable`
+  on an absent table raises `TableMissingError`.
+- Assert the reject-not-emulate adapter invariant directly: feed each adapter a
+  query whose predicate it cannot compile (including the materialize-partial
+  secondary-index case where a non-materialized column is filtered) and prove it
+  raises `QueryError` rather than fetching opaque rows and emulating the predicate
+  in memory, on every backend the contract suite runs against.
+- Prove `dropTable` releases retention at table scope: write rows holding durable
+  references into a table, `dropTable` it, and assert every ledger row for that
+  `(database formula, table ordinal)` slice and its retentions are released, with
+  no per-row `delete` first; then crash between the sidecar table removal and the
+  final release, restart, and assert reconciliation observes the absent table and
+  releases the whole ordinal's ledger slice.
 - Run one backend-contract suite against the in-memory model, Node SQLite, and
   Endor SQLite for DDL, all three cell bands, each mutation condition,
   projections, predicates, forward/reverse bounds, and early reader return.
