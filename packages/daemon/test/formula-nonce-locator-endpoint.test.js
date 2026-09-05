@@ -242,6 +242,85 @@ for (const [codecName, codec] of codecs) {
 }
 
 netTest(
+  'the per-session locator sees the handshake-verified peer public key on the default handshake path',
+  async t => {
+    // Regression pin: the default `op:start-session` handshake path
+    // (`handshake.js`, the one every in-tree netlayer — including this
+    // suite's `tcp-testing` — lands on, since none implements
+    // `handleSessionHandshake`) must forward the verified `peerPublicKey`
+    // into the per-session locator context. Before the fix it called
+    // `prepareOcapn` with three args, so `context.peerPublicKey` was
+    // `undefined` exactly here — the primary path — even though the field
+    // is declared non-optional and the docs steer durable per-peer
+    // accounting onto it.
+    // A key id is a byte value (a double SHA-256 of the key descriptor).
+    // Render it to a hex string before asserting: comparing hex gives a
+    // legible diff and avoids serializing raw ArrayBuffers.
+    const idHex = value => {
+      const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+      return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    };
+
+    const guest = Far('Guest', { greet: () => 'hi' });
+    // Capture the per-session locator context on the *dialing* client: the
+    // client, too, builds its session through the default `handshake.js`
+    // path (both ends of a `tcp-testing` session run
+    // `handleSessionHandshakeMessage`), so this exercises the exact line
+    // the fix touched. The client's `context.peerPublicKey` is the server's
+    // verified key as this session sees it.
+    let clientContext;
+    const server = await makeClient({
+      codec: syrupCodec,
+      designator: 'server-peerkey',
+      makeLocatorForSession: () => ({ get: async () => guest }),
+    });
+    const client = await makeClient({
+      codec: syrupCodec,
+      designator: 'client-peerkey',
+      locator: new Map(),
+      makeLocatorForSession: context => {
+        clientContext = context;
+        return { get: async () => undefined };
+      },
+    });
+
+    // Fetch once so the session is fully established on both ends
+    // (prepareOcapn — which builds the per-session locator — runs during
+    // establishment inside the connection pump).
+    const ref = client.client.makeSturdyRef(server.location, guestId);
+    const fetched = await client.client.enlivenSturdyRef(ref);
+    t.is(await E(fetched).greet('friend'), 'hi', 'the fetch resolved');
+
+    t.truthy(clientContext, 'the per-session factory ran on the client');
+    t.truthy(
+      clientContext.peerPublicKey,
+      'the handshake forwarded the verified peer public key (undefined before the fix)',
+    );
+    t.truthy(
+      clientContext.peerPublicKey.id,
+      'the forwarded key exposes its stable id',
+    );
+
+    // The key the per-session locator sees matches the session's own
+    // recorded peer key (`session.peer.publicKey`): the same verified
+    // identity, threaded through the fixed handshake call rather than
+    // dropped to `undefined`.
+    // eslint-disable-next-line no-underscore-dangle
+    const clientSession = await client.client._debug.provideInternalSession(
+      server.location,
+    );
+    t.is(
+      idHex(clientContext.peerPublicKey.id),
+      idHex(clientSession.peer.publicKey.id),
+      "the key the locator sees is this session's verified peer key",
+    );
+
+    client.client.shutdown();
+    server.client.shutdown();
+  },
+);
+
+netTest(
   'the per-session miss bound severs the abusive session over the wire, but not a valid peer',
   async t => {
     const guest = Far('Guest', { greet: () => 'hi' });

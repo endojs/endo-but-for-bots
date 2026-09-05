@@ -91,10 +91,34 @@ const ocapn = await makeOcapn({
 ```
 
 `@endo/daemon`'s `makeFormulaNonceLocator` (from
-`@endo/daemon/formula-nonce-locator.js`) is a ready-made pairing: the object
-it returns is itself a `NonceLocator` (pass it as the shared `locator`), and
-its `makeLocatorForSession` supplies this hook, bounding each session's failed
-presentations against a formula-identifier oracle.
+`@endo/daemon/formula-nonce-locator.js`) is a ready-made pairing. It returns
+`{ get, makeLocatorForSession }`, and **both** members must be wired for
+incoming peer traffic to be safe:
+
+```js
+const formulaLocator = makeFormulaNonceLocator({ provideLocalFormula, localNodeNumber });
+const ocapn = await makeOcapn({
+  codec: syrupCodec,
+  network,
+  // `get` is UNBOUNDED — safe as the shared `locator` only for the
+  // daemon's own outgoing self-local `enlivenSturdyRef`.
+  locator: formulaLocator,
+  // This is the member that bounds each peer's failed presentations
+  // against a formula-identifier oracle. Passing only `locator` (the
+  // historical single-locator wiring) is INERT against a prober: it
+  // exposes an unlimited, un-torn-down probing surface.
+  makeLocatorForSession: formulaLocator.makeLocatorForSession,
+});
+```
+
+Note the formula locator refuses every well-known swissnum *word* (e.g.
+`endo-peer-entry`) by construction, and — being the locator for incoming
+fetches — displaces any plain `locator` that serves one. A deployment that
+keeps a live well-known swissnum must **compose** (route the fixed
+swissnum(s) through a thin outer locator that delegates the rest to the
+formula locator) rather than replace its locator wholesale. See the
+`makeFormulaNonceLocator` docstring and
+`designs/daemon-ocapn-external-connectivity.md` §2.
 
 ## Status
 

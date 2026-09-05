@@ -279,6 +279,186 @@ test('a pipelined burst cannot clear the gate before the misses settle', async t
   t.is(aborts, 1, 'no re-abort after the burst');
 });
 
+test('overlapping hits resolve concurrently and a pending miss blocks neither', async t => {
+  // The docstring's concurrency claim: hits run concurrently and one
+  // never-settling lookup can no longer wedge the session (it holds a
+  // single in-flight slot, it does not serialize every later presentation
+  // behind one pending tail). Pin it directly: hold a miss lookup pending,
+  // fire two hits while it is still in flight, and show both hits resolve
+  // without waiting for the pending miss ahead of them.
+  const guest = makeGuest();
+  let releaseHits;
+  const hitsGate = new Promise(resolve => {
+    releaseHits = resolve;
+  });
+  let releaseMiss;
+  const missGate = new Promise(resolve => {
+    releaseMiss = resolve;
+  });
+  const missId = `${'e'.repeat(64)}:${localNode}`;
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async id => {
+      if (id === localId) {
+        await hitsGate;
+        return guest;
+      }
+      await missGate;
+      throw new ReferenceError('absent');
+    },
+    localNodeNumber: localNode,
+    missBound: 5,
+  });
+  const session = locator.makeLocatorForSession({
+    remoteDesignator: 'peer',
+    abortSession: () => t.fail('must not abort below the bound'),
+  });
+  await null;
+
+  // A miss lookup is started and held pending (in flight, unsettled).
+  const pendingMiss = session.get(missId);
+  // Two hits start while that miss is still pending.
+  const hitA = session.get(localId);
+  const hitB = session.get(localId);
+
+  // Nothing has settled: all three lookups are genuinely in flight.
+  let anySettled = false;
+  void Promise.race([hitA, hitB, pendingMiss]).then(() => {
+    anySettled = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.false(anySettled, 'all three presentations are in flight together');
+
+  // Release only the two hits: they resolve concurrently, ahead of the
+  // still-pending miss — the miss never wedged them.
+  releaseHits();
+  t.is(await hitA, guest, 'the first overlapping hit resolves');
+  t.is(await hitB, guest, 'the second overlapping hit resolves');
+
+  // The miss was still pending the whole time; releasing it now yields the
+  // uniform undefined miss.
+  releaseMiss();
+  t.is(await pendingMiss, undefined, 'the held miss finally settles as a miss');
+});
+
+test('the in-flight term gates admission before any lookup runs', async t => {
+  // Pins the `misses + inFlight >= missBound` gate's *inFlight* half
+  // (test:229 exercises the burst outcome but does not isolate this term):
+  // with no miss yet settled, filling the bound with in-flight, still-parked
+  // presentations must refuse the next one synchronously — running no lookup
+  // — and that synchronous refusal must not itself count as a miss or abort.
+  // A body that gated on settled misses alone (no in-flight term) would
+  // admit it and run its lookup.
+  const missBound = 3;
+  // Valid *local* formula identifiers, so each presentation reaches
+  // `provideLocalFormula` (and parks) rather than missing early at
+  // `assertValidId`. They still resolve as misses because the parked
+  // lookup ultimately throws.
+  const validId = char => `${char.repeat(64)}:${localNode}`;
+  let provideCalls = 0;
+  let releaseAll;
+  const gate = new Promise(resolve => {
+    releaseAll = resolve;
+  });
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async () => {
+      provideCalls += 1;
+      await gate; // park every admitted lookup in flight
+      throw new ReferenceError('absent');
+    },
+    localNodeNumber: localNode,
+    missBound,
+  });
+  let aborts = 0;
+  const session = locator.makeLocatorForSession({
+    remoteDesignator: 'peer',
+    abortSession: () => {
+      aborts += 1;
+    },
+  });
+  await null;
+
+  // Fill the bound with in-flight, still-parked presentations. The
+  // synchronous admission gate increments `inFlight` for each before the
+  // loop returns; the lookups themselves reach `provideLocalFormula` a
+  // microtask later (`get`/`sessionGet` each `await null` first), so let a
+  // turn pass before observing the call count.
+  const chars = ['a', 'c', 'd'];
+  const inflight = [];
+  for (let i = 0; i < missBound; i += 1) {
+    inflight.push(session.get(validId(chars[i])));
+  }
+  await new Promise(resolve => setTimeout(resolve, 0));
+  t.is(provideCalls, missBound, 'each admitted presentation ran its lookup');
+
+  // The next presentation is refused at the synchronous gate: inFlight
+  // alone reaches the bound though no miss has settled. It runs no lookup
+  // and does not abort.
+  const refused = session.get(validId('e'));
+  t.is(
+    await refused,
+    undefined,
+    'the over-bound presentation is a synchronous miss',
+  );
+  t.is(provideCalls, missBound, 'the refused presentation ran no lookup');
+  t.is(aborts, 0, 'a synchronous in-flight refusal does not abort the session');
+
+  // Release the parked lookups: the settled misses now cross the bound and
+  // abort exactly once.
+  releaseAll();
+  t.deepEqual(
+    await Promise.all(inflight),
+    inflight.map(() => undefined),
+    'every parked presentation settles as a miss',
+  );
+  t.is(aborts, 1, 'the settled misses abort the session exactly once');
+});
+
+test('a throwing miss logger stays a uniform miss and still counts the miss', async t => {
+  // If a broken embedder `logger.error` threw where the miss path logs,
+  // the rejection would escape `get` as a distinct error (an oracle) *and*
+  // the miss would never be counted — the `misses += 1` sits below the
+  // `await get(...)`, so a throwing `get` skips it and silently disarms the
+  // session bound. A throwing logger must be swallowed: the presentation
+  // stays a uniform undefined miss and the miss still advances the bound.
+  const missBound = 2;
+  let aborts = 0;
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async () => {
+      throw new ReferenceError('absent');
+    },
+    localNodeNumber: localNode,
+    missBound,
+    logger: {
+      error: () => {
+        throw new Error('logger blew up');
+      },
+    },
+  });
+  await null;
+  // The shared, unbounded `get` also stays a uniform miss, never a throw.
+  t.is(
+    await locator.get(localId),
+    undefined,
+    'the shared get swallows a throwing logger',
+  );
+  const session = locator.makeLocatorForSession({
+    remoteDesignator: 'peer',
+    abortSession: () => {
+      aborts += 1;
+    },
+  });
+  await null;
+  t.is(
+    await session.get('miss-1'),
+    undefined,
+    'a throwing logger stays a uniform miss',
+  );
+  t.is(aborts, 0, 'one miss, below the bound');
+  // The throwing-logger miss was counted: a second miss crosses the bound.
+  t.is(await session.get('miss-2'), undefined);
+  t.is(aborts, 1, 'the throwing-logger miss still advanced the bound');
+});
+
 test('a throwing abortSession never becomes an oracle', async t => {
   // The README and endpoint wiring both invite an embedder to wrap
   // `abortSession`; such a wrapper can throw. If that throw escaped

@@ -608,6 +608,21 @@ export const makeOcapn = async ({
     return newSessionPromise;
   };
 
+  /**
+   * Build the OCapN core for one session. `peerPublicKey` is the session's
+   * handshake-verified public key; it is threaded into the per-session
+   * locator's context (`SessionLocatorContext.peerPublicKey`) so an
+   * embedder can key durable per-peer accounting on a stable, verified
+   * identity rather than the spoofable claimed `remoteDesignator`. Every
+   * caller — `provideSession`, `resumeSession`, and the default
+   * `op:start-session` handshake path in `handshake.js` — must forward it;
+   * omitting it leaves `context.peerPublicKey` undefined on that path.
+   *
+   * @param {Connection} connection
+   * @param {import('./types.js').SessionId} sessionId
+   * @param {OcapnLocation} peerLocation
+   * @param {OcapnPublicKey} peerPublicKey
+   */
   const prepareOcapn = (connection, sessionId, peerLocation, peerPublicKey) => {
     const endSession = () => {
       const activeSession = sessionManager.getActiveSession(
