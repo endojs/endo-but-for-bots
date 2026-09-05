@@ -140,6 +140,90 @@ Two are pinned explicitly as standards-beyond-the-oracle cases:
 language and `false` on the pin.
 Note the second takes plain `/i` with no `u` flag.
 
+## Status of the apply and arguments-object defects
+
+`F173`, and `F177` through `F180`, are fixed.
+Regression coverage lands in `ironhorse-262/tests/native_callable_invocation.rs`
+and `tests/errors_coercions_strict.rs`, and in the sqlite store's
+`tests/engine_lifecycle.rs` so the behaviour survives snapshot round-trips.
+
+All five are the same root cause seen from five angles.
+IronHorse backs an `arguments` exotic object with the same `arrays` side table
+it uses for a real Array, so every fast path keyed on
+`self.arrays.contains_key(..)` also fired for `arguments` and read raw compact
+storage where the specification wants the property MOP.
+
+`F179` was the sharpest of them, an observable wrong answer rather than a
+metering gap.
+
+```js
+(function (a) { return (function (x) { return x }).apply(null, arguments) })(1)
+```
+
+The oracle returns `1`; IronHorse returned `[object Object]`.
+A *mapped* arguments object stores a `Kind::Closure` cell in its compact item so
+the parameter binding stays live, and `array_item_value` dereferences that cell
+on the ordinary read path.
+The dense-apply shortcut read `data.items()[&i]` directly, bypassing that
+projection, and forwarded the cell itself as the argument.
+`F180` is the same shortcut in `AggregateError`.
+
+```js
+(function () { arguments.length = 1; return new AggregateError(arguments).errors.join(',') })(1, 2)
+```
+
+The oracle returns `1`; IronHorse returned `1,2`.
+
+Both shortcuts now exclude arguments objects and route them through
+`CreateListFromArrayLike`, which also closes `F177`: `arraylike_length` no
+longer answers `Get(arguments, "length")` out of the array side table, so an
+assigned, deleted, or redefined `length` is honoured.
+
+`F178` and `F173` are the metering consequence.
+The generic `CreateListFromArrayLike` walk was charged nothing beyond the reads
+it performed, leaving `Math.max.apply(null, {length: 2, 0: 3, 1: 8})` at 36
+computrons against the oracle's 38.
+The residual is now charged by a shared helper at all three apply sites -- the
+two opcode trampolines and the abstract dispatcher that a bound or proxied
+`apply` reaches -- with a credit for the metering an ordinary object or an
+arguments object has already paid through its property MOP path.
+Dense Arrays and Proxies keep the full array schedule and are unchanged.
+
+`apply_array_like_reads_are_computron_exact` holds these to raw-meter equality
+with the oracle rather than result agreement, so the credits cannot drift
+silently.
+
+### The residual this leaves
+
+Routing `Get(arguments, "length")` through the property MOP is not free, and it
+over-charges by roughly 15,600 raw units per read against the pin.
+`examples/probe_apply_repeat.rs` isolates it: ten iterations of
+`f.apply(null, {length: n, ...})` where the callee returns a constant now land
+within one computron of the oracle, and the same ten iterations where the callee
+returns `arguments.length` land two computrons high, at every arity.
+The flatness across arity is what identifies the read rather than the walk.
+
+Whether the walk itself is right is a separate question and this probe answers
+it well: on the generic array-like shapes the gap moved from 10, 18 and 25
+computrons low at arities 0, 1 and 2 to 0, 0 and 1, and a bound `apply` moved
+from 2 low to exact.
+An `arguments` object forwarded to `Math.max.apply` moved from 5 high to 2 low
+over ten calls.
+
+So the apply walk is calibrated and the arguments-object `length` read is the
+next item, worth about a quarter of a computron each time a guest reads it.
+
+`AggregateError` carries a second residual, and it is a trade rather than a
+regression.
+`new AggregateError(arguments)` used to answer from the dense shortcut, which
+was one computron low and, for the shapes `F180` names, gave the wrong answer.
+It now takes the generic iterable path, which is right and runs one to four
+computrons high, growing with arity at roughly 65,500 raw units per element.
+That is the generic-iterable calibration itself, not something arguments
+objects do: an ordinary array-like carrying `Array.prototype[Symbol.iterator]`
+is three computrons high at the same arity, and a dense Array is still exact.
+`F181` is where that belongs, so no third credit is spent here to hide it.
+
 ## A harness caveat worth knowing
 
 The pinned oracle's answer for a program in this family can depend on which
@@ -350,23 +434,23 @@ The rest are listed here as they stood.
 
 ### Bound functions and collection iterables
 
-6 open, 6 of them P1.
+6 open, 6 of them P1; `F173` since fixed.
 
 - `F171` **P1** Keep recursive bound calls in the iterative dispatcher
 - `F172` **P1** Fold long bound chains without Rust recursion
-- `F173` **P1** Charge both newly enabled bound-apply forwarding paths
+- `F173` **P1** Charge both newly enabled bound-apply forwarding paths (fixed)
 - `F174` **P1** Exclude arguments objects from the dense collection fast path
 - `F175` **P1** Revalidate iterator hooks after the observable adder lookup
 - `F176` **P1** Migrate or reject pre-collection-iterable snapshots
 
 ### arguments MOP, Error construction, global environment
 
-14 open, 13 of them P1.
+14 open, 13 of them P1; `F177` through `F180` since fixed.
 
-- `F177` **P1** Read arguments-object length through the property MOP
-- `F178` **P1** Meter generic CreateListFromArrayLike reads in apply
-- `F179` **P1** Dereference mapped arguments in the dense apply shortcuts
-- `F180` **P1** Exclude arguments objects from AggregateError's dense shortcut
+- `F177` **P1** Read arguments-object length through the property MOP (fixed)
+- `F178` **P1** Meter generic CreateListFromArrayLike reads in apply (fixed)
+- `F179` **P1** Dereference mapped arguments in the dense apply shortcuts (fixed)
+- `F180` **P1** Exclude arguments objects from AggregateError's dense shortcut (fixed)
 - `F181` **P1** Do not add the dense iterator calibration to generic iterables
 - `F182` **P1** Apply observable message coercion to SuppressedError too
 - `F183` **P1** Calibrate the newly observable Error argument operations
