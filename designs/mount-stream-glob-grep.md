@@ -5,8 +5,15 @@
 | **Created** | 2026-07-09 |
 | **Updated** | 2026-09-05 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Implemented ([PR #1085](https://github.com/endojs/endo-but-for-bots/pull/1085)) |
-| **Source** | Review comment on [PR #127](https://github.com/endojs/endo-but-for-bots/pull/127#discussion_r3548861664) (mount extensions help text) |
+| **Status** | In Progress ([PR #1085](https://github.com/endojs/endo-but-for-bots/pull/1085)) |
+| **Source** | Review comments on [PR #127](https://github.com/endojs/endo-but-for-bots/pull/127#discussion_r3548861664) and [PR #1085](https://github.com/endojs/endo-but-for-bots/pull/1085#discussion_r3939436362) |
+
+## Status
+
+The JavaScript `streamGlob` and `streamGrep` surfaces are implemented on PR
+#1085. The native Endor engine, fused tree traversal, real Ironhorse parity
+path, differential suite, and preliminary benchmark report specified below are
+the pending follow-up.
 
 ## What is the Problem Being Solved?
 
@@ -36,6 +43,14 @@ package this repository already uses for byte streams (`EndoMountFile.
 streamBase64`, `write` blob ingestion, tar check-in) and which exists
 precisely to bridge async iteration over CapTP with flow control and
 pattern guards.
+
+The first implementation on PR #1085 deliberately uses the portable
+JavaScript search engine and crosses the XS-to-Rust host boundary once per
+directory or file. The follow-up requested in review removes that boundary
+cost on Endor, adds a fused `glorpStream`, and makes the same contract runnable
+and differential-tested on Node.js, Endor/XS, and Endor/Ironhorse. The second
+half is pending; consequently this design is no longer marked fully
+implemented.
 
 ## Design
 
@@ -387,12 +402,435 @@ type the two methods with `PassableReader` imported from
   design adopts the same protocol (tracking design to be filed with the
   watcher work).
 
+## Native Endor and Fused-Tree Follow-up
+
+This section is the normative implementation brief for the next fixer. It
+supersedes the earlier statements that search is mount-only and that
+`streamGrep` should drive the platform engine with singleton path and result
+batches. It does not change the already-shipped public `streamGlob` or
+`streamGrep` element shapes.
+
+### Public surface and internal search contract
+
+Add the fused operation beside `glorp`:
+
+```ts
+glorpStream(
+  globPattern: string,
+  grepPattern: string,
+  options?: {
+    buffer?: number;
+    followSymlinks?: boolean;
+  },
+): PassableReader<GrepMatch>;
+```
+
+`EndoMount.glorpStream` yields the same single `{ file, line, text }` records
+and uses the same once-only reader, `buffer` clamp, walk order, and synchronous
+remotable return as the other stream methods. It is fused rather than an alias
+for `streamGrep(grepPattern, streamGlob(globPattern))`: the implementation
+passes both patterns to one search operation, allowing a physical leaf to
+enumerate, filter, read, and match entirely in Rust. `MountInterface`,
+`EndoMount` in `packages/daemon/src/types.d.ts`, the `makeMountExo` method bag,
+and `help-text-data.js` all gain this method; regenerate `help.md` from that
+source.
+
+Extend `Search` in `packages/platform/src/fs/search-types.ts` with:
+
+```ts
+glorpFiles(
+  root: string,
+  globPattern: string,
+  regexSource: string,
+  options?: {
+    deniedSegments?: string[];
+    confinementRoot?: string;
+    batchSize?: number;
+    followSymlinks?: boolean;
+  },
+): AsyncGenerator<GrepMatch[]>;
+```
+
+The reference `makeSearch` implementation in
+`packages/platform/src/fs/search.js` implements `glorpFiles` by feeding
+`globPaths({ sorted: false, includeDirectories: false })` directly into
+`grepFiles`; it must not collect an intermediate path array. `provideSearch`
+continues to be the sole selection seam: Node file powers receive this
+reference implementation, while `makeXsFilePowers` supplies an Endor-native
+`search` object. Both `grepFiles` and `glorpFiles` yield result arrays
+internally. Batch boundaries are never observable semantics; `mount.js`
+flattens them into the existing one-record `PassableReader` surface.
+
+`streamGrep` keeps its mandatory external path reader. On Endor, replace the
+singleton adapter with `batchPathReader` in `packages/daemon/src/mount.js`:
+it forms batches of at most 64 paths and at most 256 KiB of UTF-8 encoded path
+data, permitting one over-limit path as a singleton. The reference Node search
+may consume the same path batches, so batching behavior is exercised on every
+platform even though only Endor benefits at the process boundary. These are
+named internal constants (`SEARCH_INPUT_BATCH_PATHS` and
+`SEARCH_INPUT_BATCH_BYTES`), not new public options. The benchmark may justify
+changing them later without changing semantics.
+
+### Endor host protocol
+
+Implement a stateful search cursor in a new
+`rust/endo/xsnap/src/powers/search.rs`, registered after the existing
+filesystem callbacks. It exposes four synchronous host functions:
+
+```text
+searchOpen(dirToken, rootRelative, confinementRelative, requestJson)
+                                                -> integer handle | "Error: ..."
+searchWrite(handle, pathsJsonOrNull)             -> undefined | "Error: ..."
+searchRead(handle, limitsJson)                   -> ArrayBuffer
+searchClose(handle)                              -> undefined | "Error: ..."
+```
+
+`requestJson` has exactly two variants:
+
+```ts
+type SearchRequest =
+  | {
+      kind: 'grep';
+      regexSource: string;
+      deniedSegments: string[];
+    }
+  | {
+      kind: 'glorp';
+      globPattern: string;
+      regexSource: string;
+      deniedSegments: string[];
+      followSymlinks: boolean;
+    };
+```
+
+`rootRelative` is the directory against which result paths are relative;
+`confinementRelative` is the real-path boundary. They differ for a lookup-made
+sub-mount, which searches from its `currentDir` while retaining its parent
+mount's `confinementRoot`; a true `subView` passes its narrowed `currentDir` for
+both. `searchOpen` resolves both through the existing cap-std `HostPowers`
+directory token, validates both patterns before allocating a handle, and
+constructs a lazy cursor. `searchWrite` supplies a `grep` cursor with one path
+batch; `null` closes its input, and calling it for a `glorp` cursor or while an
+earlier batch remains is an error. This compiles the regexp once per search
+rather than once per batch. A `glorp` cursor owns the directory walk and starts
+no I/O until `searchRead`.
+
+`searchRead` returns UTF-8 JSON bytes in an `ArrayBuffer`, decoded in
+`packages/daemon/src/bus-manager-rust-xs-powers.js` with the existing native
+UTF-8 decoder and `JSON.parse`:
+
+```ts
+type SearchReadResult = {
+  state: 'more' | 'needInput' | 'done';
+  matches: GrepMatch[];
+};
+```
+
+`limitsJson` carries `{ outputBytes, workFiles, workBytes }`. The adapter uses
+256 KiB, 64 files, and 4 MiB respectively; the host clamps output to 16 KiB
+through 4 MiB, files to 1 through 1,024, and work bytes to 64 KiB through 64
+MiB. A call stops when its next complete record would cross `outputBytes` or
+when either work limit is reached, even if it found no match. One record or one
+input file larger than its byte limit is processed alone. `state: 'more'`
+requests another read, `needInput` asks the grep adapter for another path batch,
+and `done` is terminal. Thus large batches, rather than one file/read call,
+cross the engine boundary, while sparse searches return to JavaScript often
+enough to observe cancellation. The cursor does not retain emitted line text.
+Exhaustion releases it automatically; `searchClose` remains mandatory and
+idempotent so cancellation and exceptions release a non-exhausted cursor.
+Unknown, closed, and cross-worker handles fail closed.
+
+Add the callbacks at the **end** of
+`rust/endo/xsnap/src/powers/search.rs::CALLBACKS`, append that slice after
+`powers::sqlite::CALLBACKS` in `worker_snapshot_callbacks`, register it last in
+`Machine::register_powers`, add `hostSearchOpen` / `hostSearchWrite` /
+`hostSearchRead` / `hostSearchClose` aliases in `host_aliases.js`, and declare
+them in
+`packages/daemon/src/bus-xs-host-globals.d.ts`. The callback ordering is
+append-only. Bump `xsnap::SNAPSHOT_SIGNATURE` because the boot-visible callback
+table changes; old snapshots must reject by signature rather than bind an old
+index to a new function.
+
+`makeXsFilePowers` constructs its optional `search` with a new
+`packages/daemon/src/bus-manager-rust-search.js` adapter. The adapter wraps
+every cursor in `try/finally`, converts `"Error: "` host results to exceptions,
+validates the decoded result shape before yielding it, and re-batches host
+responses to the `Search` caller's requested `batchSize` (default 64, ceiling
+1,024). Neither `mount.js` nor `provideSearch` calls host globals directly.
+The adapter is engine-neutral despite its manager call site: the Ironhorse
+parity archive imports the same module. `makeXsFilePowers` accepts an internal
+`{ searchImplementation: 'native' | 'js' }` test/benchmark option so the matrix
+can force the portable fallback without changing production's native default.
+
+### One parity contract
+
+`packages/platform/src/fs/search.js` remains the executable reference and a
+new checked-in `packages/platform/test/search-parity-cases.json` becomes the
+language-neutral contract. Every implementation must agree on the flattened
+sequence, errors, and cancellation checkpoints; transport batch boundaries do
+not participate in equality.
+
+The contract is:
+
+- Glob syntax remains only within-segment `*` and whole-segment `**`; every
+  other character is literal. Directory names are sorted by UTF-16 code units
+  before descent, yielding deterministic depth-first walk order. A directory
+  symlink is reported but not descended by default; `followSymlinks: true`
+  permits descent with real-path cycle detection.
+- `regexSource` is compiled once per search as `new RegExp(regexSource)` with
+  no flags. Move compilation ahead of root resolution so invalid sources reject
+  before filesystem I/O. Each file is decoded as UTF-8 with replacement and
+  split exactly as `content.split('\n')`; one trailing CR is removed from each
+  resulting line, and `test(line)` produces at most one record per matching
+  line. Lines and line numbers are 1-based. Consequently an empty file has one
+  empty line and a final LF creates a terminal empty line, either of which is a
+  match when the regexp accepts the empty string. Matching observes ECMAScript
+  UTF-16 string semantics.
+- The native scanner compiles and runs the existing XS-derived
+  `rust/engine/ironhorse-regexp` engine with an empty flag string. It does not
+  substitute the Rust `regex` crate and it does not narrow accepted syntax to
+  the unimplemented conservative-regexp design. A source that the reference
+  accepts but `ironhorse-regexp` rejects is a parity failure and blocks the
+  native path; it is not an implementation-specific skip.
+- Results are `{ file, line, text }`, ordered by walk-order file then ascending
+  line. Supplied `grepFiles` path batches preserve caller path order. Duplicate
+  supplied paths are searched repeatedly. Files that are missing, directories,
+  unreadable, denied, or resolve outside confinement are skipped as today.
+  Malformed patterns and malformed host frames are errors.
+- Matching paths are mount-face-relative `/`-joined strings. Denied segments
+  are compared with the same ECMAScript `toLowerCase()` operation as the
+  reference and prune before metadata or content access; the Rust runner must
+  include non-ASCII cases that detect a Unicode-table mismatch. A named grep
+  path follows a symlink only if the resolved target stays under the narrowed
+  root. A glorp walk never returns or enters an escaping target, whether or not
+  `followSymlinks` is set. Native path sorting and glob matching operate on
+  UTF-16 code units, not Rust scalar-value or UTF-8 byte order.
+
+The JSON cases include empty and invalid patterns, regex syntax families
+(classes, captures, backreferences, lookaround, anchors, alternation, greedy
+and lazy quantifiers, escapes, astral text, lone replacement characters), LF
+and CRLF, invalid UTF-8, empty/final-newline/long-line files, dot names, denied
+names at every depth, symlink cycles and escapes, unreadable and disappearing
+files, duplicate/empty/multi-batch supplied paths, Unicode path ordering, and
+responses on both sides of every count and byte batch threshold. Existing
+`mount-glob-cases.json`, `mount-grep-cases.json`, and
+`mount-glob-contract.json` are inputs to this corpus, not parallel contracts.
+
+### Fused traversal across tree leaves
+
+The fast path must not add search authority to the minimal `ReadableTree`
+interface. Instead add `packages/platform/src/fs/tree-search.js`, whose
+`glorpTree(root, globPattern, regexSource, options)` accepts either a
+`ReadableTree`-compatible root or an extended `Filesystem` plus an optional,
+host-private `classifyLeaf(value, prefix)` function. A `Filesystem` is entered
+through `root()` and its `Directory`/`File` surface. The portable fallback uses
+only tree reads (`list`, `lookup`, and blob `text`), applies the same contract,
+and yields `GrepMatch[]`. A successful classifier returns
+`{ prefix, glorpFiles }`, where `glorpFiles` has the platform `Search` shape.
+The walker carries the prefix when delegating so all matches remain relative to
+the original root.
+
+The daemon's `glorpStream` supplies a classifier backed only by local records;
+it never trusts a remote method name or a caller-provided physical path:
+
+| Leaf | Recognition and execution |
+| --- | --- |
+| Physical `EndoMount` or its `readOnly()` view | `getMountBacking` recognizes the local `mountRecords` entry. Delegate the whole subtree to `provideSearch(filePowers).glorpFiles` using the record's `currentDir` as the search root and `physicalRoot` as its confinement root; a true `subView` records both as the narrowed root. Endor therefore selects the Rust cursor. |
+| Virtual/composed mount | Add a `compositionRecords` `WeakMap` and host-private `describeFilesystemLeaves(filesystem)` export to `packages/platform/src/fs/extended/compose.js` for `bind`, `namespace`, `chroot`, and `compose`. It returns only `{ prefix, filesystem, posture }` records to the classifier; it never reveals host paths. A primitive in-memory or remote filesystem is searched through its `Directory`/`File` surface unless its local backend supplies a `Search` implementation. Overlay `compose` is walked as the composed visible namespace, not searched independently in both layers, so whiteouts and copy-up visibility remain correct. |
+| Generic or remote `ReadableTree` | No native backing is assumed. Walk `list`/`lookup`, read each blob through `text`, and batch results in JavaScript. A daemon content-store `EndoReadableTree` may later add a local classifier backed by its manifest and blob store, but the portable path is required now and participates in parity tests. |
+
+Traversal stops descending generically at a classified leaf and delegates
+exactly once, preventing duplicate results. Prefix-aware glob-state forwarding
+ensures a pattern is matched against the full root-relative path, not restarted
+at the leaf. A leaf under a denied prefix is never classified or contacted.
+This is the optimization boundary meant by a file tree descending into a
+physical mount, virtual mount, or `ReadableTree`: physical leaves push all work
+to Rust, locally searchable virtual leaves push to their backend, and portable
+trees remain correct without pretending to be native.
+
+For PR #1085, expose `glorpStream` on `EndoMount` and its structural
+`readOnly()` view as an additive daemon extension, but do not add it to
+`@endo/platform`'s required `ReadableTreeInterface`. Add
+`MountReadableTreeInterface` in `packages/daemon/src/interfaces.js`, spreading
+the platform `readableTreeMethodGuards` and `recursiveListMethodGuards` plus the
+same `glorpStream` guard, and use it only for the mount-created read-only view.
+The generic `glorpTree` function is what tests arbitrary `ReadableTree` and
+composed filesystem roots. This reverses the earlier mount-only resolution
+narrowly: search remains optional on a tree capability, while fused traversal
+can consume every tree shape.
+
+### Backpressure, cancellation, revocation, and confinement
+
+The public reader still controls result delivery one record at a time. There
+are now two bounded look-ahead windows: the existing exo-stream `buffer`
+(records already acknowledged) and one active native host response (default
+256 KiB, with one oversize record allowed). A Rust cursor reads lazily and owns
+at most one file body plus its not-yet-emitted response. It must not pre-walk or
+pre-read the rest of the tree.
+
+Breaking the consumer loop closes the `glorpStream` generator; its `finally`
+calls `searchClose`. Closing `streamGrep` additionally calls `return()` on the
+external path reader. Revocation is checked before every host call and before
+every public yield. A synchronous host call cannot be preempted, so cancellation
+or revocation takes effect after at most the current `searchRead`: no later
+work quantum is started and no returned-but-not-yielded record is delivered
+after the check. This non-preemption is part of the contract and is tested. A
+quantum is bounded by the configured file/input/output limits, except that one
+oversize file or record is allowed so valid input remains representable. A
+regexp execution within that file is not preemptible; this is the same ReDoS
+exposure as the current flagless JavaScript `RegExp` contract. The host reports
+`ironhorse-regexp`'s compile/match meter counts for benchmarks, but the follow-up
+does not invent a native-only timeout that would break parity. No mock
+cancellation token may claim a tighter cutoff.
+
+Native code re-enforces authority rather than trusting JS pre-filtering:
+segment validation and denial happen before lookup; all real paths remain below
+the narrowed root; link traversal uses the same default and cycle rule; and a
+sub-view passes no ancestor authority. The Rust cursor receives no ambient path
+other than the capability-scoped `dirToken`, `rootRelative`, and
+`confinementRelative`. The virtual and `ReadableTree` fallbacks possess only
+their input capabilities. Differential tests instrument every backing and
+assert denied/escaping leaves incur zero content reads.
+
+### Real Ironhorse prerequisite
+
+`rust/endo/src/ironhorse_engine.rs::run_worker()` currently returns
+`MachineError::Unavailable`; therefore an Ironhorse parity row cannot be a unit
+test of `ironhorse-regexp`, a direct `endor run -e ironhorse` script, or an XS
+worker relabeled as Ironhorse. The fixer owns the prerequisites for a real
+`endor worker -e ironhorse` path:
+
+1. Add a host-callable function ABI to `ironhorse-vm` and the Endor engine
+   adapter: install named globals, marshal undefined/boolean/number/string and
+   `ArrayBuffer` arguments/results, attach `HostPowers` and worker transport
+   context, turn Rust failures into catchable JavaScript errors, and preserve an
+   append-only callback identity table in the Ironhorse snapshot signature.
+2. Register the same worker-I/O and host-powers names as XS, including the new
+   search functions, then execute the actual embedded
+   `polyfills -> host_aliases -> SES_BOOT -> WORKER_BOOTSTRAP` sequence. The
+   VM must run the bundle rather than a private search-only harness. Any opcode,
+   intrinsic, HardenState/Modules/Functions side-table, promise-job, or SES
+   incompatibility reached by this boot is part of the fixer scope.
+3. Implement the real init/restore/deliver loop over
+   `worker_io::WorkerTransport`, drain promise jobs to the same quiescence point
+   as `xsnap::run_xs_program`, checkpoint completed cranks through the existing
+   `PersistentMachine`, and route `endor worker -e ironhorse` to it. Snapshot
+   resume must reject a mismatched host-callback signature.
+4. Add an engine choice to the worker-spawn payload and
+   `rust/endo/src/engine.rs` so the daemon test harness can request XS or
+   Ironhorse explicitly. The response must prove the selected engine (engine
+   name plus build identifier); the test rejects a missing or mismatched proof.
+
+The Ironhorse row is enabled only when this production worker boots the actual
+daemon/worker archive and completes a search through CapTP. CI may mark the row
+unavailable only when the binary was built without the `ironhorse-engine`
+feature; in the dedicated parity job that feature is mandatory and
+unavailability is a failure.
+
+### Differential test topology
+
+Build one runner, `packages/platform/test/search-parity-runner.js`, that emits
+canonical JSON for the shared case corpus. Invoke it in four modes:
+
+1. Node reference `makeSearch` over instrumented Node powers.
+2. Node reference `glorpTree` over a portable in-memory `ReadableTree`, plus
+   `bind`/`namespace`/`chroot`/`compose` fixtures that place physical,
+   in-memory, mount-adapted, and readable-tree leaves at non-root prefixes.
+3. A real `endor worker -e xs` calling the daemon `EndoMount` methods through
+   CapTP and therefore `makeXsFilePowers().search`.
+4. A real `endor worker -e ironhorse` through the identical archive, powers,
+   host search cursor, and CapTP calls.
+
+The runner records only flattened results or canonical `{ name, messageClass
+}` errors. A parent test compares every Endor mode byte-for-byte to the Node
+oracle and separately asserts its engine proof. Run every case at input path
+batch sizes 1, 2, 64, and 1,024 and output targets 16 KiB, 256 KiB, and 4 MiB;
+the flattened result must not change. Dedicated cancellation probes stop after
+the first result and assert cursor closure, no additional path-reader pulls,
+and no additional file opens after the current host call. Fault injection
+covers malformed JSON, invalid handles, host errors, revocation between reads,
+disappearance during a walk, and an output record larger than every target.
+
+Keep unit tests at their owning seams:
+
+- `packages/platform/test/search.test.js`: reference semantics, batch
+  invariance, and the full JSON corpus.
+- `packages/platform/test/tree-search.test.js`: prefix forwarding, leaf
+  classification, overlay visibility, no duplicate descent, generic
+  `ReadableTree` fallback, and cancellation propagation.
+- `packages/daemon/test/mount-stream-search.test.js`: public reader guards,
+  `glorpStream`, liveness/revocation, denial/confinement, and Node collection
+  parity.
+- `rust/endo/xsnap/tests/search_host.rs`: cursor lifecycle, cap-std
+  confinement, wire limits, invalid UTF-8, symlinks, handles, and snapshot
+  callback order/signature.
+- `rust/endo/tests/search_engine_parity.rs`: production XS and Ironhorse worker
+  launch, engine proof, restart/resume, CapTP result parity, and cancellation.
+
+### Reproducible benchmark and preliminary report
+
+Check the harness into `rust/endo/benches/search.rs` and the orchestration
+script into `rust/endo/benches/run-search-matrix.sh`. The script builds one
+release `endor` with the `ironhorse-engine` feature, records the binary SHA-256,
+Rust/Node versions, OS/architecture, CPU model, commit SHA, and fixture seed,
+warms each cell three times, then records at least ten measured samples. It
+sets `LC_ALL=C`, uses a fixed seed, drops no filesystem caches, and labels the
+result as warm-cache; a cold-cache run is optional and must state the privileged
+cache-drop command used.
+
+Generate deterministic fixtures outside the timed region at 1 thousand, 10
+thousand, and 100 thousand files, crossed with 1 KiB and 64 KiB files and match
+densities 0%, 1%, and 100%. Include a 16 MiB single-line case and a mixed tree
+with physical, virtual/composed, and `ReadableTree` leaves. Measure:
+
+| Axis | Required values |
+| --- | --- |
+| Runtime | Node reference, Endor/XS reference fallback, Endor/XS native, Endor/Ironhorse native |
+| Operation | `streamGrep` over supplied paths, composed `streamGlob` + `streamGrep`, fused `glorpStream` |
+| Input path batch | 1, 64, 1,024 |
+| Host output target | 16 KiB, 256 KiB, 4 MiB |
+| Consumer | collect all; stop after first match |
+
+Report wall time, time to first result, files/s, MiB/s, peak RSS, host-call
+count, bytes crossing the host boundary, file opens after cancellation, and
+p50/p95 over samples. Correctness hashes of flattened results must match before
+a timing sample is accepted.
+
+The preliminary report is checked in at
+`rust/endo/benches/reports/search-<YYYY-MM-DD>-<short-sha>.json` with raw samples
+and metadata, plus a same-basename `.md` summary generated by the script. The
+Markdown contains the full command, matrix table, correctness hash, notable
+regressions, and the chosen default batch values. Commit both files with the
+implementation; CI runs only the 1-thousand-file smoke matrix and verifies the
+report schema, while the full matrix is reproducible locally.
+
+### Fixer delivery order
+
+The subsequent implementation job is one reviewable stack in this order:
+
+1. Contract corpus and reference `glorpFiles`/`glorpTree` implementation.
+2. Rust cursor, XS callbacks/aliases/declarations, Endor search adapter, and
+   `streamGrep` input batching.
+3. Public `glorpStream`, physical/virtual/`ReadableTree` leaf dispatch, types,
+   help, and mount tests.
+4. Ironhorse host ABI, real worker boot/transport, engine selection/proof, and
+   production parity tests.
+5. Benchmark harness and checked-in preliminary JSON/Markdown report.
+
+Each layer must pass its owning unit tests before the next lands. The final
+commit runs the full Node/XS/Ironhorse differential suite; no Ironhorse mock,
+skipped engine row, regexp-subset exemption, or direct-engine-only harness
+satisfies completion.
+
 ## Dependencies
 
 | Artifact | Relationship |
 | --- | --- |
 | [PR #127](https://github.com/endojs/endo-but-for-bots/pull/127) `feat/mount-extensions` | Defines `glob`/`grep` and `walkGlob`; the implementation stacks on this branch or lands after the mount stack merges to `llm` |
 | `@endo/exo-stream` (`PROTOCOL.md`, `DESIGN.md`) | The stream remotable shape, reader pump, buffer option, pattern guards |
+| `@endo/platform/fs/search` and `@endo/platform/fs/extended` | The normative search generators and physical/virtual/composed filesystem backings the fused traversal dispatches across |
+| [ironhorse-engine](ironhorse-engine.md) | The real Ironhorse worker, host-function ABI, SES boot, transport, and promise-drain prerequisites; direct script execution alone is insufficient |
+| `rust/engine/ironhorse-regexp` | The XS-derived native regexp implementation used by the Rust cursor and parity-gated against the JavaScript reference |
 | [daemon-mount](daemon-mount.md), [daemon-mount-capabilities](daemon-mount-capabilities.md) | The mount surface being extended |
 | [fs-interface-consolidation](fs-interface-consolidation.md) § C1 | `followNameChanges` placeholder that should reuse this stream shape |
 
@@ -411,6 +849,9 @@ type the two methods with `PassableReader` imported from
 2. **Stream surface.** `streamGlob` / `streamGrep` methods, `MountInterface`
    guards, help-text entries, typedefs.
 3. **Tests** per the plan below.
+4. **Native Endor and fused-tree follow-up.** Pending: the five-layer fixer
+   stack under § Fixer delivery order, including a real Ironhorse worker and
+   the checked-in benchmark report.
 
 One implementation PR. Its base follows the repository's base-branch inference:
 it landed on `llm` after the mount stack merged.
@@ -525,9 +966,11 @@ Covered on a temporary directory tree with `makeMount`:
 
 ## Resolved Questions
 
-- Streaming search remains an `EndoMount` capability. A later design may
-  consider `ReadableTree` and `SnapshotTree`, but this design keeps those
-  structural views minimal and does not add search to them.
+- `streamGlob` and `streamGrep` remain `EndoMount` capabilities.
+  `glorpStream` is also exposed on the mount's structural read-only view, while
+  the generic `glorpTree` helper consumes arbitrary `ReadableTree` values
+  without making search a required method of the shared interface. This is the
+  narrow extension selected by the native/fused follow-up.
 - The producer clamps `buffer` at 1,024 elements. This bounds the *pre-ack*
   window (the marshalled elements pre-pulled ahead of demand), not necessarily the
   whole daemon-side memory high-water mark: `streamGlob` walks in walk order and
@@ -544,6 +987,10 @@ Covered on a temporary directory tree with `makeMount`:
 
 ## Follow-up
 
+- **Native Endor search, fused tree traversal, real Ironhorse parity, and the
+  benchmark report — pending.** This is fully specified in § Native Endor and
+  Fused-Tree Follow-up and is the next fixer's required scope. It is not
+  satisfied by the current singleton JavaScript adapter.
 - **Per-grant `buffer` ceiling.** The search readers are now minted once-only, so
   the post-revoke delivery window is bounded per reader (§ Revocation). The one
   lever the *revoker* still lacks is a `buffer` ceiling on
@@ -567,3 +1014,12 @@ Covered on a temporary directory tree with `makeMount`:
   glob-identical UTF-16 order uses eager `glob()` instead. The `sorted` engine
   flag remains available should a sorted streaming variant ever be wanted, but
   none is planned.
+
+## Prompt
+
+> On Endor, build a platform-specific variant of the JavaScript grep that
+> carries large batches through the Rust process. Add a fused `glorpStream`
+> optimized when a file-tree leaf descends into a physical mount, virtual
+> mount, or `ReadableTree`. Verify one contract with comprehensive differential
+> tests across the Node.js JavaScript implementation and Endor on both XS and
+> Ironhorse, benchmark the variants, and check in the preliminary report.
