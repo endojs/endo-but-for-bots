@@ -247,6 +247,37 @@ test('globPaths sorted:false yields walk order — same multiset, sorting recove
   }
 });
 
+test('globPaths sorted:false sorts each directory while keeping the walk lazy', async t => {
+  await null;
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'search-directory-order-'),
+  );
+  t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'b'));
+  fs.mkdirSync(path.join(root, 'a'));
+  fs.writeFileSync(path.join(root, 'm.txt'), '');
+  fs.writeFileSync(path.join(root, 'a', 'zeta.txt'), '');
+  fs.writeFileSync(path.join(root, 'a', 'alpha.txt'), '');
+
+  const base = makeNodeSearchPowers();
+  const search = makeSearch({
+    ...base,
+    // Deliberately make the platform enumeration hostile to deterministic
+    // ordering. The engine, not the filesystem, owns directory-local order.
+    readDirectory: async directory => {
+      await null;
+      return [...(await base.readDirectory(directory))].sort().reverse();
+    },
+  });
+
+  t.deepEqual(
+    await collect(
+      search.globPaths(root, '**', { sorted: false, batchSize: 1 }),
+    ),
+    ['a', 'a/alpha.txt', 'a/zeta.txt', 'b', 'm.txt'],
+  );
+});
+
 test('globPaths sorted:false is incremental: a first path before the whole walk', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'search-walk-incr-'));
   t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));

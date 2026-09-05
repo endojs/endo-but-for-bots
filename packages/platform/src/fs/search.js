@@ -370,7 +370,11 @@ export const makeSearch = powers => {
       }
       let names;
       try {
-        names = await powers.readDirectory(dir);
+        // Sorting one directory at a time gives walk-order streams a stable,
+        // platform-independent order without imposing glob's eager global-sort
+        // barrier. The walk remains lazy: it sorts only the directory it has
+        // reached, then descends before reading later sibling directories.
+        names = [...(await powers.readDirectory(dir))].sort();
       } catch {
         // A directory removed mid-walk drops this branch rather than aborting.
         return;

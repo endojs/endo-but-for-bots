@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-09 |
-| **Updated** | 2026-09-04 |
+| **Updated** | 2026-09-05 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Implemented ([PR #1085](https://github.com/endojs/endo-but-for-bots/pull/1085)) |
 | **Source** | Review comment on [PR #127](https://github.com/endojs/endo-but-for-bots/pull/127#discussion_r3548861664) (mount extensions help text) |
@@ -66,9 +66,11 @@ streamGrep(pattern, files, options?) -> PassableReader<{ file, line, text }>
   and — because it then pulls no further paths — the unread remainder of the
   *producer's* stream too; whether that halts the producer's directory walk
   depends on whether the producer's walk is itself incremental. For `streamGlob`
-  the engine walks in walk order (`globPaths({ sorted: false })`) and yields each
-  matched path as the walk discovers it, so its enumeration is demand-bounded and
-  early close halts the walk within one walk step — and therefore
+  the engine walks in directory-locally sorted walk order (`globPaths({ sorted:
+  false })`): it sorts each directory when reached and yields matched paths as
+  the walk discovers them, without a whole-tree sort barrier. Its enumeration is
+  therefore demand-bounded and early close halts the walk within one walk step —
+  and therefore
   `streamGrep(p, streamGlob('**'))` inherits a walk-incremental producer, a first
   match before the whole tree is walked.
 
@@ -141,10 +143,11 @@ the stream breaks with an error:
    (`assertLivePathBatches`) is interposed on each method's *path source* —
    asserting before surfacing each path batch — and `assertLive()` runs again
    before each yield. The two methods differ in **what their path source is**.
-   `streamGlob`'s source is `globPaths({ sorted: false })`: paths in *walk order*,
-   each yielded as the walk discovers it, so the liveness check runs between walk
-   steps and a `revoke()` *during* the enumeration is observed within one walk
-   step.
+   `streamGlob`'s source is `globPaths({ sorted: false })`: paths in
+   *directory-locally sorted walk order*. Each directory's names are sorted only
+   when the walk reaches it, and each match is yielded as discovered, so the
+   liveness check runs between walk steps and a `revoke()` *during* the
+   enumeration is observed within one walk step.
    `streamGrep`'s source is the **external `files` reader** — grep no longer
    walks. It adapts that reader into path batches (`iterateReader`, one path per
    singleton batch) and interposes the same liveness check, so the check runs
@@ -161,9 +164,10 @@ the stream breaks with an error:
    dropped: the paths arrive one at a time over the stream. Because grep does not
    enumerate, there is **one walker** — in the producer — and no second walk to
    drift.
-4. Ordering and eagerness follow the *producer*. `streamGlob` uses **walk order**
-   (`globPaths({ sorted: false })`) — each matched path yielded as the walk
-   discovers it — so it is **incremental in the directory walk**: a first path
+4. Ordering and eagerness follow the *producer*. `streamGlob` uses
+   **directory-locally sorted walk order** (`globPaths({ sorted: false })`) —
+   each directory is sorted when reached and each matched path is yielded as the
+   walk discovers it — so it is **incremental in the directory walk**: a first path
    before the whole tree is walked, its enumeration demand-bounded, and its
    streaming win is time-to-first-result on top of bounded marshalled-message size
    and the absent 10,000-path cap. `streamGrep` reads the supplied files'
@@ -446,8 +450,9 @@ it landed on `llm` after the mount stack merged.
    `ReadableTree` view, matching the existing `glob`/`grep`/`stat`
    exclusion.
 7. **Ordering follows the producer.** `streamGlob` uses the shared engine's
-   **walk order** (`globPaths({ sorted: false })`) — each matched path yielded as
-   the walk discovers it — so collecting it yields the same **multiset** as eager
+   **directory-locally sorted walk order** (`globPaths({ sorted: false })`) —
+   each directory is sorted when reached and each matched path is yielded as the
+   walk discovers it — so collecting it yields the same **multiset** as eager
    `glob` (order-independent equality; walk order is not glob's UTF-16 sort), a
    first path before the whole tree is walked. A caller needing glob-identical
    order uses eager `glob()`. `streamGrep` yields records in the order its
@@ -550,9 +555,10 @@ Covered on a temporary directory tree with `makeMount`:
   multiplier, so this is a refinement of the residual single-stream window, not a
   correctness gap.
 - **Walk-incremental, interruptible `streamGlob` / `streamGrep` — delivered.**
-  `streamGlob` now drives its walk in **walk order**
-  (`globPaths({ sorted: false })`), yielding each matched path as the walk
-  discovers it, so `streamGrep(p, streamGlob('**'))` is walk-incremental end to
+  `streamGlob` now drives its walk in **directory-locally sorted walk order**
+  (`globPaths({ sorted: false })`), sorting each directory only when reached and
+  yielding each matched path as the walk discovers it, so
+  `streamGrep(p, streamGlob('**'))` is walk-incremental end to
   end — a first match before the whole tree is walked — and a mid-stream
   `revoke()` halts the enumeration within one walk step rather than after an
   uninterruptible whole-tree walk. A *sorted* streaming mode was considered and
