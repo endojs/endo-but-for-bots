@@ -27,7 +27,8 @@ automation: when a pull request carries a planned major bump for a package
 whose `exports` still holds `.js`-suffixed keys with extensionless siblings,
 CI surfaces the removable keys as an informational annotation, framed as
 "major bump: opportunity to complete the extensionless-exports cleanup." No
-LLM, no persistent state, no gate.
+LLM and no gate; the check keeps no state of its own, reading pass 1's
+committed manifest for provenance.
 
 ## Design
 
@@ -79,6 +80,17 @@ commit that inserts the siblings, mapping each touched package name to the
 }
 ```
 
+A colocated per-package alternative was weighed — a `package.json` field
+recording the same fact — and rejected: it travels with a rename (a live
+concern, `daemon-rename-to-manager` is a pending row) and avoids a second
+repo-root dotfile, but it puts pass-1 provenance inside the very file a later
+major edits to *remove* the `.js` keys, so the record and the thing it vouches
+for share one mutable place and a careless removal drops the provenance with
+the key. A central manifest keeps provenance in a file no later cleanup
+touches. The concurrent-PR-conflict cost of one aggregate file that every pass-1
+commit rewrites is real but bounded — pass 1 is a single migration wave, not
+continuous — and is the price of that separation.
+
 Recording the creation-time value, not just the key name, binds provenance to
 the fact that made it true. `exports` is mutable place-data: a key can be
 deleted and, much later, re-added under the identical string for an unrelated
@@ -94,7 +106,7 @@ of what pass 1 did, written once per package by pass 1 and never edited
 afterward. In particular it is **not** the opt-out knob (that is a separate
 suppression list, below); conflating the two would make the file stop truthfully
 answering "what did pass 1 create?" for its other consumer, the codemod's own
-`--check` gate A (defined under "gate A" below), which reads the same manifest.
+`--check` gate A, which reads the same manifest.
 The check **fails closed on missing provenance**: a `.js` key with no entry in
 the manifest is never flagged, even when it is structurally deep-equal to an
 extensionless sibling today. There is deliberately **no** parse-the-changeset-note
@@ -105,7 +117,7 @@ reintroducing the `platform` `.types.js` false positive is a harder problem
 than the manifest it would stand in for — so specifying such a parser to the
 same rigor as the frontmatter grammar is not worth its risk. Until #663 both
 lands and is amended to emit the manifest, the notice simply finds nothing,
-which is its correct inert behaviour before any pass-1 package exists.
+which is its correct inert behavior before any pass-1 package exists.
 Confirming #663 emits the manifest in the shape specified here is a named
 prerequisite in the test plan.
 
@@ -157,7 +169,12 @@ lives in one shared, dependency-free helper,
 questions: gate A wants the orphaned keys, this check wants the matched,
 in-manifest pairs. A single list named "dual pairs" would not distinguish the
 two, so the helper returns a classification instead:
-`classifyExportSubpaths(exportsMap, manifest) -> { dual, orphaned }`. It is
+`classifyExportSubpaths(exportsMap, manifest) -> { matched, orphaned }`, whose
+two sibling fields name the same category (in-manifest `.js` keys, partitioned
+by whether their extensionless sibling is present) at the same level. `matched`
+is the deep-equal in-manifest pairs **before** the caller applies
+private-package exclusion and the `.exports-migration-suppressions.json` filter,
+so it is not itself the final removable set; the caller narrows it. It is
 consumed by the pass-1 codemod's `--check` mode and by this check. If the
 codemod lands first without the helper, this work will factor it out of
 `scripts/codemod-exports-extensionless.mjs`.
@@ -171,20 +188,32 @@ PR that applies the bumps and, once merged, cuts the release tags. The two
 surfaces below hook the two ends of that pipeline, and both classify a bump
 as breaking through one shared breaking-bump core so their criteria cannot
 drift. It is exposed as **two named entry points over that core**,
-`isBreakingChangeset(bump, currentVersion)` for surface 1 and
-`isBreakingVersionBump(oldVersion, newVersion)` for surface 2, so neither
+`isBreakingBump(bumpLevel, currentVersion)` for surface 1 and
+`isBreakingVersionChange(oldVersion, newVersion)` for surface 2, so neither
 call site is a `(string, string)` pair whose meaning switches on which surface
 it sits in (see Design Decision 4).
 
 **Surface 1: the contributor PR that declares the major (the early
 reminder).** On `pull_request`, diff against the merge base and collect the
 `.changeset/*.md` files the PR **adds or modifies** (never
-`.changeset/README.md`). Parse each changeset's YAML frontmatter for
-`'<pkg>': <bump>` entries. That single-quoted spelling is what `changeset add`
-actually emits (`.changeset/add-endo-cbor.md`: `'@endo/cbor': major`); a
-parser written to a double-quoted grammar would match zero real changesets and
-surface 1 would silently never fire. Treat an entry as breaking through
-`isBreakingChangeset(bump, currentVersion)`, which is true for `major`, and for
+`.changeset/README.md`). Parse each changeset's leading `---`-fenced YAML
+frontmatter block for `<pkg>: <bump>` entries, accepting the package key in any
+of the three spellings the repo's live changesets actually use: single-quoted
+(`'@endo/cbor': major`, what `changeset add` emits), **double-quoted**
+(`"@endo/captp": minor`, six hand-written entries across
+`.changeset/graceful-captp-shutdown.md`, `http-confine-core.md`,
+`http-web-seed-content.md`, `tar-writer-web-seed-provide.md`,
+`http-client-initial.md`, `lucky-planes-resolve.md`), and bare/unquoted. A
+grammar fixed to any one spelling would silently drop the others — and because
+zero findings exits 0 (below), that miss is invisible; a survey of every
+`.changeset/*.md` frontmatter block on the branch, not one exemplar, is what
+fixes the grammar. Only entries inside the fenced block count: a body line that
+merely looks like an entry (a double-quoted phrase followed by a colon, e.g.
+`add-endo-ocapn-iroh.md`'s `"Dial keys, not IPs": …` prose) must not register
+as a package, and a file whose first line is an entry with no opening `---`
+fence (`.changeset/lucky-planes-resolve.md`) is malformed frontmatter, not a
+bare-key changeset. Treat an entry as breaking through
+`isBreakingBump(bumpLevel, currentVersion)`, which is true for `major`, and for
 `minor` when the package's current `package.json` `version` has a `0` major
 (the 0.x breaking convention). Sharing the core is deliberate: without the 0.x
 clause the early reminder would silently miss exactly the pre-1.0 breaking
@@ -202,15 +231,18 @@ per `.github/workflows/release.yml`) *consumes* the changeset files, so
 surface 1 is blind there, and that PR is the last deterministic gate before
 tags are pushed. On that branch shape the check instead diffs each changed
 workspace `package.json` `version` against the merge base and feeds the
-`(oldVersion, newVersion)` pair to `isBreakingVersionBump`: breaking iff the
+`(oldVersion, newVersion)` pair to `isBreakingVersionChange`: breaking iff the
 major component increased, or the major is `0` and the minor increased (the
 0.x breaking convention). Acting on this surface's notice means holding the
 Version Packages PR and landing the key removal on the base branch, then
 regenerating the PR: `changeset version` has already consumed the changesets
 and written `CHANGELOG.md`, so a removal committed straight into the PR would
 ship undocumented, and `changesets/action` force-pushes `changeset-release/*`
-on each run, so a commit added there is not durable. This is folded into the
-"Which branch actually cuts releases" prerequisite below.
+on each run, so a commit added there is not durable. The base-branch removal is
+documented the ordinary way — it carries its own `major` changeset for the
+package, which the next Version Packages run folds into the changelog — so
+"land it on the base branch" is not itself the undocumented path it replaces.
+This is folded into the "Which branch actually cuts releases" prerequisite below.
 
 **Which branch actually cuts releases.** Surface 2 must be pinned to the
 branch this fork's own tag-cutting really runs from before it is relied on as
@@ -286,20 +318,21 @@ no install step:
    alias can be added then, with a stated reason.
    Because the mode is a passed value and not read only from the branch name,
    surface 1 is forceable on any branch.
-   Empty input is handled by two different contracts, chosen so the
-   non-blocking invariant holds. When the mode was resolved by `auto` and the
-   matched surface has no candidate inputs (a contributor PR that edits a
-   `package.json` but adds no changeset, so `auto` picks `pr` and finds no
-   changesets), that is a **legitimate zero-finding outcome**: it is logged in
-   the step summary and exits 0, never a red check. Only an **explicitly
-   forced** mode with no inputs (a maintainer typing `--mode release` on a
-   branch with no version diffs, or `--mode pr` with no changesets) is an
-   **error** that exits non-zero with a diagnostic, because a deliberate force
-   that cannot answer the question it was told to answer is an operator
-   mistake, not a normal PR. The frontmatter
-   grammar is the constrained single-quoted `'<pkg>': <bump>` block that
-   `changeset add` writes; a small line parser covers it, and malformed lines
-   are reported in the step summary and skipped rather than trusted.
+   Empty input is a legitimate zero-finding outcome under **every** mode: the
+   exit code depends on the state of the world, not on whether the mode was
+   typed or inferred. A surface with no candidate inputs — a contributor PR that
+   edits a `package.json` but adds no changeset, or a maintainer running
+   `--mode release` on a branch with no version diffs — logs the liveness line
+   to the step summary and exits 0, never a red check, so the invariant above
+   holds with no "how was the mode chosen" special case. A caller that genuinely
+   wants "you asked me to look and there was nothing to look at" as a hard error
+   opts into it explicitly with `--require-findings`, which is off by default and
+   never set in CI. The frontmatter grammar is the leading
+   `---`-fenced block, and within it each `<pkg>: <bump>` line whose package key
+   is single-quoted, double-quoted, or bare (the three spellings surveyed in
+   "Surface 1"); a small line parser covers all three, only lines between the
+   opening and closing `---` are considered, and malformed lines are reported in
+   the step summary and skipped rather than trusted.
 3. Map breaking-bumped package names to workspace directories, run
    `classifyExportSubpaths` on each package's `exports`, and anchor the
    annotation on the line where the removable key is **defined as a key**. Plain
@@ -317,7 +350,14 @@ no install step:
    one liveness line to the step summary naming the surface that ran ("surface
    1 (`pr`): N breaking bumps considered, M publishable packages with removable
    keys") so "found nothing" is distinguishable from "did not run" and from
-   "`auto` picked the other surface".
+   "`auto` picked the other surface". Because the check **fails closed on a
+   missing manifest** (a permanent state until #663 lands and is amended), that
+   same liveness line reports **manifest presence and entry count** ("provenance
+   manifest: present, 12 packages" / "provenance manifest: absent — inert until
+   `exports-extensionless-migration` pass 1 lands"): a fail-closed zero caused by
+   an absent provenance input must not read identically to a healthy zero, or
+   the design's own "silently rots" hazard reappears in the one output meant to
+   prevent it.
 
 Wiring: a dedicated job (`major-bump-exports-notice`) in a small separate
 workflow on `pull_request` with a path filter (`.changeset/**`,
@@ -337,16 +377,28 @@ version-diff path against the same base the release PR would diff from. Omitting
 
 ### Test plan
 
-- Unit tests (ava, colocated under `scripts/` per the
-  `generate-composite-tsconfigs.test.mjs` precedent) over fixtures:
-  changeset-frontmatter parsing (major/minor/patch, single-quoted names, with
-  one fixture copied verbatim from an existing `.changeset/*.md` such as
-  `'@endo/cbor': major`, and malformed lines), `classifyExportSubpaths` (dual
+- Unit tests (ava) live at `scripts/test/check-major-bump-exports-notice.test.mjs`
+  and are **wired into CI** the way the repo actually runs script tests: a
+  `test:major-bump-exports-notice` root-`package.json` script (`ava
+  scripts/test/check-major-bump-exports-notice.test.mjs`) invoked from
+  `.github/workflows/ci.yml` beside the existing
+  `yarn test:package-uniformity` (ci.yml line 92) — the repo's *wired*
+  script-test precedent (`scripts/test/check-package-uniformity.test.mjs`), not
+  the unreferenced `scripts/generate-composite-tsconfigs.test.mjs`, which no
+  script or workflow invokes and would leave these tests never running in CI.
+  Fixtures cover: changeset-frontmatter parsing across all three live key
+  spellings (single-quoted `'@endo/cbor': major`, double-quoted
+  `"@endo/captp": minor`, and bare/unquoted), each with the entry inside a
+  proper `---` fence; and the two malformed shapes that must **not** register a
+  package — a body line that looks like an entry (`"Dial keys, not IPs": …`) and
+  a file whose first line is an entry with no opening `---` fence (the
+  `lucky-planes-resolve.md` shape) — plus ordinary malformed lines.
+  `classifyExportSubpaths` (dual
   in-manifest pairs, diverged values, out-of-manifest deep-equal pairs such as
   `platform`'s `.types.js` aliases, `private`-package exclusion, pattern keys,
   string versus conditional-object values), and the 0.x breaking rule proven
-  identical on both entry points (`isBreakingChangeset` over a `<bump>` plus the
-  package's current version (`0.x` or not), and `isBreakingVersionBump` over an
+  identical on both entry points (`isBreakingBump` over a `<bump>` plus the
+  package's current version (`0.x` or not), and `isBreakingVersionChange` over an
   `(oldVersion, newVersion)` pair).
 - The two steps most likely to fail silently get their own fixtures: the
   breaking-bumped-package-name to workspace-directory mapping, and the
@@ -392,8 +444,8 @@ version-diff path against the same base the release PR would diff from. Omitting
    "Which branch actually cuts releases" above, and confirming which holds is a
    prerequisite of the implementation PR.
 4. **One shared breaking-bump core, two named entry points.** Both surfaces
-   classify through one core, exposed as `isBreakingChangeset(bump,
-   currentVersion)` and `isBreakingVersionBump(oldVersion, newVersion)` so
+   classify through one core, exposed as `isBreakingBump(bumpLevel,
+   currentVersion)` and `isBreakingVersionChange(oldVersion, newVersion)` so
    neither call site is a `(string, string)` pair whose meaning switches on
    context; the 0.x breaking convention holds identically at the early reminder
    and the late gate rather than the two paths converging only because surface

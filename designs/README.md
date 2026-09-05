@@ -121,9 +121,8 @@ surface on the Changesets Version Packages PR compares `package.json`
 versions so the reminder also fires at the last gate before tags;
 the check exits 0 on findings by construction, needs no write
 permissions, and self-quiets once a major actually removes the keys;
-follow-up to
-`exports-extensionless-migration` (forthcoming, PR #663), inert until its
-pass 1 lands),
+follow-up to `exports-extensionless-migration` (forthcoming, PR #663); the
+notice is inert until that design's pass 1 lands),
 [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md)
 (added 2026-07-08, revised 2026-07-09 and 2026-07-17; distilled git-rebase-session
 evidence into a trimmed three-scenario `@endo/agentry` git code-mode
@@ -886,7 +885,6 @@ capability list rather than a capability-plus-hygiene mix.
 | ~~break-dev-dependency-cycles~~ | **Complete** (on `llm`) | Synthetic test-package factoring retires the workspace devDep SCC on `llm`: Cut 2 (`@endo/hex-test`, PR #211), Cut 3 (`@endo/zip` devDep delete, PR #209), Cut 4 (`@endo/harden-test`, PR #210), Cut 5 (`@endo/eventual-send-test`, PR #247), and Cut 1 (`@endo/ses-test`, PR #261) have all landed on `llm`. Verified 2026-06-15: combined dep+devDep SCC count is 0; self-loop count is 0; `scripts/check-dependency-cycles.sh 0` passes. The upstream-ferry mirror PR #235 against master is the master-side mirror of the same cuts and is M2-orthogonal — the cycle is broken on the project branch and the substrate noise is gone |
 | ~~ci-no-npm-lifecycle~~ | **Complete** | `.yarnrc.yml` pins `enableScripts: false` and CI installs with `yarn install --immutable`; PR #126 merged 2026-05-15 (master-base mirror staged as PR #250) |
 | ~~base64-native-fallthrough~~ | **Complete** | `@endo/base64` dispatches to `Uint8Array.fromBase64` / `toBase64` when available; landed on `llm` via `actual/master` merge (commit `7325bbe15`, from `endojs/endo#3216`) |
-| release-automation-major-bump-exports-trigger | Not Started | Deterministic, non-blocking CI notice (added 2026-07-10): when a PR adds a `major` changeset for a package whose `exports` still carries `.js` keys with deep-equal extensionless siblings recorded in pass 1's manifest (left by `exports-extensionless-migration`, PR #663 in flight; publishable packages only), annotate the removable keys; second surface on the Changesets Version Packages PR via `package.json` version diffs; no LLM, no write permissions, exits 0 on findings |
 
 **Exit criterion:** The shared byte/encoding/test-helper libraries are
 factored out of per-package duplicates (`@endo/bytes`, `@endo/hex` fully
@@ -895,22 +893,13 @@ is dissolved so turbo's `^build` form prints no cycle warning. The CI
 posture is hardened against npm lifecycle scripts. The Chat bundle has
 a build-and-load smoke gate. None of these are user-visible features
 on their own; together they remove substrate noise that otherwise
-accompanies every M3 capability commit. The original criterion still holds;
-one later release-hygiene row is filed here as a convenience, per the Status
-note below.
+accompanies every M3 capability commit.
 
-**Status:** The original six rows reached **Complete** on `llm` as of
-2026-06-15, and that exit criterion **remains met** — this note does not
-reopen it. The remaining upstream-ferry effort (PR #235 mirroring the cuts to
-master) is tracked separately and is not a blocker for M2's exit criterion on
-`llm`. **One convenience row was added 2026-07-10**,
-`release-automation-major-bump-exports-trigger` (Not Started): a
-release-automation reminder is exactly this bucket's kind of substrate hygiene,
-so it is filed here for discoverability rather than by opening a new milestone.
-Being Not Started, it does not bear on M2's already-met exit criterion (an
-added convenience row is not a re-opening of the milestone). It is inert until
-the in-flight `exports-extensionless-migration` design (PR #663) it rides
-lands; that design will add its own separate M2 row when it merges.
+**Status:** **Complete** on `llm` as of 2026-06-15. All six rows above
+are Complete or Implemented on the project branch. The remaining
+upstream-ferry effort (PR #235 mirroring the cuts to master) is
+tracked separately and is not a blocker for M2's exit criterion on
+`llm`.
 
 ---
 
@@ -1672,7 +1661,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~hex-package~~ | S-M | — | 2 | ✅ Complete (`@endo/hex` shipped; synthetic `@endo/hex-test` lands as Cut 2 of break-dev-dependency-cycles, PR #211) |
 | ~~endo-bytes~~ | S | — | 2 | ✅ Implemented (PR #142): `@endo/bytes` with `concatBytes`, `bytesEqual`, `bytesFromText`, `bytesToText`; follow-up `bytesToImmutable`/`bytesFromImmutable` and ocapn buffer-utils consolidation (PR #227) |
 | ~~break-dev-dependency-cycles~~ | M | — | 2 | ✅ Complete on `llm` (all five cut packages exist; SCC count is 0). Cut 1 PR #261, Cut 2 PR #211, Cut 3 PR #209, Cut 4 PR #210, Cut 5 PR #247. PR #235 against master is the upstream-ferry mirror, M2-orthogonal |
-| release-automation-major-bump-exports-trigger | S | 1-2 days | 2 | One dependency-free script (`scripts/check-major-bump-exports-notice.mjs`), a shared `classifyExportSubpaths` helper, a small no-permissions workflow, and fixture tests; inert until `exports-extensionless-migration` pass 1 lands (PR #663) |
+| release-automation-major-bump-exports-trigger | S | 1-2 days | — | Out-of-milestone release-hygiene follow-up (added 2026-07-10): one dependency-free script (`scripts/check-major-bump-exports-notice.mjs`), a shared `classifyExportSubpaths` helper, a small no-permissions workflow, and fixture tests; inert until `exports-extensionless-migration` pass 1 lands (PR #663) |
 | ~~unhandled-rejection-display~~ | S | — | — | ✅ Complete (out-of-milestone diagnostic; PR #187 closes #171). CapTP `CTP_DISCONNECT.reason` now renders structured Error reasons rather than empty `{}` |
 | hardener-indexed-cardinality | S | 1 day | — | Out-of-milestone `master`-based optimization: conjoined cardinality-count-plus-last-key-ordering test for the purely indexed TypedArray fast path, regression matrix, and focused benchmark |
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 4 | Architectural refactor (M-L bumped 1.2x) |
@@ -1765,7 +1754,7 @@ date of this pass.
 | Milestone | Items remaining | Effort Estimate | Plus Review Queue (current rate) |
 |-----------|-----------------|-----------------|----------------------------------|
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
-| M2: Project Hygiene (was M½) | 1 (`release-automation-major-bump-exports-trigger`; convenience row added 2026-07-10, original six rows Complete and exit criterion still met; the in-flight `exports-extensionless-migration` design PR #663 adds its own M2 row on merge) | ~1-2 days | — |
+| M2: Project Hygiene (was M½) | 0 | **Complete** | — |
 | M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
 | M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
@@ -1775,7 +1764,7 @@ date of this pass.
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **66** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** (the M2 addition is ~1-2 days, below the week granularity of this total) + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -1846,7 +1835,7 @@ dates project from that anchor at the upper-bound effort.
 | Milestone | Duration | Cumulative | Target Date |
 |-----------|----------|------------|-------------|
 | M1: AI Agent Experience (was M0) | 18 days (actual) | **Complete** | March 5, 2026 |
-| M2: Project Hygiene (was M½) | ~1-2 days (convenience row `release-automation-major-bump-exports-trigger` added 2026-07-10; original scope Complete 2026-06-15, exit criterion still met) | — | — |
+| M2: Project Hygiene (was M½) | **Complete** | — | 2026-06-15 |
 | M3: Remote Access & Tools (was M1) | 8-10 weeks | 8-10 weeks | Late July to early August 2026 |
 | M4: Networking (was M2) | 5-6 weeks | 13-16 weeks | Late August to mid September 2026 |
 | M5: Public Hosting & Billing (was M7) | 4-6 weeks (designs + impl) + AWS-stack merge cadence | 17-22 weeks | Late September to mid November 2026 (gated by M3 gateway-package merge cadence and PRs #343 / #356) |
