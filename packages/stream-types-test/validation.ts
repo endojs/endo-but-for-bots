@@ -13,6 +13,13 @@ import {
 } from '@endo/stream';
 
 import type { Stream, Reader, Writer } from '@endo/stream';
+import { makeAutoBuffer } from '@endo/stream/auto-buffer';
+import type {
+  AutoBuffer,
+  AutoBufferSink,
+  AutoBufferSpring,
+  MaybePromise,
+} from '@endo/stream/auto-buffer';
 
 async () => {
   const q = makeQueue<number>();
@@ -21,6 +28,22 @@ async () => {
   // @ts-expect-error
   q.put('NaN'); // it's a string!
   const a: number = await q.get();
+};
+
+async () => {
+  const { spring, sink } = makeAutoBuffer<number, string>();
+  const producer: AutoBufferSpring<number, string> = spring;
+  const consumer: AutoBufferSink<number, string> = sink;
+  const buffer: AutoBuffer<number, string> = {
+    spring: producer,
+    sink: consumer,
+  };
+  const value: MaybePromise<number> = Promise.resolve(1);
+  buffer.spring.next(value);
+  // @ts-expect-error
+  buffer.spring.next('NaN');
+  buffer.spring.return('finished');
+  const result: IteratorResult<number, string> = await buffer.sink.next();
 };
 
 async () => {

@@ -73,6 +73,39 @@ which promises settle.
 A stream is consequently a pair of queues that transport iteration results,
 one to send messages forward and another to receive acknowledgements.
 
+## Auto buffer
+
+An _auto buffer_ is a one-way buffer whose storage grows automatically to
+retain every produced value until a consumer reads it, applying no backpressure
+and dropping nothing. Import `makeAutoBuffer` from `@endo/stream/auto-buffer`.
+It returns a `{ spring, sink }` pair. The spring is the producer-facing
+generator subset: `next(value)`, `return(value)`, and `throw(error)` enqueue
+values or terminal iterations without waiting. The sink is the consumer-facing
+async iterator subset: `next()` returns the next iteration promise.
+
+```js
+import { makeAutoBuffer } from '@endo/stream/auto-buffer';
+
+const { spring, sink } = makeAutoBuffer();
+spring.next('one');
+spring.return('done');
+
+console.log(await sink.next()); // { value: 'one', done: false }
+console.log(await sink.next()); // { value: 'done', done: true }
+```
+
+The auto buffer is built on `makeQueue`, the asynchronous promise queue. This
+is the no-acknowledgement portion of the coherent design space described in
+[A General Theory of Reactivity](https://kriskowal.com/gtor/): the spring pushes
+generator iterations and the sink pulls them later.
+
+The complementary bounded variant is a _ring buffer_, deliberately not
+implemented here. A ring buffer needs a separate, synchronous module with
+pre-allocated storage, head and tail offsets, refusal behavior, and bulk
+flushing. That substantially different abstraction must not be hidden behind the
+promise-queue implementation, and its explicit name (ring buffer) keeps it
+distinct from the auto buffer.
+
 ## Pump
 
 The `pump` function pumps iterations from a reader to a writer.

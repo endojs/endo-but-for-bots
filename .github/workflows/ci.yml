@@ -157,7 +157,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
+        # Node 24.19.0 regressed native-addon worker teardown. Pin this matrix
+        # entry to the last known-good patch pending the upstream fix.
+        # https://github.com/nodejs/node/pull/65042
+        node-version: [22.x, 24.18.1]
         platform: [ubuntu-latest, macos-15]
         # windows-latest exhibited flakey tests that are not yet worth the
         # trouble to investigate, and blocked us from upgrading yarn from 1 to
