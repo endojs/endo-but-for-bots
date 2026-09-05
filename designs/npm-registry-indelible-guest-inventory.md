@@ -1,4 +1,4 @@
-# Indelible npm registry in every guest inventory
+# Indelible npm Registry in Every Guest Inventory
 
 | | |
 |---|---|
@@ -29,9 +29,9 @@ The mandatory capability is a credential-free public-read view.
 It has the directory tree's `has`, `lookup`, `list`, and `getInfo` surfaces at
 the nodes where the directory-tree design permits them, but no publish,
 configuration, credential, raw-network, or content-store administration surface.
-The Node-hosted Endo daemon projects this name today; Rust-hosted Endor matches
-the underlying tree contract now and the inventory projection once it grows an
-agent and guest model.
+Once the underlying tree design ships, the Node-hosted Endo daemon projects this
+name; Rust-hosted Endor will match the same tree contract at that point, and the
+inventory projection once it grows an agent and guest model.
 
 ## The problem being solved
 
@@ -63,8 +63,9 @@ The registry needs both properties together.
 4. Node and Endor present an identical *tree contract* at the registry root.
    The inventory projection of `@registry` is required of the Node daemon now,
    and of Endor once it grows an agent and guest model; until then Endor's tree
-   adapter satisfies the tree-only conformance suite and the inventory projection
-   is a Node-only surface (see the parity section).
+   adapter is held to the tree-only conformance suite and the inventory projection
+   is a Node-only surface (see the parity section). The tree contract itself is
+   Not Started (see Dependencies), so both projections build on it once it ships.
 5. After an upgrade, existing guests acquire the slot before they are exposed.
 
 ## Non-goals
@@ -78,6 +79,12 @@ The registry needs both properties together.
   npmjs.com credential from
   [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md).
 - Letting a guest choose, replace, or remove its mandatory registry root.
+- Re-pointing an already-populated guest at a new default root (root rotation).
+  The `registry` field is write-once: set at formulation, or filled by the
+  one-shot migration when absent, and never rewritten thereafter. Rotating the
+  shared default (a backend credential change, a tree-contract version bump)
+  across already-seated guests is out of scope; the field is a durable dependency
+  identity, deliberately kept distinct from mutable operator policy.
 - Building an agent or guest model in Endor. This design scopes Endor to tree
   parity and defers the inventory projection to that later work.
 - Implementing this design. A build follows design acceptance.
@@ -148,9 +155,15 @@ The candidates compare as follows:
 | Required `GuestFormula.registry` projected as `@registry` | Explicit, durable, and visible to reachability and inspection. | Protected by every special-name write boundary. | Selected. |
 
 The daemon already ships the fourth pattern: `leastAuthority` is preformulated
-once, made a formula-graph root, and projected as `@none` in every agent's
-special names, durable and GC-reachable with no per-guest field and no migration.
+once, made a formula-graph root, and projected as `@none` in the **host's**
+special names (where it backs the host-only `makeUnconfined` / `makeArchive`
+power defaults), durable and GC-reachable with no per-guest field and no
+migration.
 That pattern alone would carry a purely shared registry root.
+The shipped precedent is host-side only, though: the guest `specialNames` overlay
+has no `@none` entry and no equivalent guest method consumes it, so projecting a
+preformulated root into a *guest's* inventory — precisely what this design does —
+is adjacent to the `@none` pattern rather than already demonstrated by it.
 This design still adds the per-guest `registry` field for two reasons the shared
 pattern cannot express: an operator may seat a *different* attenuating root per
 guest (see Placement and name), and per-guest inspection and reachability should
@@ -210,9 +223,18 @@ of these constraints:
 
 Where every guest shares one default root (the common case in Placement and
 name), that root's lookup traffic is not attributable per guest, so per-caller
-rate and resource accounting is not a property this design provides. Those limits
-are owned by [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md)
-(see Non-goals); an operator needing per-guest accounting seats a distinct
+rate and resource accounting is not a property this design provides. This design
+makes registry-reaching authority present-by-construction for every guest and, in
+the shared-root common case, funnels their lookups through one origin, so that
+aggregate exposure needs a bound and no landed design currently supplies one: the
+sibling [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md)
+design defines the tree shape, caching, and offline-error semantics but does *not*
+itself specify a rate limit, concurrency cap, or per-caller quota. Bounding the
+shared root's aggregate origin traffic is therefore a **required property of the
+backend an operator seats at the mandatory slot** — it must carry the
+daemon-owned cancellation, size, and concurrency limits named above — and this
+design records it as an open constraint on the seated root rather than an
+already-owned one. An operator needing per-guest accounting seats a distinct
 attenuating root per guest rather than the shared default.
 
 The first configured child is `npm`, backed by unauthenticated public reads.
@@ -227,7 +249,7 @@ another name.
 By operator policy at formulation, it may instead occupy the required slot, but a
 guest can never request a wider view.
 
-Guest `@registry` and host `@registry` carry the *identical* node interfaces:
+Guest `@registry` and host `@registry` carry the *identical* tree-node interfaces:
 the guest root is a strict attenuation of the host tree, presenting the same
 method surfaces so that library code written against either resolves and fails
 the same way.
@@ -235,8 +257,8 @@ Any credentialed or administrative registry view is not a wider `@registry`; it
 occupies a different name, so the same spelling never resolves to two different
 interfaces.
 
-This is deliberate baseline authority, not an unforgeable global discovered
-behind a string.
+This is deliberate baseline authority, not ambient authority obtainable merely by
+knowing the right name.
 The reference is visible in the guest's inventory, follows ordinary capability
 passing rules, and is limited to a fixed public-read protocol.
 Code that receives only some other capability does not gain registry access
@@ -264,9 +286,13 @@ but an `@intro-registry` binding neither collides with nor shadows `@registry`.
 
 ## Node and Endor parity
 
-Node and Endor already share the registry *tree contract*: both implement the
-directory-tree design's adapters and pass its cross-backend, tree-only
-conformance suite. This design does not change that layer.
+Node and Endor will share the registry *tree contract* once
+[npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) ships: both
+backends implement that design's adapters and pass its cross-backend, tree-only
+conformance suite. That tree design is Not Started (see Dependencies) and today's
+`@registry` is still the deprecated `makeEndoRegistry` exo, so the shared tree
+contract is a prerequisite this design builds on, not an already-achieved state.
+This design does not change that layer.
 
 The inventory projection is different.
 Node's daemon has agents, guests, formulas, and special names, so it can carry
@@ -276,10 +302,13 @@ sources are the npm resolver and assembler, with no pet store or inventory to
 project a name into.
 The parity requirement is therefore staged:
 
-1. **Now (both backends):** the registry root behind `@registry` conforms to the
-   shared tree contract, so a resolved root, its `/npm` hub, package and version
-   directories, and immutable leaves behave identically on either backend.
-2. **Now (Node only):** guest formulation records a registry-root identifier
+1. **Once the tree design ships (both backends):** the registry root behind
+   `@registry` conforms to the shared tree contract, so a resolved root, its
+   `/npm` hub, package and version directories, and immutable leaves behave
+   identically on either backend. This is a prerequisite, not a present-day
+   state — the tree contract and its conformance suite are Not Started (see
+   Dependencies).
+2. **Then (Node only):** guest formulation records a registry-root identifier
    before exposing the guest; guest construction presents that identifier as
    `@registry` through the inventory interface; the persisted guest record
    retains the root across restart and garbage collection; and no guest method or
@@ -294,7 +323,7 @@ inventory fixture that runs on the Node backend rather than by creating a second
 Endor-specific protocol.
 The fixture formulates guests, then compares the `@registry` name, method guards,
 path results, ordering, content identity, and documented failure shapes against
-the tree contract both backends already satisfy.
+the tree contract both backends satisfy once the tree design ships.
 
 ## Persistence, reachability, and inspection
 
@@ -311,6 +340,22 @@ This is an intentional departure from the sibling `HostFormula.registry`, which
 *is* wired through `thisDiesIfThatDies` today; the host holds its own registry
 root, whereas one guest-safe root is shared across many guests, so the host's
 cascade semantics are wrong for the guest slot.
+
+This cascade-avoidance argument holds for the shared-default-root case, where one
+root backs many guests. It does *not* hold for the per-guest distinct-root case
+that Placement and name and Authority and attenuation permit (an operator seating
+a 1:1 attenuating root per guest for accounting), where the root has exactly one
+namer and the `HostFormula.registry` cascade semantics would in fact fit. This
+design nonetheless applies the GC-reachability (no-`thisDiesIfThatDies`) wiring
+uniformly to both cases, and states that as a deliberate choice, not an oversight:
+a permanently-broken per-guest root leaves the guest **alive-but-registry-dead** —
+its `@registry` still resolves to the now-failing root and surfaces the
+directory-tree design's registry failure family at each call — rather than
+cancelling the guest. Uniform wiring keeps the slot's lifecycle contract identical
+regardless of which root an operator seats, so a caller never has to reason about
+whether a given guest's root death is fatal. An operator who instead wants a
+per-guest root's death to cancel its guest wires that cancellation explicitly at
+formulation rather than relying on the slot.
 The parallel normalized formula record used by `getFormula` and inspection also
 reports the field.
 Any equivalent Rust dependency and inspection table does the same once Endor
@@ -385,6 +430,12 @@ from the mandatory guest slot, under a different name.
 The tests cover:
 
 - fresh guests list and resolve `@registry` without any provisioning option;
+- two guests seated against two *distinct* attenuating roots each resolve
+  `@registry` only to their own root: guest A's `@registry` lists and looks up
+  A's seated view and never B's or the shared default's wider view, and
+  symmetrically for B, confirming per-guest root isolation for the
+  operator-chosen 1:1 seating path (the branch with no shared default to fall
+  back on);
 - the resolved root and exact package-version leaf retain identity across daemon
   restart;
 - `storeIdentifier`, `storeLocator`, `remove`, `rename`, `move`, and `copy`
