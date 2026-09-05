@@ -14,8 +14,8 @@
 dimensions behind one package boundary. This design splits it into focused
 packages, one per dimension actually present in its source, each shipped as a
 parallel pair: a plain `@endo/<dim>` package (pure logic and platform binding,
-no exo machinery) and an `@endo/exo-<dim>` package (the passable facet, meaning
-its interface guards and `makeExo` factories). The split follows the precedent
+no exo machinery) and an `@endo/exo-<dim>` package (the passable facet: its
+interface guards and `makeExo` factories). The split follows the precedent
 already in the tree: `@endo/http-confine` (pure core) under
 `@endo/exo-http-client` (passable facet). Three members depart from the bare
 `@endo/<dim>` / `@endo/exo-<dim>` grammar, and the departures are deliberate
@@ -127,14 +127,14 @@ Three clarifications the current code forces:
    passable shape, they do not define one. The dependency-row entries below are
    not table errors.
 
-The packages that get exo-free weight, which is the cost the seam was opened
-for: `@endo/fs-backend` (errors, eventual-send, harden) and `@endo/proc-node`
-(harden) are the two genuinely exo-free leaves, and they are the ones a
-consumer like `packages/chat/vite-endo-plugin.js` or `@endo/git` reaches for.
+Exo-free weight is the cost the seam was opened for. `@endo/fs-backend` (errors,
+eventual-send, harden) and `@endo/proc-node` (harden) are the two genuinely
+exo-free leaves, and they are the ones a consumer like
+`packages/chat/vite-endo-plugin.js` or `@endo/git` reaches for.
 The Node backend leaf `@endo/fs-backend-node` (via its `./backend` subpath) is
 likewise exo-free in what it defines. `@endo/fs`, `@endo/cas`, and
-`@endo/cas-node` shed the filesystem and exo-minting surface but still carry
-`@endo/exo-stream` for passable stream types. `@endo/fs-node`, `@endo/exo-fs`,
+`@endo/cas-node` shed the extended-`Filesystem` and exo-minting surfaces but
+still carry `@endo/exo-stream` for passable stream types. `@endo/fs-node`, `@endo/exo-fs`,
 `@endo/exo-cas`, and `@endo/exo-filesystem` are exo-carrying by construction.
 The seam therefore buys a large dependency cut for pure consumers and a
 definitional one (the enforced absence of guards and `makeExo`) everywhere
@@ -240,6 +240,30 @@ explicitly rather than "mechanically":
   consumer) was rejected precisely because `exo-cas` also consumes it, which
   would close `exo-cas` to `exo-filesystem` against the drawn
   `exofilesystem --> exocas` edge.
+
+  Homing the scalar/path helpers in `@endo/fs-backend` gives the snapshot-tier
+  `@endo/fs-node` a workspace dependency on an extended-tier package (its
+  `local-blob.js` imports `toSafeNumber`), which is a residual cross-tier
+  package edge and should be justified with the same candor as the naming
+  departures rather than left implicit in a dependency-table cell. The tradeoff
+  is deliberate and narrow. The alternative that fully severs the edge is a
+  dependency-free micro-leaf for these nine trivial functions (each imports
+  nothing beyond `harden`), which trades one small cross-tier edge for a tenth
+  published package whose entire reason to exist is to hold nine scalars, a
+  worse cost, and one the split's own "one package per real dimension" thesis
+  argues against. Duplicating the nine functions into `@endo/fs-node` was
+  likewise rejected: it re-forks a shared definition the extended tier also
+  depends on, exactly the drift the seam exists to stop. So the edge stays. It
+  does not fully undo the "one dimension pulls in another's surface" coupling the
+  Problem section indicts (npm resolution is whole-package, so `@endo/fs-node`
+  does pull all of `@endo/fs-backend`, protocol and both backend implementations
+  included, not just the nine helpers it uses), but it narrows that coupling's
+  weight to a single light leaf rather than eliminating it: `@endo/fs-backend`'s
+  own dependency row is `errors` / `eventual-send` / `harden` and no more, so the
+  transitive closure the snapshot tier inherits is small, where the pre-split
+  monolith dragged in `@endo/exo`, `@endo/exo-stream`, `@endo/stream-node`, and
+  the whole filesystem surface. The narrowing, not a clean severance, is what the
+  edge buys, and naming it plainly here is the point.
 - **`fs/extended/type-guards.js` splits by name**, not by file:
   `BlobRefInterface` moves to `@endo/exo-cas` (the one guard `blob-ref.js` needs
   from itself); every other guard stays in `@endo/exo-filesystem`. `blob-ref.js`
@@ -309,7 +333,8 @@ they are not part of the repoint sweep. The transition:
    next-major bump with a changeset note. `@endo/platform` is **publishable**
    (no `private` flag, `publishConfig: {"access": "public"}`), so the gate has
    two halves. The in-repo half gates on the dependency declaration plus import
-   specifiers (not a bare grep, which prose mentions survive): no `packages/*`
+   specifiers (not a bare grep, which would false-positive on prose mentions of
+   the package name): no `packages/*`
    manifest lists `@endo/platform` as a dependency and no module imports a
    `@endo/platform` specifier, excluding the umbrella itself. The external half
    is at least one published major that carries the deprecation notice before
@@ -350,9 +375,7 @@ exports.
 | `@endo/platform/fs/extended/types-index.js` | `@endo/exo-filesystem` (type surface) |
 | `@endo/platform/fs/extended/{in-memory,from-mount,readonly,layer,cached-fs}.js` | `@endo/exo-filesystem` (named exports) |
 | `@endo/platform/fs/extended/{node-fs,node-fs-module}.js` | `@endo/fs-backend-node` |
-| `@endo/platform/fs/extended/helpers.js` (`walk`, `collectBytes`, `collectStream`) | `@endo/exo-filesystem` |
 | `@endo/platform/fs/extended/cas.js` | `@endo/cas` |
-| `@endo/platform/fs/extended/shared/blob-ref.js` | `@endo/exo-cas` |
 | `@endo/platform/fs/extended/shared/helpers.js`, by name | split: scalar/path helpers (`toSafeNumber`, ...) to `@endo/fs-backend`; bytes plumbing (`EMPTY_BYTES`, `makeBytesReaderFromBytes`) to `@endo/cas` |
 
 ## Package Scaffolding
@@ -360,13 +383,14 @@ exports.
 Each new package clones the shape of `packages/http-confine` /
 `packages/exo-http-client`, adjusted to platform's current conventions:
 
-- **`package.json`**: `"type": "module"`, version `0.0.0` as the recently
-  added siblings start (`@endo/exo-git`, `@endo/exo-shell`), and platform's
+- **`package.json`**: `"type": "module"`, version `0.0.0`, the version at which
+  the recently added siblings (`@endo/exo-git`, `@endo/exo-shell`) started, and
+  platform's
   own publish posture (no `private` flag, `publishConfig: {"access":
   "public"}`) because a published umbrella re-exporting an unpublished
   `@endo/fs` would dangle. A `description` names the package's partner and tier
   (most existing paired packages do this, for example "Pair with
-  `@endo/exo-git`" and "pair with `@endo/host-spawner`", so `ls packages/` tells
+  `@endo/exo-git`," and "pair with `@endo/host-spawner`," so `ls packages/` tells
   pure from exo from binding; the `http-confine` / `exo-http-client` pair is one
   that does not, and its `description` is corrected in passing). The manifest
   carries an explicit `exports` map with `types` conditions and **no deep
@@ -381,6 +405,32 @@ Each new package clones the shape of `packages/http-confine` /
   because § Compatibility removes the umbrella at next major, the durable home
   for that map is this design plus the per-package READMEs, not the umbrella
   README alone.
+- **Confusable-name disambiguation is a hard README requirement, not a nicety.**
+  This split names two near-collisions the README shape must actively steer a
+  reader away from (both accepted deliberately in Decision 1 rather than renamed,
+  so the README pointer is the mitigation that carries the cost):
+  - `@endo/exo-fs` (snapshot facet, 13 sites) and `@endo/exo-filesystem`
+    (extended `Filesystem` capability, 71 sites) read as a typo of each other
+    yet belong to different dimensions. The `@endo/exo-fs` README **opens** with
+    "if you want the pipelinable `Filesystem` capability, you want
+    `@endo/exo-filesystem`, not this package," and `@endo/exo-filesystem`'s
+    README opens with the reciprocal pointer to `@endo/exo-fs`. The same
+    reciprocal pointer pair sits between `@endo/fs` and `@endo/fs-backend`, since
+    the bare `@endo/fs` deliberately names the minority snapshot surface while
+    the 71-site extended surface has no guessable bare name (Decision 1): the
+    `@endo/fs` README **opens** with "if you want the `Filesystem` capability,
+    see `@endo/fs-backend` / `@endo/exo-filesystem`," so the more-common wrong
+    guess self-corrects in under one page.
+  - `@endo/cas` (`has(info)` / `get(info)` / `put(info, bytes)`) and the
+    existing `@endo/mem-cas` family (`has(hash)` / `read(hash)` / `write(bytes)`)
+    are two same-domain stores spelling their read/write operations with
+    different verb pairs (Decision 7). A developer who has used one will reach
+    for the other's verbs on the wrong package. Both `@endo/cas`'s and (via a
+    changeset note) `@endo/mem-cas`'s READMEs state the verb pair is deliberate
+    and why the two contracts do not merge, cross-linking each other, so the
+    mismatch is documented at the point of confusion rather than discovered by a
+    failed call. If the Open Questions npm/family check reassigns the bare
+    `@endo/cas` name (below), this pointer moves with it to the renamed package.
 - **The guard module is `src/interfaces.js` in every `@endo/exo-*` package**,
   matching `packages/exo-git` and `packages/exo-shell`. `fs/interfaces.js`
   keeps its name into `@endo/exo-fs`; `fs/extended/type-guards.js` is renamed
@@ -433,7 +483,18 @@ Each new package clones the shape of `packages/http-confine` /
   / `Far(` and fails on a hit; the plain packages that carry no exo import at
   all additionally get the `no-restricted-imports` lint as a cheaper first line.
   The gate lands with the first child that creates a plain package (C2) and is
-  copied to each subsequent plain package.
+  copied to each subsequent plain package. The grep is a syntactic proxy for a
+  semantic invariant, and does not claim otherwise: an aliased maker
+  (`import { interface as mkI }` then `mkI(...)`, or `const bind = Far`) spells
+  the forbidden operation without matching the literal patterns and would slip
+  past. That gap is accepted because aliasing an exo maker to slip a guard
+  definition into a package whose whole purpose is to hold none would be a
+  deliberate, conspicuous act in a small, single-dimension `src/` under review,
+  not the incremental drift the gate exists to stop (a contributor adding a plain
+  `makeExo(` to a growing module, exactly how the current scattered sites
+  accreted). The gate is calibrated to that realistic failure mode; a call-graph
+  check that survives aliasing is available later if the cheaper textual gate
+  ever proves insufficient.
 
 ## Execution Plan: An Orchestration
 
@@ -486,7 +547,12 @@ commit) is what makes each child additive.
    is built over, and that `@endo/exo-fs` / `@endo/exo-filesystem` read better
    than `@endo/fs-lite` / `@endo/exo-fs-extended`. That is a deliberate override
    of the usage counts, recorded here so the tradeoff is explicit rather than
-   silent.
+   silent. Because the override sends the most-trafficked entry point to the
+   wrong guess, it is paid down at the surface it hurts: § Package Scaffolding
+   makes a reciprocal "if you want the `Filesystem` capability, see
+   `@endo/fs-backend` / `@endo/exo-filesystem`" pointer at the top of the
+   `@endo/fs` README a hard requirement, so the wrong guess self-corrects in
+   under one page.
 
    **Three departures from the bare `@endo/<dim>` / `@endo/exo-<dim>` grammar,
    recorded here so the reader is not surprised:**
@@ -498,7 +564,11 @@ commit) is what makes each child additive.
      reads better than a mechanical `-extended` suffix. The cost (the pair's
      halves share no stem, and `@endo/exo-fs` for snapshots sits one
      abbreviation away from `@endo/exo-filesystem` for the cap) is accepted
-     deliberately.
+     deliberately, and mitigated rather than left bare: § Package Scaffolding
+     requires `@endo/exo-fs` and `@endo/exo-filesystem` to open their READMEs
+     with reciprocal "you probably want the other one if ..." pointers, so a
+     caller who reached the confusable near-twin lands on the disambiguation
+     before the API.
    - **The extended Node binding is `@endo/fs-backend-node`, its own package,
      not folded into `@endo/fs-node`.** `@endo/fs-node` binds the snapshot tier;
      `@endo/fs-backend-node` binds the extended tier. Keeping them separate
@@ -555,7 +625,15 @@ commit) is what makes each child additive.
    `packages/platform/src/fs/extended/cas.js`). The keys, the sync/async shape,
    and the interface all differ, so merging them would union two unrelated
    contracts under one name, which is the monolith problem this design exists to
-   undo. They stay separate. Because `@endo/mem-cas` already occupies the
+   undo. They stay separate. Staying separate leaves a live ergonomic hazard the
+   split must not ship silent: the two same-domain stores spell read/write with
+   different verb pairs (`get` / `put` here versus `read` / `write` in the
+   `mem-cas` family), so a developer who has used one will reach for the other's
+   verbs on the wrong package. Per § Package Scaffolding, both `@endo/cas`'s and
+   (via a changeset note) `@endo/mem-cas`'s READMEs therefore state the verb pair
+   is deliberate and why the contracts do not merge, cross-linking each other, so
+   the mismatch is read at the point of confusion rather than hit as a failed
+   call. Because `@endo/mem-cas` already occupies the
    family-generic slot, whether this design's snapshot CAS should take the bare
    `@endo/cas` at all is folded into the Open Questions npm-scope check below;
    if that check says the bare name belongs to the `mem-cas` family, this
@@ -585,7 +663,7 @@ commit) is what makes each child additive.
   is publishable and these packages inherit that posture, so the question bites
   at first publish, not only at ferry time. Deciding it needs an npm-registry
   check against the `@endo` scope plus an in-tree family check, and it **gates
-  C2** (the first child that names a bare package), not merely "before C2".
+  C2** (the first child that names a bare package), not merely "before C2."
 
 ## Prompt
 
