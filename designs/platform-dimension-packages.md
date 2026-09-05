@@ -24,8 +24,8 @@ The split follows the precedent already in the tree:
 [http-confine](http-confine.md), a pure core (`@endo/http-confine`) under a
 passable facet (`@endo/exo-http-client`); read that design for the pattern this
 one generalizes. The dimensions named below are enumerated and grounded in
-§ The Dimensions, Derived from Source. Three members depart from the bare
-`@endo/<dim>` / `@endo/exo-<dim>` grammar, and the departures are deliberate
+§ The Dimensions, Derived from Source. Three departures from the bare
+`@endo/<dim>` / `@endo/exo-<dim>` grammar are deliberate
 rather than oversights (Decision 1 records each). The extended dimension ships
 as `@endo/fs-backend` (pure protocol) paired with `@endo/exo-filesystem` (the
 `Filesystem` capability) rather than `fs`/`exo-fs`, whose names are already
@@ -135,14 +135,30 @@ Three clarifications the current code forces:
    passable shape, they do not define one. The dependency-row entries below are
    not table errors.
 
-Exo-free weight is the cost the seam was opened for. `@endo/fs-backend` (errors,
-eventual-send, harden) and `@endo/proc-node` (harden) are the two genuinely
-exo-free leaves, and they are the ones a consumer like
-`packages/chat/vite-endo-plugin.js` or `@endo/git` reaches for.
-The Node backend leaf `@endo/fs-backend-node` (via its `./backend` subpath) is
-likewise exo-free in what it defines. `@endo/fs`, `@endo/cas`, and
-`@endo/cas-node` shed the extended-`Filesystem` and exo-minting surfaces but
-still carry `@endo/exo-stream` for passable stream types. `@endo/fs-node`, `@endo/exo-fs`,
+Exo-free weight is the cost the seam was opened for. Every plain `@endo/<dim>`
+package is *definitionally* exo-free (it defines no interface guard and mints no
+exo), but they differ in dependency weight, and only `@endo/proc-node` (harden)
+is exo-free in its dependency row too. `@endo/fs-backend` defines no exo, but it
+is **not** dependency-free of the exo-stream package: its
+`backends/from-mount-backend.js` drives the `@endo/exo-stream` wire protocol
+(`iterateBytesReader` / `bytesReaderFromIterator`,
+`packages/platform/src/fs/extended/backends/from-mount-backend.js:32-33`) and its
+`types.ts` protocol barrel names `@endo/exo-stream` passable-stream types, so
+`@endo/fs-backend` carries `@endo/exo-stream` in its dependency row for those
+passable shapes, a permitted *consume*, not a *define* (Decision 2,
+clarification 3), the same shape `@endo/fs` and `@endo/cas` already carry.
+`@endo/fs-backend` is therefore the light backend leaf that a pure consumer
+reaches for, but its closure is `errors` / `eventual-send` / `harden` /
+`@endo/exo-stream`, not three deps. The one genuinely dependency-exo-free leaf,
+`@endo/proc-node`, is the one `packages/chat/vite-endo-plugin.js` (which needs
+only `systemCapture`) reaches for; `@endo/git`, by contrast, imports
+`ReadableBlobRangeInterface` (`packages/git/src/native-git-backend.js:31`, → `@endo/exo-fs`)
+and `wrapBackend` (→ `@endo/exo-filesystem`), so it reaches the exo-carrying
+packages, not the exo-free leaf. The Node backend leaf `@endo/fs-backend-node`
+(via its `./src/node-fs-backend.js` subpath) is likewise exo-free in what it
+*defines*. `@endo/fs`, `@endo/cas`, and `@endo/cas-node` shed the
+extended-`Filesystem` and exo-minting surfaces but likewise carry
+`@endo/exo-stream` for passable stream types. `@endo/fs-node`, `@endo/exo-fs`,
 `@endo/exo-cas`, and `@endo/exo-filesystem` are exo-carrying by construction.
 The seam therefore buys a large dependency cut for pure consumers and a
 definitional one (the enforced absence of guards and `makeExo`) everywhere
@@ -155,13 +171,13 @@ else.
 | `@endo/fs` | `fs/` snapshot model minus `interfaces.js` and the `makeExo` sites in `snapshot-store.js`; the pure confined-search pair `fs/confinement.js` + `fs/search.js` with `fs/search-types.ts`; the snapshot-side typedefs of `fs/types.ts` and `fs/types-index.d.ts` | errors, harden, stream, exo-stream, base64, hex, eventual-send |
 | `@endo/exo-fs` | `exo-fs.js`, `blob.js` (the `ReadableBlob` exo), `fs/interfaces.js`, the exo-minting factory extracted from `snapshot-store.js`, plus `LocalBlob` / `LocalTree` / `ReadableBlobRange` guards and factories extracted from `fs-node/` | fs, exo, patterns, base64, utf8, exo-stream, harden |
 | `@endo/fs-node` | `fs-node/` method suites (`local-blob`, `local-tree`, `tree-writer`) and `search-powers.js`, minus exo minting. Snapshot tier only; the extended-tier Node backend lives in `@endo/fs-backend-node` | fs, fs-backend, exo-fs, stream-node, hex, harden, base64, exo-stream |
-| `@endo/fs-backend` | `fs/extended/backend-types-index.js` and its `backend-types-index.d.ts`, `backends/in-memory-backend.js`, `backends/from-mount-backend.js`, and the pure scalar/path helpers of `fs/extended/shared/` (`path-tables`, `stat-table`, `qid`, and from `shared/helpers.js` the scalar/path suite `toSafeNumber`, `rangesOverlap`, `assertChildName`, `toSegments`, `isStrictDescendantPath`, `movePathToPath`, `mintBrand`, `materialiseViaWalk`, `computeOpenMode`). Three of the four `toSafeNumber` consumers (`fs/extended/cached-fs.js`, `backends/from-mount-backend.js`, `shared/blob-ref.js` / `cursor-exo.js`) are extended-tier; the fourth, `fs-node/local-blob.js`, is **snapshot-tier**, so its dependency on this leaf is the deliberate residual cross-tier edge that § Shared Leaf Modules defends, not unremarkable same-tier reachability. This leaf is reachable from each consumer; none reaches `@endo/fs` | errors, eventual-send, harden |
-| `@endo/fs-backend-node` | `fs/extended/backends/node-fs-backend.js` (the pure Node `FsBackend`, published as the `./backend` subpath) plus the Node `Filesystem` conveniences `node-fs.js` (`makeNodeFilesystem`) and `node-fs-module.js`, which mint a cap by consuming `@endo/exo-filesystem`'s `wrapBackend` (a permitted consume, not a define; Decision 2) | fs-backend, exo-filesystem, stream-node, base64, eventual-send, harden |
+| `@endo/fs-backend` | the protocol type barrel `fs/extended/types.ts` (see § Shared Leaf Modules) with `backend-types.ts` and its `backend-types-index.d.ts`, `backends/in-memory-backend.js`, `backends/from-mount-backend.js`, and the pure scalar/path helpers of `fs/extended/shared/` (`path-tables`, `stat-table`, `qid`, and from `shared/helpers.js` the scalar/path suite `toSafeNumber`, `rangesOverlap`, `assertChildName`, `toSegments`, `isStrictDescendantPath`, `movePathToPath`, `mintBrand`, `materialiseViaWalk`, `computeOpenMode`). Four of the five `toSafeNumber` consumers (`fs/extended/cached-fs.js`, `backends/from-mount-backend.js`, `shared/blob-ref.js`, `shared/cursor-exo.js`) are extended-tier; the fifth, `fs-node/local-blob.js`, is **snapshot-tier**, so its dependency on this leaf is the deliberate residual cross-tier edge that § Shared Leaf Modules defends, not unremarkable same-tier reachability. This leaf is reachable from each consumer; none reaches `@endo/fs`. Carries `@endo/exo-stream` for the passable stream shapes `from-mount-backend.js` and `types.ts` consume (§ The Endo/Exo Boundary Rule), a consume not a define | errors, eventual-send, exo-stream, harden |
+| `@endo/fs-backend-node` | `fs/extended/backends/node-fs-backend.js` (the pure Node `FsBackend`, published as the `./src/node-fs-backend.js` subpath) plus the Node `Filesystem` conveniences `node-fs.js` (`makeNodeFilesystem`) and `node-fs-module.js`, which mint a cap by consuming `@endo/exo-filesystem`'s `wrapBackend` (a permitted consume, not a define; Decision 2) | fs-backend, exo-filesystem, stream-node, base64, eventual-send, harden |
 | `@endo/exo-filesystem` | `fs/extended/wrap-backend.js`, `type-guards.js` (minus `BlobRefInterface`, which moves to `@endo/exo-cas`; renamed `src/interfaces.js` per the scaffolding convention), `attach.js`, `posix-fs.js`, the combinators (`compose.js`, `layer.js`, `readonly.js`, `cached-fs.js`, `in-memory.js`, `from-mount.js`, and their `*-module.js` twins except the Node ones), the exo-defining `shared/` modules (`cursor-exo`, `watcher-exo`, `xattrs-exo`, `lock-table`), the guard-and-exo modules added since this design's first draft (`clone.js`, `posture.js`), the `mkmem.js` `endo run` script that mints an in-memory `Filesystem` cap, and the passable-bytes porcelain `fs/extended/helpers.js` (`walk`, `collectBytes`, `collectStream`), whose consumers are all extended-tier, so this is acyclic | fs-backend, cas, exo-cas, exo, exo-stream, patterns, errors, eventual-send, base64, harden |
-| `@endo/cas` | `fs/extended/cas.js` (`makeMemoryCas`, `cacheBackedRead`) plus the `ContentStoreFilePowers` / `ContentStoreCryptoPowers` typedefs lifted out of `fs/types.ts`, **and the shared bytes plumbing from `shared/helpers.js` (`EMPTY_BYTES`, `makeBytesReaderFromBytes`)**. `@endo/cas` is the deepest leaf reached by all three consumers of that plumbing (`cas.js` here, `blob-ref.js` in `@endo/exo-cas`, `cached-fs.js` / `wrap-backend.js` in `@endo/exo-filesystem`), so homing it here keeps the graph acyclic where homing it in `@endo/exo-filesystem` would close an `exo-cas` to `exo-filesystem` cycle. `makeBytesReaderFromBytes` already imports `@endo/exo-stream/bytes-reader-from-iterator.js`, which `@endo/cas` depends on. Consolidating these helpers into `@endo/exo-stream` stays a named follow-up, not yet filed (Decision 5) | errors, eventual-send, exo-stream, harden |
+| `@endo/cas` | `fs/extended/cas.js` (`cacheBackedRead` and the in-memory CAS factory, **renamed `makeMemoryCas` → `makeSnapshotCas` in the move** to end the `makeMemoryCasStore` near-collision, Decision 7; the umbrella keeps a deprecated `makeMemoryCas` alias so no consumer breaks) plus the `ContentStoreFilePowers` / `ContentStoreCryptoPowers` typedefs lifted out of `fs/types.ts`, **and the shared bytes plumbing from `shared/helpers.js` (`EMPTY_BYTES`, `makeBytesReaderFromBytes`)**. `@endo/cas` is the deepest leaf both consumer packages of that plumbing depend on: `blob-ref.js` in `@endo/exo-cas`, and `cached-fs.js` / `wrap-backend.js` in `@endo/exo-filesystem`; `cas.js` itself does **not** import it (it names `makeBytesReaderFromBytes` only in a prose comment and imports `iterateBytesReader` directly). Both consumer packages depend down on `@endo/cas` (the drawn `exocas --> cas` and `exofilesystem --> cas` edges), so homing it here keeps the graph acyclic where homing it in `@endo/exo-filesystem` would close an `exo-cas` to `exo-filesystem` cycle. `makeBytesReaderFromBytes` already imports `@endo/exo-stream/bytes-reader-from-iterator.js`, which `@endo/cas` depends on. Consolidating these helpers into `@endo/exo-stream` stays a named follow-up, not yet filed (Decision 5) | errors, eventual-send, exo-stream, harden |
 | `@endo/cas-node` | `fs-node/content-store-powers.js` | cas, stream-node, hex, harden |
 | `@endo/exo-cas` | `fs/extended/shared/blob-ref.js` plus `BlobRefInterface` lifted from `type-guards.js` | cas, fs-backend, exo, patterns, base64, sha256, errors, harden |
-| `@endo/proc-node` | `proc.js`, verbatim (imports `fs`, `path`, `child_process`, so it is Node-bound and carries the `-node` suffix) | harden |
+| `@endo/proc-node` | `proc.js`, verbatim (imports `fs`, `path`, and `child_process`, so it is Node-bound and carries the `-node` suffix) | harden |
 | `@endo/platform` | Nothing but one-line re-export shims (below) | all ten packages above |
 
 The table above is exhaustive for the modules it names, and a named placement
@@ -231,8 +247,31 @@ factory) but otherwise stays as it is; folding or renaming it is out of scope
 
 ### Shared Leaf Modules (Why the Split Stays Acyclic)
 
-Three barrels the partition divides could close a cycle, so each is homed
+Four barrels the partition divides could close a cycle, so each is homed
 explicitly rather than "mechanically":
+
+- **`fs/extended/types.ts` is the protocol type barrel, and it homes whole in
+  `@endo/fs-backend`.** It is the deepest type source the tiers chain through:
+  `backend-types.ts` (itself in `@endo/fs-backend`) imports `NodeKind` /
+  `NodeStat` / `Qid` / `WatchEvent` from it, `node-fs.js` (in
+  `@endo/fs-backend-node`) imports `Filesystem`, `blob-ref.js` (in
+  `@endo/exo-cas`) imports `BlobInfo` / `BlobRef`, and eleven extended modules (in
+  `@endo/exo-filesystem`) import it. Every one of those packages already depends
+  *down* on `@endo/fs-backend` (the drawn `fsbackendnode --> fsbackend`,
+  `exocas --> fsbackend`, and `exofilesystem --> fsbackend` edges), so homing the
+  whole barrel there serves all four consumers acyclically, and it is why the
+  Consumer Repoint Map routes the raw `backend-types` subpath to `@endo/fs-backend`
+  while the aggregate `types-index.js` barrel (which re-exports both `types.js`
+  and every runtime factory) routes to `@endo/exo-filesystem`, the package that
+  depends on `@endo/fs-backend`; the two rows are consistent, not contradictory,
+  because they name different files. The `Filesystem` type it declares is the
+  protocol's *contract* type, distinct from the capability factory `wrapBackend`
+  that mints a `Filesystem` (which stays in `@endo/exo-filesystem`); a type
+  declaration is neither a guard nor an exo, so this respects the boundary rule.
+  Because `types.ts` names `@endo/exo-stream` passable-stream types,
+  `@endo/fs-backend` carries `@endo/exo-stream` in its dependency row (§ The
+  Endo/Exo Boundary Rule), the same permitted consume `@endo/fs` and `@endo/cas`
+  already make.
 
 - **`shared/helpers.js` is not one module's worth of one dimension.** It holds
   two unrelated families. Its **scalar/path helpers** (`toSafeNumber`,
@@ -256,8 +295,9 @@ explicitly rather than "mechanically":
   departures rather than left implicit in a dependency-table cell. The tradeoff
   is deliberate and narrow. The alternative that fully severs the edge is a
   dependency-free micro-leaf for these nine trivial functions (each imports
-  nothing beyond `harden`), which trades one small cross-tier edge for a tenth
-  published package whose entire reason to exist is to hold nine scalars, a
+  nothing beyond `harden`), which trades one small cross-tier edge for an
+  eleventh published package (the target set is already ten) whose entire reason
+  to exist is to hold nine scalars, a
   worse cost, and one the split's own "one package per real dimension" thesis
   argues against. Duplicating the nine functions into `@endo/fs-node` was
   likewise rejected: it re-forks a shared definition the extended tier also
@@ -267,10 +307,13 @@ explicitly rather than "mechanically":
   does pull all of `@endo/fs-backend`, protocol and both backend implementations
   included, not just the nine helpers it uses), but it narrows that coupling's
   weight to a single light leaf rather than eliminating it: `@endo/fs-backend`'s
-  own dependency row is `errors` / `eventual-send` / `harden` and no more, so the
-  transitive closure the snapshot tier inherits is small, where the pre-split
-  monolith dragged in `@endo/exo`, `@endo/exo-stream`, `@endo/stream-node`, and
-  the whole filesystem surface. The narrowing, not a clean severance, is what the
+  own dependency row is `errors` / `eventual-send` / `harden` / `@endo/exo-stream`
+  and no more (the `@endo/exo-stream` for passable stream shapes it consumes,
+  § The Endo/Exo Boundary Rule; the snapshot tier's `@endo/fs-node` already lists
+  `@endo/exo-stream` in its own row, so this adds nothing new to the closure the
+  snapshot tier inherits), so that transitive closure is small, where the
+  pre-split monolith dragged in `@endo/exo`, `@endo/exo-stream`,
+  `@endo/stream-node`, and the whole filesystem surface. The narrowing, not a clean severance, is what the
   edge buys, and naming it plainly here is the point.
 - **`fs/extended/type-guards.js` splits by name**, not by file:
   `BlobRefInterface` moves to `@endo/exo-cas` (the one guard `blob-ref.js` needs
@@ -346,7 +389,12 @@ they are not part of the repoint sweep. The transition:
    manifest lists `@endo/platform` as a dependency and no module imports a
    `@endo/platform` specifier, excluding the umbrella itself. The external half
    is at least one published major that carries the deprecation notice before
-   the package disappears, since a published consumer cannot be grepped for.
+   the package disappears, since a published consumer cannot be grepped for. The
+   same two-half gate governs pruning any *individual* shim subpath (a partial
+   removal), which is why C5 records the gate but prunes nothing: the split's C1
+   through C5 keep every current subpath alive, and the physical removal (of a
+   subpath or of the whole umbrella) is this deferred next-major act, gated on
+   both halves.
 
 [inter-package-plain-re-exports](inter-package-plain-re-exports.md) (#543)
 prescribes the staging this transition follows (repoint importers, deprecate
@@ -378,7 +426,7 @@ specifier needs repointing on its own.
 | `@endo/platform/proc` | `@endo/proc-node` |
 | `@endo/platform/fs/extended` (index), by name, see split below | five packages (not one) |
 | &nbsp;&nbsp;- `makeNodeFilesystem`, `makeNodeFsBackend` | `@endo/fs-backend-node` |
-| &nbsp;&nbsp;- `makeMemoryCas`, `cacheBackedRead` | `@endo/cas` |
+| &nbsp;&nbsp;- `makeMemoryCas` (→ `@endo/cas`'s renamed `makeSnapshotCas`; the umbrella keeps a deprecated `makeMemoryCas` alias so the sweep can repoint call sites incrementally), `cacheBackedRead` | `@endo/cas` |
 | &nbsp;&nbsp;- `makeInMemoryBackend`, `makeFromMountBackend` | `@endo/fs-backend` |
 | &nbsp;&nbsp;- everything else (`makeInMemoryFilesystem`, `readOnly`, `mountAsFilesystem`, `compose`/`chroot`/`bind`/`namespace`/`emptyFilesystem`, `makeLayer`/`LayerInterface`, `withCachedReads`, `wrapBackend`, `walk`/`collectBytes`/`collectStream`, `PosixFsInterface`, the `type-guards.js` re-exports except `BlobRefInterface`) | `@endo/exo-filesystem` |
 | &nbsp;&nbsp;- `BlobRefInterface` (also re-exported by the index) | `@endo/exo-cas` |
@@ -401,10 +449,12 @@ Each new package clones the shape of `packages/http-confine` /
   own publish posture (no `private` flag, `publishConfig: {"access":
   "public"}`) because a published umbrella re-exporting an unpublished
   `@endo/fs` would dangle. A `description` names the package's partner and tier
-  (most existing paired packages do this, for example "Pair with
-  `@endo/exo-git`," and "pair with `@endo/host-spawner`," so `ls packages/` tells
-  pure from exo from binding; the `http-confine` / `exo-http-client` pair is one
-  that does not, and its `description` is corrected in passing). The manifest
+  (most existing paired packages do this: `@endo/git`'s reads "Pair with
+  `@endo/exo-git` for the portable remotable exo glue" and `@endo/exo-shell`'s
+  "pair with @endo/host-spawner ... for the process-execution engine," so a
+  reader inspecting the manifests can tell pure from exo from binding; the
+  `http-confine` / `exo-http-client` pair is one that does not, and its
+  `description` is corrected in passing). The manifest
   carries an explicit `exports` map with `types` conditions and **no deep
   wildcard** (the umbrella already enumerates its subpaths; every public module
   in a new package is likewise an enumerated subpath), workspace `dependencies`
@@ -421,7 +471,7 @@ Each new package clones the shape of `packages/http-confine` /
   landed on one of the two flagged collision pairs; a reader who lands first on
   `@endo/fs-node`, `@endo/cas`, or `@endo/cas-node` has no signposted path to the
   sibling they need, and there is no `packages/README.md` precedent to fall back
-  on (checked: none exists today). So C5 homes a durable dimension × plain / exo
+  on (checked: none exists today). So C5 homes a durable dimension x plain / exo
   / node table where it outlives the umbrella and is reachable from `packages/`
   (a new `packages/README.md`, or the extended-tier hub `@endo/fs-backend`'s
   README with every new package's README linking it), carrying the map below.
@@ -456,8 +506,8 @@ Each new package clones the shape of `packages/http-confine` /
     different verb pairs (Decision 7). A developer who has used one will reach
     for the other's verbs on the wrong package. A README a caller may never open
     is a weaker mitigation than the hazard warrants, because the failure it must catch
-    is exactly a wrong method call surfacing only as a runtime "not a function,"
-    which only an IDE hover or a type error catches in time. So the
+    is exactly a wrong method call that surfaces only as a runtime "not a
+    function," a failure only an IDE hover or a type error catches in time. So the
     disambiguation is a **hard type/JSDoc requirement, not README-only**: each
     contract's own interface type and method JSDoc (the `CasInterface`-style
     typedef and each method's doc comment, in the package's `src/interfaces.js`
@@ -477,17 +527,28 @@ Each new package clones the shape of `packages/http-confine` /
   `BlobRefInterface` it sheds lands in `@endo/exo-cas/src/interfaces.js`). The
   rename happens during the move, while the module is not yet an enumerated
   public subpath.
-- **Subpaths are spelled `./src/<file>.js`**, as `exo-git`, `exo-shell`, and
+- **Each package ships a `"."` root barrel**, as every precedent package does
+  (`exo-git`, `exo-shell`, `git`, `http-confine`, `mem-cas` all export `"."`;
+  only the umbrella omits it). The root barrel re-exports the package's primary
+  surface (the factories, method suites, and, for an `@endo/exo-*` package, the
+  guards a caller reaches for first), so `import { ... } from '@endo/fs-node'`
+  resolves. The § Consumer Repoint Map writes bare `@endo/<pkg>` specifiers
+  precisely because they resolve through this `"."` barrel; a consumer that
+  imported a *deep* umbrella subpath repoints to the corresponding deep
+  `./src/<file>.js` subpath instead.
+- **Deep subpaths are spelled `./src/<file>.js`**, as `exo-git`, `exo-shell`, and
   `git` do, not the bare `./types` / `./type-guards` style that only the
   umbrella uses. The repoint map above writes the short form for legibility;
-  the `exports` maps write the file form.
+  the `exports` maps write the file form. A bare `@endo/<pkg>` row in the map is
+  the `"."` barrel; a `.../<file>.js` row is a deep subpath.
 - **tsconfig**: per-package `tsconfig.json` + `tsconfig.build.json` copied
   from platform's; `tsconfig.composite.json` is generated, so each child
   reruns `scripts/generate-composite-tsconfigs.mjs` after editing workspace
   dependency edges.
 - **Workspace wiring**: the root `workspaces: ["packages/*"]` glob picks the
   new directories up automatically. The lockfile update lands as its own
-  `chore: Update yarn.lock` commit per the repo's retcon discipline.
+  `chore: Update yarn.lock` commit, per the repo's convention of landing lockfile
+  updates as a separate `chore: Update yarn.lock` commit.
 - **Tests relocate with their subjects**, and the relocation is a total
   function over `packages/platform/test/`: every test file is assigned or
   explicitly retained. `local-blob.test.js` and `snapshot-hash.test.js` go to
@@ -548,8 +609,8 @@ before `fs-backend-node` binds the extended backend.
 | C1 | `@endo/proc-node`: move `proc.js`, hollow the shim, repoint nothing yet. Proves the umbrella pattern end to end on the smallest dimension. | S |
 | C2 | `@endo/fs` + `@endo/exo-fs` + `@endo/fs-node` (snapshot tier only): extract the `makeExo` sites per the boundary rule, and seed `@endo/fs-backend` with its pure scalar/path-helper leaf (`toSafeNumber` and the sibling helpers), because `fs-node/local-blob.js` imports `toSafeNumber` and must repoint to a package that exists by this child. The backend protocol and backends join `@endo/fs-backend` in C4; this child stands up only the leaf. Hollow shims. | M |
 | C3 | `@endo/cas` + `@endo/cas-node` + `@endo/exo-cas`: lift the powers typedefs out of `fs/types.ts`, move `cas.js` and `blob-ref.js`, repoint platform-internal imports (extended still lives in platform and imports `BlobRef` from `@endo/exo-cas`), hollow shims. | S-M |
-| C4 | `@endo/fs-backend` grows the backend protocol + backends (its scalar/path leaf already exists from C2), `@endo/exo-filesystem` is created, and `@endo/fs-backend-node` is created holding the extended Node binding (`node-fs-backend.js` as `./backend` plus the `node-fs` conveniences): the big move, mechanical under the seam [endo-fs-backend-seam](endo-fs-backend-seam.md) already built. Hollow shims, relocate the extended test suite. | L |
-| C5 | Consumer repoint sweep across all sixteen importers, umbrella deprecation notice + changeset, prune the umbrella's enumerated shim subpaths, regenerate composite tsconfigs, and add the removal gate to the umbrella's checklist. Each pruned subpath is a partial package removal, so it carries the same two-half gate as whole-package removal (no in-repo importer *and* a published deprecation major), not an in-repo-use-only prune. | M |
+| C4 | `@endo/fs-backend` grows the backend protocol + backends (its scalar/path leaf already exists from C2), `@endo/exo-filesystem` is created, and `@endo/fs-backend-node` is created holding the extended Node binding (`node-fs-backend.js` as `./src/node-fs-backend.js` plus the `node-fs` conveniences): the big move, mechanical under the seam [endo-fs-backend-seam](endo-fs-backend-seam.md) already built. Hollow shims, relocate the extended test suite. | L |
+| C5 | Consumer repoint sweep across all 16 importers, umbrella deprecation notice + changeset, regenerate composite tsconfigs, and **record** the removal gate for the umbrella and each of its shim subpaths. C5 **prunes nothing**: each subpath prune is a partial package removal carrying the same two-half gate as whole-package removal (no in-repo importer *and* a published deprecation major), and the published-major half cannot be met in-repo, so the physical prune is deferred to the next-major bump (transition step 4), not this child. C5 completes when every in-repo consumer is repointed and the gate is recorded; the "keeps every current subpath" invariant (step 1) therefore holds unbroken through the whole orchestration. | M |
 
 Every child hollows what it moves in the same commit series that creates the
 new packages, so the tree is never in a state where an existing import path
@@ -559,7 +620,7 @@ proceeds) is achieved per-child rather than as a separate first step:
 hollowing (replacing each moved module body with a re-export shim in the same
 commit) is what makes each child additive.
 
-### Ordering Against In-Flight Interface Work
+### Ordering against In-Flight Interface Work
 
 Two in-flight designs, [fs-interface-reconciliation](fs-interface-reconciliation.md)
 and [fs-interface-consolidation](fs-interface-consolidation.md), reshape interface
@@ -694,11 +755,26 @@ pre-split monolith shape. The policy that avoids that, rather than the open-ende
    `packages/platform/src/fs/extended/cas.js`). The keys, the sync/async shape,
    and the interface all differ, so merging them would union two unrelated
    contracts under one name, which is the monolith problem this design exists to
-   undo. They stay separate. Staying separate leaves a live ergonomic hazard the
-   split must not ship silent: the two same-domain stores spell read/write with
-   different verb pairs (`get` / `put` here versus `read` / `write` in the
-   `mem-cas` family), so a developer who has used one will reach for the other's
-   verbs on the wrong package. Per § Package Scaffolding, the disambiguation is a
+   undo. They stay separate. Staying separate leaves two live ergonomic hazards the
+   split must not ship silent. The first is a **factory-name near-collision**:
+   this design's `@endo/cas` exports `makeMemoryCas`
+   (`packages/platform/src/fs/extended/cas.js:81`) while the existing family root
+   `@endo/mem-cas` exports `makeMemoryCasStore` (`packages/mem-cas/src/store.js:73`):
+   two in-memory CAS factories with near-identical names and incompatible
+   contracts (sync `BlobInfo` here, async hash-keyed there), and the one *named*
+   `makeMemoryCas` does not live in the package named `mem-cas`; autocomplete
+   picks the wrong one and the failure surfaces as a runtime "not a function." C3
+   mints a new package, so this is resolved *at the move, not deferred to README*:
+   the snapshot CAS's factory is **renamed `makeSnapshotCas`** as it lands in
+   `@endo/cas` (a mechanical rename over a not-yet-published export), so the two
+   factories no longer near-collide; the umbrella's `cas.js` shim keeps a
+   deprecated `makeMemoryCas` alias so no in-repo consumer breaks and C5's sweep
+   can repoint call sites to `makeSnapshotCas` incrementally. If the Open
+   Questions npm-scope-and-family check also reassigns the bare package name to a
+   snapshot-qualified one, the factory name is already aligned. The second hazard is the **verb divergence**:
+   the two same-domain stores spell read/write with different verb pairs (`get` /
+   `put` here versus `read` / `write` in the `mem-cas` family), so a developer who
+   has used one will reach for the other's verbs on the wrong package. Per § Package Scaffolding, the disambiguation is a
    hard type/JSDoc requirement (each contract's interface type and method JSDoc
    names the sibling and its divergent verbs, so an editor surfaces it at the
    call site under `tsc` and on hover), with both `@endo/cas`'s and (via a
@@ -720,7 +796,7 @@ pre-split monolith shape. The policy that avoids that, rather than the open-ende
 | [platform-fs](platform-fs.md) | Built the monolith this design splits; stays Complete as history |
 | [endo-fs-backend-seam](endo-fs-backend-seam.md) | Built the internal FsBackend/exo seam that becomes the `@endo/fs-backend` / `@endo/exo-filesystem` package boundary |
 | [inter-package-plain-re-exports](inter-package-plain-re-exports.md) | Governs the umbrella's lifecycle: repoint, deprecate, remove |
-| [fs-interface-reconciliation](fs-interface-reconciliation.md), [fs-interface-consolidation](fs-interface-consolidation.md) | In-flight interface work on the same surfaces; ordering/freeze policy in § Execution Plan: An Orchestration ("Ordering against in-flight interface work"): a child defers to these landing first on the dimensions it touches, then rebases its tables |
+| [fs-interface-reconciliation](fs-interface-reconciliation.md), [fs-interface-consolidation](fs-interface-consolidation.md) | In-flight interface work on the same surfaces; ordering/freeze policy in § Ordering against In-Flight Interface Work: a child defers to these landing first on the dimensions it touches, then rebases its tables |
 | [daemon-cas-management](daemon-cas-management.md) | `@endo/daemon-cas` consumes `@endo/cas` + `@endo/cas-node` after C3 |
 | `packages/mem-cas` | The existing `CasStore` family root; Decision 7 records why `@endo/cas` is disjoint and does not merge with it |
 

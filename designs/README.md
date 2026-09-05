@@ -115,10 +115,10 @@ endojs/endo-but-for-bots#124),
 2026-07-10; split the `@endo/platform` monolith into focused
 per-dimension endo/exo package pairs derived from source: the
 snapshot tier as `@endo/fs` + `@endo/exo-fs` + `@endo/fs-node`, the
-extended `Filesystem` as `@endo/fs-backend` + `@endo/exo-filesystem`
-along the seam endo-fs-backend-seam already built, the consolidated
-CAS surface as `@endo/cas` + `@endo/cas-node` + `@endo/exo-cas`, and
-`@endo/proc-node` standing alone (Node-bound, so it carries the
+extended `Filesystem` as `@endo/fs-backend` + `@endo/exo-filesystem` +
+`@endo/fs-backend-node` along the seam endo-fs-backend-seam already
+built, the consolidated CAS surface as `@endo/cas` + `@endo/cas-node` +
+`@endo/exo-cas`, and `@endo/proc-node` standing alone (Node-bound, so it carries the
 `-node` suffix); the endo/exo boundary rule is "guards
 and exo makers live only in the exo package," mirroring
 http-confine / exo-http-client; `@endo/platform` becomes a
@@ -351,7 +351,7 @@ LLM-agent stack).*
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | Not Started |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
-| [platform-dimension-packages](platform-dimension-packages.md) | 2026-07-10 | 2026-09-04 | Not Started |
+| [platform-dimension-packages](platform-dimension-packages.md) | 2026-07-10 | 2026-09-05 | Not Started |
 | [fs-interface-reconciliation](fs-interface-reconciliation.md) | 2026-06-18 | 2026-06-19 | In Progress |
 | [fs-interface-consolidation](fs-interface-consolidation.md) | 2026-06-18 | 2026-07-15 | In Progress |
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | Not Started |
