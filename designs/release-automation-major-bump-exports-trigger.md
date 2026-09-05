@@ -15,8 +15,8 @@ leaves every migrated package with dual `exports` keys: the `.js`-suffixed key
 (`./foo`), with a standing changeset note reserving the right to remove the
 `.js` keys **in the next major version**. (Pass 1 of the migration adds the
 extensionless siblings and retains the `.js` keys. Removing those `.js` keys
-later is a separate, unscheduled major bump — the event this notice exists to
-prompt — not a further migration step.) That reserved window is easy to miss:
+later is a separate, unscheduled major bump (the event this notice exists to
+prompt), not a further migration step.) That reserved window is easy to miss:
 majors are rare, the note
 scrolls away into the changelog, and nothing
 at release time connects "this PR declares a major bump for `@endo/pkg`" with
@@ -54,8 +54,8 @@ carries three deep-equal dual pairs (`./fs/lite/types.js`,
 `node16`-resolution **type-entry aliases** a consumer plausibly imports by the
 `.js` specifier, not compatibility shims the next major should drop. The
 deep-equality clause cannot tell "pass-1 compat alias" from "intentional
-dual key that is deep-equal by design", so it is false that structural
-deep-equality alone would stay inert until pass 1 lands packages: without a
+dual key that is deep-equal by design", so structural deep-equality alone does
+not stay inert until pass 1 lands packages: without a
 provenance filter the check would fire on `platform` on day one. Pass 1's manifest is the discriminator;
 this check enumerates the intersection of that manifest with the still-present
 dual pairs.
@@ -80,22 +80,22 @@ commit that inserts the siblings, mapping each touched package name to the
 }
 ```
 
-A colocated per-package alternative was weighed — a `package.json` field
-recording the same fact — and rejected: it travels with a rename (a live
+A colocated per-package alternative was weighed (a `package.json` field
+recording the same fact) and rejected: it travels with a rename (a live
 concern, `daemon-rename-to-manager` is a pending row) and avoids a second
 repo-root dotfile, but it puts pass-1 provenance inside the very file a later
 major edits to *remove* the `.js` keys, so the record and the thing it vouches
 for share one mutable place and a careless removal drops the provenance with
 the key. A central manifest keeps provenance in a file no later cleanup
 touches. The concurrent-PR-conflict cost of one aggregate file that every pass-1
-commit rewrites is real but bounded — pass 1 is a single migration wave, not
-continuous — and is the price of that separation.
+commit rewrites is real but bounded (pass 1 is a single migration wave, not
+continuous) and is the price of that separation.
 
 Recording the creation-time value, not just the key name, binds provenance to
 the fact that made it true. `exports` is mutable place-data: a key can be
 deleted and, much later, re-added under the identical string for an unrelated
 reason. Keying provenance on the name alone would let the never-edited manifest
-assert pass-1 provenance for that unrelated re-creation — the very false
+assert pass-1 provenance for that unrelated re-creation: the very false
 positive the guard exists to prevent. A key is therefore flagged only when it
 is in the manifest **and** its current value still deep-equals the recorded
 creation-time value, so a delete-then-recreate under a new value is not
@@ -114,7 +114,7 @@ fallback. A free-form changelog note has no machine-parseable key-list grammar
 (the repo's actual `.changeset/*.md` bodies are prose paragraphs), and a prose
 parser reliable enough to assert "pass 1 created this exact key" without
 reintroducing the `platform` `.types.js` false positive is a harder problem
-than the manifest it would stand in for — so specifying such a parser to the
+than the manifest it would stand in for, so specifying such a parser to the
 same rigor as the frontmatter grammar is not worth its risk. Until #663 both
 lands and is amended to emit the manifest, the notice simply finds nothing,
 which is its correct inert behavior before any pass-1 package exists.
@@ -130,7 +130,7 @@ name to the list of `.js` keys to silence, consumed **only** by this notice's
 provenance filter, never by gate A. It deliberately shares the
 `.exports-migration-` prefix with the manifest so a maintainer scanning
 repo-root dotfiles reads the paired provenance/override files as one subsystem
-from the filenames alone — the immutable `-manifest` and the hand-editable
+from the filenames alone: the immutable `-manifest` and the hand-editable
 `-suppressions`. A key present in the manifest but listed in suppressions is
 skipped by the notice while the manifest still records, truly, that pass 1
 created it.
@@ -197,19 +197,22 @@ it sits in (see Design Decision 4).
 reminder).** On `pull_request`, diff against the merge base and collect the
 `.changeset/*.md` files the PR **adds or modifies** (never
 `.changeset/README.md`). Parse each changeset's leading `---`-fenced YAML
-frontmatter block for `<pkg>: <bump>` entries, accepting the package key in any
-of the three spellings the repo's live changesets actually use: single-quoted
-(`'@endo/cbor': major`, what `changeset add` emits), **double-quoted**
-(`"@endo/captp": minor`, six hand-written entries across
+frontmatter block for `<pkg>: <bump>` entries, accepting the package key in
+three spellings: single-quoted
+(`'@endo/cbor': major`, what `changeset add` emits) and **double-quoted**
+(`"@endo/captp": minor`, five hand-written entries across
 `.changeset/graceful-captp-shutdown.md`, `http-confine-core.md`,
-`http-web-seed-content.md`, `tar-writer-web-seed-provide.md`,
-`http-client-initial.md`, `lucky-planes-resolve.md`), and bare/unquoted. A
-grammar fixed to any one spelling would silently drop the others — and because
+`http-web-seed-content.md`, `tar-writer-web-seed-provide.md`, and
+`http-client-initial.md`), both attested in the repo today, plus bare/unquoted,
+handled defensively: it is valid YAML and cheap to accept, though a survey of
+every `.changeset/*.md` frontmatter block on `HEAD` turns up no bare/unquoted
+entry in the repo today. A
+grammar fixed to any one spelling would silently drop the others, and because
 zero findings exits 0 (below), that miss is invisible; a survey of every
 `.changeset/*.md` frontmatter block on the branch, not one exemplar, is what
 fixes the grammar. Only entries inside the fenced block count: a body line that
 merely looks like an entry (a double-quoted phrase followed by a colon, e.g.
-`add-endo-ocapn-iroh.md`'s `"Dial keys, not IPs": …` prose) must not register
+`add-endo-ocapn-iroh.md`'s `"Dial keys, not IPs": ...` prose) must not register
 as a package, and a file whose first line is an entry with no opening `---`
 fence (`.changeset/lucky-planes-resolve.md`) is malformed frontmatter, not a
 bare-key changeset. Treat an entry as breaking through
@@ -239,8 +242,8 @@ regenerating the PR: `changeset version` has already consumed the changesets
 and written `CHANGELOG.md`, so a removal committed straight into the PR would
 ship undocumented, and `changesets/action` force-pushes `changeset-release/*`
 on each run, so a commit added there is not durable. The base-branch removal is
-documented the ordinary way — it carries its own `major` changeset for the
-package, which the next Version Packages run folds into the changelog — so
+documented the ordinary way (it carries its own `major` changeset for the
+package, which the next Version Packages run folds into the changelog), so
 "land it on the base branch" is not itself the undocumented path it replaces.
 This is folded into the "Which branch actually cuts releases" prerequisite below.
 
@@ -253,7 +256,7 @@ upstream `endojs/endo` history into `llm` rather than through this fork's own
 `master` pipeline. The confirmation question is not merely "does the release
 pipeline run" but the sharper "do *this fork's own* changesets (authored on
 `llm` for packages like `@endo/cbor`) ever reach a `changeset-release/*`
-Version Packages PR against `master`" — a `master` pipeline that is live but
+Version Packages PR against `master`". A `master` pipeline that is live but
 only ever sees upstream-merged changesets would still never fire surface 2 for
 the packages this design cares about. If that path does not exist here, surface
 2 must key off whichever branch shape actually precedes this fork's own tags;
@@ -291,7 +294,7 @@ annotations for a purely informational signal. Annotations and the step
 summary need no permissions at all. The trade-off is honest about its residual
 gap: for a contributor who does not habitually open the Checks tab, a
 Checks-tab annotation is exactly as missable as the changeset note it
-supplements — this surfacing narrows the visibility gap for the Checks-tab
+supplements. This surfacing narrows the visibility gap for the Checks-tab
 audience without closing it for everyone. If that proves too weak in practice,
 the lower-frequency release-PR gate (surface 2) could later request
 `pull-requests: write` for a sticky comment on that surface alone, without
@@ -313,23 +316,25 @@ no install step:
    (parse the added/modified changesets), `--mode release` runs surface 2 (diff
    workspace `package.json` versions), and the default `--mode auto` sniffs the
    head branch (`changeset-release/*` resolves to `release`, otherwise `pr`).
-   The flag ships one canonical spelling per value — no parse-technique aliases;
+   The flag ships one canonical spelling per value, no parse-technique aliases;
    if a mode ever needs invoking by a parsing-technique name in practice, an
    alias can be added then, with a stated reason.
    Because the mode is a passed value and not read only from the branch name,
-   surface 1 is forceable on any branch.
+   surface 1 is forceable on any branch. A companion `--base <ref>` flag names
+   the ref to diff against for the selected surface; in CI it is the
+   checked-out merge-base commit, and it defaults to that when omitted.
    Empty input is a legitimate zero-finding outcome under **every** mode: the
    exit code depends on the state of the world, not on whether the mode was
-   typed or inferred. A surface with no candidate inputs — a contributor PR that
+   typed or inferred. A surface with no candidate inputs (a contributor PR that
    edits a `package.json` but adds no changeset, or a maintainer running
-   `--mode release` on a branch with no version diffs — logs the liveness line
+   `--mode release` on a branch with no version diffs) logs the liveness line
    to the step summary and exits 0, never a red check, so the invariant above
    holds with no "how was the mode chosen" special case. A caller that genuinely
    wants "you asked me to look and there was nothing to look at" as a hard error
    opts into it explicitly with `--require-findings`, which is off by default and
    never set in CI. The frontmatter grammar is the leading
    `---`-fenced block, and within it each `<pkg>: <bump>` line whose package key
-   is single-quoted, double-quoted, or bare (the three spellings surveyed in
+   is single-quoted, double-quoted, or bare (the three spellings described in
    "Surface 1"); a small line parser covers all three, only lines between the
    opening and closing `---` are considered, and malformed lines are reported in
    the step summary and skipped rather than trusted.
@@ -353,8 +358,8 @@ no install step:
    "`auto` picked the other surface". Because the check **fails closed on a
    missing manifest** (a permanent state until #663 lands and is amended), that
    same liveness line reports **manifest presence and entry count** ("provenance
-   manifest: present, 12 packages" / "provenance manifest: absent — inert until
-   `exports-extensionless-migration` pass 1 lands"): a fail-closed zero caused by
+   manifest: present, 12 packages" / "provenance manifest: absent (inert until
+   `exports-extensionless-migration` pass 1 lands)"): a fail-closed zero caused by
    an absent provenance input must not read identically to a healthy zero, or
    the design's own "silently rots" hazard reappears in the one output meant to
    prevent it.
@@ -382,17 +387,18 @@ version-diff path against the same base the release PR would diff from. Omitting
   `test:major-bump-exports-notice` root-`package.json` script (`ava
   scripts/test/check-major-bump-exports-notice.test.mjs`) invoked from
   `.github/workflows/ci.yml` beside the existing
-  `yarn test:package-uniformity` (ci.yml line 92) — the repo's *wired*
+  `yarn test:package-uniformity` (ci.yml line 92), the repo's *wired*
   script-test precedent (`scripts/test/check-package-uniformity.test.mjs`), not
   the unreferenced `scripts/generate-composite-tsconfigs.test.mjs`, which no
   script or workflow invokes and would leave these tests never running in CI.
-  Fixtures cover: changeset-frontmatter parsing across all three live key
+  Fixtures cover: changeset-frontmatter parsing across all three parsed key
   spellings (single-quoted `'@endo/cbor': major`, double-quoted
-  `"@endo/captp": minor`, and bare/unquoted), each with the entry inside a
+  `"@endo/captp": minor`, and defensively-handled bare/unquoted), each with the
+  entry inside a
   proper `---` fence; and the two malformed shapes that must **not** register a
-  package — a body line that looks like an entry (`"Dial keys, not IPs": …`) and
+  package: a body line that looks like an entry (`"Dial keys, not IPs": ...`), and
   a file whose first line is an entry with no opening `---` fence (the
-  `lucky-planes-resolve.md` shape) — plus ordinary malformed lines.
+  `lucky-planes-resolve.md` shape); plus ordinary malformed lines.
   `classifyExportSubpaths` (dual
   in-manifest pairs, diverged values, out-of-manifest deep-equal pairs such as
   `platform`'s `.types.js` aliases, `private`-package exclusion, pattern keys,
