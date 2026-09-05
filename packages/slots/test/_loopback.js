@@ -15,6 +15,9 @@ import { makeSlotCodec } from '../src/codec.js';
 import { makeSlotClient } from '../src/client.js';
 import {
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   encodeDeliverPayload,
   decodeDeliverPayload,
@@ -37,7 +40,12 @@ const flipArr = arr => arr.map(flipDesc);
  * @param payload
  */
 const flipEnvelope = (verb, payload) => {
-  if (verb === VERB_DELIVER) {
+  if (
+    verb === VERB_DELIVER ||
+    verb === VERB_GET ||
+    verb === VERB_INDEX ||
+    verb === VERB_UNTAG
+  ) {
     const p = decodeDeliverPayload(payload);
     return encodeDeliverPayload({
       target: flipDesc(p.target),

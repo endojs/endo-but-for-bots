@@ -370,25 +370,12 @@ const makeMakeHandlerForRemoteReference = ({
           resolver: resolveMeDesc,
         } = takeNextRemoteAnswer(externalAnswerPromise);
 
-        // Check if the string looks like a non-negative integer (for array index access)
-        // JavaScript proxies receive "0", "1", etc. for array-style access like obj[0]
-        if (/^(0|[1-9][0-9]*)$/.test(prop)) {
-          // op:index for integer index access on Lists (copyArray)
-          send({
-            type: 'op:index',
-            receiverDesc: targetGetter(),
-            index: BigInt(prop),
-            answerPosition,
-          });
-        } else {
-          // op:get for string field access on Structs (copyRecord)
-          send({
-            type: 'op:get',
-            receiverDesc: targetGetter(),
-            fieldName: prop,
-            answerPosition,
-          });
-        }
+        send({
+          type: 'op:get',
+          receiverDesc: targetGetter(),
+          fieldName: prop,
+          answerPosition,
+        });
 
         // Send op:listen for the answerPromise so B knows how to send the result back
         send({
@@ -398,6 +385,56 @@ const makeMakeHandlerForRemoteReference = ({
           wantsPartial: false,
         });
 
+        return internalPromise;
+      },
+      index(_o, index, externalAnswerPromise) {
+        if (didUnplug()) {
+          return quietReject(didUnplug());
+        }
+        logger.info(`index`, targetGetter(), index);
+        const {
+          internalPromise,
+          answerPromise,
+          position: answerPosition,
+          resolver: resolveMeDesc,
+        } = takeNextRemoteAnswer(externalAnswerPromise);
+        send({
+          type: 'op:index',
+          receiverDesc: targetGetter(),
+          index: BigInt(index),
+          answerPosition,
+        });
+        send({
+          type: 'op:listen',
+          to: answerPromise,
+          resolveMeDesc,
+          wantsPartial: false,
+        });
+        return internalPromise;
+      },
+      untag(_o, tag, externalAnswerPromise) {
+        if (didUnplug()) {
+          return quietReject(didUnplug());
+        }
+        logger.info(`untag`, targetGetter(), tag);
+        const {
+          internalPromise,
+          answerPromise,
+          position: answerPosition,
+          resolver: resolveMeDesc,
+        } = takeNextRemoteAnswer(externalAnswerPromise);
+        send({
+          type: 'op:untag',
+          receiverDesc: targetGetter(),
+          tag,
+          answerPosition,
+        });
+        send({
+          type: 'op:listen',
+          to: answerPromise,
+          resolveMeDesc,
+          wantsPartial: false,
+        });
         return internalPromise;
       },
       applyFunction(_o, args, externalAnswerPromise) {

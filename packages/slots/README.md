@@ -1,7 +1,8 @@
 # @endo/slots
 
 JavaScript client for the slot-machine wire protocol — a flat
-four-verb (`deliver` / `resolve` / `drop` / `abort`) capability bus
+seven-verb (`deliver` / `get` / `index` / `untag` / `resolve` / `drop` /
+`abort`) capability bus
 designed to interoperate byte-for-byte with the Rust crate at
 `rust/endo/slots`.
 
@@ -98,28 +99,14 @@ it.  On receipt the target's own shape decides dispatch, exactly as
 There is no `__call__` sentinel and no `[method, args]` body shape —
 both are retired in favour of the flat vector above.
 
-**Property access (`op:get`) today rides on `deliver`; the separate
-OCapN lanes are the target shape.**  OCapN provides `op:get`,
-`op:index`, and `op:untag` as lanes distinct from message delivery
-(field access, positional indexing, and tag stripping against
-`Struct` / `List` / tagged targets).  Slot-machine's intent is to
-**emulate those lanes too**.  What is modelled *today* is only
-`op:get`, and only because it is the single such lane that JavaScript
-eventual-send exposes: `E(p).prop` is the sole non-delivery operation
-`HandledPromise`/`E` can express (`HandledPromise.get`), so it is the
-only one there is a JS surface to carry.  It currently resolves through
-a `deliver` of a conventional `__get__` string method carrying the
-property name as its sole argument (so, like any method call, its
-selector is prepended), which keeps the four-verb bus (`deliver` /
-`resolve` / `drop` / `abort`) intact.
-
-`op:index` and `op:untag` have **no eventual-send surface** to invoke
-them from JavaScript yet, so they are not modelled; and promoting even
-`op:get` to a first-class wire operation (rather than the `__get__`
-call it is carried as today) would have to be mirrored in the Rust
-supervisor's verb set (`rust/endo/slots/src/wire`).  Designing the
-distinct-lane emulation — including any eventual-send extension needed
-to express `op:index` / `op:untag` — is tracked as follow-up work.
+**Data operations cannot be intercepted as deliveries.**  OCapN's
+`op:get`, `op:index`, and `op:untag` have distinct slot-machine envelope
+verbs.  They surface as `E.get(target).field`, `E.index(target, index)`,
+and `E.untag(target, tag)`, backed by corresponding `HandledPromise`
+handler and static methods.  A `get` rejects an array target, an `index`
+rejects a non-array target, and `untag` rejects a mismatched tag.  Keeping
+these lanes separate ensures that no method named `__get__`, `index`, or
+`untag` can intercept or impersonate a data operation.
 
 ## Daemon integration
 

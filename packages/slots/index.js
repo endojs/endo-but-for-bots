@@ -10,6 +10,9 @@ export {
 } from './src/descriptor.js';
 export {
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   VERB_DROP,
   VERB_ABORT,
