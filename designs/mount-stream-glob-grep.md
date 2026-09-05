@@ -877,11 +877,6 @@ it landed on `llm` after the mount stack merged.
    minted once-only, so the window
    is bounded per reader — a grantee cannot open a second concurrent stream to
    multiply it. See § Revocation.)
-8. **Mint the search readers once-only** (`readerFromIterator({ once: true })`).
-   A per-search reader has no meaningful second consumer, and a second `stream()`
-   over the shared iterator would both split the element set and open a second
-   pre-ack window; latching keeps the pre-ack and post-revoke windows bounded per
-   reader, not per concurrent stream.
 4. **One shared engine** (`@endo/platform/fs/search`) for eager and streaming
    variants, preventing behavioral drift in confinement, deny patterns, and
    ordering.
@@ -903,6 +898,11 @@ it landed on `llm` after the mount stack merged.
    enumeration order at all: decoupling moved that choice to the producer, and the
    walk-incremental `streamGlob` producer gives `streamGrep`
    first-match-before-full-walk without touching grep.
+8. **Mint the search readers once-only** (`readerFromIterator({ once: true })`).
+   A per-search reader has no meaningful second consumer, and a second `stream()`
+   over the shared iterator would both split the element set and open a second
+   pre-ack window; latching keeps the pre-ack and post-revoke windows bounded per
+   reader, not per concurrent stream.
 
 9. **`streamGrep` takes a mandatory file stream, not an internal glob**
    ([PR #1085 review](https://github.com/endojs/endo-but-for-bots/pull/1085)).

@@ -373,8 +373,14 @@ export const makeSearch = powers => {
         // Sorting one directory at a time gives walk-order streams a stable,
         // platform-independent order without imposing glob's eager global-sort
         // barrier. The walk remains lazy: it sorts only the directory it has
-        // reached, then descends before reading later sibling directories.
-        names = [...(await powers.readDirectory(dir))].sort();
+        // reached, then descends before reading later sibling directories. In
+        // eager `sorted: true` mode the intra-directory order is unobservable —
+        // dedup is order-independent and a final global sort reimposes the
+        // UTF-16 order — so the sort is confined to the walk-order path that
+        // relies on it, keeping `glob`/`grep`/`glorp` at their pre-streaming cost.
+        names = sorted
+          ? await powers.readDirectory(dir)
+          : [...(await powers.readDirectory(dir))].sort();
       } catch {
         // A directory removed mid-walk drops this branch rather than aborting.
         return;
