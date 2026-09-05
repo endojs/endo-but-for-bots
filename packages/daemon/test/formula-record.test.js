@@ -80,6 +80,49 @@ test('makeFormulaRecord surfaces a scratch-mount path from mountHostPath', t => 
   });
 });
 
+test('makeFormulaRecord surfaces a current-shape invitation record', t => {
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'invitation',
+      invitingAgent: 'agent-id',
+      invitingHandle: 'handle-id',
+      guestName: 'friend',
+    })
+  );
+
+  const record = makeFormulaRecord(formula, aNumber);
+
+  t.is(record.type, 'invitation');
+  t.deepEqual(record.properties, {
+    invitingAgent: { kind: 'reference', identifier: 'agent-id' },
+    invitingHandle: { kind: 'reference', identifier: 'handle-id' },
+    guestName: { kind: 'literal', value: 'friend' },
+  });
+});
+
+test('makeFormulaRecord coerces a legacy hostAgent/hostHandle invitation record', t => {
+  // Records minted before the hostAgent/hostHandle →
+  // invitingAgent/invitingHandle rename must still inspect, so existing
+  // production databases need not be purged.
+  const formula = /** @type {Formula} */ (
+    /** @type {unknown} */ ({
+      type: 'invitation',
+      hostAgent: 'agent-id',
+      hostHandle: 'handle-id',
+      guestName: 'friend',
+    })
+  );
+
+  const record = makeFormulaRecord(formula, aNumber);
+
+  t.is(record.type, 'invitation');
+  t.deepEqual(record.properties, {
+    invitingAgent: { kind: 'reference', identifier: 'agent-id' },
+    invitingHandle: { kind: 'reference', identifier: 'handle-id' },
+    guestName: { kind: 'literal', value: 'friend' },
+  });
+});
+
 test('makeFormulaRecord omits a scratch-mount path when unresolved', t => {
   // When the host cannot resolve the path (e.g. the formula was
   // collected since resolution), the property is omitted rather than
