@@ -3,40 +3,92 @@
 | | |
 |---|---|
 | **Created** | 2026-09-04 |
-| **Updated** | 2026-09-04 |
+| **Updated** | 2026-09-05 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Draft. Design only, no implementation in this change. |
+| **Status** | Proposed |
+
+This is a design document only; it lands no implementation. The maintainer
+brief that prompted it is reproduced verbatim under [Prompt](#prompt).
+
+## Background
+
+This design lives inside `@endo/pass-style` and its consumers, and uses that
+subsystem's vocabulary throughout. The load-bearing terms:
+
+- **Passable**: a value `@endo/pass-style` admits into a pass-by-copy or
+  pass-by-reference message. `passStyleOf(value)` classifies a passable into
+  one of a fixed set of *pass styles* (`copyRecord`, `copyArray`, `tagged`,
+  `remotable`, `symbol`, ...); a non-passable value throws.
+- **Pass-by-copy / reify**: pass-by-copy passables are serialized by value and
+  reconstructed (*reified*) on the receiving side into a fresh local value.
+  Reifying a symbol means turning its wire name back into a local JavaScript
+  value that stands for that symbol.
+- **Marshal**: `@endo/marshal`, the layer that encodes a passable to a wire
+  form (smallcaps, capdata, or `encodePassable` ordered keys) and decodes it
+  back, calling into `@endo/pass-style` at the leaves.
+- **Remotable**: a pass-by-reference passable (a `Far` object); mentioned only
+  as one of the pass styles, not otherwise central here.
+- **Compartment / vat**: isolation units. A *compartment* is an SES evaluation
+  scope with its own globals; a *vat* is an Agoric unit of isolated, resumable
+  computation, typically hosting many compartments. Several vats can share one
+  OS process. The threat model below turns on the fact that the global symbol
+  registry is shared across all compartments and vats in a process, defeating
+  that isolation.
+- **`PASS_STYLE`**: the well-known key `Symbol.for('passStyle')`, exported from
+  `packages/pass-style/src/passStyle-helpers.js`. Every pass-by-copy container
+  carries it as a property whose string value names the container's pass style;
+  this is the existing tagging convention the tagged-object representation
+  reuses (see [The existing dispatch mechanism this rides
+  on](#the-existing-dispatch-mechanism-this-rides-on)).
 
 ## Summary
 
 Today a passable symbol *is* a primitive JavaScript `symbol`: a well-known
 symbol (`Symbol.iterator` and friends, reified on the wire as `"@@" + name`)
 or a `Symbol.for(name)` registered symbol. This design introduces an
-**alternate reified representation** for passable symbols, a plain hardened
+**alternate reified representation** for passable symbols: a plain hardened
 object
 
 ```js
 { [Symbol.for('passStyle')]: 'symbol', [Symbol.toStringTag]: symbolName }
 ```
 
-that carries *no* primitive `symbol` at all, eliminates well-known symbols
-as a passable category, and never calls `Symbol.for` on incoming names. (The
-object is *keyed* by two primitive symbols, `Symbol.for('passStyle')` and
-`Symbol.toStringTag`, which are the existing pass-by-copy tagging convention;
-the passed *value* it stands in for contains no primitive symbol. That
-convention is what [The existing dispatch mechanism this rides
-on](#the-existing-dispatch-mechanism-this-rides-on) explains, so the apparent
-contradiction is resolved there.) The name is carried in `Symbol.toStringTag`
-specifically, rather than a plain string property like `name`, because that
-lets Ava's `t.deepEqual` treat two reifications of the same name as
-structurally equal (see [The Ava/`t.deepEqual`
+Distinguish two roles the primitive symbols play here, because the design turns
+on the distinction. The object is *keyed* by two primitive symbols,
+`Symbol.for('passStyle')` and `Symbol.toStringTag`, which are the existing
+pass-by-copy tagging convention every container already uses (see [The existing
+dispatch
+mechanism this rides on](#the-existing-dispatch-mechanism-this-rides-on)). The
+passable *value* this object stands in for contains no primitive symbol at all.
+"Carries no primitive symbol" is a claim about the represented value, not about
+the tag keys.
+
+Relative to today's primitive representation, the design's changes are: the
+reified value carries no primitive `symbol`; the variant module eliminates
+well-known symbols as a passable category; and its decode leaf never calls
+`Symbol.for` on incoming names. The name is carried in `Symbol.toStringTag`
+because that follows the standing tag-record convention (`[PASS_STYLE]` plus
+`[Symbol.toStringTag]`, as in `remotable.js` and `byteArray.js`) and keeps the
+name out of the string-key namespace; a useful consequence is that AVA's
+`t.deepEqual` treats two reifications of the same name as structurally equal
+(see [The AVA/`t.deepEqual`
 advantage](#the-avatdeepequal-advantage-with-a-worked-example)).
 
 This representation is **not** the default. It is selected per process by a
 custom Node resolution condition, `pass-style-symbol`, activated with
 `node -C pass-style-symbol` (equivalently `--conditions=pass-style-symbol`).
-Absent that flag, resolution falls through to `"default"` and today's behavior
-is unchanged, byte for byte.
+Absent that flag, resolution falls through to `"default"` and today's *runtime
+behavior on today's values is unchanged*: no default process ever produces the
+tagged shape, so the primitive-symbol path handles every value exactly as
+today. The one deliberate, dormant default-world change this design makes is
+that `passStyleOf` *recognizes* the tagged shape (`'symbol'` is registered
+unconditionally, so a hand-built tagged object classifies rather than throwing
+`Unrecognized PassStyle`); that recognition is inert unless such an object is
+constructed, which default code never does. This is called out at first
+statement because a naive "default is untouched, byte for byte" reading is
+contradicted by [The `HelperTable['symbol']`
+decision](#the-helpertablesymbol-decision-register-unconditionally); the precise
+claim is "default *production and encoding* of real values is unchanged."
 
 The swap is deliberately narrow: a single package-private `imports` alias
 inside `@endo/pass-style`, `#pass-style-symbol-impl`, resolves either to
@@ -44,30 +96,51 @@ today's `src/symbol.js` (`default`) or to a new sibling
 `src/symbol-tagged.js` (`pass-style-symbol`). The two modules present the
 *same* function surface (`isPassableSymbol` / `assertPassableSymbol` /
 `nameForPassableSymbol` / `passableSymbolForName` / `unpassableSymbolForName`),
-so any downstream code that reaches passable symbols *through that surface*
-(`passStyleOf`, and all three marshal encoders) swaps transitively with no line
-of its own changing. The transitivity has one important limit: code that
-inspects a passable symbol with a bare `typeof === 'symbol'` guard rather than
-through `isPassableSymbol`/`nameForPassableSymbol` does **not** swap for free
-and breaks under the variant (the reified value is now an object). This design
-surfaces one such site (`@endo/ocapn`'s `selector.js`, see [OCapN
-selectors](#ocapn-selectors-endoocapn)) but has not audited the whole tree for
-other `typeof === 'symbol'` guards; every such guard is a latent break the
-implementation must find and make world-agnostic.
+plus a shared world-identity export (see [A named world query, not a
+shape-sniff](#a-named-world-query-not-a-shape-sniff)), so any downstream code
+that reaches passable symbols *through that surface* (`passStyleOf`, and all
+three marshal encoders) swaps transitively with no line of its own changing.
+
+The transitivity has a limit that is *wider than `typeof` guards*, and the
+design must not undersell it. Two kinds of breakage exist:
+
+- **Recoverable by predicate swap.** Code that inspects a passable symbol with a
+  bare `typeof === 'symbol'` guard can be made world-agnostic by validating
+  through `isPassableSymbol` / `nameForPassableSymbol` instead. `@endo/ocapn`'s
+  `selector.js` is such a site.
+- **Not recoverable by any predicate swap.** Code that uses the *symbol-ness
+  itself* structurally (as a JavaScript **property key**, or by reading
+  `symbol.description`) cannot be rescued by a predicate, because a plain
+  object is neither a property key nor has a `.description`. `@endo/ocapn`'s
+  syrup layer does exactly this: `getSyrupSelectorName`
+  (`packages/ocapn/src/syrup/js-representation.js:44`) reads `.description`, and
+  syrup dictionary keys are selectors. Such sites need a representation change,
+  not a guard change.
+
+This design surfaces both classes (see [OCapN
+selectors](#ocapn-selectors-endoocapn)) but has not audited the whole tree; every
+such site is a latent break the implementation must find and address, and the
+second class raises the implementation cost above "swap the guards."
 
 ## Motivation
 
 ### The threat model, sharpened
 
-The brief asserts a memory-exhaustion vector; grounding it in the code
-confirms and sharpens it.
+The maintainer brief (reproduced under [Prompt](#prompt)) asserts a
+memory-exhaustion vector; grounding it in the code confirms and sharpens it.
 
 `passableSymbolForName` (`packages/pass-style/src/symbol.js`) is the decode
-leaf for *every* incoming passable symbol name, across all three wire codecs:
+leaf for *every* incoming passable symbol name. It has four call sites, not
+three: the three marshal wire codecs, plus one in `@endo/ocapn`'s syrup layer:
 
 - smallcaps: `encodeToSmallcaps.js:363`, `return passableSymbolForName(encoding.slice(1))`
 - capdata: `encodeToCapData.js:368`, `return passableSymbolForName(name)`
 - `encodePassable` (ordered keys): `encodePassable.js:777`, `return passableSymbolForName(name)`
+- syrup selectors: `packages/ocapn/src/syrup/js-representation.js:37`,
+  `SyrupSelectorFor(name) => passableSymbolForName('syrup:' + name)`. This
+  fourth leaf both swaps (it produces the tagged object under the variant) and
+  is a structural break (its reader `getSyrupSelectorName` reads
+  `.description`); see [OCapN selectors](#ocapn-selectors-endoocapn).
 
 Its terminal line is `return Symbol.for(name)`. `Symbol.for` interns into the
 **global symbol registry**: a process-wide, string-keyed table with **no
@@ -109,7 +182,7 @@ same spelling. For OCapN alignment we want passable symbols to be *exactly*
 The threat above is sharpest in an Agoric-style multi-vat/compartment process,
 where one confined guest can grow a table shared by trusted vats. This design
 delivers the *mechanism* that closes the leak (the tagged reification, armed by
-a Node condition) and its *test-harness* rollout (Ava `nodeArguments`, see
+a Node condition) and its *test-harness* rollout (AVA `nodeArguments`, see
 [Test and CI strategy](#test-and-ci-strategy-and-the-empirical-check-the-brief-demanded)).
 It does **not** yet deliver the vat-deployment path. A bundled vat does not read
 a runtime `-C` flag; `@endo/bundle-source` resolves `imports` at *build* time
@@ -121,6 +194,46 @@ bundle can opt in is future work, noted as an open question below
 motivating *beneficiary* of the eventual rollout, not as something this landing
 wires up.
 
+State the consequence plainly, not just the scope: because open question 7
+concedes a bundled vat cannot read `-C` and open question 9 concedes the
+condition is process-wide, the lever cannot be pulled where the threat actually
+lives (a single untrusted vat inside a shared-process kernel). As landed, the
+*only* world that can arm the variant is an AVA test config's `nodeArguments`
+(see [Test and CI strategy](#test-and-ci-strategy-and-the-empirical-check-the-brief-demanded)).
+So the honest near-term value of this landing is "it proves the representation
+and closes the leak for a process that opts in wholesale," not "it closes the
+multi-vat DoS." The multi-vat close waits on the value-parameter shape
+([open question 8](#open-questions)) or the bundle path
+([open question 7](#open-questions)). The cross-package churn here buys the
+proof and the migration lever, weighed against that, not against the DoS close.
+
+### Two policies ride behind one condition
+
+The `pass-style-symbol` condition bundles two logically independent changes, and
+this design ships them atomically on purpose:
+
+1. **The memory-exhaustion fix**: decode never calls `Symbol.for`, so no wire
+   name grows the global registry. This is the security payload.
+2. **The category narrowing**: well-known symbols cease to be a passable
+   category and `@@`-prefixed names are rejected (the Hilbert Hotel escape is
+   retired). This touches the registry not at all; `Symbol[suffix]` is a fixed
+   engine-property lookup (`packages/pass-style/src/symbol.js:104-110`).
+
+They are separable in principle: one could keep well-known symbols and only
+change the registered-symbol leaf, or reify `@@iterator` as a tagged object
+literally named `@@iterator` with no `Symbol.for`. They are shipped together
+because the tagged representation the security fix adopts *is* a plain object,
+and a plain object has no way to denote "the engine's `Symbol.iterator`
+identity": reifying well-known names as tagged objects would either invent a
+second escape or silently alias distinct engine symbols to equal-by-name
+objects. Rather than carry a second escape convention into the new
+representation, the variant drops the well-known category. A deployer who wants
+the memory fix therefore also accepts the receive-side narrowing that a
+default peer's legal `@@iterator` message no longer decodes (see [Cross-variant
+interop](#cross-variant-interop)). This coupling is a deliberate design choice,
+recorded here so it is weighed rather than discovered; splitting it into two
+conditions is [open question 3](#open-questions).
+
 ### Why a plain object closes it
 
 The tagged-object representation carries the name in `Symbol.toStringTag` (an
@@ -128,16 +241,17 @@ ordinary string-valued own property) and never calls `Symbol.for` on decode.
 `passableSymbolForName(name)` under the variant returns
 `harden({ [PASS_STYLE]: 'symbol', [Symbol.toStringTag]: name })`: a fresh
 object, immediately eligible for GC once unreferenced, touching no global
-table. The unbounded-registry vector is closed at the leaf, for all three
-codecs at once, because all three call the same swapped leaf. (This closes the
-vector *at this leaf*; whether an equivalent intern table lives elsewhere in
-OCapN is the subject of [open question 4](#open-questions), so "closed"
-here means "closed at the pass-style decode leaf," not proven closed across
-every downstream selector consumer.)
+table. The unbounded-registry vector is closed at the leaf, for all four call
+sites at once (the three marshal codecs and the syrup selector leaf), because
+all four call the same swapped `passableSymbolForName`. (This closes the vector
+*at this leaf*; whether an equivalent intern table lives elsewhere in OCapN is
+the subject of [open question 4](#open-questions), so "closed" here means
+"closed at the pass-style decode leaf," not proven closed across every
+downstream selector consumer.)
 
 Well-known symbols disappear as a category: under the variant,
 `assertPassableSymbol` rejects primitive symbols outright (see
-[Swap unit](#what-swaps-as-one-unit)), so `Symbol.iterator` is simply not
+[What swaps as one unit](#what-swaps-as-one-unit)), so `Symbol.iterator` is simply not
 passable, and the `@@`-escape logic is not part of the variant module.
 
 ## The existing dispatch mechanism this rides on
@@ -218,8 +332,10 @@ reaches passable symbols through that surface* (the `typeof`-guard caveat in the
     must be a well-formed string; names beginning `@@` are **rejected**
     (well-known symbols are not representable), which also removes the Hilbert
     Hotel escape entirely.
-  - `nameForPassableSymbol(sym)` accepts the tagged object, returns its
-    `Symbol.toStringTag` string, and returns `undefined` for anything else.
+  - `nameForPassableSymbol(sym)` accepts the tagged object and returns its
+    `Symbol.toStringTag` string, but **also rejects a `@@`-prefixed name** (it
+    returns `undefined`, so the value does not read back as a passable symbol);
+    it returns `undefined` for anything that is not a tagged object.
   - `isPassableSymbol` / `assertPassableSymbol` are true/pass **only** for the
     tagged object; a primitive `symbol` is **not** passable under the variant.
   - `unpassableSymbolForName(name)` keeps its intent (a distinct
@@ -227,12 +343,63 @@ reaches passable symbols through that surface* (the `typeof`-guard caveat in the
     non-registered tagged object (see [Open questions](#open-questions)).
   - Additionally exports a `SymbolHelper` (a `PassStyleHelper` with
     `styleName: 'symbol'`, validating shape: frozen, own `[PASS_STYLE] ===
-    'symbol'`, own string `[Symbol.toStringTag]`, no other own enumerable
-    data).
+    'symbol'`, own string `[Symbol.toStringTag]` **whose value is not
+    `@@`-prefixed**, no other own enumerable data).
 
-### The two consumers that change their import specifier
+  The `@@` rejection must be enforced at **all three doors**, not just the
+  producer: `passableSymbolForName` (produce), `nameForPassableSymbol` (read),
+  and `SymbolHelper` (validate). Otherwise a hand-built
+  `harden({ [PASS_STYLE]: 'symbol', [Symbol.toStringTag]: '@@iterator' })` would
+  classify as `passStyleOf === 'symbol'`, encode as `@@iterator`, and a
+  `default` peer would decode it to `Symbol.iterator`: the variant's own
+  emitter reintroducing the category it abolishes. The in-tree sibling already
+  guards both of its doors this way: `packages/ocapn/src/selector.js` checks
+  `@@` in **both** `makeSelector` (produce, line 10) and `getSelectorName`
+  (read, line 35).
 
-Only the *specifiers* change; the code does not.
+### A named world query, not a shape-sniff
+
+The active world is ambient process state with, as designed so far, no name a
+call site can read. Both the test strategy and any world-aware consumer would
+otherwise have to *sniff* the world by calling `passableSymbolForName('x')` and
+inspecting the returned shape, which is exactly the `typeof`-style guard this
+design elsewhere names as its breakage class, re-introduced as recommended
+discipline. Worse, under `default` that probe has a **permanent side effect**:
+`passableSymbolForName('x')` interns `'x'` into the global registry forever, so
+the sniff feeds the very table this design exists to protect.
+
+Both implementation modules therefore **export the world as data**: a single
+named constant
+
+```js
+// src/symbol.js
+export const passableSymbolRepresentation = 'primitive';
+// src/symbol-tagged.js
+export const passableSymbolRepresentation = 'tagged';
+```
+
+re-exported through `#pass-style-symbol-impl` (and, for consumers, through
+`@endo/pass-style`). Tests and world-agnostic code branch on that named value
+rather than on the shape of a minted symbol, with no side effect and no
+shape-sniff. Both modules already exist, so this adds no mechanism, only a
+constant. This mirrors the repo's existing condition-swapped sibling
+`@endo/harden`, which ships an explicit world query (`hardenIsNoop`,
+`packages/harden/is-noop.js`) precisely so consumers need not sniff a minted
+value; its README says so in as many words.
+
+Relatedly, because the world is ambient state a call site cannot see, the
+variant module's error messages **must name the variant**: today
+`assertPassableSymbol(Symbol.iterator)` throws `Only registered symbols or
+well-known symbols are passable`, which names the category the variant just
+removed. Variant errors should instead name `pass-style-symbol`, so a developer
+who hits one under an ambiently-armed process is not sent chasing the wrong
+model.
+
+### The consumers that change their import specifier
+
+Three in-package sites import the symbol functions from `./src/symbol.js`
+directly and so do **not** swap unless their specifier is repointed at the
+alias. For the first two, only the *specifier* changes; the code does not.
 
 - `packages/pass-style/index.js` currently re-exports the five functions
   `from './src/symbol.js'`. Change that to `from '#pass-style-symbol-impl'`.
@@ -255,18 +422,45 @@ Only the *specifiers* change; the code does not.
   primitive symbols are not passable and the `Symbol.for`-registry classify
   path is closed on this side too.
 
+- `packages/pass-style/tools/arb-passable.js:6` imports `passableSymbolForName`
+  from `../src/symbol.js` **directly** (not through the public entry), and ships
+  via `tools.js`; it is the fast-check arbitrary that mints example passable
+  symbols. Left unchanged it keeps minting *primitive* symbols labelled Passable
+  even under the variant, so every property test built on it would either fail
+  or, worse, silently exercise the wrong world (the proposed variant config's
+  `files: ['test/**/*.test.*']` runs them). Its specifier must therefore also be
+  repointed at `#pass-style-symbol-impl`, so the arbitrary produces the tagged
+  object under the variant. Unlike the first two, this is a genuinely
+  world-sensitive site the implementation must not miss.
+
 ### The `HelperTable['symbol']` decision: register unconditionally
 
-Recommendation: **register the `symbol` style unconditionally.** Add
+Recommendation: **register the `symbol` style unconditionally, and make
+`SymbolHelper`'s validator probe `nameForPassableSymbol(val) !== undefined`
+under the active world** (option (b) of [open question 1](#open-questions)). Add
 `symbol: undefined` to the `makeHelperTable` seed and add `SymbolHelper` to the
 `makePassStyleOf([...])` list *in both branches*, sourced from
 `#pass-style-symbol-impl`. Because `passStyleOf.js` sources `SymbolHelper`
 through that alias, and under `default` the alias resolves to `src/symbol.js`,
 **`src/symbol.js` must also export a `SymbolHelper`** (this is the one new
-export noted in [The two implementation modules](#the-two-implementation-modules)).
-Both modules therefore export a structurally-identical validator for the
-tagged shape; only the five *behavioral* functions differ between them.
-Rationale:
+export noted in [The two implementation
+modules](#the-two-implementation-modules)). Both modules therefore export a
+structurally-identical validator for the tagged shape; only the five
+*behavioral* functions differ between them.
+
+The bare-structural variant of this recommendation (option (a), validate shape
+only) is **rejected** precisely because it breaks the completeness invariant
+that `passStyleOf`/`assertPassable` are relied on to hold. Under (a), a
+hand-built tagged object classifies as `passStyleOf === 'symbol'` while
+`default`'s `nameForPassableSymbol` returns `undefined`, so the value is
+"classified-but-unencodable": consumers that lean on classification as a
+*complete* Passable predicate (CopySet/CopyMap key admission, `sameStructure`,
+remote-argument gating) admit a value the encoders then reject. Folding the
+`nameForPassableSymbol` probe into the validator (option (b)) keeps
+`passStyleOf` a single code path *and* keeps acceptance and encodability from
+diverging, so a value classifies as `'symbol'` only if the active world can also
+turn it back into a name. Rationale for keeping registration unconditional
+rather than swapping `HelperTable` (option (c)):
 
 - It keeps `passStyleOf.js` a single code path with no condition-branching of
   its own: less risk, one thing to reason about.
@@ -281,31 +475,29 @@ Rationale:
   object hits `Fail\`Unrecognized PassStyle: 'symbol'\``; with it, it
   classifies as `passStyleOf(val) === 'symbol'`.
 
-That last point has a concrete asymmetry the maintainers should weigh, and it
-is *not* free. `SymbolHelper`'s validation is purely structural (frozen, own
-`[PASS_STYLE] === 'symbol'`, own string `[Symbol.toStringTag]`); it does not
-consult whether the active world's `nameForPassableSymbol` can turn the value
-back into a wire name. So under `default`, a hand-built tagged object would
-classify as `passStyleOf(val) === 'symbol'` (a green light that the value is
-Passable), yet `default`'s `nameForPassableSymbol` returns `undefined` for it,
-so the marshal encoders that consume that function (see [The two
-consumers](#the-two-consumers-that-change-their-import-specifier)) would fail to
-encode a value `passStyleOf` just certified as valid. Registering
-unconditionally therefore trades a clean `Unrecognized PassStyle` at
-classification time for a later "classified-but-unencodable" state: worse for
-consumers that lean on `passStyleOf`/`assertPassable` as a *complete* predicate
-(CopyMap/CopySet key admission, `sameStructure`, remote-argument gating)
-without ever calling encode. The choice is genuine and is [open question
-1](#open-questions). If the maintainers keep unconditional registration and
-want to avoid the divergence, `SymbolHelper`'s validator can additionally probe
-`nameForPassableSymbol(val) !== undefined` under the active world, so
-`passStyleOf` acceptance and marshal encodability cannot diverge.
+Why the probe is part of the recommendation and not merely an option: the third
+bullet above (recognizing a hand-built tagged object) is exactly where the
+bare-structural validator would break the completeness invariant. A purely
+structural `SymbolHelper` (frozen, own `[PASS_STYLE] === 'symbol'`, own string
+`[Symbol.toStringTag]`) does not consult whether the active world's
+`nameForPassableSymbol` can turn the value back into a wire name; so under
+`default` it would green-light a value (`passStyleOf(val) === 'symbol'`) that
+`default`'s `nameForPassableSymbol` cannot encode (see [The consumers that
+change their import
+specifier](#the-consumers-that-change-their-import-specifier)): the
+classified-but-unencodable split-brain that consumers relying on classification
+as a *complete* predicate (CopyMap/CopySet key admission, `sameStructure`,
+remote-argument gating) would trip over. The recommended validator therefore
+*additionally* probes `nameForPassableSymbol(val) !== undefined` under the
+active world, so classification and encodability cannot diverge. That is what
+makes option (b), not option (a), the recommendation.
 
-The alternative, making `HelperTable` itself part of the swap so `'symbol'`
-exists *only* under the variant, is viable but adds a second conditional
-surface. It is recorded as an open question to the extent the maintainers
-prefer the stricter "the shape is meaningless unless armed" stance, which also
-sidesteps the classified-but-unencodable asymmetry above.
+Option (c), making `HelperTable` itself part of the swap so `'symbol'` exists
+*only* under the variant, is viable and also sidesteps the split-brain, but
+adds a second conditional surface (`passStyleOf.js` would branch on the
+condition too, rather than staying a single code path). It is recorded as
+[open question 1](#open-questions)(c) for maintainers who prefer the stricter
+"the shape is meaningless unless armed" stance.
 
 Note that the two `'symbol'`-producing paths coexist by construction and never
 collide. Within a single process the condition is fixed, so at most one path is
@@ -347,6 +539,57 @@ design is the better long-term shape and is recorded as [open question
 8](#open-questions); the coarse process-vs-vat granularity it would fix is
 [open question 9](#open-questions). This section exists so the tradeoff is on
 the record rather than silently foreclosed.
+
+### Alternative considered: a representation-preserving intern table
+
+The value-parameter alternative above still changes the *representation* (a
+symbol becomes an object). A cheaper alternative closes the same threat while
+keeping `typeof passable === 'symbol'`, and it must be weighed on the record
+because the entire cost surface this design accepts (a `HelperTable` entry, a
+Node condition, a second AVA config, a second tsconfig, a published-type
+divergence, the `selector.js` edits, and a tree-wide `typeof`-guard audit) is
+justifiable only against the cheapest alternative that closes the same threat.
+
+All three defects the [threat model](#the-threat-model-sharpened) names ("not
+compartment-scoped", "not vat-scoped", "durable") are properties of the
+**global** registry, not of primitive symbols as such. A decode leaf that mints
+`Symbol(name)` (a fresh, *non-registered* symbol) and reads the name back from
+`symbol.description`, interning `name -> symbol` in a table **owned by the
+marshal instance** rather than by the engine, closes all three: the table is
+GC-scoped to the instance, disposed with it, never process-global. Crucially it
+keeps every `typeof === 'symbol'` guard true, keeps the published `.d.ts` saying
+`symbol`, keeps `packages/ocapn/src/selector.js` and the syrup `.description`
+reads working unchanged, and needs no `HelperTable` entry, no condition, no
+second config, and no `typeof`-audit. This is not hypothetical: `@endo/ocapn`
+already ships exactly this scheme: `SyrupSelectorFor`
+(`packages/ocapn/src/syrup/js-representation.js:36`) mints a passable symbol for
+a name and `getSyrupSelectorName` reads it back off `.description`.
+
+Why the tagged object is chosen over it anyway:
+
+- **Per-value GC beats a per-instance table.** The tagged object is collectable
+  the instant it is unreferenced; the intern table holds every distinct decoded
+  name alive for the life of the marshal instance. For a long-lived instance
+  decoding attacker-chosen names, that is the same unbounded-growth shape as the
+  registry, merely instance-scoped rather than process-scoped: it narrows the
+  blast radius but does not make decode allocation-neutral. (A `WeakValue`-keyed
+  table mitigates this but complicates equality.)
+- **Structural equality vs. identity.** The intern table preserves same-name
+  `===` identity *within* an instance but loses it *across* instances (two
+  marshal instances mint distinct `Symbol('foo')`); the tagged object has no
+  cross-instance identity either, but recovers "same conceptual symbol" as a
+  *structural* fact (`t.deepEqual`), which the primitive cannot (see [The
+  AVA/`t.deepEqual` advantage](#the-avatdeepequal-advantage-with-a-worked-example)).
+- **`Symbol.description` is not a hardened, spoof-proof carrier.** Reading a
+  name back off `.description` reintroduces a primitive whose description is
+  engine-controlled and not a pass-by-copy own property; the tagged object
+  carries the name as an ordinary, hardenable own property under the standing
+  `[PASS_STYLE]`/`[Symbol.toStringTag]` convention.
+
+The intern table remains a legitimate contender on cost, and a maintainer who
+weights "no representation change, no tree-wide audit" above per-value GC and
+structural equality could reasonably prefer it. It is rejected here, not
+omitted, so the choice is on the record.
 
 ## The condition wiring (`package.json` `imports`)
 
@@ -400,25 +643,25 @@ around, not glossed:
 
 ## Test and CI strategy, and the empirical check the brief demanded
 
-The brief insists we not *assume* that Ava forwards a `-C` flag to whatever
+The brief insists we not *assume* that AVA forwards a `-C` flag to whatever
 process ultimately resolves the conditional import, but confirm it. **The
 forwarding path is already load-bearing in this very repo**, by a mechanism the
 pass-style suite depends on today:
 
-- Every endo Ava config sets `nodeArguments: ['-C', 'ses-ava:endo']`
-  (`ava-endo-lockdown.config.mjs` and siblings). Ava applies `nodeArguments`
+- Every Endo AVA config sets `nodeArguments: ['-C', 'ses-ava:endo']`
+  (`ava-endo-lockdown.config.mjs` and siblings). AVA applies `nodeArguments`
   to the Node worker processes it spawns to run test files.
 - `@endo/ses-ava`'s `package.json` `exports` for `./test.js` has a
   `"ses-ava:endo"` conditional branch resolving to `./prepare-endo.js`. That
   branch is selected **only** because the `-C ses-ava:endo` in `nodeArguments`
   reaches the worker where module resolution happens.
-- The pass-style test suite imports `@endo/ses-ava/test.js` and gets the endo
+- The pass-style test suite imports `@endo/ses-ava/test.js` and gets the Endo
   prepared harness today, which is only possible if the condition reached the
   worker. So the forwarding path (`ava nodeArguments`, then worker `execArgv`,
   then conditional resolution) is a **load-bearing, already-exercised** fact,
   not an assumption.
 
-This also tells us *where* to inject `pass-style-symbol`: through an Ava
+This also tells us *where* to inject `pass-style-symbol`: through an AVA
 config's `nodeArguments`, driven by `ses-ava`'s existing multi-config
 mechanism (`sesAvaConfigs` in `package.json`, dispatched by
 `packages/ses-ava/src/command.js`, which spawns `ava --config <file>` once per
@@ -471,19 +714,23 @@ Concretely:
    "test:pass-style-symbol": "ses-ava --only pass-style-symbol"
    ```
 
-3. **The test files must be world-aware.** Because a given worker is wholly in
+3. **Make the test files world-aware.** Because a given worker is wholly in
    one world, a shared test file cannot assert "primitive under default AND
    tagged under variant" in one run. The clean split:
    - Keep the existing symbol tests asserting **default** (primitive) behavior;
      they run under the default configs and, under the variant config, the
      assertions that a passable symbol is a primitive `symbol` would **fail**,
-     so they must be gated. Gate on a tiny runtime probe rather than trying to
-     read the condition (Node exposes no "is condition X active" API): probe by
-     the *shape* `passableSymbolForName('x')` returns (`typeof === 'symbol'`
-     means default; object with `[PASS_STYLE] === 'symbol'` means variant).
-     Branch the assertions on that probe, or split into `symbol.test.js` (runs
+     so they must be gated. Gate on the **named world query** rather than
+     sniffing a minted value (Node exposes no "is condition X active" API, but
+     this design exports one: see [A named world query, not a
+     shape-sniff](#a-named-world-query-not-a-shape-sniff)). Import
+     `passableSymbolRepresentation` from `@endo/pass-style` and branch on
+     `passableSymbolRepresentation === 'primitive'` vs. `'tagged'`, with no
+     shape inspection and no `Symbol.for` side effect on the global registry.
+     Branch
+     the assertions on that constant, or split into `symbol.test.js` (runs
      default config only) and `symbol-tagged.test.js` (runs variant config
-     only) via Ava's per-config `files` globs.
+     only) via AVA's per-config `files` globs.
    - Add variant-only tests asserting: `passableSymbolForName` returns the
      tagged object; it never grows the registry (see the registry-growth
      regression test below); primitive symbols are **not** passable;
@@ -491,8 +738,8 @@ Concretely:
      (`toCapData`/`fromCapData`, smallcaps, `encodePassable`) reifies to the
      tagged object.
 
-4. **A registry-growth regression test** (variant world) makes the security
-   claim executable rather than asserted:
+4. **Add a registry-growth regression test** (variant world) that makes the
+   security claim executable rather than asserted:
 
    ```js
    const before = Symbol.for(freshName); // interns once
@@ -507,9 +754,9 @@ Concretely:
    them (`Symbol.keyFor(decoded) === name`). The two tests together are the
    worked proof of the threat model and its fix.
 
-5. **Cross-variant interop tests** (the two claims [Cross-variant
+5. **Add cross-variant interop tests.** The two claims [Cross-variant
    interop](#cross-variant-interop) makes are testable in-process today, with
-   literal wire payloads, no live two-peer setup):
+   literal wire payloads and no live two-peer setup:
    - *default emits, variant decodes.* Construct the wire encoding a `default`
      peer produces for a `@@iterator` (well-known) name literally, hand it to a
      variant-world decoder, and assert it is **rejected** (the variant refuses
@@ -523,18 +770,18 @@ Concretely:
    world-gated test that constructs the *other* world's payload as a literal
    rather than by running the other world live.
 
-6. **CI** runs the whole matrix by virtue of `ses-ava` iterating all
+6. **Let CI run the whole matrix** by virtue of `ses-ava` iterating all
    `sesAvaConfigs`. No CI YAML change is required beyond ensuring pass-style's
    `test` script stays `ses-ava` (it does). Optionally add an explicit
    `test:pass-style-symbol` job for signal isolation, but it is redundant with
    the default `test`.
 
-## The Ava/`t.deepEqual` advantage, with a worked example
+## The AVA/`t.deepEqual` advantage, with a worked example
 
 This section is an *ergonomics* property of the tagged representation, distinct
 from the security motivation above; it is a reason the variant is nicer to
 assert on, not itself a reason the DoS closes. Because the reified value is a
-plain object, Ava's `t.deepEqual` structurally compares two instances by their
+plain object, AVA's `t.deepEqual` structurally compares two instances by their
 own properties (`[Symbol.toStringTag]` and `[PASS_STYLE]`), which is exactly
 pass-by-copy identity ("same name implies same symbol"). Primitive symbols
 cannot do this: two independently produced symbols are `===`-unequal unless
@@ -564,7 +811,7 @@ Contrast the default world, where `passableSymbolForName('foo')` is
 `Symbol.for('foo')`: there `a === b` (registry-interned), but a *non-registered*
 conceptual duplicate (`Symbol('foo')`) is neither `===` nor `t.deepEqual` to
 it, and `t.deepEqual(sym, sym2)` gives you no structural recourse. The variant
-makes "same conceptual symbol" a *structural* fact Ava can see. This should be
+makes "same conceptual symbol" a *structural* fact AVA can see. This should be
 demonstrated by an early test committed with the implementation, not merely
 asserted in prose.
 
@@ -593,17 +840,36 @@ throws on its own valid selectors. `makeSelector` also `harden(...)`s the
 result (fine for an object) but its `@@`-prefix guard is now redundant with the
 variant leaf's own rejection.
 
-Recommendation: **bring OCapN selectors under the same condition, but treat
-`selector.js`'s `typeof === 'symbol'` guards as code that must be made
-world-agnostic as part of arming the variant.** That is, validate "is this a
-passable symbol" via `isPassableSymbol` / `nameForPassableSymbol` returning a
-string, not via `typeof === 'symbol'`. Since OCapN alignment is a *stated
-motivation* for this whole effort, leaving selectors on primitive symbols
-while pass-style moves would be self-defeating. However, the concrete edits to
-`selector.js` are **implementation**, out of scope for this design; this
-document's job is to flag that selectors are on the path and that their
-`typeof` guards are the specific breakage. Whether OCapN's own wire/table
-representation needs any further change is an open question below.
+`selector.js`'s guards are the **recoverable** class (see [Summary](#summary)):
+validate "is this a passable symbol" via `isPassableSymbol` /
+`nameForPassableSymbol` returning a string, not via `typeof === 'symbol'`.
+Recommendation: **bring OCapN selectors under the same condition and make those
+guards world-agnostic as part of arming the variant.** Since OCapN alignment is
+a *stated motivation* for this whole effort, leaving selectors on primitive
+symbols while pass-style moves would be self-defeating.
+
+The syrup layer is the **unrecoverable** class, and the design must flag it as a
+harder cost than `selector.js`. `packages/ocapn/src/syrup/js-representation.js`
+mints its selectors through `passableSymbolForName`
+(`SyrupSelectorFor`, line 36), so it is a *fourth* leaf that swaps to the
+tagged object under the variant, and then reads the name back with
+`getSyrupSelectorName` (line 44) off `selectorSymbol.description`, and uses
+selectors as **JavaScript dictionary keys** (lines 160-180). A tagged object has
+no `.description` and cannot be a property key at all, so **no predicate swap
+recovers this**: it needs a representation change (read the name from
+`[Symbol.toStringTag]`, key syrup dictionaries by string) or it must stay on the
+primitive scheme independent of the pass-style world. A reader auditing `typeof`
+guards will hit these first and mis-scope the work as guard edits, so the design
+names it explicitly. Note this file documents itself as "not used in OCapN...
+useful for testing and debugging," so it is not on the production OCapN wire
+path, but it is a real in-tree consumer that breaks.
+
+The concrete edits to either file are **implementation**, out of scope for this
+design; this document's job is to flag that selectors are on the path, that
+`selector.js`'s `typeof` guards are the recoverable breakage, and that the syrup
+layer's `.description`/property-key use is the unrecoverable breakage. Whether
+OCapN's own wire/table representation needs any further change is
+[open question 4](#open-questions).
 
 ## Typecheck, `.d.ts`, and eslint under the non-default condition
 
@@ -707,7 +973,7 @@ that is a separate wire-format change, noted as an open question.
 1. Land this design (PR against `llm`).
 2. Implement `src/symbol-tagged.js` + `SymbolHelper`, the `imports` alias, the
    `SymbolHelper` export added to `src/symbol.js`, the two specifier edits, the
-   shared type surface, the second Ava config + `sesAvaConfigs` entry +
+   shared type surface, the second AVA config + `sesAvaConfigs` entry +
    world-aware tests (including the registry-growth regression, the
    cross-variant interop tests, and the `t.deepEqual` proof), and the second
    tsconfig for type coverage. Default behavior byte-identical.
@@ -729,8 +995,9 @@ that is a separate wire-format change, noted as an open question.
    means a hand-built tagged object classifies as `passStyleOf === 'symbol'`
    under default while `nameForPassableSymbol` returns `undefined` for it, so
    an encoder that trusts the classification fails later rather than at
-   classification time (see [the decision
-   section](#the-helpertablesymbol-decision-register-unconditionally)). Do the
+   classification time (see [The `HelperTable['symbol']` decision: register
+   unconditionally](#the-helpertablesymbol-decision-register-unconditionally)).
+   Do the
    maintainers prefer (a) unconditional registration as-is, (b) unconditional
    registration with a `nameForPassableSymbol`-probe in `SymbolHelper`'s
    validator so acceptance and encodability cannot diverge, or (c) the stricter
@@ -766,13 +1033,13 @@ that is a separate wire-format change, noted as an open question.
    package intends to *ship* under the variant, its own published types diverge
    and that needs its own decision.
 
-6. **Ava-worker end-to-end confirmation, including the union/map-order
+6. **AVA-worker end-to-end confirmation, including the union/map-order
    behavior.** The Node-level facts this design leans on (repeated `-C` unions,
    and map-key order rather than flag order picking the target) are stated as
    *expected, not yet observed in this repo* and must be observed once in the
    implementation PR against the CI Node, together with the full chain in an
-   actual Ava worker: that a pass-style test running under the new config
-   observes *both* the endo harness (proving `ses-ava:endo` survived) *and* the
+   actual AVA worker: that a pass-style test running under the new config
+   observes *both* the Endo harness (proving `ses-ava:endo` survived) *and* the
    tagged-object reification (proving `pass-style-symbol` took) in one worker
    process. High confidence given the already-load-bearing `ses-ava:endo` path,
    but the brief's discipline is to observe it, not assume it.
@@ -785,15 +1052,16 @@ that is a separate wire-format change, noted as an open question.
    condition the right granularity for the multi-vat threat the Motivation
    names? (See [open question 9](#open-questions) on granularity.)
 
-8. **Value parameter as the long-term shape.** The [alternative
-   considered](#alternative-considered-a-value-parameter-instead-of-a-process-condition)
+8. **Value parameter as the long-term shape.** The [Alternative considered: a
+   value parameter instead of a process
+   condition](#alternative-considered-a-value-parameter-instead-of-a-process-condition)
    section records a value-oriented design (a `makePassStyleOf`/`makeMarshal`
    constructor option) that decouples the representation choice from module
    resolution. Should a follow-up migrate from the condition lever to a value
    parameter once the cross-package refactor of `passStyleOf`'s module-level
    singletons and marshal's free-binding imports is scoped?
 
-9. **Process granularity vs vat granularity.** The condition binds the
+9. **Process granularity vs. vat granularity.** The condition binds the
    representation to the OS process ("a process is wholly in one world or the
    other"), but the threat model's isolation unit is the vat/compartment. A
    kernel hosting several same-process vats cannot put only an untrusted vat's
@@ -801,3 +1069,30 @@ that is a separate wire-format change, noted as an open question.
    default interop. Is process granularity acceptable for the migration lever,
    with vat granularity deferred to the value-parameter shape (open question
    8), or does the multi-vat case need vat granularity from the start?
+
+## Prompt
+
+This design was generated from a maintainer brief. The verbatim wording was not
+preserved in a durable channel; the brief's substance, reconstructed from the
+directive that commissioned the design and the two empirical disciplines it
+imposed (both cited above as "the brief"), was:
+
+> Design an alternate reified representation for passable symbols, gated behind
+> a custom Node resolution condition (`pass-style-symbol`) and **not** the
+> default, in which a passable symbol becomes a plain hardened object
+> `{ [Symbol.for('passStyle')]: 'symbol', [Symbol.toStringTag]: name }` rather
+> than a primitive JavaScript symbol. The motivation is a memory-exhaustion
+> vector: `passableSymbolForName`'s `Symbol.for(name)` decode leaf interns every
+> incoming name into the global symbol registry, which is unbounded,
+> process-lifetime, un-GC'd, and unscoped by compartment or vat, so untrusted
+> content that reaches a decode can grow a durable process-global table. Ground
+> the threat model in the actual sources rather than asserting it. Deliver a
+> design document only (no implementation) against the `llm` branch, in the
+> repository's design-document conventions.
+>
+> Two disciplines the design must honor rather than assume:
+> 1. Do **not** assume AVA forwards a `-C` condition flag through to the worker
+>    process where module resolution happens; confirm the forwarding path
+>    against the actual repo and the actual CI Node.
+> 2. Make the security claim (decode no longer grows the registry) an
+>    executable regression test, not a prose assertion.

@@ -6,6 +6,13 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[pass-style-symbol-condition](pass-style-symbol-condition.md) (added 2026-09-04,
+revised 2026-09-05; an alternate reified representation for passable symbols
+(a plain hardened `{ [PASS_STYLE]: 'symbol', [Symbol.toStringTag]: name }`
+object) selected per-process by a custom `pass-style-symbol` Node resolution
+condition and never the default, closing the `Symbol.for` global-registry
+memory-exhaustion vector at the marshal decode leaf; design only, no
+implementation; carries nine open questions),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
 2026-09-03; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
@@ -283,6 +290,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [pass-style-symbol-condition](pass-style-symbol-condition.md) | 2026-09-04 | 2026-09-05 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
@@ -511,6 +519,19 @@ This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
 from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
+
+The 2026-09-04 update adds
+[pass-style-symbol-condition](pass-style-symbol-condition.md) (Proposed),
+increasing Proposed from 40 to 41 and the design count from 196 to 197. It is a
+small, self-contained `@endo/pass-style` hardening (a condition-gated alternate
+symbol representation) with no design-level dependencies or dependents, so it
+takes no node in the dependency graph; its natural home is the marshal/pass-style
+security track. Size estimate: a modest implementation (one new module plus a
+`SymbolHelper`, an `imports` alias, three specifier edits, a world-query export,
+a second AVA config, world-aware tests, and a second tsconfig for type coverage)
+— roughly a single focused implementation PR, plus a follow-up for OCapN
+`selector.js` de-primitivization and the syrup-layer representation change; it
+does not shift any milestone's critical path.
 
 ## Roadmap
 
