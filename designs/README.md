@@ -48,7 +48,7 @@ retains no decoding machinery; the root `.` re-export is preserved
 no signature, canonicality, or number-domain change; follow-up to
 kriskowal's approving review of
 endojs/endo-but-for-bots#885),
-[endo-zone](endo-zone.md) (added 2026-07-30; proposed portable
+[endo-zone](endo-zone.md) (added 2026-07-30, revised 2026-09-05; proposed portable
 `@endo/zone` prerequisite for `@endo/ertp`: Endo-owned zone contract and heap
 implementation, host-owned Agoric and daemon durability adapters, and an
 explicit MapStore/retention/restart boundary),
@@ -449,7 +449,7 @@ LLM-agent stack).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
-| [endo-zone](endo-zone.md) | 2026-07-30 | 2026-09-04 | Proposed |
+| [endo-zone](endo-zone.md) | 2026-07-30 | 2026-09-05 | Proposed |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | Not Started |
 | [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
