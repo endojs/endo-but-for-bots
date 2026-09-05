@@ -117,12 +117,13 @@ for the `.js` exports-key cleanup window: when a PR adds a `major`
 changeset for a package whose `exports` still holds `.js` keys with
 deep-equal extensionless siblings, a dependency-free CI script emits a
 check annotation and step summary listing the removable keys; a second
-surface on the changesets Version Packages PR compares `package.json`
+surface on the Changesets Version Packages PR compares `package.json`
 versions so the reminder also fires at the last gate before tags;
 the check exits 0 on findings by construction, needs no write
 permissions, and self-quiets once a major actually removes the keys;
 follow-up to
-exports-extensionless-migration, inert until its pass 1 lands),
+`exports-extensionless-migration` (forthcoming, PR #663), inert until its
+pass 1 lands),
 [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md)
 (added 2026-07-08, revised 2026-07-09 and 2026-07-17; distilled git-rebase-session
 evidence into a trimmed three-scenario `@endo/agentry` git code-mode
@@ -885,7 +886,7 @@ capability list rather than a capability-plus-hygiene mix.
 | ~~break-dev-dependency-cycles~~ | **Complete** (on `llm`) | Synthetic test-package factoring retires the workspace devDep SCC on `llm`: Cut 2 (`@endo/hex-test`, PR #211), Cut 3 (`@endo/zip` devDep delete, PR #209), Cut 4 (`@endo/harden-test`, PR #210), Cut 5 (`@endo/eventual-send-test`, PR #247), and Cut 1 (`@endo/ses-test`, PR #261) have all landed on `llm`. Verified 2026-06-15: combined dep+devDep SCC count is 0; self-loop count is 0; `scripts/check-dependency-cycles.sh 0` passes. The upstream-ferry mirror PR #235 against master is the master-side mirror of the same cuts and is M2-orthogonal — the cycle is broken on the project branch and the substrate noise is gone |
 | ~~ci-no-npm-lifecycle~~ | **Complete** | `.yarnrc.yml` pins `enableScripts: false` and CI installs with `yarn install --immutable`; PR #126 merged 2026-05-15 (master-base mirror staged as PR #250) |
 | ~~base64-native-fallthrough~~ | **Complete** | `@endo/base64` dispatches to `Uint8Array.fromBase64` / `toBase64` when available; landed on `llm` via `actual/master` merge (commit `7325bbe15`, from `endojs/endo#3216`) |
-| release-automation-major-bump-exports-trigger | Not Started | Deterministic, non-blocking CI notice (added 2026-07-10): when a PR adds a `major` changeset for a package whose `exports` still carries `.js` keys with deep-equal extensionless siblings (left by exports-extensionless-migration pass 1, PR #663 in flight), annotate the removable keys; second surface on the changesets Version Packages PR via `package.json` version diffs; no LLM, no write permissions, exits 0 on findings |
+| release-automation-major-bump-exports-trigger | Not Started | Deterministic, non-blocking CI notice (added 2026-07-10): when a PR adds a `major` changeset for a package whose `exports` still carries `.js` keys with deep-equal extensionless siblings recorded in pass 1's manifest (left by `exports-extensionless-migration`, PR #663 in flight; publishable packages only), annotate the removable keys; second surface on the Changesets Version Packages PR via `package.json` version diffs; no LLM, no write permissions, exits 0 on findings |
 
 **Exit criterion:** The shared byte/encoding/test-helper libraries are
 factored out of per-package duplicates (`@endo/bytes`, `@endo/hex` fully
@@ -894,9 +895,9 @@ is dissolved so turbo's `^build` form prints no cycle warning. The CI
 posture is hardened against npm lifecycle scripts. The Chat bundle has
 a build-and-load smoke gate. None of these are user-visible features
 on their own; together they remove substrate noise that otherwise
-accompanies every M3 capability commit. (The 2026-07-10 reopening below
-adds one release-hygiene row tracked under this bucket by convenience,
-not against this stated criterion, which stays met; see Status.)
+accompanies every M3 capability commit. The original criterion still holds;
+one later release-hygiene row is filed here as a convenience, per the Status
+note below.
 
 **Status:** The original six rows reached **Complete** on `llm` as of
 2026-06-15, and that exit criterion remains met. The remaining
@@ -1668,7 +1669,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~hex-package~~ | S-M | — | 2 | ✅ Complete (`@endo/hex` shipped; synthetic `@endo/hex-test` lands as Cut 2 of break-dev-dependency-cycles, PR #211) |
 | ~~endo-bytes~~ | S | — | 2 | ✅ Implemented (PR #142): `@endo/bytes` with `concatBytes`, `bytesEqual`, `bytesFromText`, `bytesToText`; follow-up `bytesToImmutable`/`bytesFromImmutable` and ocapn buffer-utils consolidation (PR #227) |
 | ~~break-dev-dependency-cycles~~ | M | — | 2 | ✅ Complete on `llm` (all five cut packages exist; SCC count is 0). Cut 1 PR #261, Cut 2 PR #211, Cut 3 PR #209, Cut 4 PR #210, Cut 5 PR #247. PR #235 against master is the upstream-ferry mirror, M2-orthogonal |
-| release-automation-major-bump-exports-trigger | S | 1-2 days | 2 | One dependency-free script (`scripts/check-major-bump-exports-notice.mjs`), a shared `dualExportPairs` helper, a small no-permissions workflow, and fixture tests; inert until exports-extensionless-migration pass 1 lands (PR #663) |
+| release-automation-major-bump-exports-trigger | S | 1-2 days | 2 | One dependency-free script (`scripts/check-major-bump-exports-notice.mjs`), a shared `classifyExportSubpaths` helper, a small no-permissions workflow, and fixture tests; inert until `exports-extensionless-migration` pass 1 lands (PR #663) |
 | ~~unhandled-rejection-display~~ | S | — | — | ✅ Complete (out-of-milestone diagnostic; PR #187 closes #171). CapTP `CTP_DISCONNECT.reason` now renders structured Error reasons rather than empty `{}` |
 | hardener-indexed-cardinality | S | 1 day | — | Out-of-milestone `master`-based optimization: conjoined cardinality-count-plus-last-key-ordering test for the purely indexed TypedArray fast path, regression matrix, and focused benchmark |
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 4 | Architectural refactor (M-L bumped 1.2x) |
@@ -1842,7 +1843,7 @@ dates project from that anchor at the upper-bound effort.
 | Milestone | Duration | Cumulative | Target Date |
 |-----------|----------|------------|-------------|
 | M1: AI Agent Experience (was M0) | 18 days (actual) | **Complete** | March 5, 2026 |
-| M2: Project Hygiene (was M½) | ~1-2 days (reopened 2026-07-10 with `release-automation-major-bump-exports-trigger`; original scope Complete 2026-06-15) | — | Opportunistic; rides exports-extensionless-migration pass 1, no critical-path shift |
+| M2: Project Hygiene (was M½) | ~1-2 days (reopened 2026-07-10 with `release-automation-major-bump-exports-trigger`; original scope Complete 2026-06-15) | — | — |
 | M3: Remote Access & Tools (was M1) | 8-10 weeks | 8-10 weeks | Late July to early August 2026 |
 | M4: Networking (was M2) | 5-6 weeks | 13-16 weeks | Late August to mid September 2026 |
 | M5: Public Hosting & Billing (was M7) | 4-6 weeks (designs + impl) + AWS-stack merge cadence | 17-22 weeks | Late September to mid November 2026 (gated by M3 gateway-package merge cadence and PRs #343 / #356) |

@@ -8,12 +8,16 @@
 
 ## What is the Problem Being Solved?
 
-Pass 1 of [exports-extensionless-migration](exports-extensionless-migration.md)
+Pass 1 of `exports-extensionless-migration` (in flight as PR #663; not yet on
+`llm`, so its design file is cited by name here, not linked, until it lands)
 leaves every migrated package with dual `exports` keys: the `.js`-suffixed key
 (`./foo.js`) retained for compatibility beside the new extensionless sibling
 (`./foo`), with a standing changeset note reserving the right to remove the
-`.js` keys **in the next major version**. That reserved window is easy to
-miss: majors are rare, the note scrolls away into the changelog, and nothing
+`.js` keys **in the next major version**. (The migration is two passes: pass 1
+adds the extensionless siblings and retains the `.js` keys; removing the `.js`
+keys is a later, unscheduled major, which this notice exists to prompt, not
+pass 2.) That reserved window is easy to miss: majors are rare, the note
+scrolls away into the changelog, and nothing
 at release time connects "this PR declares a major bump for `@endo/pkg`" with
 "`@endo/pkg` still carries removable `.js` keys."
 
@@ -28,27 +32,70 @@ LLM, no persistent state, no gate.
 
 ### The removable set
 
-For a package, an exports key `./K.js` is **removable-on-major** iff:
+For a **publishable** package (see the `private` carve-out below), an exports
+key `./K.js` is **removable-on-major** iff:
 
 1. it is an explicit (non-pattern) subpath key ending in `.js`, the same
    population pass 1 migrated, so `.`, `./package.json`, other extensions
    (`.css`), and `*` pattern keys are excluded; and
 2. the sibling key `./K` exists in the same map; and
-3. the two values are deep-equal.
+3. the two values are deep-equal; and
+4. **provenance:** the pair was created by the migration's pass 1, recorded in
+   the migration's own manifest of the keys it added, not merely structurally
+   deep-equal today.
 
-The deep-equality clause makes the check self-limiting: a pair someone later
-diverges on purpose is no longer a compatibility alias and is not flagged,
-and once a major actually removes the `.js` keys the removable set is empty
-and the notice self-quiets. Zero findings means zero output; there is no
-state to disarm.
+The fourth clause is not optional narrowing. It is load-bearing.
+Structural deep-equality alone has a **live false positive on `llm` today**,
+before pass 1 has landed anything: `packages/platform/package.json` already
+carries three deep-equal dual pairs (`./fs/lite/types.js`,
+`./fs/search.types.js`, `./fs/extended/backend-types.js`) that are
+`node16`-resolution **type-entry aliases** a consumer plausibly imports by the
+`.js` specifier, not compatibility shims the next major should drop. The
+deep-equality clause cannot tell "pass-1 compat alias" from "intentional
+dual key that is deep-equal by design", so the earlier claim that the notice
+is "inert until pass-1 packages exist" was false: without a provenance filter
+it would fire on `platform` on day one. Pass 1's manifest (the record of which
+`.js` keys it retained for compatibility) is the discriminator; this check
+enumerates the intersection of that manifest with the still-present dual pairs.
+
+**Private packages are out of scope.** `.changeset/config.json` sets
+`privatePackages: {version: true, tag: true}`, so private packages carry
+changeset entries and version bumps, and roughly half the `0.x` workspace is
+`private`. An unpublished package has no compatibility window at all (its
+`.js` keys can go at any time, not only at a major), so "wait for the major"
+is the wrong advice there and the notice would be noise across half the tree.
+The removable set is computed only for packages whose `package.json` is not
+`private`.
+
+A worked example. Given
+
+```jsonc
+"exports": {
+  "./codec": "./src/codec.js",       // extensionless sibling (pass-1 output)
+  "./codec.js": "./src/codec.js",     // retained .js key, deep-equal -> removable
+  "./types.js": "./types.d.ts",       // no "./types" sibling -> NOT removable
+  "./legacy": "./src/legacy-v2.js"    // "./legacy.js" absent -> NOT removable
+}
+```
+
+only `./codec.js` is removable-on-major (and only if pass 1's manifest lists
+it): `./types.js` has no extensionless sibling, and `./legacy` is
+extensionless already. Once a major deletes `./codec.js` the set is empty and
+the notice self-quiets. Zero findings means zero output; there is no state to
+disarm.
 
 This predicate is the complement of the migration's **gate A** (which fails
-when an explicit `.js` key *lacks* a deep-equal extensionless sibling). Both
-walk the same structure, so the pair enumeration lives in one shared,
-dependency-free helper, `scripts/lib/extensionless-exports.mjs` (exporting
-`dualExportPairs(exportsMap)`), consumed by the pass-1 codemod's `--check`
-mode and by this check. If the codemod lands first without the helper, this
-work factors it out of `scripts/codemod-exports-extensionless.mjs`.
+when a *pass-1-migrated* `.js` key lacks a deep-equal extensionless sibling).
+Both walk the same structure and read the same manifest, so the enumeration
+lives in one shared, dependency-free helper,
+`scripts/lib/extensionless-exports.mjs`. The two consumers ask opposite
+questions (gate A wants the orphaned keys, this check wants the matched,
+in-manifest pairs), so rather than a single list whose name promises only "dual
+pairs", the helper returns a classification, `classifyExportSubpaths(exportsMap,
+manifest) -> { dual, orphaned }`. It is consumed by the pass-1 codemod's
+`--check` mode and by
+this check. If the codemod lands first without the helper, this work factors it
+out of `scripts/codemod-exports-extensionless.mjs`.
 
 ### Detecting a planned major bump: two surfaces, one core
 
@@ -57,32 +104,47 @@ naming the packages it bumps and at what level (`major`/`minor`/`patch`); the
 `changesets/action` bot batches the pending files into a "Version Packages"
 PR that applies the bumps and, once merged, cuts the release tags. The two
 surfaces below hook the two ends of that pipeline, and both classify a bump
-as breaking through one shared `isBreakingBump` helper so their criteria
-cannot drift.
+as breaking through one shared breaking-bump core so their criteria cannot
+drift. It is exposed as **two named entry points over that core**,
+`isBreakingChangeset(bump, currentVersion)` for surface 1 and
+`isBreakingVersionBump(oldVersion, newVersion)` for surface 2, so neither
+call site is a `(string, string)` pair whose meaning switches on which surface
+it sits in (see Design Decision 4).
 
 **Surface 1: the contributor PR that declares the major (the early
 reminder).** On `pull_request`, diff against the merge base and collect the
-`.changeset/*.md` files the PR **adds or modifies** (never `README.md`).
-Parse each changeset's YAML frontmatter for `"<pkg>": <bump>` entries and
-treat an entry as breaking with the same predicate surface 2 uses:
-`isBreakingBump` returns true for `major`, and for `minor` when the package's
-current `package.json` `version` has a `0` major (the 0.x breaking
-convention). Sharing the predicate is deliberate: without the 0.x clause the
-early reminder would silently miss exactly the pre-1.0 breaking bumps the
-late gate catches, and 46 of the workspace's packages are currently at `0.x`.
+`.changeset/*.md` files the PR **adds or modifies** (never
+`.changeset/README.md`). Parse each changeset's YAML frontmatter for
+`'<pkg>': <bump>` entries. That single-quoted spelling is what `changeset add`
+actually emits (`.changeset/add-endo-cbor.md`: `'@endo/cbor': major`); a
+parser written to a double-quoted grammar would match zero real changesets and
+surface 1 would silently never fire. Treat an entry as breaking through
+`isBreakingChangeset(bump, currentVersion)`, which is true for `major`, and for
+`minor` when the package's current `package.json` `version` has a `0` major
+(the 0.x breaking convention). Sharing the core is deliberate: without the 0.x
+clause the early reminder would silently miss exactly the pre-1.0 breaking
+bumps the late gate catches, and the workspace has 19 publishable packages at
+`0.x` (68 of 123 counting the `private` packages `privatePackages.version`
+bumps but this check excludes).
 Scoping to the PR's own changesets, rather than everything pending on the
 branch (which is what `changeset status` reports), keeps one long-lived
 pending major changeset from spamming every unrelated PR on the branch.
 
-**Surface 2: the changesets release PR (the reminder of record).** The
+**Surface 2: the Changesets release PR (the reminder of record).** The
 `changesets/action` "Version Packages" PR (head branch `changeset-release/*`,
 per `.github/workflows/release.yml`) *consumes* the changeset files, so
 surface 1 is blind there, and that PR is the last deterministic gate before
 tags are pushed. On that branch shape the check instead diffs each changed
 workspace `package.json` `version` against the merge base and feeds the
-`(oldVersion, newVersion)` pair to the same `isBreakingBump` helper: breaking
-iff the major component increased, or the major is `0` and the minor
-increased (the 0.x breaking convention).
+`(oldVersion, newVersion)` pair to `isBreakingVersionBump`: breaking iff the
+major component increased, or the major is `0` and the minor increased (the
+0.x breaking convention). Acting on this surface's notice means holding the
+Version Packages PR and landing the key removal on the base branch, then
+regenerating the PR: `changeset version` has already consumed the changesets
+and written `CHANGELOG.md`, so a removal committed straight into the PR would
+ship undocumented, and `changesets/action` force-pushes `changeset-release/*`
+on each run, so a commit added there is not durable. This is folded into the
+"Which branch actually cuts releases" prerequisite below.
 
 **Which branch actually cuts releases.** Surface 2 must be pinned to the
 branch this fork's own tag-cutting really runs from before it is relied on as
@@ -92,10 +154,10 @@ fork develops on `llm`, and observed releases have arrived by merging
 upstream `endojs/endo` history into `llm` rather than through this fork's own
 `master` pipeline. If `master`/`release.yml` is not a live publish path here,
 surface 2 must key off whichever branch shape actually precedes this fork's
-tags, or the design is honestly surface-1-only and says so, rather than
-attaching to a `changeset-release/*` PR that never appears and silently never
-firing. Confirming this is a prerequisite of the implementation PR and a
-named item in the test plan below.
+tags. Failing that, the design is surface-1-only and must say so. What it must
+not do is attach to a `changeset-release/*` PR that never appears and so never
+fires. Confirming this is a prerequisite of the implementation PR and a named
+item in the test plan below.
 
 Both surfaces feed the same reporting core. If the notice is ignored on the
 contributor PR it reappears on the release PR; if it is ignored there too,
@@ -114,9 +176,9 @@ On findings the check emits:
   (surface 2, which diffs `package.json`; not surface 1, whose PR touches
   only `.changeset/*.md`, leaving the annotation in the Checks tab alone); and
 - a **`$GITHUB_STEP_SUMMARY`** markdown table (package, removable `.js`
-  keys, and a pointer to
-  [exports-extensionless-migration](exports-extensionless-migration.md) and
-  its standing changeset note) so the full list survives even when the
+  keys, and a pointer to `exports-extensionless-migration` (forthcoming,
+  PR #663) and its standing changeset note) so the full list survives even
+  when the
   annotation message is truncated.
 
 Considered and rejected: a sticky PR comment. Reason: it requires
@@ -135,46 +197,63 @@ informational check whose breakage is invisible would silently rot.
 `scripts/check-major-bump-exports-notice.mjs`, plain Node, no dependencies,
 no install step:
 
-1. `git diff --name-status <merge-base>...HEAD` to find candidate files.
-2. On a `changeset-release/*` head branch (or when `--mode versions` is
-   passed), diff workspace `package.json` versions; otherwise parse the
-   added/modified changesets. The branch shape is the default selector
-   because each workflow trigger already knows which surface it is, and
-   `--mode versions` is only the explicit override for local reproduction.
-   The frontmatter grammar is the constrained `"<pkg>": <bump>` block that
+1. Run `git diff --name-status <merge-base>...HEAD` to find candidate files.
+2. Select the surface from an explicit `--mode auto|changesets|versions` flag
+   (default `auto`): `versions` diffs workspace `package.json` versions,
+   `changesets` parses the added/modified changesets, and `auto` sniffs the
+   head branch (`changeset-release/*` means `versions`, otherwise
+   `changesets`). The mode is passed as a value, not read only from the branch
+   name, so surface 1 is forceable on any branch and a mode with no candidate
+   inputs is an **error, not a quiet pass** (a `versions` run on a branch with
+   no version diffs, or a `changesets` run with no changesets, exits non-zero
+   with a diagnostic rather than reporting zero findings). The frontmatter
+   grammar is the constrained single-quoted `'<pkg>': <bump>` block that
    `changeset add` writes; a small line parser covers it, and malformed lines
    are reported in the step summary and skipped rather than trusted.
 3. Map breaking-bumped package names to workspace directories, run
-   `dualExportPairs` on each package's `exports`, and locate the first
-   removable key's line in the raw `package.json` text as the annotation
-   anchor.
-4. Emit the annotations and the summary; exit 0.
+   `classifyExportSubpaths` on each package's `exports`, and anchor the
+   annotation by the **parsed key's position inside the `exports` map** (not a
+   raw-text scan for the first `.js` substring, which mis-anchors: a `.js` key
+   can also appear as a *value* line, and after pass 1 the extensionless
+   sibling's value line can precede its `.js` key).
+4. Emit the annotations and the summary; exit 0. On zero findings still emit
+   one liveness line to the step summary ("N breaking bumps considered, M
+   publishable packages with removable keys") so "found nothing" is
+   distinguishable from "did not run".
 
 Wiring: a dedicated job (`major-bump-exports-notice`) in a small separate
 workflow on `pull_request` with a path filter (`.changeset/**`,
 `packages/**/package.json`), a checkout deep enough to reach the merge base,
-actions pinned by SHA and workflow-level `permissions: {}` per repo
-convention (see `release.yml` and designs/ci-no-npm-lifecycle.md posture).
+actions pinned by SHA, and workflow-level `permissions: {}` per repo
+convention (see `release.yml` and the posture in
+[ci-no-npm-lifecycle](ci-no-npm-lifecycle.md)).
 Runtime is seconds: checkout, Node, one script, no `yarn install`.
 
 Local reproduction, surface 1 (a contributor PR against `llm`):
-`node scripts/check-major-bump-exports-notice.mjs --base origin/llm` prints
-the same report as plain text. Surface 2, the higher-stakes release-PR gate:
-`node scripts/check-major-bump-exports-notice.mjs --mode versions --base
-<release-branch-parent>` exercises the `package.json` version-diff path
-against the same base the release PR would diff from.
+`node scripts/check-major-bump-exports-notice.mjs --mode changesets --base
+origin/llm` prints the same report as plain text. Surface 2, the higher-stakes
+release-PR gate: `node scripts/check-major-bump-exports-notice.mjs --mode
+versions --base <release-branch-parent>` exercises the `package.json`
+version-diff path against the same base the release PR would diff from. Omitting
+`--mode` (i.e. `auto`) sniffs the branch shape, matching CI.
 
 ### Test plan
 
 - Unit tests (ava, colocated under `scripts/` per the
   `generate-composite-tsconfigs.test.mjs` precedent) over fixtures:
-  changeset-frontmatter parsing (major/minor/patch, quoted and unquoted
-  names, malformed lines), `dualExportPairs` (dual pairs, diverged values,
-  pattern keys, string versus conditional-object values), and the shared
-  `isBreakingBump` predicate across both its input shapes (a changeset
-  `<bump>` plus the package's current `0.x`-or-not version, and an
-  `(oldVersion, newVersion)` pair) so the 0.x breaking rule is proven
-  identical on surface 1 and surface 2.
+  changeset-frontmatter parsing (major/minor/patch, single-quoted names, with
+  one fixture copied verbatim from an existing `.changeset/*.md` such as
+  `'@endo/cbor': major`, and malformed lines), `classifyExportSubpaths` (dual
+  in-manifest pairs, diverged values, out-of-manifest deep-equal pairs such as
+  `platform`'s `.types.js` aliases, `private`-package exclusion, pattern keys,
+  string versus conditional-object values), and the 0.x breaking rule proven
+  identical on both entry points (`isBreakingChangeset` over a `<bump>` plus the
+  package's current `0.x`-or-not version, and `isBreakingVersionBump` over an
+  `(oldVersion, newVersion)` pair).
+- The two steps most likely to fail silently get their own fixtures: the
+  breaking-bumped-package-name to workspace-directory mapping, and the
+  annotation anchor (the parsed-key position inside `exports`, verified on a
+  `package.json` where a `.js` key also appears as a value line).
 - One live probe after pass 1 lands: a scratch PR adding a `major` changeset
   for a migrated package must produce the annotation and summary; a sibling
   `minor`-only scratch PR must produce neither, except for a `0.x` package,
@@ -189,7 +268,7 @@ against the same base the release PR would diff from.
 
 | Design | Relationship |
 |--------|--------------|
-| [exports-extensionless-migration](exports-extensionless-migration.md) (PR #663, in flight) | Prerequisite in effect: its pass 1 creates the dual keys this check enumerates, and its gate A shares the `dualExportPairs` helper. Authoring and landing this check is not blocked, but the notice is inert until pass-1 packages exist |
+| `exports-extensionless-migration` (forthcoming, PR #663; not yet on `llm`) | Prerequisite in effect: its pass 1 creates the dual keys this check enumerates, and its gate A shares the `classifyExportSubpaths` helper and pass-1 manifest. Authoring and landing this check is not blocked, but the notice is inert until pass-1 packages exist, because the provenance clause fires only on keys pass 1's manifest records. |
 
 ## Design Decisions
 
@@ -199,14 +278,22 @@ against the same base the release PR would diff from.
    or modifies trigger surface 1; pending majors elsewhere on the branch do
    not spam unrelated PRs.
 3. **Two surfaces.** The contributor PR is the early reminder; the Version
-   Packages PR is the reminder of record, the last deterministic point
-   before tags where the cleanup can still join the major.
-4. **One shared breaking-bump predicate.** Both surfaces classify a bump
-   through a single `isBreakingBump` helper, so the 0.x breaking convention
-   holds identically at the early reminder and the late gate rather than the
-   two paths converging only because surface 2 backstops surface 1.
-5. **Deep-equality guard.** Intentionally diverged key pairs are never
-   flagged, and the notice self-quiets once the cleanup ships.
+   Packages PR is the reminder of record. It is the last deterministic point
+   before tags where the cleanup can still join the major, but acting on it
+   means holding the Version Packages PR and landing the removal on the base
+   branch, because the PR's own commits are not durable (`changesets/action`
+   force-pushes the branch) and land after `CHANGELOG.md` is written.
+4. **One shared breaking-bump core, two named entry points.** Both surfaces
+   classify through one core, exposed as `isBreakingChangeset(bump,
+   currentVersion)` and `isBreakingVersionBump(oldVersion, newVersion)` so
+   neither call site is a `(string, string)` pair whose meaning switches on
+   context; the 0.x breaking convention holds identically at the early reminder
+   and the late gate rather than the two paths converging only because surface
+   2 backstops surface 1.
+5. **Deep-equality plus provenance guard.** A pair is flagged only when it is
+   deep-equal *and* recorded in pass 1's manifest, so intentionally diverged
+   pairs and pre-existing type-entry aliases (e.g. `platform`'s `.types.js`
+   keys) are never flagged, and the notice self-quiets once the cleanup ships.
 6. **Exit 0 on findings by construction.** Non-blocking is a property of the
    design, not a `continue-on-error` flag, so real crashes stay visible.
 7. **Install-free, dependency-free script.** The constrained changeset
@@ -222,6 +309,14 @@ against the same base the release PR would diff from.
   blocking gate on major-bump PRs until the `.js` keys are removed? (Assumed
   no: the changeset note reserves a right; it does not create an
   obligation.)
+- A package that deliberately keeps a compatibility `.js` key past a major
+  (a reserved right, not an obligation) will see the notice fire at *every*
+  future major. Is that acceptable as a standing, ignorable reminder, or does
+  it need an explicit per-key opt-out (e.g. dropping the key from pass 1's
+  manifest, which the provenance clause already honors)? (Assumed acceptable:
+  the manifest is the opt-out (removing a key from it silences the notice
+  without diverging the values), so perpetual reminders are opt-out-able
+  without a new mechanism.)
 
 ## Prompt
 
