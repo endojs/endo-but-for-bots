@@ -6,6 +6,16 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[guest-native-invitations](guest-native-invitations.md) (added 2026-09-02 and
+revised 2026-09-04;
+guest-native `invite`/`accept` so an `EndoGuest` onboards another guest with its
+own authority, accepting as its own handle with no minted replacement guest and
+reciprocal pet-name binding; daemon-node locator authority with
+inviting-agent-sourced hints, narrow injected `acceptInvitation` / insert-only
+`registerPeer` / `formulateInvitation` daemon-core capabilities, the pet-store
+compare-and-set overwrite as the durable consume-once record, and a
+shared `EndoAgent` invitation vocabulary; closes the daemon gap named by
+[kriscendobot/minion.town#56](https://github.com/kriscendobot/minion.town/pull/56)),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
 2026-09-03; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
@@ -283,6 +293,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-09-04 | Not Started |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
@@ -499,6 +510,8 @@ The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-att
 The 2026-09-01 rebase adds [endo-workflow](endo-workflow.md) (Proposed) to M3, increasing Proposed from 39 to 40 and the design count from 194 to 195.
 
 The same 2026-09-01 pass flips [endo-workflow](endo-workflow.md) from Proposed to **In Progress** (implementation landed as `packages/workflow`), so Proposed returns 40 -> 39.
+
+The 2026-09-02 rebase adds [guest-native-invitations](guest-native-invitations.md) (Not Started), increasing Not Started from 49 to 50 and the design count from 195 to 196.
 
 The 2026-09-03 update adds
 [daemon-secret-manager](daemon-secret-manager.md) to M10.
@@ -783,8 +796,10 @@ flowchart TD
         adeep[familiar-deep-link-invitations<br/><i>PROPOSED</i>]
         ashare[endo-app-sharing<br/><i>PROPOSED</i>]
         auihost[familiar-app-ui-hosting<br/><i>PROPOSED</i>]
+        guestinv[guest-native-invitations<br/><i>NOT STARTED</i>]
         onoise --> adeep
         dnet --> adeep
+        guestinv --> adeep
         adeep --> aship
         exozip --> ashare
         dci --> ashare
@@ -1267,7 +1282,8 @@ deep-link -> P2 app + sandboxed UI -> P3 clone).
 | Design | Status | Pillar | Notes |
 |--------|--------|--------|-------|
 | app-sharing-milestone | Proposed | — | Milestone roadmap doc; verified current state + P0-P3 plan |
-| familiar-deep-link-invitations | Proposed | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete) |
+| familiar-deep-link-invitations | Proposed | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete on the host facet; may move to the guest facet per guest-native-invitations) |
+| guest-native-invitations | Not Started | 2 — connect peers | New: `invite`/`accept` on `EndoGuest` so a guest onboards another guest with its own authority (accept-as-own-handle, no minted replacement guest); enables the deep-link consumer to route through the inviting guest instead of borrowing host authority |
 | endo-app-sharing | Proposed | 3 — make & share apps | New: app handle (source + exec + ui + `cloneable`); cross-daemon clone as a single streamed tree-archive into a pluggable durable backing (default zip) vs remote reference — no per-blob hashing |
 | familiar-app-ui-hosting | Proposed | 3 — sandboxed UI | New: app UI manifest + sandbox tiers (`isolated`/`connected`/`trusted`) over the weblet substrate |
 | ~~familiar-electron-shell~~ | **Complete** | 1 — distributable | The shell being distributed (counted under M1) |
@@ -1724,6 +1740,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endopi-extension-package-manifest | S-M | 3 days | 10 | `package.json` `endo` keyword bundling guests + skills + prompts + providers in one install |
 | app-sharing-milestone | — | — | 8 | Roadmap doc; no implementation of its own (reference for the P0-P3 sequencing) |
 | familiar-deep-link-invitations | S-M | 3 days | 8 | `endo://` capture in shell + Chat confirm/naming modal; daemon `invite`/`accept` already Complete |
+| guest-native-invitations | M | 4-5 days | 8 | `invite`/`accept` on `EndoGuest` (accept-as-own-handle, no minted guest); new synchronous `storeLocatorIfMatches` pet-store CAS for consume-once; shared `acceptInvitation` helper; retained + new cross-daemon retention tests |
 | endo-app-sharing | M | 4-5 days | 8 | App handle + cross-daemon `endo clone` (hash-verified) vs remote reference (1.2x bump) |
 | familiar-app-ui-hosting | M | 4-5 days | 8 | App UI manifest + sandbox tiers over the existing weblet substrate (1.2x bump) |
 
@@ -1746,11 +1763,11 @@ date of this pass.
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
-| M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
+| M8: Peer App Sharing (was Milestone A) | 4 net-new (`familiar-deep-link-invitations`, `guest-native-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2.5-3.5 weeks | 3.5-6 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **66** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
