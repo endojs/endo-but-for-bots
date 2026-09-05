@@ -13,6 +13,9 @@ import {
   encodeAbortPayload,
   decodeAbortPayload,
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   VERB_DROP,
   VERB_ABORT,
@@ -129,10 +132,16 @@ test('abort — non-ASCII utf-8 passes through', t => {
 
 test('verb constants and isSlotVerb', t => {
   t.is(VERB_DELIVER, 'deliver');
+  t.is(VERB_GET, 'get');
+  t.is(VERB_INDEX, 'index');
+  t.is(VERB_UNTAG, 'untag');
   t.is(VERB_RESOLVE, 'resolve');
   t.is(VERB_DROP, 'drop');
   t.is(VERB_ABORT, 'abort');
   t.true(isSlotVerb('deliver'));
+  t.true(isSlotVerb('get'));
+  t.true(isSlotVerb('index'));
+  t.true(isSlotVerb('untag'));
   t.true(isSlotVerb('resolve'));
   t.true(isSlotVerb('drop'));
   t.true(isSlotVerb('abort'));

@@ -420,10 +420,16 @@ fn route_message(sup: &Arc<Supervisor>, mut msg: Message, callbacks: &RoutingCal
             let from = session_for_edge(msg.from, msg.to);
             let to = session_for_edge(msg.to, msg.from);
             match msg.envelope.verb.as_str() {
-                slots::wire::VERB_DELIVER => {
-                    if let Ok(out) =
-                        slots::wire::translate::translate_deliver(sm, from, to, &msg.envelope.payload)
-                    {
+                slots::wire::VERB_DELIVER
+                | slots::wire::VERB_GET
+                | slots::wire::VERB_INDEX
+                | slots::wire::VERB_UNTAG => {
+                    if let Ok(out) = slots::wire::translate::translate_deliver(
+                        sm,
+                        from,
+                        to,
+                        &msg.envelope.payload,
+                    ) {
                         msg.envelope.payload = out;
                     }
                 }

@@ -271,9 +271,15 @@ const hp = new HandledPromise((resolve, reject, resolveWithPresence) => {
 // Handler intercepts operations
 const handler = {
   get(target, prop) { /* ... */ },
+  index(target, index) { /* ... */ },
+  untag(target, tag) { /* ... */ },
   applyMethod(target, verb, args) { /* ... */ }
 };
 ```
+
+The matching user-facing data operations are `E.get(target).field`,
+`E.index(target, index)`, and `E.untag(target, tag)`. These remain distinct
+from method and function delivery throughout handler dispatch.
 
 **Most users don't need to use HandledPromise directly.**
 The `E()` proxy provides the ergonomic interface.

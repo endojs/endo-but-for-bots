@@ -127,17 +127,23 @@ export const makeSlotCodec = ({
   };
 
   /**
-   * Encode a method-call into wire-level `deliver` payload bytes.
+   * Encode a delivery into wire-level `deliver` payload bytes.  The
+   * body is one flat passable argument vector, following the OCapN
+   * Body Content Format (`packages/ocapn/docs/cbor-encoding.md`):
+   * function application sends its arguments unchanged, while a
+   * method invocation prepends the method's passable-symbol selector
+   * (the caller — `@endo/slots`'s client handlers — is responsible
+   * for that prepend, exactly as `@endo/ocapn` does).
    *
-   * @param {object} args
-   * @param {unknown} args.target
-   * @param {string} args.method
-   * @param {unknown[]} args.args
-   * @param {unknown} [args.reply] optional promise whose resolution
+   * @param {object} call
+   * @param {unknown} call.target
+   * @param {unknown[]} call.args the complete argument vector to place
+   *   in the body, selector-prefixed already for a method invocation
+   * @param {unknown} [call.reply] optional promise whose resolution
    *   will receive the call's return value (fire-and-forget if absent)
    * @returns {Uint8Array}
    */
-  const encodeDeliver = ({ target, method, args, reply }) => {
+  const encodeDeliver = ({ target, args, reply }) => {
     encodingSlots = [];
     const targetDesc = describe(target);
     const replyDesc =
@@ -145,9 +151,7 @@ export const makeSlotCodec = ({
         ? clist.exportLocal(reply, Kind.Promise)
         : /** @type {Descriptor | null} */ (null);
     const { body } = toCapData(
-      /** @type {import('@endo/pass-style').Passable} */ (
-        harden([method, args])
-      ),
+      /** @type {import('@endo/pass-style').Passable} */ (harden([...args])),
     );
     /** @type {DeliverPayload} */
     const payload = {
@@ -162,12 +166,14 @@ export const makeSlotCodec = ({
   harden(encodeDeliver);
 
   /**
-   * Decode `deliver` payload bytes back into the JS-level call shape.
+   * Decode `deliver` payload bytes back into the JS-level call shape:
+   * the target and the flat argument vector carried in the body.
+   * Object-vs-function dispatch (whether the leading argument is a
+   * method selector) is decided by the receiver, not here.
    *
    * @param {Uint8Array} bytes
    * @returns {{
    *   target: unknown,
-   *   method: string,
    *   args: unknown[],
    *   reply: unknown | null,
    * }}
@@ -178,17 +184,10 @@ export const makeSlotCodec = ({
     const bodyStr = textDecoder.decode(p.body);
     const slotStrings = decodingSlots.map((_, i) => `${SLOT_TAG}${i}`);
     const decoded = fromCapData(harden({ body: bodyStr, slots: slotStrings }));
-    if (!Array.isArray(decoded) || decoded.length !== 2) {
+    if (!Array.isArray(decoded)) {
       throw makeError(
-        X`deliver body must decode to [method, args], got ${q(decoded)}`,
+        X`deliver body must decode to an argument array, got ${q(decoded)}`,
       );
-    }
-    const [method, args] = decoded;
-    if (typeof method !== 'string') {
-      throw makeError(X`deliver method must be string, got ${q(method)}`);
-    }
-    if (!Array.isArray(args)) {
-      throw makeError(X`deliver args must be array, got ${q(args)}`);
     }
     const target = clist.importRemote(p.target, () => makePresence(p.target));
     const replyDesc = p.reply;
@@ -196,7 +195,7 @@ export const makeSlotCodec = ({
       replyDesc === null
         ? null
         : clist.importRemote(replyDesc, () => makePresence(replyDesc));
-    return { target, method, args: [...args], reply };
+    return { target, args: [...decoded], reply };
   };
   harden(decodeDeliver);
 

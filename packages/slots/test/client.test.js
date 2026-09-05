@@ -2,6 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far, E } from '@endo/far';
+import { HandledPromise } from '@endo/eventual-send';
 
 import { Direction, Kind } from '../src/descriptor.js';
 import { makeCList } from '../src/clist.js';
@@ -9,6 +10,9 @@ import { makeSlotCodec } from '../src/codec.js';
 import { makeSlotClient } from '../src/client.js';
 import {
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   encodeDeliverPayload,
   decodeDeliverPayload,
@@ -93,7 +97,12 @@ const flipDesc = d => ({
 const flipArr = arr => arr.map(flipDesc);
 
 const flipEnvelope = (verb, payload) => {
-  if (verb === VERB_DELIVER) {
+  if (
+    verb === VERB_DELIVER ||
+    verb === VERB_GET ||
+    verb === VERB_INDEX ||
+    verb === VERB_UNTAG
+  ) {
     const p = decodeDeliverPayload(payload);
     return encodeDeliverPayload({
       target: flipDesc(p.target),
@@ -141,6 +150,36 @@ test('makePresence returns a HandledPromise whose E() call encodes a deliver', a
   t.is(client.pendingCount(), 1);
 });
 
+test('presence get, index, and untag emit distinct verbs', async t => {
+  const envelopes = [];
+  const clist = makeCList({ label: 'caller' });
+  const codec = makeSlotCodec({
+    clist,
+    makePresence: () => ({}),
+    marshalName: 'caller',
+  });
+  const client = makeSlotClient({
+    clist,
+    codec,
+    sendEnvelope: (verb, payload) => envelopes.push({ verb, payload }),
+  });
+  const presence = client.makePresence({
+    direction: Direction.Remote,
+    kind: Kind.Object,
+    position: 1,
+  });
+
+  void E.get(presence).field;
+  void E.index(presence, 0);
+  void E.untag(presence, 'example');
+  await null;
+
+  t.deepEqual(
+    envelopes.map(({ verb }) => verb),
+    [VERB_GET, VERB_INDEX, VERB_UNTAG],
+  );
+});
+
 test('pendingCount decrements when a matching resolve arrives', async t => {
   const { a, b } = makeLoopback();
 
@@ -180,6 +219,60 @@ test('rejections surface via is_reject', async t => {
   });
 
   await t.throwsAsync(() => E(presence).boom(), { message: /kaboom/ });
+});
+
+test('object delivery whose leading arg is not a selector rejects', async t => {
+  const { a, b } = makeLoopback();
+
+  const target = Far('target', { greet: () => 'hi' });
+  const targetDesc = b.clist.exportLocal(target, Kind.Object);
+  const presence = a.client.makePresence({
+    ...targetDesc,
+    direction: Direction.Remote,
+  });
+
+  // Bypass the method-call handler and send a raw argument vector
+  // whose leading element is a plain string, not a passable-symbol
+  // selector — the malformed object-call case.
+  const replyP = a.client.deliver(presence, ['greet']);
+  await t.throwsAsync(() => replyP, { message: /must be a symbol/ });
+});
+
+test('object delivery whose leading selector is a reserved symbol rejects on receipt', async t => {
+  const { a, b } = makeLoopback();
+
+  const target = Far('target', { greet: () => 'hi' });
+  const targetDesc = b.clist.exportLocal(target, Kind.Object);
+  const presence = a.client.makePresence({
+    ...targetDesc,
+    direction: Direction.Remote,
+  });
+
+  // A well-behaved sender never mints a reserved (`@@`, well-known)
+  // selector, but the receiver does not trust the wire: it validates
+  // the leading selector independently.  Send a raw vector whose
+  // leading element is a well-known symbol and assert receipt rejects
+  // it rather than dispatching.
+  const replyP = a.client.deliver(presence, [Symbol.asyncIterator]);
+  await t.throwsAsync(() => replyP, { message: /reserved for well-known/ });
+});
+
+test('symbol-named methods are rejected before send', async t => {
+  const { a, b } = makeLoopback();
+
+  const target = Far('target', { greet: () => 'hi' });
+  const targetDesc = b.clist.exportLocal(target, Kind.Object);
+  const presence = a.client.makePresence({
+    ...targetDesc,
+    direction: Direction.Remote,
+  });
+
+  // A symbol method name has no wire selector, so slot-machine
+  // rejects it at the sender rather than delivering it.
+  await t.throwsAsync(
+    () => HandledPromise.applyMethod(presence, Symbol.for('greet'), []),
+    { message: /string methods/ },
+  );
 });
 
 test('unknown resolve targets are silently ignored', t => {

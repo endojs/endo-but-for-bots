@@ -1,7 +1,8 @@
 # @endo/slots
 
 JavaScript client for the slot-machine wire protocol — a flat
-four-verb (`deliver` / `resolve` / `drop` / `abort`) capability bus
+seven-verb (`deliver` / `get` / `index` / `untag` / `resolve` / `drop` /
+`abort`) capability bus
 designed to interoperate byte-for-byte with the Rust crate at
 `rust/endo/slots`.
 
@@ -64,6 +65,49 @@ for the splice plan.
   reference and `SessionId` digests.  Either side will fail-loudly
   if the wire shape drifts.
 
+## Calling convention
+
+`deliver` carries **one flat passable argument vector** in its body,
+following the OCapN **Body Content Format**
+(`packages/ocapn/docs/cbor-encoding.md` § Body Content Format) and
+mirroring `@endo/ocapn`'s client (`packages/ocapn/src/client/ocapn.js`,
+`packages/ocapn/src/selector.js`):
+
+- **Function application** — `E(fn)(...args)` — sends its arguments
+  unchanged: the body is exactly `[...args]`, no selector.
+- **String-named method invocation** — `E(obj).method(...args)` —
+  prepends the method's passable-symbol selector
+  (`passableSymbolForName(method)`), so the body is
+  `[selector, ...args]`.
+- **Symbol-named methods are unreachable.**  A symbol method name has
+  no wire selector, so slot-machine rejects it at the sender rather
+  than delivering it.
+
+The convention is **enforced independently on receipt** — the receiver
+does not rely on the wire (or a well-behaved sender) to have honoured
+it.  On receipt the target's own shape decides dispatch, exactly as
+`@endo/ocapn`'s `invokeDeliver` does:
+
+- a **function** Exo receives the complete argument vector through
+  `applyFunction`;
+- an **object** Exo validates and decodes the leading selector to a
+  string method name and dispatches through `applyMethod`.  A leading
+  argument that is not a passable symbol, that decodes to no registered
+  name, or whose name is reserved (`@@`, the well-known symbols) is
+  rejected by `getSelectorName` regardless of what the peer sent.
+
+There is no `__call__` sentinel and no `[method, args]` body shape —
+both are retired in favour of the flat vector above.
+
+**Data operations cannot be intercepted as deliveries.**  OCapN's
+`op:get`, `op:index`, and `op:untag` have distinct slot-machine envelope
+verbs.  They surface as `E.get(target).field`, `E.index(target, index)`,
+and `E.untag(target, tag)`, backed by corresponding `HandledPromise`
+handler and static methods.  A `get` rejects an array target, an `index`
+rejects a non-array target, and `untag` rejects a mismatched tag.  Keeping
+these lanes separate ensures that no method named `__get__`, `index`, or
+`untag` can intercept or impersonate a data operation.
+
 ## Daemon integration
 
 The worker-side splice is in `packages/daemon/src/bus-worker-node-raw.js`,
@@ -91,7 +135,7 @@ If `makeMessageSlots` is too high-level, drop down to:
 ## Testing
 
 ```sh
-yarn test         # 74 unit tests
+yarn test         # 82 unit tests
 yarn lint         # eslint + tsc
 ```
 
