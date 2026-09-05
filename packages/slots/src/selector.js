@@ -54,9 +54,7 @@ export const getSelectorName = selector => {
   // this guard correct should the wire representation of a selector ever
   // migrate to another passable shape.
   if (passStyleOf(selector) !== 'symbol') {
-    throw makeError(
-      X`method selector must be a symbol, got ${q(selector)}`,
-    );
+    throw makeError(X`method selector must be a symbol, got ${q(selector)}`);
   }
   const name = nameForPassableSymbol(selector);
   if (name === undefined) {
