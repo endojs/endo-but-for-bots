@@ -15,6 +15,9 @@
       "path": "../cbor/tsconfig.composite.json"
     },
     {
+      "path": "../cbor-frame/tsconfig.composite.json"
+    },
+    {
       "path": "../eventual-send/tsconfig.composite.json"
     },
     {
