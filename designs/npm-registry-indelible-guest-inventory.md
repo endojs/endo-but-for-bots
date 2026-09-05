@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-04 |
+| **Updated** | 2026-09-05 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Proposed |
 
@@ -30,8 +31,8 @@ It has the directory tree's `has`, `lookup`, `list`, and `getInfo` surfaces at
 the nodes where the directory-tree design permits them, but no publish,
 configuration, credential, raw-network, or content-store administration surface.
 Once the underlying tree design ships, the Node-hosted Endo daemon projects this
-name; Rust-hosted Endor will match the same tree contract at that point, and the
-inventory projection once it grows an agent and guest model.
+name; Rust-hosted Endor will match the same tree contract at that point, and adds
+the inventory projection once it grows an agent and guest model.
 
 ## The problem being solved
 
@@ -108,6 +109,9 @@ Each guest formula carries the root directly:
 type GuestFormula = {
   type: 'guest';
   // existing required fields
+  // Unlike HostFormula.registry, this dependency is GC-reachability-only and is
+  // deliberately not wired through thisDiesIfThatDies; see Persistence,
+  // reachability, and inspection for the divergent cascade semantics.
   registry: FormulaIdentifier;
 };
 ```
@@ -128,9 +132,20 @@ Lookup does not traverse `@host`, and the guest does not depend on the host
 retaining an ordinary name for the registry.
 All guests may point to the same stable root formula when they share
 one public registry policy.
+"Shared" here means the same formula identifier is copied into each guest's
+write-once `registry` slot at formulation, not a live alias each guest tracks.
+Rotating the default (out of scope per Non-goals) therefore leaves already-seated
+guests on their original identifier while newly formulated guests take the new
+one; the only reconvergence path is a fresh per-guest migration that reuses the
+Phase 2 idempotent-rewrite mechanism. This copy-once fragmentation-after-rotation
+is a deliberate, named limitation, not a silent one.
 A daemon that needs guest-specific accounting may formulate attenuating roots
 with the same tree interfaces, but the slot remains required and the guest
 cannot select a wider root.
+The formulation-time mechanism by which an operator seats a non-default per-guest
+root (a guest-maker registry-root parameter or override argument) is left to the
+implementation build and is not specified here; this design names only the
+resulting capability shape, not the API surface that seats it.
 
 The floor contract at the required slot is fixed regardless of which root an
 operator seats there, so a caller never branches on coverage: `@registry` always
@@ -157,12 +172,12 @@ The candidates compare as follows:
 The daemon already ships the fourth pattern: `leastAuthority` is preformulated
 once, made a formula-graph root, and projected as `@none` in the **host's**
 special names (where it backs the host-only `makeUnconfined` / `makeArchive`
-power defaults), durable and GC-reachable with no per-guest field and no
+power defaults). It is durable and GC-reachable with no per-guest field and no
 migration.
 That pattern alone would carry a purely shared registry root.
 The shipped precedent is host-side only, though: the guest `specialNames` overlay
 has no `@none` entry and no equivalent guest method consumes it, so projecting a
-preformulated root into a *guest's* inventory — precisely what this design does —
+preformulated root into a *guest's* inventory (precisely what this design does)
 is adjacent to the `@none` pattern rather than already demonstrated by it.
 This design still adds the per-guest `registry` field for two reasons the shared
 pattern cannot express: an operator may seat a *different* attenuating root per
@@ -226,13 +241,13 @@ name), that root's lookup traffic is not attributable per guest, so per-caller
 rate and resource accounting is not a property this design provides. This design
 makes registry-reaching authority present-by-construction for every guest and, in
 the shared-root common case, funnels their lookups through one origin, so that
-aggregate exposure needs a bound and no landed design currently supplies one: the
+aggregate exposure needs a bound and no landed design currently supplies one. The
 sibling [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md)
 design defines the tree shape, caching, and offline-error semantics but does *not*
 itself specify a rate limit, concurrency cap, or per-caller quota. Bounding the
 shared root's aggregate origin traffic is therefore a **required property of the
-backend an operator seats at the mandatory slot** — it must carry the
-daemon-owned cancellation, size, and concurrency limits named above — and this
+backend an operator seats at the mandatory slot** (it must carry the
+daemon-owned cancellation, size, and concurrency limits named above), and this
 design records it as an open constraint on the seated root rather than an
 already-owned one. An operator needing per-guest accounting seats a distinct
 attenuating root per guest rather than the shared default.
@@ -306,7 +321,7 @@ The parity requirement is therefore staged:
    `@registry` conforms to the shared tree contract, so a resolved root, its
    `/npm` hub, package and version directories, and immutable leaves behave
    identically on either backend. This is a prerequisite, not a present-day
-   state — the tree contract and its conformance suite are Not Started (see
+   state: the tree contract and its conformance suite are Not Started (see
    Dependencies).
 2. **Then (Node only):** guest formulation records a registry-root identifier
    before exposing the guest; guest construction presents that identifier as
@@ -333,7 +348,7 @@ lifecycle mechanism.
 The `guest` case of `extractLabeledDeps` emits the registry identifier so the
 formula graph keeps the root reachable while the guest exists; the root is
 deliberately not wired through `thisDiesIfThatDies`.
-That wiring registers *this* context to be cancelled when its dependency dies, so
+That wiring registers *this* context to be canceled when its dependency dies, so
 wiring it would let a shared root's reformulation or cancellation cascade a
 cancellation into every guest that named the root, never the reverse.
 This is an intentional departure from the sibling `HostFormula.registry`, which
@@ -348,14 +363,20 @@ a 1:1 attenuating root per guest for accounting), where the root has exactly one
 namer and the `HostFormula.registry` cascade semantics would in fact fit. This
 design nonetheless applies the GC-reachability (no-`thisDiesIfThatDies`) wiring
 uniformly to both cases, and states that as a deliberate choice, not an oversight:
-a permanently-broken per-guest root leaves the guest **alive-but-registry-dead** —
-its `@registry` still resolves to the now-failing root and surfaces the
-directory-tree design's registry failure family at each call — rather than
-cancelling the guest. Uniform wiring keeps the slot's lifecycle contract identical
+a permanently-broken per-guest root leaves the guest **alive-but-registry-dead**
+(its `@registry` still resolves to the now-failing root and surfaces the
+directory-tree design's registry failure family at each call) rather than
+canceling the guest. Uniform wiring keeps the slot's lifecycle contract identical
 regardless of which root an operator seats, so a caller never has to reason about
 whether a given guest's root death is fatal. An operator who instead wants a
 per-guest root's death to cancel its guest wires that cancellation explicitly at
 formulation rather than relying on the slot.
+The write-once slot has no in-place repair for a permanently-broken per-guest
+root: repointing that guest's `registry` field is out of scope (Non-goals, root
+rotation), so recovery means formulating a fresh guest against a working root and
+migrating its ordinary pet names by hand. This dead-end is accepted deliberately
+for the rare 1:1 accounting path rather than adding a field-rewrite path that
+would reintroduce the root rotation this design excludes.
 The parallel normalized formula record used by `getFormula` and inspection also
 reports the field.
 Any equivalent Rust dependency and inspection table does the same once Endor
@@ -392,8 +413,14 @@ enumerate persisted guest formulas, rewrite each in place, and update the graph
 transactionally.
 It fills only an absent field, preserves an existing field, and makes a second
 start a no-op.
-An upgrade failure is fatal for exposure of the affected guest; it never leaves a
-guest without the invariant.
+The transactional boundary is per-guest, not per-enumeration: a single guest
+formula that is permanently unmigratable (a corrupt record or an unrecoverable
+write) quarantines only itself, leaving its own guest unexposed while every
+sibling guest still migrates and reaches the agent map. A guest's upgrade failure
+is therefore fatal for the exposure of that guest alone; it never leaves a guest
+without the invariant and never blocks a sibling's exposure. The test catalog
+covers this permanent-failure case, not only the transient/resumable interruption
+below.
 
 An existing ordinary pet name such as `registry` remains untouched and mutable.
 After migration it coexists with the special `@registry` name.
@@ -448,6 +475,10 @@ The tests cover:
   and inspection reports the dependency;
 - migration fills a missing field once, preserves an existing field, and never
   exposes an unmigrated guest;
+- one guest formula is permanently unmigratable (a corrupt record or an
+  unrecoverable write): it stays unexposed while every sibling guest still
+  migrates and reaches the agent map, proving per-guest isolation rather than a
+  whole-batch abort;
 - a migration interrupted mid-pass (a fault or restart after some but not all
   guest formulas are rewritten) exposes no half-migrated guest on the next start:
   the pass resumes and every guest is either fully migrated or unexposed, with no
