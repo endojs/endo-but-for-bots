@@ -39,7 +39,7 @@ import { makeReaderPump } from './reader-pump.js';
  * @returns {PassableReader<TRead, TReadReturn>}
  */
 export const readerFromIterator = (iterator, options = {}) => {
-  const { buffer = 0, readPattern, readReturnPattern } = options;
+  const { buffer = 0, readPattern, readReturnPattern, once = false } = options;
 
   const pump = makeReaderPump(iterator, {
     buffer,
@@ -47,13 +47,34 @@ export const readerFromIterator = (iterator, options = {}) => {
     readReturnPattern,
   });
 
+  // A `PassableReader` backed by a single underlying iterator can, by default,
+  // have `stream()` invoked more than once: each invocation drives the *same*
+  // iterator, so concurrent streams silently split the element set between them
+  // and each holds its own pre-ack `buffer` window. `once: true` latches the
+  // reader to a single active stream — a second `stream()` rejects rather than
+  // splitting — which is what a per-request producer (one reader, one intended
+  // consumer) wants, and which bounds the pre-ack / post-revoke window to the
+  // reader rather than to `k` concurrent streams a grantee could open.
+  let streamed = false;
+  const stream = once
+    ? synPromise => {
+        if (streamed) {
+          throw new Error(
+            'This PassableReader is once-only; stream() was already called',
+          );
+        }
+        streamed = true;
+        return pump(synPromise);
+      }
+    : pump;
+
   return /** @type {PassableReader<TRead, TReadReturn>} */ (
     /** @type {unknown} */ (
       makeExo(
         'PassableReader',
         PassableReaderInterface,
         /** @type {any} */ ({
-          stream: pump,
+          stream,
 
           /**
            * Returns the pattern for validating TRead (yielded values).

@@ -642,6 +642,12 @@ export const makeDirectoryMaker = ({
         identify,
         locate,
         reverseLocate,
+        // These name-change subscription readers deliberately omit the search
+        // readers' `once: true` latch: they mint with the default `buffer: 0`
+        // (no pre-ack window to multiply) and are not minted against a revocable
+        // mount, so the buffer/revocation-window-multiplication hazard `once`
+        // closes for `streamGlob`/`streamGrep` does not arise here. (Same at the
+        // `manager.js` mirror sites.)
         followLocatorNameChanges: locator =>
           readerFromIterator(directory.followLocatorNameChanges(locator)),
         list,

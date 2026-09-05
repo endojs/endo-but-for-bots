@@ -217,6 +217,7 @@ Wrap a local `AsyncIterator<TRead>` as a `PassableReader` Exo
 - `buffer` (number, default 0): Number of values to pre-pull before waiting for synchronizes
 - `readPattern` (Pattern): Pattern describing TRead (yielded values)
 - `readReturnPattern` (Pattern): Pattern describing TReadReturn (return value)
+- `once` (boolean, default false): Latch the reader to a single `stream()` call. When true, a second `stream()` rejects rather than starting a second consumer over the shared iterator (which would split the element set across consumers and open a second pre-ack `buffer` window). Use it for a per-request reader that has no meaningful second consumer, to bound the pre-ack and post-close windows per reader rather than per concurrent stream.
 
 #### `iterateReader(readerRef, options?)`
 

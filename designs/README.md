@@ -331,6 +331,7 @@ LLM-agent stack).*
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
+| [mount-stream-glob-grep](mount-stream-glob-grep.md) | 2026-07-09 | 2026-09-05 | In Progress (PR #1085) |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |
 | [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | 2026-08-29 | Not Started |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Not Started |

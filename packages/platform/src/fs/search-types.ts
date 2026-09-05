@@ -40,6 +40,17 @@ export type GlobOptions = {
   /** Include directory entries in results (default `true`). */
   includeDirectories?: boolean;
   /**
+   * Emit results in the normative UTF-16 code-unit sorted order (default
+   * `true`, glob's contract). When `false`, matched paths are yielded in *walk
+   * order* as they are discovered, with no global-sort barrier — so the first
+   * batch can be emitted before the whole tree is walked. Confinement and
+   * denial filtering are unchanged; only the terminal sort is dropped. The
+   * substrate for a walk-order path *producer* (the daemon's `streamGlob` /
+   * `streamGrep`); decoupled `streamGrep` greps whatever file stream it is
+   * handed and needs no sort of its own (see the engine header).
+   */
+  sorted?: boolean;
+  /**
    * Let `**` descend through symbolic links to directories (default `false`).
    * A link is reported as an entry either way; this governs only recursion
    * through it, which turns the walk from a tree into a link graph. Segments

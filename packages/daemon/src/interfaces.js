@@ -765,6 +765,42 @@ export const MountInterface = M.interface('EndoMount', {
       ),
     )
     .returns(M.promise()),
+  // Streaming search (glob). Returns a `PassableReader` synchronously (guard
+  // `M.remotable('PassableReader')`, not `M.promise()`), so
+  // `iterateReader(E(mount).streamGlob(p))` pipelines without an extra round
+  // trip — the same synchronous-remotable shape `followNameChanges`, `entry`,
+  // and `readOnly` use. There is no `maxResults`: the consumer's pull-based
+  // flow control is the bound, and `buffer` (the pre-ack window) is clamped by
+  // the producer. With `buffer: 0` a mid-stream `revoke()` cuts the next pull;
+  // a non-zero `buffer` may still deliver up to that many already-acknowledged
+  // elements first, bounded per reader (the reader is once-only). See
+  // designs/mount-stream-glob-grep.md.
+  streamGlob: M.call(M.string())
+    .optional(M.splitRecord({}, { buffer: M.number() }))
+    .returns(M.remotable('PassableReader')),
+  // Streaming search (grep), decoupled from enumeration. Like `streamGlob`,
+  // returns a `PassableReader` synchronously. `files` is a *mandatory* external
+  // stream of mount-relative paths to grep — a `PassableReader<string>` (the
+  // shape `streamGlob` returns), or a promise for one so a caller may pipe
+  // `E(mount).streamGlob(g)` straight in — not an options bag. Grep does not
+  // glob: "everything" is `streamGrep(p, streamGlob('**'))` and "a subset" is
+  // `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern, glob(g))`
+  // seam. `buffer` is the clamped pre-ack window. No `maxResults`. Grep reads
+  // the supplied files' contents lazily, but "one file per pull" holds only for
+  // a *matching* file: grep reads ahead to the next match, so a sparse run of
+  // non-matching files is read within one pull (bounded by the per-file liveness
+  // check, not backpressure). Early close leaves later supplied files unread.
+  // Whether the directory *walk* is incremental is the producer's concern:
+  // `streamGlob` walks in walk order, so `streamGrep(p, streamGlob('**'))` is
+  // walk-incremental. Record order follows the supplied file stream, so fed
+  // `streamGlob(g)` it is glob's walk order — the same multiset of matches as
+  // `grep()` (order-independent).
+  streamGrep: M.call(
+    M.string(),
+    M.or(M.remotable('PassableReader'), M.promise()),
+  )
+    .optional(M.splitRecord({}, { buffer: M.number() }))
+    .returns(M.remotable('PassableReader')),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is async in every mount implementation, so retain the
   // promise boundary here even though the shared name-hub record is broader.

@@ -1385,6 +1385,56 @@ export interface EndoMount extends PathEntryIssuer {
     grepPattern: string,
     options?: { maxResults?: number; followSymlinks?: boolean },
   ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
+  /**
+   * Streaming glob: a `PassableReader` yielding matching mount-relative paths
+   * one element at a time, in *walk order* (as the tree is traversed). Returned
+   * synchronously so `iterateReader(E(mount).streamGlob(p))` pipelines. No
+   * result cap; `buffer` is the clamped pre-ack window. Unlike glob's global
+   * sort, the walk is incremental — each path is yielded as it is discovered, so
+   * `streamGlob` delivers a first result before the whole tree is walked, its
+   * in-daemon memory tracks consumer demand, and closing the iterator early
+   * stops the walk. The trade is order: elements arrive in walk order, not
+   * glob's UTF-16 sort, so a caller needing glob-identical ordering uses `glob`.
+   * With `buffer: 0` a mid-stream `revoke()`
+   * rejects the next pull immediately; a non-zero `buffer` may still deliver up
+   * to that many already-acknowledged elements first — and the reader is
+   * once-only, so that window is bounded per reader, not multiplied across
+   * concurrent streams.
+   */
+  streamGlob(
+    pattern: string,
+    options?: { buffer?: number },
+  ): import('@endo/exo-stream').PassableReader<string, undefined>;
+  /**
+   * Streaming grep, decoupled from enumeration: a `PassableReader` yielding
+   * `{ file, line, text }` records one element at a time. `files` is a
+   * *mandatory* external stream of mount-relative paths to grep — a
+   * `PassableReader<string>` (the shape `streamGlob` returns), or a promise for
+   * one so `E(mount).streamGlob(g)` can be piped straight in. Grep does not
+   * glob: search everything with `streamGrep(p, streamGlob('**'))` and a subset
+   * with `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern,
+   * glob(g))` seam. No `maxResults`. Content reads are lazy, but "one file per
+   * pull" holds only for a *matching* file: grep reads ahead to the next match,
+   * so a run of non-matching files is read within one pull (bounded by the
+   * per-file liveness check, not backpressure). Early close leaves later
+   * supplied files unread; whether the directory *walk* is incremental is the
+   * producer's concern (`streamGlob` walks in walk order, so the pipeline is
+   * walk-incremental). Record order follows the supplied file stream. With
+   * `buffer: 0` a mid-stream `revoke()` rejects
+   * the next pull immediately; a non-zero `buffer` may still deliver up to that
+   * many already-acknowledged elements first — and the reader is once-only, so
+   * that window is bounded per reader.
+   */
+  streamGrep(
+    pattern: string,
+    files: import('@endo/eventual-send').ERef<
+      import('@endo/exo-stream').PassableReader<string, any>
+    >,
+    options?: { buffer?: number },
+  ): import('@endo/exo-stream').PassableReader<
+    import('@endo/platform/fs/search.types').GrepMatch,
+    undefined
+  >;
   lookup(
     path: string | readonly string[] | EndoMountEntry,
   ): Promise<EndoMount | EndoMountFile>;

@@ -232,9 +232,17 @@ export const makeSearch = powers => {
    *
    * Glob's sort forces the full result set to be collected before the first
    * batch: the flattened order is normative, so a partially-walked prefix
-   * cannot be emitted in sorted order. The generator is nonetheless the shared
-   * core — the eager surface flattens-and-caps it, the future stream surface
-   * reads it.
+   * cannot be emitted in sorted order. That barrier is glob's contract, not the
+   * walker's: with `sorted: false` the same walker yields matched paths in
+   * *walk order* as they are discovered, so the first batch is emitted before
+   * the whole tree is walked. This is the substrate for a walk-order path
+   * *producer*: the streaming `streamGlob` drives the walk this way, so its
+   * output is incremental and demand-bounded, and grep — decoupled — needs no
+   * global sort of the files it is handed. The eager `glob()` keeps `sorted:
+   * true`.
+   * Either way the generator is the shared core — the eager surface
+   * flattens-and-caps it, the stream surface reads it — and there is exactly one
+   * walk: `sorted` only chooses between draining it to sort and streaming it.
    *
    * @param {string} root
    * @param {string} pattern
@@ -247,6 +255,7 @@ export const makeSearch = powers => {
       confinementRoot = root,
       batchSize,
       includeDirectories = true,
+      sorted = true,
       followSymlinks = false,
     } = options;
     await null;
@@ -285,18 +294,26 @@ export const makeSearch = powers => {
     };
 
     /**
-     * Record a final match, honoring `includeDirectories`.
+     * Record a final match, honoring `includeDirectories`, and yield it the
+     * first time it is seen. `results` doubles as the dedup set, so a path
+     * reached by more than one route (interleaved `**`) is emitted once — in
+     * sorted mode the yield is drained to fill `results`; in walk-order mode it
+     * is the incremental output.
      *
      * @param {string[]} prefix
      * @param {string} childPath
-     * @returns {Promise<void>}
+     * @returns {AsyncGenerator<string>}
      */
-    const addResult = async (prefix, childPath) => {
+    const addResult = async function* addResult(prefix, childPath) {
       await null;
       if (!includeDirectories && (await powers.isDirectory(childPath))) {
         return;
       }
-      results.add(prefix.join('/'));
+      const relativePath = prefix.join('/');
+      if (!results.has(relativePath)) {
+        results.add(relativePath);
+        yield relativePath;
+      }
     };
 
     /**
@@ -325,9 +342,15 @@ export const makeSearch = powers => {
      * @param {string[]} prefix
      * @param {Set<string>} ancestorsReal
      * @param {string | undefined} dirReal Physical path of `dir`, for `isLink`.
-     * @returns {Promise<void>}
+     * @returns {AsyncGenerator<string>}
      */
-    const walk = async (remaining, dir, prefix, ancestorsReal, dirReal) => {
+    const walk = async function* walk(
+      remaining,
+      dir,
+      prefix,
+      ancestorsReal,
+      dirReal,
+    ) {
       await null;
       const visitKey = `${remaining.length}\0${dir}`;
       if (visited.has(visitKey)) {
@@ -337,13 +360,27 @@ export const makeSearch = powers => {
       if (remaining.length === 0) {
         // The walk root itself (empty prefix) is never a result.
         if (prefix.length > 0) {
-          results.add(prefix.join('/'));
+          const relativePath = prefix.join('/');
+          if (!results.has(relativePath)) {
+            results.add(relativePath);
+            yield relativePath;
+          }
         }
         return;
       }
       let names;
       try {
-        names = await powers.readDirectory(dir);
+        // Sorting one directory at a time gives walk-order streams a stable,
+        // platform-independent order without imposing glob's eager global-sort
+        // barrier. The walk remains lazy: it sorts only the directory it has
+        // reached, then descends before reading later sibling directories. In
+        // eager `sorted: true` mode the intra-directory order is unobservable —
+        // dedup is order-independent and a final global sort reimposes the
+        // UTF-16 order — so the sort is confined to the walk-order path that
+        // relies on it, keeping `glob`/`grep`/`glorp` at their pre-streaming cost.
+        names = sorted
+          ? await powers.readDirectory(dir)
+          : [...(await powers.readDirectory(dir))].sort();
       } catch {
         // A directory removed mid-walk drops this branch rather than aborting.
         return;
@@ -355,7 +392,7 @@ export const makeSearch = powers => {
         // matches `docs/*.md`). One or more consumed: descend into each confined
         // child directory with `**` still in play. A trailing `**` additionally
         // matches file descendants directly.
-        await walk(rest, dir, prefix, ancestorsReal, dirReal);
+        yield* walk(rest, dir, prefix, ancestorsReal, dirReal);
         for (const name of names) {
           if (isDeniedName(denySet, name)) {
             continue;
@@ -387,7 +424,7 @@ export const makeSearch = powers => {
             const linked = !followSymlinks && isLink(dirReal, name, real);
             if (!linked && real !== undefined && !ancestorsReal.has(real)) {
               const descentAncestors = new Set([...ancestorsReal, real]);
-              await walk(
+              yield* walk(
                 remaining,
                 childPath,
                 [...prefix, name],
@@ -397,10 +434,10 @@ export const makeSearch = powers => {
             } else if (rest.length === 0) {
               // A linked, cyclic, or unresolvable directory under a trailing
               // `**` is still a valid entry: recorded once, never re-entered.
-              await addResult([...prefix, name], childPath);
+              yield* addResult([...prefix, name], childPath);
             }
           } else if (rest.length === 0) {
-            await addResult([...prefix, name], childPath);
+            yield* addResult([...prefix, name], childPath);
           }
         }
         return;
@@ -416,7 +453,7 @@ export const makeSearch = powers => {
           continue;
         }
         if (rest.length === 0) {
-          await addResult([...prefix, name], childPath);
+          yield* addResult([...prefix, name], childPath);
           continue;
         }
         // A non-final segment must descend, so it matches directories only.
@@ -429,21 +466,46 @@ export const makeSearch = powers => {
             real === undefined
               ? ancestorsReal
               : new Set([...ancestorsReal, real]);
-          await walk(rest, childPath, [...prefix, name], nextAncestors, real);
+          yield* walk(rest, childPath, [...prefix, name], nextAncestors, real);
         }
       }
     };
 
     const rootReal = await powers.maybeRealPath(root);
     const initialAncestors = new Set(rootReal === undefined ? [] : [rootReal]);
-    await walk(patternSegments, root, [], initialAncestors, rootReal);
+    const matches = walk(patternSegments, root, [], initialAncestors, rootReal);
 
-    // Sort by UTF-16 code unit (Array.prototype.sort's default string order) as
-    // the final step so the flattened sequence is deterministic across
-    // platforms — a native runner mirrors the sort, not the walk order.
-    const sorted = [...results].sort();
-    for (let i = 0; i < sorted.length; i += batchLimit) {
-      yield harden(sorted.slice(i, i + batchLimit));
+    if (!sorted) {
+      // Walk-order (incremental) mode: yield each matched path as the walk
+      // discovers it, so the first batch is emitted before the whole tree is
+      // walked. `walk` already deduped and applied confinement + denial
+      // filtering, so no barrier stands between discovery and emission.
+      let batch = [];
+      for await (const relativePath of matches) {
+        batch.push(relativePath);
+        if (batch.length >= batchLimit) {
+          yield harden(batch);
+          batch = [];
+        }
+      }
+      if (batch.length > 0) {
+        yield harden(batch);
+      }
+      return;
+    }
+
+    // Sorted (glob's contract) mode: drain the whole walk, then sort by UTF-16
+    // code unit (Array.prototype.sort's default string order) so the flattened
+    // sequence is deterministic across platforms — a native runner mirrors the
+    // sort, not the walk order. The global sort is what forces the full walk
+    // before the first batch.
+    const collected = [];
+    for await (const relativePath of matches) {
+      collected.push(relativePath);
+    }
+    collected.sort();
+    for (let i = 0; i < collected.length; i += batchLimit) {
+      yield harden(collected.slice(i, i + batchLimit));
     }
   }
   harden(globPaths);
@@ -518,7 +580,7 @@ export const makeSearch = powers => {
 
     const source = pathBatches(root, { ...options, confinementRoot }, paths);
     for await (const pathBatch of source) {
-      for (const relPath of pathBatch) {
+      for (const relativePath of pathBatch) {
         if (maxResults !== undefined && count >= maxResults) {
           if (batch.length > 0) {
             yield harden(batch);
@@ -526,7 +588,9 @@ export const makeSearch = powers => {
           }
           return;
         }
-        const segments = relPath.split('/').filter(segment => segment !== '');
+        const segments = relativePath
+          .split('/')
+          .filter(segment => segment !== '');
         if (segments.some(segment => isDeniedName(denySet, segment))) {
           continue;
         }
@@ -555,7 +619,7 @@ export const makeSearch = powers => {
           }
           const text = lines[i].replace(/\r$/, '');
           if (regex.test(text)) {
-            batch.push(harden({ file: relPath, line: i + 1, text }));
+            batch.push(harden({ file: relativePath, line: i + 1, text }));
             count += 1;
             if (batch.length >= batchLimit) {
               yield harden(batch);
