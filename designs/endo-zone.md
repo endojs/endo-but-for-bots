@@ -9,9 +9,13 @@
 
 ## What is the Problem Being Solved?
 
-`@endo/ertp` needs one vocabulary for allocating its stateful facets and
-collections, while keeping the choice of heap, daemon persistence, or Agoric
-vat durability with its host. The existing `@agoric/zone` solves that problem,
+`@endo/ertp` (Agoric's Electronic Rights Transfer Protocol, its asset-issuance
+library) needs one vocabulary for allocating its stateful objects and
+collections, while keeping the choice of storage with its host: a process heap,
+Endo daemon persistence, or the cross-upgrade durability of an Agoric vat. Those
+host-runtime terms, and the others this design leans on, are defined in the
+terms-of-art list immediately below, which a reader new to this vocabulary may
+want to read first. The existing `@agoric/zone` solves that problem,
 but its package boundary pulls in `@agoric/store` for heap collections and
 `@agoric/vat-data` for virtual and durable ones. A direct dependency would put
 an Endo package back behind Agoric's vat runtime; merely accepting an untyped
@@ -22,6 +26,11 @@ Terms of art this design leans on:
 
 - **ERTP** (Electronic Rights Transfer Protocol) is Agoric's asset-issuance
   library, the primary consumer this contract serves.
+- **SES** (Secure ECMAScript) is the hardened JavaScript environment
+  `lockdown()`/`@endo/init` establishes; without it `harden` is absent or a
+  no-op.
+- **CapTP** is Endo's capability-transfer protocol for reaching a remote object
+  with `E()`.
 - **SwingSet** is Agoric's deterministic vat runtime.
 - A **vat** is a unit of that runtime with its own durable heap.
 - An **incarnation** is one run of a vat between upgrades. Durable state carries
@@ -54,7 +63,7 @@ adapter (a cross-org proposal, may be declined); **Phase 3** the Endo daemon
 durable adapter; **Phase 4** ERTP adoption. Full detail is under
 [Phased Implementation](#phased-implementation) below.
 
-### A portable allocation contract
+### A Portable Allocation Contract
 
 A **Zone** is a namespace-scoped allocator: it hands out exos, stores, and
 sub-zones under stable names, and remembers which names it has already used so an
@@ -63,7 +72,7 @@ construct: every method returns its value directly, and a Zone is used only
 within the worker that holds it, never as a remote reference reached with `E()`.
 
 `@endo/zone` exports, from a single root entry point (`.`; the package has no
-`exports` subpath map — adapter authors reach `makeAdapterZone` from the root
+`exports` subpath map, so adapter authors reach `makeAdapterZone` from the root
 too): the `Zone` and store-provider types, `makeHeapZone`, `makeAdapterZone`, the
 default `isStorable` predicate, and the `watchPromise` promise-watcher helper
 (`makeOnce`, `detached`, and the store makers are `Zone` members, not standalone
@@ -99,8 +108,11 @@ Hardening is a **core-side** obligation on *every* path that yields a value to a
 consumer, not only the mint path and not adapter discipline. The core hardens (or
 rejects a non-frozen value) whatever a host store returns on a revival read, and
 whatever the Phase-3 resolved view loads back over the substrate, and whatever a
-host `exoMakers` returns — exactly as it composes `isStorable` and holds the
-detached brand core-side (below) rather than trusting the adapter. Otherwise a
+host `exoMakers` returns. This mirrors two other core-side obligations detailed
+below rather than asserted here: composing `isStorable` as a conjunction (see
+[A Portable Allocation Contract](#a-portable-allocation-contract)) and holding
+the detached brand core-side (see [Naming and `makeOnce`](#naming-and-makeonce)).
+Each keeps the guarantee off adapter discipline. Otherwise a
 durable adapter whose unmarshal yields a mutable record would hand ERTP a mutable
 object under a name the contract advertises as safe. This whole property rests on
 a `lockdown()`/`@endo/init` precondition, which `@endo/zone` therefore declares:
@@ -116,7 +128,7 @@ reserves for objects meant to be marshalled and reached across a boundary with
 because a Zone is never meant to cross that boundary. What keeps it off the marshal
 boundary is structural, not a naming convention: a Zone is a plain hardened object,
 not an exo or other remotable, so `passStyleOf` does not classify it as passable
-and marshal refuses to serialize it (synchrony alone would not stop this — `E()`
+and marshal refuses to serialize it (synchrony alone would not stop this: `E()`
 answers a synchronous method fine and wraps the result in a promise, so the real
 barrier is pass-style rejection, not the absence of async methods). Every adapter
 (Phase 3 below) is additionally required to run *in the consumer's worker* and
@@ -153,36 +165,53 @@ sub-zone maker, and optionally a legacy key mapper (see
 [Naming and `makeOnce`](#naming-and-makeonce)); the constructor supplies label
 scoping, one-use enforcement, and the common surface. The dedicated
 `detachedStoreProvider` is what lets `detached()` construct a *host-durable*
-anonymous store on a durable adapter — `storeProviders` are named-store providers
-and a detached store is anonymous, so without this slot `detached()` could only
-fall back to a core heap store, which then could not be durable-through-its-containing-exo
-and which the adapter's narrowing predicate would reject when a purse kit's `init`
-returned it, breaking the ERTP recovery-set idiom this design names as the intended
-use.
+anonymous store on a durable adapter. Because `storeProviders` are named-store
+providers and a detached store is anonymous, without this slot `detached()` could
+only fall back to a core heap store. Such a store could not be
+durable-through-its-containing-exo, and the adapter's narrowing predicate would
+reject it when a purse kit's `init` returned it, breaking the ERTP recovery-set
+idiom this design names as the intended use.
 
 The `hostIsStorable` option is deliberately *not* named `isStorable`, because it
 is not the predicate: it only **narrows** the core floor. Three roles that the
-single name `isStorable` used to conflate are now distinct: the exported default
-predicate is `isStorable`; the Zone member `zone.isStorable` reports the
+single name `isStorable` used to conflate are now distinct. The exported default
+predicate is `isStorable`. The Zone member `zone.isStorable` reports the
 **composed** predicate for that Zone (not the core floor), so a consumer probing
-admission through it under a durable adapter gets the right answer; and the option
-a host passes to narrow the floor is `hostIsStorable`. Admission **composes as a
-conjunction, never a replacement**: the effective predicate is `coreIsStorable(v)
-&& hostIsStorable(v)`, so a host predicate can only *narrow* what is admitted,
-never widen it. The core default (`coreIsStorable`) admits `isPassable` values and
-is fixed to be a **superset of `@agoric/zone`'s current heap `isStorable`
-admission set**, so the Phase-2 re-export narrows no existing Agoric caller's
-stored value. A durable adapter passes a `hostIsStorable` that additionally
-rejects non-durable values; a host with no extra rule passes nothing and gets the
-core default alone. Framing the host predicate as a plain override would let a lax
-host pass `() => true` and silently drop the core floor, so the contract fixes the
-composition rather than trusting adapter discipline. A `hostIsStorable` that
-throws or returns a non-boolean is treated as a rejection. The composed predicate
-gates **every value-admitting seam** — `mapStore.init`/`set`, `setStore.add`,
-store **keys**, `exoClass`/`exoClassKit` `init` results, `makeOnce` results, and
-the persisted `watchPromise` watcher — not the `makeOnce` path alone, so a lax
-host cannot admit at the store seam what the core floor rejects at the `makeOnce`
-seam. The checked value is the already-hardened value (hardening happens before
+admission through it under a durable adapter gets the right answer. The option a
+host passes to narrow the floor is `hostIsStorable`. Only the third role gets a
+wholly new name; the first two keep the bare `isStorable` deliberately, not by
+oversight. Both answer the same *kind* of question (is this value storable in
+this Zone) and are told apart by binding site alone (a module import versus a
+Zone-instance member), which is sufficient because a reader cannot invoke one
+where the other is meant. `hostIsStorable` names a *different kind of thing*, a
+host-supplied narrowing *input* rather than an *answer*, so binding site would
+not have been enough and it earns the distinct name.
+
+Admission **composes as a conjunction, never a replacement**: the effective
+predicate is `coreIsStorable(v) && hostIsStorable(v)`, so a host predicate can
+only *narrow* what is admitted, never widen it. The core default
+(`coreIsStorable`) admits `isPassable` values and is fixed to be a **superset of
+`@agoric/zone`'s current heap `isStorable` admission set**, so the Phase-2
+re-export narrows no existing Agoric caller's stored value. That superset
+relationship is a **Phase-1 exit test, not an asserted design fact**: Phase 1
+checks that `coreIsStorable` admits every value `@agoric/zone`'s current heap
+predicate admits, drawing the cases from `@agoric/store`'s own
+`isStorable`/pass-style fixtures (its `isPassable` domain), so a divergence that
+would silently narrow an existing caller's stored value fails a test here rather
+than surfacing during the cross-org Phase-2 negotiation this design de-risks. A
+durable adapter passes a `hostIsStorable` that additionally rejects non-durable
+values; a host with no extra rule passes nothing and gets the core default alone.
+Framing the host predicate as a plain override would let a lax host pass `() =>
+true` and silently drop the core floor, so the contract fixes the composition
+rather than trusting adapter discipline. A `hostIsStorable` that throws or returns
+a non-boolean is treated as a rejection.
+
+The composed predicate gates **every value-admitting seam**: `mapStore.init`/`set`,
+`setStore.add`, store **keys**, `exoClass`/`exoClassKit` `init` results,
+`makeOnce` results, and the persisted `watchPromise` watcher. It is not the
+`makeOnce` path alone, so a lax host cannot admit at the store seam what the core
+floor rejects at the `makeOnce` seam. The checked value is the already-hardened
+value (hardening happens before
 admission); the structural defense against a read-time-varying value is that
 pass-style admission rejects accessor-bearing values outright (`harden` freezes
 descriptors but a frozen getter still runs per read, so `harden` is *not* what
@@ -219,8 +248,8 @@ entries and do not collide. The state machine on a call:
 1. **Collision.** Consult the key-state map *first*, before reading the backing
    map or running the maker. If the key is already **in-progress** or **used**,
    fail. Checking state first is what makes the **used** mark load-bearing: a
-   second `makeOnce(sameKey, ...)` in a revived incarnation — whose first call
-   marked the key **used** on the revival path below — is caught here rather than
+   second `makeOnce(sameKey, ...)` in a revived incarnation (whose first call
+   marked the key **used** on the revival path below) is caught here rather than
    silently returning the stored value again, which is the exact duplicate this
    boundary exists to catch. (If revival ran first, step 2 would always match a
    key with a backing value and this step would be unreachable.) The
@@ -249,10 +278,19 @@ have already reserved a durable kind handle in the backing store that the caught
 throw does not unwind; retrying then collides on the inner key or orphans the
 kind. So the contract is: a durable adapter either makes the maker's provider
 writes atomic with the maker (rolled back on throw), or the retry guarantee is
-scoped to allocation-free makers, and the adapter states which. "Maker throws on
-first use" and "maker allocates, then throws, then retries" are both Phase-1
-scenarios for the heap Zone, where no maker has a persisted effect; the durable
-partial-effect case moves to the Phase-3 adapter suite.
+scoped to allocation-free makers, and the adapter states which.
+
+The inner-key marking is **backend-agnostic**: it fires on the heap Zone exactly
+as on a durable adapter, because the per-incarnation key-state map is identical on
+both. So "maker throws on first use" and "maker allocates, then throws, then
+retries" are both Phase-1 heap scenarios, but they expect *different* outcomes and
+the test list says which. The first expects the released outer key to retry
+cleanly (the maker allocated nothing before throwing). The second expects the
+retry to **fail on the already-used inner key**, demonstrating the same orphaning
+described above, not a clean retry. What the heap Zone alone lacks is the *durable*
+partial effect: no heap maker leaves a persisted kind handle a caught throw cannot
+unwind, so it is only the durable-rollback obligation (the atomic-writes-or-scoped-guarantee
+choice above), not the inner-key collision, that moves to the Phase-3 adapter suite.
 
 Revival is **eager, not lazy**, for durable adapters. SwingSet requires every
 durable kind with prior-incarnation instances to be re-defined before the first
@@ -278,16 +316,16 @@ truncation could fold two distinct labels onto one durable key. The parent->chil
 label derivation is **injective**: because the scope separator is outside the
 label alphabet (or the derivation is length-prefixed), `subZone('a').mapStore('b/c')`
 cannot alias `subZone('a/b').mapStore('c')` and no child label can reconstruct a
-sibling's or parent's prefix. Where a host's own storage-key grammar is stricter
-than the portable label alphabet — the daemon binds each named store to a pet name
-([`packages/daemon/src/pet-name.js`](../packages/daemon/src/pet-name.js): no `/`,
-`\0`, or `@`, not `.`/`..`, at most 255 characters) — it is the adapter's
-`keyMapper` (below) that injectively encodes a portable label (including a
-separator-bearing or long one) into a grammar-legal, length-bounded storage key,
+sibling's or parent's prefix. A host's own storage-key grammar can be stricter
+than the portable label alphabet. The daemon, for instance, binds each named store
+to a pet name ([`packages/daemon/src/pet-name.js`](../packages/daemon/src/pet-name.js):
+no `/`, `\0`, or `@`, not `.`/`..`, at most 255 characters). There it is the
+adapter's `keyMapper` (below) that injectively encodes a portable label (including
+a separator-bearing or long one) into a grammar-legal, length-bounded storage key,
 so a kit written and tested against the heap Zone binds unchanged at the daemon
 Zone rather than failing late at bind time. Injectivity is a
 universally-quantified property, so Phase 1 pins it with a **property-based** test
-over arbitrary label paths (`fc.property(arbLabelPath, arbLabelPath, …)` that
+over arbitrary label paths (`fc.property(arbLabelPath, arbLabelPath, ...)` that
 shrinks to the minimal aliasing pair), not one hand-picked example. A host that
 supplies its own `keyMapper` (an options-bag hook, not prose-only discipline) for
 legacy durable keys must preserve injectivity; because the key-state map runs
@@ -295,8 +333,8 @@ pre-mapping and cannot catch a mapper-induced alias, the core additionally holds
 **per-incarnation reverse map of post-mapping keys** and rejects a second label
 landing on an already-in-use post-mapping key, so a lax or aliasing mapper is
 caught structurally rather than left to adapter discipline. The shared adapter
-conformance suite carries a mapper-injectivity property (distinct labels —
-including case-variant and NFC/NFD-variant labels — map to distinct host keys).
+conformance suite carries a mapper-injectivity property (distinct labels,
+including case-variant and NFC/NFD-variant labels, map to distinct host keys).
 "Sub-zone isolation" in the Phase-1 list is specifically the separator-collision
 case (a sibling-alias test), not merely two distinct labels. Backends do not
 expose their vatstore-key encoding through the public API; a host with legacy
@@ -311,7 +349,12 @@ way, `zone.detached().setStore('recovery set')` returned from a purse kit's
 `init`; the store is durable *through its containing exo*, revived with it, never
 independently by name). The rejected case is registering a detached store under a
 *name* the Zone would revive on its own (a named-store provider slot or a
-`makeOnce` result) because nothing then reconstructs it across an upgrade.
+`makeOnce` result) because nothing then reconstructs it across an upgrade. Because
+`detached()` is the one member whose contract is narrower than its `@agoric/zone`
+namesake, the code-review stage must carry this narrowed contract in `detached()`'s
+own JSDoc, not leave it to this design document alone, so a consumer porting a kit
+by pattern-matching familiar names meets the restriction in the doc-comment rather
+than first as a thrown error mid-development.
 
 The restriction is enforced by a **runtime-observable, core-held** brand, not a
 type-level tag and not prose. The core holds a per-incarnation `WeakSet` of the
@@ -326,18 +369,33 @@ would otherwise **lapse across an upgrade**: a detached store legally revived
 and is not in the new set, which would silently stop the check firing on exactly
 the stores the endorsed idiom creates. The design closes this rather than scoping
 the guarantee to the first incarnation: a durable adapter's eager revival
-(Phase 3) **re-brands** each detached store it reconstructs — re-entering it into
-the new incarnation's `WeakSet` as it loads — so `detached()` membership survives
-the persistence boundary and the check fires identically in every incarnation. The
-adapter carries the obligation because only it knows, at revival time, which
-reconstructed stores were detached; the core exposes the re-branding hook, and the
-conformance suite asserts that a *revived* detached store is still rejected as a
-named store. Enforcement is **core-side**: the core wraps *every* host-supplied
-hook that can widen the boundary — each named-store provider, its `makeOnce`
-machinery, and `makeSubZone` (whose result the core re-wraps in the same adapter
+(Phase 3) **re-brands** each detached store it reconstructs (re-entering it into
+the new incarnation's `WeakSet` as it loads), so `detached()` membership survives
+the persistence boundary. The adapter carries the obligation because only it
+knows, at revival time, which reconstructed stores were detached; the core exposes
+the re-branding hook, and the conformance suite asserts that a *revived* detached
+store is still rejected as a named store.
+
+The revival path is a deliberately **weaker guarantee than the mint path**, and
+this design names the asymmetry rather than claiming parity. At mint the core
+enforces the brand *structurally*: it wraps every host hook and rejects a detached
+store before delegating, so no adapter bug can bypass it. At revival the brand's
+re-establishment rests on the adapter's *discipline* in calling the re-branding
+hook for every reconstructed detached store; an adapter that forgets one re-brand
+produces a **false negative the core cannot observe** (the un-re-branded store is
+indistinguishable from an ordinary durable value, so the omission is silent, not
+an error). The conformance test (a revived detached store is still rejected) is
+therefore the check on this path, not core-structural enforcement. A future
+adapter contract may close the gap by having the adapter report its
+revived-detached set back to the core for a completeness check against what the
+backing store's revival enumerates; until that lands, the residual risk is
+adapter-discipline-plus-test, and it is named here rather than hidden behind a
+uniform-guarantee claim. Enforcement is **core-side**: the core wraps *every* host-supplied
+hook that can widen the boundary (each named-store provider, its `makeOnce`
+machinery, and `makeSubZone`, whose result the core re-wraps in the same adapter
 shell and rejects if it is identical to any ancestor zone, so a `makeSubZone`
 returning a parent or an un-adapted zone cannot drop the composed `isStorable`,
-the detached brand, or label scoping for the child) — and rejects a value in the
+the detached brand, or label scoping for the child). It rejects a value in the
 detached set *before delegating* to the host: the host's own provider never gets
 the chance to persist it, so a buggy or lax adapter cannot satisfy the property by
 construction. Note that the two checks over a detached store are **distinct
@@ -387,26 +445,39 @@ heap implementation.
    not a runtime-free `types.js` masquerade), `makeOnce`, category key policy,
    promise-watcher fallback, and heap exos/stores. Landing the package regenerates
    the root `tsconfig.composite.json` (via
-   `scripts/generate-composite-tsconfigs.mjs` — regenerated, never hand-edited),
+   `scripts/generate-composite-tsconfigs.mjs`, regenerated and never hand-edited),
    lands type-clean with **no** new root `tsconfig` exclude entry, needs no
    `.yarnrc.yml` catalog touch (`fast-check` / `@fast-check/ava` are per-package
    devDependencies), and carries a `'@endo/zone': major` changeset introducing the
    package and naming the heap-only scope of this phase. Port focused compatibility
-   tests for: labels (including a **property-based injectivity** test over
-   arbitrary label paths, and rejection of ill-formed and out-of-alphabet labels);
-   `makeOnce` revival (a second Zone over a pre-populated backing map) **plus a
-   second `makeOnce` on the revived key asserting it rejects**; a **maker that
-   re-enters `makeOnce` on its own key** (directly and via a sub-zone/exo it
-   constructs) asserting it fails rather than recursing; the maker-throws and
-   maker-allocates-then-throws-then-retries release cases; the **`isStorable`
-   conjunction** (a lax host `() => true` cannot widen the core floor, and the host
-   predicate is *not invoked* once the core floor already rejects — a spy
-   provider); **same-label cross-category collisions** and the sub-zone
-   **separator-collision** (sibling-alias) case; a host **key-mapper alias**
-   rejected by the post-mapping reverse map; the core rejection of a `detached()`
-   store registered as a named store or `makeOnce` result (and the same after a
-   simulated revival, once re-branding lands with the Phase-3 adapter); store
-   failures; weak-store restrictions; and watchers.
+   tests for:
+   - **labels**: a property-based injectivity test over arbitrary label paths,
+     plus rejection of ill-formed and out-of-alphabet labels.
+   - **`makeOnce` revival**: a second Zone over a pre-populated backing map, plus
+     a second `makeOnce` on the revived key asserting it rejects.
+   - **re-entrant maker**: a maker that re-enters `makeOnce` on its own key
+     (directly and via a sub-zone/exo it constructs) asserting it fails rather
+     than recursing.
+   - **release cases**: the maker-throws case (the outer key returns to **free**
+     and the retry succeeds), and the maker-allocates-then-throws case (the retry
+     instead fails on the already-**used** inner key, per
+     [Naming and `makeOnce`](#naming-and-makeonce)).
+   - **`isStorable` conjunction**: a lax host `() => true` cannot widen the core
+     floor, and the host predicate is *not invoked* once the core floor already
+     rejects (a spy provider).
+   - **`coreIsStorable` superset**: every value `@agoric/zone`'s current heap
+     predicate admits is admitted by `coreIsStorable`, drawn from `@agoric/store`'s
+     own `isStorable`/pass-style fixtures, so Phase 2 narrows no existing caller's
+     stored value.
+   - **collisions**: same-label cross-category collisions and the sub-zone
+     separator-collision (sibling-alias) case.
+   - **key-mapper alias**: a host key-mapper alias rejected by the post-mapping
+     reverse map.
+   - **detached rejection**: the core rejection of a `detached()` store registered
+     as a named store or `makeOnce` result (and the same after a simulated
+     revival, once re-branding lands with the Phase-3 adapter).
+   - **store and weak-store semantics**: store failures, weak-store restrictions,
+     and watchers.
 2. **Agoric compatibility adapter.** *Propose* to `@agoric/zone` (which lives
    in `agoric-sdk`, a separate repository under Agoric's governance, not this
    one) that it depend on and re-export the Endo contract while retaining its
@@ -431,16 +502,16 @@ heap implementation.
    *Host-side async bootstrap is the synchronization point.* `makeAdapterZone`
    itself stays synchronous (§ [A portable allocation contract](#a-portable-allocation-contract));
    there is no promise-returning variant of the core export. The daemon adapter's
-   **host bootstrap code** — not the core constructor — is what awaits, during
+   **host bootstrap code** (not the core constructor) is what awaits, during
    worker bootstrap and before any user code runs: it drives the daemon's async
    `M.callWhen(...)` round-trips to load every previously-opened store into a
    resolved in-worker view (the eager revival described under
    [Naming and `makeOnce`](#naming-and-makeonce)), then calls the synchronous
    `makeAdapterZone`, passing that resolved view in as its `storeProviders` /
    `detachedStoreProvider`. The durable *kinds* are re-defined not by the factory
-   but by user code's own early `exoClass(...)` calls in the first delivery — a
+   but by user code's own early `exoClass(...)` calls in the first delivery (a
    kind's re-definition needs its behavior, which is user code the factory is never
-   handed — and the resolved handles make those calls synchronous, so SwingSet's
+   handed), and the resolved handles make those calls synchronous, so SwingSet's
    re-define-before-first-delivery requirement is met by early user code running
    over an already-populated view, not by the factory re-defining kinds it could
    not construct. No later synchronous call ever awaits mid-flight, because first
@@ -459,13 +530,13 @@ heap implementation.
    the host `await`s before it treats the incarnation's work as landed. A
    write-through failure has two windows, and they need different terminal states.
    Across a **crash** between the synchronous return and the daemon ack, no value
-   escaped a live incarnation, so the key is left **free** for the next incarnation
-   to re-allocate cleanly — never half-committed under a name a later `makeOnce`
+   escapes a live incarnation, so the key is left **free** for the next incarnation
+   to re-allocate cleanly, never half-committed under a name a later `makeOnce`
    would both revive and re-create. But *within a live incarnation* the synchronous
-   return already handed the caller a live value and marked the key **used**;
+   return has already handed the caller a live value and marked the key **used**;
    rolling that key back to **free** would let a later `makeOnce(sameKey)` mint a
-   **second** live value under one name while the first is still reachable — the
-   once-only invariant broken without any crash. So an in-incarnation write-through
+   **second** live value under one name while the first is still reachable, breaking
+   the once-only invariant without any crash. So an in-incarnation write-through
    failure moves the key to a distinct terminal **failed** (poisoned) state, not
    **free**: the key refuses re-allocation for the rest of the incarnation, and the
    failure is made **fatal** through the commit barrier (the host aborts the
@@ -487,7 +558,7 @@ heap implementation.
    Zone reachable without a prerequisite landing first. Phase 4 is additionally
    gated on the `@endo/ertp` design itself, which is not yet landed: it is the open
    draft [PR #778](https://github.com/endojs/endo-but-for-bots/pull/778) carrying
-   kriskowal's request for changes (2026-07-30) — the review this design answers —
+   kriskowal's request for changes (2026-07-30), the review this design answers,
    so Phase 4 cannot begin until that design settles. `@endo/zone` is its
    prerequisite, not a build atop a settled seam. As the daemon adapter
    lands, the matrix widens to heap-plus-daemon; the Agoric adapter is added only
@@ -504,8 +575,8 @@ not a heap-only suite plus host extras: the store contract properties (duplicate
 `M.key()` equality plus rank iteration order **up to rank ties**) are owed by
 every provider, so each adapter runs the same suite against its own Zone. The
 iteration-order property is qualified because rank order is not a total order over
-keys — `compareRank` treats all remotables as tied, and the tie propagates into
-containers — so a heap `Map` (insertion order) and a SQLite/encoded-key store
+keys: `compareRank` treats all remotables as tied, and the tie propagates into
+containers, so a heap `Map` (insertion order) and a SQLite/encoded-key store
 (B-tree order) legitimately differ among tied keys. The suite therefore asserts
 that iteration agrees with `compareRank` only where it is a total order; order
 among tied keys is unspecified and must not be asserted. Because the central claim ("a
@@ -522,7 +593,7 @@ copyRecords, distinct remotables), and runs under `@fast-check/ava` (at
 `catalog:dev`, as `packages/pass-style` / `packages/patterns` / `packages/exo-git`
 already do), once per implementation.
 `packages/exo-git/test/kit-conformance.test.js` is the in-repo precedent for
-**property-based** fast-check conformance — it uses `fc.asyncProperty`, not
+**property-based** fast-check conformance: it uses `fc.asyncProperty`, not
 `fc.commands`, which appears nowhere in the tree yet, so this model-based suite
 would be the first of its shape here. Adapter suites then add the properties their host alone
 can promise: an Agoric upgrade returns the same `makeOnce` value, and a daemon
