@@ -578,7 +578,9 @@ export const makeSearch = powers => {
           }
           return;
         }
-        const segments = relativePath.split('/').filter(segment => segment !== '');
+        const segments = relativePath
+          .split('/')
+          .filter(segment => segment !== '');
         if (segments.some(segment => isDeniedName(denySet, segment))) {
           continue;
         }
