@@ -1809,7 +1809,7 @@ pub fn run_xs_program(
     // hazard"). Observed at a pure-Rust frame below and converted into
     // `XsnapError::Panicked`, so only this one worker dies.
     //
-    // The poison-drain contract, stated once for all five checkpoints below:
+    // The poison-drain contract, stated once for all six checkpoints below:
     // `worker_io::ffi_panicked()` must be observed *before* every
     // side-effecting call this run can reach on a poisoned worker, so a
     // mid-mutation dead worker never commits an effect (a `suspend` snapshot,
@@ -1822,7 +1822,10 @@ pub fn run_xs_program(
     //      any envelope this pump iteration.
     //   4. mid-pump-before-dispatch: inside the drain, before each subsequent
     //      `handle_envelope`.
-    //   5. post-crank (loop bottom): after the pump, before the meter report.
+    //   5. mid-pump-before-debug-flush: after the drain breaks, before
+    //      `flush_debug_outbound` ships any buffered `debug` envelope (the last
+    //      dispatched envelope's callbacks may have poisoned the worker).
+    //   6. post-crank (loop bottom): after the pump, before the meter report.
     // Each check is `if ffi_panicked() { take; [break 'outer;] }`; the only
     // variation is that checkpoint 1 falls through (no loop yet). Placement of
     // each check *before* its guarded effect is the load-bearing invariant;
@@ -1846,6 +1849,9 @@ pub fn run_xs_program(
         ffi_death = worker_io::take_ffi_panic();
         eprintln!("{label}: worker died from an FFI-guarded panic during bootstrap");
     }
+    // Bootstrap eval ran guest JS; heal a `CAPTURING` flag stranded by an
+    // `fxAbort`->`longjmp` there before either run path below starts.
+    worker_io::reset_capturing();
 
     if ffi_death.is_none() && supervised {
         eprintln!("{label}: entering main loop");
@@ -1861,6 +1867,14 @@ pub fn run_xs_program(
             METERING_ABORTED.with(|a| a.set(false));
             let hard_limit = CRANK_HARD_LIMIT.with(|c| c.get());
             set_crank_limit(hard_limit);
+
+            // Heal a `CAPTURING` flag stranded `true` by a previous crank's
+            // `fxAbort`->`longjmp` (which can unwind past `guard_ffi_ret`'s
+            // restore); this pure-Rust crank boundary is a longjmp-proof point,
+            // so clearing it here keeps a stuck flag from permanently blinding
+            // this thread's panic diagnostics (design § "The already-live FFI
+            // abort hazard").
+            worker_io::reset_capturing();
 
             // A guarded callback may have poisoned this worker on the
             // *previous* crank's reactive pump. Observe it here, *before* the
@@ -1980,6 +1994,22 @@ pub fn run_xs_program(
                     }
                 }
 
+                // The last `handle_envelope` in the drain above can itself run
+                // guest JS that panics in a guarded callback and poisons the
+                // worker; the loop's pre-dispatch check does not cover it once
+                // the drain has broken. `flush_debug_outbound()` ships a raw
+                // `debug` envelope to the supervisor — a side effect that must
+                // not fire on a dead, mid-mutation worker — so observe the
+                // poison before flushing, consistent with the other checkpoints.
+                if worker_io::ffi_panicked() {
+                    ffi_death = worker_io::take_ffi_panic();
+                    eprintln!(
+                        "{label}: worker died from an FFI-guarded panic \
+                         (mid-pump, before debug flush)"
+                    );
+                    break 'outer;
+                }
+
                 // Flush any debug output generated during this pump
                 // cycle (breakpoint hits, step responses, etc.).
                 flush_debug_outbound();
@@ -2005,6 +2035,13 @@ pub fn run_xs_program(
             // ---- Crank end ----
             let steps = machine.current_computrons();
             set_crank_limit(0);
+
+            // The reactive pump above runs JS, so an `fxAbort`->`longjmp`
+            // (metering abort, recoverable OOM) may have stranded `CAPTURING`
+            // `true` mid-crank, past `guard_ffi_ret`'s restore. Clear it at this
+            // longjmp-proof boundary before the crank-end effects (meter report,
+            // `__shouldTerminate` eval) run any further callbacks.
+            worker_io::reset_capturing();
 
             // A Rust panic in an `extern "C"` worker callback was caught at
             // the FFI boundary this crank (the guard forbade it from
@@ -2041,6 +2078,9 @@ pub fn run_xs_program(
         // Run until idle: drain promise jobs and fire timers until
         // both queues are empty.
         machine.run_loop();
+        // Heal a `CAPTURING` flag stranded by an `fxAbort`->`longjmp` during
+        // this non-metered run before the poison drain and teardown below.
+        worker_io::reset_capturing();
     }
 
     // Catch a poison left by the non-metered (`run_loop`) path too.

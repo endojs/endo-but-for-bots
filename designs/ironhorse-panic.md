@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
-| **Updated** | 2026-09-04 |
+| **Updated** | 2026-09-05 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -266,7 +266,7 @@ and adds classification, rather than collapsing them:
    carries a diagnostic payload, for the same reason item 1 keeps the legacy
    variants' payloads**: collapsing them to payload-free would forfeit exactly the
    supervisor/debugger diagnostics this family is meant to preserve:
-   `EngineFault { message: String, location: Option<PanicLocation> }` captures the
+   `EngineFault { message: String, location: Option<String> }` captures the
    caught Rust panic's message and (where the panic hook can recover it) its
    file/line, so `EngineFault` is as informative as `StackOverflow(usize)`'s
    overshoot; `ReferenceError { name: Option<String>, site: RaiseSite }` captures
@@ -278,8 +278,8 @@ and adds classification, rather than collapsing them:
    frozen-at-fault snapshot is self-describing rather than requiring the cause to be
    re-derived from the program counter alone. The two "where" fields are
    deliberately spelled differently: `EngineFault.location` is an *optional
-   physical source position* (`PanicLocation`, a Rust file/line the panic hook can
-   recover only sometimes), whereas `ReferenceError.site` is a *non-optional
+   physical source position* (`Option<String>`, a Rust `file:line:col` string the
+   panic hook can recover only sometimes), whereas `ReferenceError.site` is a *non-optional
    categorical raise-site* (`RaiseSite`, always exactly one of the finite Coda
    sites). The distinction is a fault's physical origin versus its known-in-advance categorical
    origin, not an accidental naming inconsistency. Neither variant is payload-free.

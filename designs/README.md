@@ -367,7 +367,7 @@ LLM-agent stack).*
 | [test262-fixture-consolidation](test262-fixture-consolidation.md) | 2026-08-06 | 2026-08-14 | In Progress |
 | [platform-neutral-hash](platform-neutral-hash.md) | 2026-07-22 | 2026-08-12 | In Progress |
 | [conservative-regexp-subset](conservative-regexp-subset.md) | 2026-07-10 | 2026-07-29 | Not Started |
-| [ironhorse-panic](ironhorse-panic.md) | 2026-08-17 | 2026-09-01 | Proposed |
+| [ironhorse-panic](ironhorse-panic.md) | 2026-08-17 | 2026-09-05 | Proposed |
 | [endor-run-expanded](endor-run-expanded.md) | 2026-04-17 | 2026-08-27 | In Progress |
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-08-01 | **Complete** |
 | [endor-registry-proxy-worker](endor-registry-proxy-worker.md) | 2026-08-06 | — | Proposed |
