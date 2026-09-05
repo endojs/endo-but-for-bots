@@ -528,8 +528,8 @@ symbol representation) with no design-level dependencies or dependents, so it
 takes no node in the dependency graph; its natural home is the marshal/pass-style
 security track. Size estimate: a modest implementation (one new module plus a
 `SymbolHelper`, an `imports` alias, three specifier edits, a world-query export,
-a second AVA config, world-aware tests, and a second tsconfig for type coverage)
-— roughly a single focused implementation PR, plus a follow-up for OCapN
+a second AVA config, world-aware tests, and a second tsconfig for type coverage),
+roughly a single focused implementation PR, plus a follow-up for OCapN
 `selector.js` de-primitivization and the syrup-layer representation change; it
 does not shift any milestone's critical path.
 
