@@ -34,12 +34,24 @@ import { assertValidId, parseId } from '../formula-identifier.js';
  *
  * @typedef {object} FormulaNonceLocator
  * @property {(secret: string | Uint8Array) => Promise<unknown>} get
- *   The shared formula adapter, usable directly as `makeOcapn`'s
- *   `locator`.
+ *   The shared, **unbounded** formula adapter. It carries no miss counter
+ *   and no abort, so it is safe as `makeOcapn`'s `locator` **only** for
+ *   the outgoing, self-local `enlivenSturdyRef` path (resolving your own
+ *   node's sturdyrefs). It is **not** safe as the sole `locator` for
+ *   *incoming* peer `bootstrap.fetch`: used that way it hands every
+ *   authenticated (and, depending on the netlayer, unauthenticated) peer
+ *   an unlimited, un-torn-down formula-identifier probing surface. For
+ *   incoming peer traffic, always pair it with `makeLocatorForSession`
+ *   (below), which is what applies the per-peer miss bound and abort.
  * @property {MakeSessionFormulaLocator} makeLocatorForSession
  *   The per-session factory for `makeOcapn`'s `makeLocatorForSession`
  *   hook; its session locator's `get` carries the same widened
- *   `string | Uint8Array` secret the shared `get` does.
+ *   `string | Uint8Array` secret the shared `get` does. This is the
+ *   member that makes the mechanism non-inert against a probing peer.
+ *   Note it refuses every well-known swissnum *word* (e.g.
+ *   `endo-peer-entry`) by construction — see the well-known-swissnum note
+ *   on {@link makeFormulaNonceLocator} — so a deployment that keeps a
+ *   live well-known swissnum must compose, not replace.
  */
 
 // How many failed presentations one authenticated session may make
@@ -48,7 +60,14 @@ import { assertValidId, parseId } from '../formula-identifier.js';
 // holds a valid identifier presents it and hits, so it never
 // accumulates misses. Chosen small: a legitimate client that has the
 // nonce does not miss, and a prober learns nothing from any single
-// presentation, so a tight bound costs honest peers nothing.
+// presentation, so a tight bound costs an honest *serial* peer nothing.
+// The one liveness cost a tight bound *can* impose falls only on a peer
+// that pipelines more than `missBound` presentations at once: the
+// in-flight admission gate (see the `misses + inFlight >= missBound`
+// term below) may refuse one such concurrent presentation as a miss
+// without aborting the session. That is a bounded, retryable cost a
+// high-concurrency peer pays, never a security relaxation — a peer that
+// simply awaits each presentation before the next never encounters it.
 const DEFAULT_MISS_BOUND = 16;
 
 /**
@@ -106,11 +125,32 @@ const assertCapability = value => {
  * nonce. Foreign-node identifiers are a miss, never a peer dial — this
  * endpoint only ever discloses local formulas.
  *
- * The returned object is itself a plain shared `NonceLocator` (its `get`
- * is usable directly as `makeOcapn`'s `locator`). The returned
- * `makeLocatorForSession` is the per-session factory for `makeOcapn`'s
- * `makeLocatorForSession` hook: it wraps the shared `get` with a miss
- * counter scoped to one authenticated peer/connection. Only *misses* are
+ * The returned object's shared `get` is a plain `NonceLocator`, but it is
+ * **unbounded**: it carries no miss counter and no abort. Passing it alone
+ * as `makeOcapn`'s `locator` is safe **only** for the outgoing, self-local
+ * `enlivenSturdyRef` path; as the sole locator for *incoming* peer
+ * `bootstrap.fetch` it is the one inert configuration — an unlimited,
+ * un-torn-down probing surface with nothing flagging it. The bound and the
+ * abort live entirely in the per-session locator, so for incoming peer
+ * traffic the shared `get` must be **paired** with `makeLocatorForSession`
+ * (the historical single-`locator` wiring is inert against a prober). The
+ * returned `makeLocatorForSession` is the per-session factory for
+ * `makeOcapn`'s `makeLocatorForSession` hook: it wraps the shared `get`
+ * with a miss counter scoped to one authenticated peer/connection.
+ *
+ * Well-known swissnums (a fixed *word* like `endo-peer-entry`, not a
+ * formula identifier) are refused by construction — every non-formula
+ * presentation is a uniform miss — so this mechanism cannot itself serve
+ * the daemon's live well-known peer-entry swissnum, and the per-session
+ * locator, being the `locator` for incoming fetches, would displace any
+ * plain `locator` that does. A deployment that retains a well-known
+ * swissnum (see `designs/daemon-ocapn-external-connectivity.md` §2 and
+ * `networks/ocapn.js`'s `PEER_ENTRY_SWISSNUM`) must therefore **compose**:
+ * route the fixed well-known swissnum(s) through a thin outer locator that
+ * delegates everything else to this formula locator, rather than replacing
+ * its locator with this one wholesale, or migrate the peer-entry exo onto
+ * a formula identifier. This mechanism deliberately carries no well-known
+ * branch of its own; that composition is the embedder's responsibility. Only *misses* are
  * ordered against the bound — hits are never serialized behind one
  * another. A synchronous in-flight counter is incremented at entry, and a
  * presentation is refused outright (no lookup runs) once
@@ -178,6 +218,23 @@ export const makeFormulaNonceLocator = ({
       'makeFormulaNonceLocator: missBound must be a positive integer',
     );
   }
+  // A throwing embedder `logger` must never become an oracle. If
+  // `logger.error` threw where the miss path calls it, the rejection would
+  // escape `get` as a distinct error — a distinguishable failure the peer
+  // could observe — and, worse, the miss would never be counted (the
+  // `misses += 1` below the `await get(...)` would be skipped), silently
+  // disarming the session bound. Route every diagnostic through a wrapper
+  // that swallows a broken logger, so what the peer observes never depends
+  // on the logger behaving.
+  /** @param {...unknown} args */
+  const logError = (...args) => {
+    try {
+      logger.error(...args);
+    } catch {
+      // A broken logger must not change what the peer observes, nor whether
+      // a miss counts; there is nowhere safe left to report the failure.
+    }
+  };
   /**
    * The shared formula adapter. `secret` is whatever the OCapN bootstrap
    * decoded from the Swiss number: the canonical ASCII identifier as a
@@ -226,7 +283,7 @@ export const makeFormulaNonceLocator = ({
       // `assertValidId` echo) would otherwise land that bearer nonce in
       // the daemon log. Per authenticated session the volume is bounded by
       // the miss bound below.
-      logger.error(
+      logError(
         'formula nonce locator: presentation missed',
         error instanceof Error ? error.name : 'Error',
       );
@@ -267,7 +324,7 @@ export const makeFormulaNonceLocator = ({
       try {
         abortSession();
       } catch (error) {
-        logger.error(
+        logError(
           'formula nonce locator: abortSession threw',
           error instanceof Error ? error.name : 'Error',
         );

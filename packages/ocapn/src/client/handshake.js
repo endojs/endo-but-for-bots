@@ -126,7 +126,7 @@ export const makeSession = ({
  * @param {(connection: Connection, reason: string) => void} sendAbortAndClose
  * @param {any} message
  * @param {string} captpVersion
- * @param {(connection: Connection, sessionId: SessionId, peerLocation: OcapnLocation) => Ocapn} prepareOcapn
+ * @param {(connection: Connection, sessionId: SessionId, peerLocation: OcapnLocation, peerPublicKey: OcapnPublicKey) => Ocapn} prepareOcapn
  * @param {OcapnCodec} codec
  * @param {Cryptography} cryptography
  */
@@ -253,7 +253,12 @@ const handleSessionHandshakeMessage = (
         peerPublicKey.id,
       );
 
-      const ocapn = prepareOcapn(connection, sessionId, peerLocation);
+      const ocapn = prepareOcapn(
+        connection,
+        sessionId,
+        peerLocation,
+        peerPublicKey,
+      );
       const session = makeSession({
         id: sessionId,
         selfIdentity,
@@ -290,7 +295,7 @@ const handleSessionHandshakeMessage = (
  * @param {(connection: Connection, reason: string) => void} sendAbortAndClose
  * @param {Uint8Array} data
  * @param {string} captpVersion
- * @param {(connection: Connection, sessionId: SessionId, peerLocation: OcapnLocation) => Ocapn} prepareOcapn
+ * @param {(connection: Connection, sessionId: SessionId, peerLocation: OcapnLocation, peerPublicKey: OcapnPublicKey) => Ocapn} prepareOcapn
  * @param {OcapnCodec} codec
  * @param {Cryptography} cryptography
  */
