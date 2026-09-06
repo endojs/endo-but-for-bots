@@ -1,0 +1,91 @@
+//! Member access and assignment on `null`/`undefined` throw the spec's
+//! `TypeError` (architecture review F007).
+//!
+//! `GET_PROPERTY`'s receiver match fell through to `Slot::undefined()` for
+//! a nullish base and `SET_PROPERTY` had no else arm, so `null.f`
+//! evaluated to `undefined`, `null.f = 1` was a silent no-op, and every
+//! `if (x.y)` guard over a nullish `x` took the wrong branch — a wrong
+//! value, silently, from the most common runtime error in the language.
+//! `null.f()` did throw, because the call site checks callability, which
+//! masked the defect in the most-tested shape. XS's `fxToInstance` throws
+//! `TypeError: cannot coerce null to object` / `… undefined to object`;
+//! the messages below are the pinned oracle's `String(e)`.
+
+use ironhorse_vm::{run_program_with_symbols, RunOutcome};
+
+fn run(source: &str) -> RunOutcome {
+    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("source compiles");
+    run_program_with_symbols(&bytecode, &symbols)
+}
+
+fn assert_throws_type_error(source: &str, message: &str) {
+    // `TypeError` is named so the realm links its prototype (as any program
+    // that inspects the error does); `e.name`/`e.message` are the realm's
+    // own view of the thrown object.
+    let program = format!(
+        "var r=0; try {{ {source} }} \
+         catch(e){{ r=(e instanceof TypeError)+':'+e.name+': '+e.message }} r"
+    );
+    let out = run(&program);
+    assert!(
+        out.completed,
+        "the TypeError must be catchable; halt: {:?}\n  {program}",
+        out.halt
+    );
+    assert_eq!(out.result, format!("true:TypeError: {message}"), "{source}");
+}
+
+#[test]
+fn reading_a_named_property_of_null_or_undefined_throws() {
+    assert_throws_type_error("null.f", "cannot coerce null to object");
+    assert_throws_type_error("undefined.f", "cannot coerce undefined to object");
+    assert_throws_type_error("var a; a.f", "cannot coerce undefined to object");
+    assert_throws_type_error("({}).x.y", "cannot coerce undefined to object");
+}
+
+#[test]
+fn reading_a_computed_property_of_null_or_undefined_throws() {
+    assert_throws_type_error("var k='f'; null[k]", "cannot coerce null to object");
+    assert_throws_type_error("var k='f'; undefined[k]", "cannot coerce undefined to object");
+    assert_throws_type_error("null[0]", "cannot coerce null to object");
+}
+
+#[test]
+fn writing_a_property_of_null_or_undefined_throws() {
+    assert_throws_type_error("null.f = 1", "cannot coerce null to object");
+    assert_throws_type_error("undefined.f = 1", "cannot coerce undefined to object");
+    assert_throws_type_error("var k='f'; null[k] = 1", "cannot coerce null to object");
+    assert_throws_type_error("var k='f'; undefined[k] = 1", "cannot coerce undefined to object");
+}
+
+#[test]
+fn a_nullish_guard_takes_the_throwing_path_not_the_wrong_branch() {
+    // The silent form: before the fix `x.y` was `undefined` and the guard
+    // fell through to "no".
+    let out = run(
+        "var x = null; var r = 'unset'; \
+         try { if (x.y) { r = 'yes' } else { r = 'no' } } catch (e) { r = 'threw' } r",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "threw");
+}
+
+#[test]
+fn an_uncaught_nullish_access_escapes_with_the_xs_rendering() {
+    let out = run("null.f");
+    assert!(!out.completed);
+    assert_eq!(
+        out.halt.thrown_rendering(),
+        Some("TypeError: cannot coerce null to object")
+    );
+}
+
+#[test]
+fn optional_chaining_and_call_shapes_are_unchanged() {
+    let out = run("var r=0; try { null?.f; r='ok' } catch(e) { r=String(e) } r");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "ok");
+    let out = run("var r=0; try { null.f() } catch(e) { r=e instanceof TypeError } r");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "true");
+}
