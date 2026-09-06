@@ -222,20 +222,29 @@ The answer decides whether the oracle gets to judge the run:
   `Test262Error` here is ironhorse failing an assertion XS passes, and any
   other error is one the oracle did not throw.
   The one honest shape is the engine's `ReferenceError: get <Name>: undefined
-  variable` for a `<Name>` the pinned oracle binds in an **empty** program
-  (probed once per name with `typeof <Name>`): the reference engine has a host
-  intrinsic the port has not landed, reported as the named skip
-  `ironhorse-missing-global:<Name>`.
-  A name the oracle does not bind that way was bound by the program itself, by
-  whatever declaration form, so ironhorse failing to resolve it is a spurious
-  `ReferenceError` and fails.
+  variable` for a `<Name>` the pinned oracle binds **and ironhorse does not**
+  in an **empty** program (both engines probed once per name with
+  `typeof <Name>`): the reference engine has a host intrinsic the port has not
+  landed, reported as the named skip `ironhorse-missing-global:<Name>`.
+  A name neither engine binds that way was bound by the program itself, by
+  whatever declaration form, and a name both bind was there to be found, so in
+  either case ironhorse failing to resolve it is a spurious `ReferenceError`
+  and fails.
 - A shared abort where the oracle threw a native error constructor and
   ironhorse threw a different one is a failure (`abort-type divergence`).
   The same constructor with a different message stays the
-  `abort-value-differs` skip until engine errors carry messages, and an oracle
-  that itself could not resolve a global (the pinned XS build has no `Intl`)
-  certified nothing, so that shape is the oracle-side skip
-  `oracle-host-missing-global:<Name>`.
+  `abort-value-differs` skip until engine errors carry messages.
+  An oracle that itself could not resolve a name certified nothing: a name
+  ironhorse binds and the pinned XS build does not (`Intl`) is the oracle's
+  host gap, `oracle-host-missing-global:<Name>`; a name neither binds is an
+  XS miss on a program-level binding, the infrastructure skip
+  `oracle-unresolved-binding:<Name>`.
+- Every failure above that rests on the oracle's authority (an uncaught throw
+  where the oracle completed, a spurious `ReferenceError`, an abort-type
+  divergence) is demoted to an `oracle-gate-off:<shape>` skip under
+  `--no-oracle`, like the existing over-acceptance arm.
+  An engine-invariant halt and an unregistered declined label are not oracle
+  disagreements and fail regardless.
 
 The stage-scoped curated corpora under `ironhorse-262/corpora/` are the
 bootstrap (stage-1 arithmetic/logic/control-flow; stage-2 var/loop/object;

@@ -524,12 +524,8 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     } else {
                         Verdict::Covered
                     }
-                } else if let Some(name) = missing_global_binding(&run.oracle_error) {
-                    // The oracle itself could not resolve a global on this
-                    // program (the pinned XS build lacks `Intl`, for one), so
-                    // it certified nothing here: an oracle non-result, named
-                    // by the intrinsic, never an ironhorse abort-type failure.
-                    Verdict::RunSkip(format!("oracle-host-missing-global:{name}"))
+                } else if let Some(skip) = oracle_unresolved_name_skip(&run.oracle_error) {
+                    skip
                 } else if cfg.oracle && oracle_missing_intl(run) {
                     // The same missing `Intl`, wrapped by an assertion-based
                     // case into its Test262Error.
@@ -543,10 +539,14 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                         // one (or the harness's `Test262Error`): the error
                         // model diverged, which is a wrong answer the bar
                         // forbids, not a built-in gap.
-                        Verdict::Fail(format!(
-                            "abort-type divergence: oracle threw {:?} ironhorse threw {:?}",
-                            run.oracle_error, thrown
-                        ))
+                        oracle_disagreement(
+                            cfg,
+                            "abort-type-differs",
+                            format!(
+                                "abort-type divergence: oracle threw {:?} ironhorse threw {:?}",
+                                run.oracle_error, thrown
+                            ),
+                        )
                     } else {
                         // Both aborted with the same constructor but a different
                         // message (the port's engine errors carry no text yet),
@@ -655,33 +655,46 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
             Halt::Throw { rendered: thrown, .. } if constructor_name(thrown) == "Test262Error" => {
                 // ironhorse computed a value the harness's own assertion
                 // rejected, on a case XS passes: the assertion is the report.
-                Verdict::Fail(format!(
-                    "ironhorse failed a harness assertion the oracle passed: {thrown}"
-                ))
+                oracle_disagreement(
+                    cfg,
+                    "oracle-only-complete",
+                    format!("ironhorse failed a harness assertion the oracle passed: {thrown}"),
+                )
             }
             Halt::Throw { rendered: thrown, .. } => match missing_global_binding(thrown) {
                 // The one honest shape: the name ironhorse could not resolve
-                // is one the reference engine binds in an empty program, so
-                // the binding is a host intrinsic the port has not landed —
-                // an unlanded global, named. The oracle is asked directly
-                // (`oracle_binds_global`) rather than the source inspected:
-                // a name the program itself binds, by any of the language's
-                // many declaration forms, is unbound in an empty program and
-                // so stays the failure it is.
-                Some(name) => match oracle_binds_global(name) {
-                    Some(true) => Verdict::RunSkip(format!("ironhorse-missing-global:{name}")),
-                    Some(false) => Verdict::Fail(format!(
-                        "spurious ReferenceError: ironhorse could not resolve `{name}`, \
-                         which the oracle does not bind as a global"
-                    )),
+                // is one the reference engine binds in an empty program and
+                // ironhorse does not, so the binding is a host intrinsic the
+                // port has not landed — an unlanded global, named. Both
+                // engines are asked directly (`probe_global`) rather than the
+                // source inspected: a name the program itself binds, by any
+                // of the language's many declaration forms, is unbound in an
+                // empty program, and a name ironhorse binds too was reachable
+                // and not reached — either way the engine's scope resolution
+                // lied, and that stays the failure it is.
+                Some(name) => match probe_global(name) {
+                    Some(binding) if binding.oracle && !binding.ironhorse => {
+                        Verdict::RunSkip(format!("ironhorse-missing-global:{name}"))
+                    }
+                    Some(binding) => oracle_disagreement(
+                        cfg,
+                        "oracle-only-complete",
+                        format!(
+                            "spurious ReferenceError: ironhorse could not resolve `{name}` \
+                             (bound as a global by oracle={} ironhorse={})",
+                            binding.oracle, binding.ironhorse
+                        ),
+                    ),
                     None => Verdict::RunSkip("oracle-machine-error".into()),
                 },
                 // Any other uncaught throw is an error the oracle did not
                 // throw — a spurious engine error on a program the oracle
                 // completed, a wrong answer.
-                None => Verdict::Fail(format!(
-                    "ironhorse threw where the oracle completed: {thrown}"
-                )),
+                None => oracle_disagreement(
+                    cfg,
+                    "oracle-only-complete",
+                    format!("ironhorse threw where the oracle completed: {thrown}"),
+                ),
             },
             // The engine's own limits (stack geometry, meter, step ceiling)
             // the oracle cannot share: an ironhorse limitation, honestly
@@ -714,7 +727,7 @@ pub(crate) const HARNESS_DECLINED_LABELS: &[&str] =
 /// exemption from the oracle is granted here, by an explicit allowlist, not by
 /// the engine reaching for a new string.
 fn declined_verdict(label: &str) -> Verdict {
-    if is_declined_label(label) || HARNESS_DECLINED_LABELS.contains(&label) {
+    if is_skip_eligible_label(label) {
         Verdict::RunSkip(format!("unsupported-opcode:{label}"))
     } else {
         Verdict::Fail(format!("unregistered-halt-label:{label}"))
@@ -730,37 +743,105 @@ pub(crate) fn missing_global_binding(thrown: &str) -> Option<&str> {
     let name = thrown
         .strip_prefix("ReferenceError: get ")?
         .strip_suffix(": undefined variable")?;
-    let identifier = !name.is_empty()
+    // A plain identifier: `ID_Start` first (never a digit — `typeof 123` is
+    // `"number"`, which would read as "bound"), identifier characters after.
+    let identifier = name.chars().next().is_some_and(|c| !c.is_ascii_digit())
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
     identifier.then_some(name)
 }
 
-/// Does the pinned XS oracle bind `name` as a global in an **empty** program?
-/// The probe `typeof <name>` completes on the oracle whether or not the name
-/// is bound, and reads `"undefined"` when it is not. `None` only when the
-/// oracle machine itself fails. Answers are cached per name for the process:
-/// the question is a property of the pinned oracle, not of any case.
+/// Which engines bind a name as a global in an **empty** program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GlobalBinding {
+    /// The pinned XS oracle binds it.
+    pub oracle: bool,
+    /// ironhorse binds it.
+    pub ironhorse: bool,
+}
+
+/// Does each engine bind `name` as a global in an **empty** program? The
+/// probe `typeof <name>` completes whether or not the name is bound and reads
+/// `"undefined"` when it is not; both engines run it through the ordinary
+/// dual run. `None` only when the oracle machine itself fails. Answers are
+/// cached per name for the process: the question is a property of the two
+/// engines, not of any case.
 ///
-/// This is the signal that separates an unlanded intrinsic (the oracle binds
-/// it with no help from the program) from a spurious ironhorse
-/// `ReferenceError` on a binding the program made itself — a `var`, a
-/// parameter, a `catch` name, a destructuring target, a `with` object, an
-/// `eval`-introduced binding, or a property defined on `globalThis` — none of
-/// which exist in an empty program.
-pub(crate) fn oracle_binds_global(name: &str) -> Option<bool> {
+/// Both halves are needed. A `ReferenceError` ironhorse raised for a name the
+/// oracle binds **and ironhorse does not** is an unlanded intrinsic. A name
+/// neither binds was bound by the program itself — a `var`, a parameter, a
+/// `catch` name, a destructuring target, a `with` object, an `eval`-introduced
+/// binding, a property defined on `globalThis` — so failing to resolve it is
+/// the engine's scope resolution lying. And a name **both** bind is the same
+/// lie on an intrinsic: ironhorse's object-environment and `with` paths raise
+/// the identical `get <name>: undefined variable` text when they fail to fall
+/// through to the global object, which the oracle half alone would launder
+/// into a "missing intrinsic".
+pub(crate) fn probe_global(name: &str) -> Option<GlobalBinding> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<String, GlobalBinding>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(&bound) = cache.lock().unwrap().get(name) {
-        return Some(bound);
+    if let Some(&binding) = cache.lock().unwrap().get(name) {
+        return Some(binding);
     }
-    let probe = xs_oracle::run(&format!("typeof {name}"))?;
-    let bound = probe.completed && probe.result != "undefined";
-    cache.lock().unwrap().insert(name.to_string(), bound);
-    Some(bound)
+    let run = crate::dual_run(&format!("typeof {name}"))?;
+    let binding = GlobalBinding {
+        oracle: oracle_completed(run.agreement) && run.oracle_result != "undefined",
+        ironhorse: ironhorse_completed(run.agreement) && run.ironhorse_result != "undefined",
+    };
+    cache.lock().unwrap().insert(name.to_string(), binding);
+    Some(binding)
+}
+
+/// The skip owed when the **oracle's** uncaught throw is its unresolved-name
+/// `ReferenceError`, or `None` when that throw is a reference behavior to be
+/// judged as usual. The oracle certified nothing on such a program, so
+/// ironhorse's own throw goes unjudged — but only when the name is one XS
+/// really could not have bound: a host intrinsic the pinned build lacks and
+/// ironhorse has (`Intl`) is the oracle's known host gap; a name neither
+/// engine binds in an empty program is one the program bound and XS still
+/// could not resolve (an XS defect on a program-level binding), an oracle-side
+/// surprise. A name the oracle **does** bind in an empty program was made
+/// unresolvable by this program (a `delete globalThis.Array`, a `with`
+/// shadow), which is exactly the reference behavior the shared-abort
+/// comparison exists to judge, so it falls through.
+fn oracle_unresolved_name_skip(oracle_error: &str) -> Option<Verdict> {
+    let name = missing_global_binding(oracle_error)?;
+    match probe_global(name) {
+        Some(binding) if !binding.oracle && binding.ironhorse => Some(Verdict::RunSkip(format!(
+            "oracle-host-missing-global:{name}"
+        ))),
+        Some(binding) if !binding.oracle && !binding.ironhorse => Some(Verdict::RunSkip(format!(
+            "oracle-unresolved-binding:{name}"
+        ))),
+        Some(_) => None,
+        None => Some(Verdict::RunSkip("oracle-machine-error".into())),
+    }
+}
+
+/// Is `label` one the differential instruments may treat as an honest skip:
+/// registered by the engine (`ironhorse_vm::halt_labels`) or one of the
+/// runner's own [`HARNESS_DECLINED_LABELS`]? The one predicate every discard
+/// site consults, so a change to what counts as registered lands everywhere
+/// at once.
+pub(crate) fn is_skip_eligible_label(label: &str) -> bool {
+    is_declined_label(label) || HARNESS_DECLINED_LABELS.contains(&label)
+}
+
+/// A verdict for an **oracle disagreement** — a shape whose failure depends
+/// on the oracle being the differential authority. Under `--no-oracle` the
+/// oracle cannot fail the build ([`Config::oracle`]), so the same shape is
+/// demoted to the named `oracle-gate-off:<shape>` skip, exactly as the
+/// over-acceptance arm already does. Engine-invariant halts and unregistered
+/// declined labels are not oracle disagreements and never pass through here.
+fn oracle_disagreement(cfg: &Config, shape: &str, detail: String) -> Verdict {
+    if cfg.oracle {
+        Verdict::Fail(detail)
+    } else {
+        Verdict::RunSkip(format!("oracle-gate-off:{shape}"))
+    }
 }
 
 /// Is `name` one of the native error constructors the port claims to
@@ -3169,7 +3250,13 @@ mod tests {
         // where the oracle completed. The oracle binds no `x` in an empty
         // program, so this is the engine's scope resolution lying, never the
         // named global skip.
-        assert_eq!(oracle_binds_global("x"), Some(false));
+        assert_eq!(
+            probe_global("x"),
+            Some(GlobalBinding {
+                oracle: false,
+                ironhorse: false
+            })
+        );
         let mut run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get x: undefined variable"));
         run.source = "function f(x) { return x; } f(1);".into();
         assert!(matches!(
@@ -3179,11 +3266,77 @@ mod tests {
     }
 
     #[test]
+    fn a_scope_resolution_miss_on_an_intrinsic_both_engines_bind_is_a_failure() {
+        // Both engines bind `Array`; ironhorse still raised its unresolved-
+        // variable ReferenceError for it (the `with`/object-environment
+        // paths emit the same text when they fail to fall through to the
+        // global object). The oracle half alone would call this a missing
+        // intrinsic; the ironhorse half says the binding was there.
+        assert_eq!(
+            probe_global("Array"),
+            Some(GlobalBinding {
+                oracle: true,
+                ironhorse: true
+            })
+        );
+        let run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get Array: undefined variable"));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("spurious ReferenceError")
+        ));
+    }
+
+    #[test]
+    fn oracle_disagreements_are_demoted_without_the_oracle_gate() {
+        // Under `--no-oracle` an oracle disagreement cannot fail the build;
+        // every new failure shape that depends on the oracle's authority is
+        // demoted to the named `oracle-gate-off:` skip, as the existing
+        // over-acceptance arm already is. Engine-invariant halts and
+        // unregistered labels are not oracle disagreements and still fail.
+        let mut cfg = Config::default();
+        cfg.oracle = false;
+        let assertion = synthetic_oracle_only(Halt::synthetic_throw("Test262Error: nope"));
+        assert_eq!(
+            evaluate_positive(&cfg, &assertion, false),
+            Verdict::RunSkip("oracle-gate-off:oracle-only-complete".into())
+        );
+        let mut mismatch = synthetic_abort(Halt::synthetic_throw("RangeError"), "RangeError");
+        mismatch.oracle_error = "TypeError: not a function".into();
+        assert_eq!(
+            evaluate_positive(&cfg, &mismatch, false),
+            Verdict::RunSkip("oracle-gate-off:abort-type-differs".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-gate-off:abort-type-differs"
+            ),
+            crate::report::Category::Infrastructure
+        );
+        let invariant = synthetic_oracle_only(Halt::EngineInvariant("end:frame-underflow"));
+        assert_eq!(
+            evaluate_positive(&cfg, &invariant, false),
+            Verdict::Fail("engine-invariant:end:frame-underflow".into())
+        );
+        let unregistered = synthetic_oracle_only(Halt::Unsupported("sneak:new-exemption"));
+        assert_eq!(
+            evaluate_positive(&cfg, &unregistered, false),
+            Verdict::Fail("unregistered-halt-label:sneak:new-exemption".into())
+        );
+    }
+
+    #[test]
     fn an_unlanded_intrinsic_is_a_named_missing_global_skip() {
         // The pinned oracle binds `Compartment` in an empty program; the
         // port does not. That is a host intrinsic the port lacks: an honest
         // coverage gap that names the intrinsic to land.
-        assert_eq!(oracle_binds_global("Compartment"), Some(true));
+        assert_eq!(
+            probe_global("Compartment"),
+            Some(GlobalBinding {
+                oracle: true,
+                ironhorse: false
+            })
+        );
         let run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get Compartment: undefined variable"));
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
@@ -3216,6 +3369,10 @@ mod tests {
             missing_global_binding("ReferenceError: get : undefined variable"),
             None
         );
+        assert_eq!(
+            missing_global_binding("ReferenceError: get 123: undefined variable"),
+            None
+        );
         assert_eq!(missing_global_binding("TypeError: not a function"), None);
         assert_eq!(missing_global_binding("ReferenceError"), None);
     }
@@ -3227,7 +3384,13 @@ mod tests {
         // oracle non-result named by the intrinsic — never the abort-type
         // failure, which is reserved for a reference behavior the oracle
         // actually exhibited.
-        assert_eq!(oracle_binds_global("Intl"), Some(false));
+        assert_eq!(
+            probe_global("Intl"),
+            Some(GlobalBinding {
+                oracle: false,
+                ironhorse: true
+            })
+        );
         let mut run = synthetic_abort(Halt::synthetic_throw("RangeError"), "RangeError");
         run.oracle_error = "ReferenceError: get Intl: undefined variable".into();
         run.oracle_parsed = true;
@@ -3242,6 +3405,31 @@ mod tests {
             ),
             crate::report::Category::Skipped
         );
+        // A name neither engine binds is one the program bound and XS still
+        // could not resolve: an oracle-side surprise on a program-level
+        // binding, not a host gap and not an ironhorse failure.
+        run.oracle_error = "ReferenceError: get x: undefined variable".into();
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-unresolved-binding:x".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-unresolved-binding:x"
+            ),
+            crate::report::Category::Infrastructure
+        );
+        // A name the oracle binds in an empty program was made unresolvable
+        // by this program (`delete globalThis.Array`, a `with` shadow): XS's
+        // ReferenceError is the reference behavior, so ironhorse's different
+        // constructor is the abort-type divergence it would be for any other
+        // native error, not an oracle non-result.
+        run.oracle_error = "ReferenceError: get Array: undefined variable".into();
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("abort-type divergence")
+        ));
         // The assertion-wrapped form of the same missing `Intl` keeps its
         // existing host skip too.
         run.oracle_error = "Test262Error: Expected a RangeError but got a ReferenceError".into();

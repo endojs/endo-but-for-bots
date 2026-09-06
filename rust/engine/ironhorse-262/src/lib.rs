@@ -712,6 +712,32 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
         Some(r) => r,
         None => return BootVerdict::NamedGap("oracle-machine-error".into()),
     };
+    // The halt is judged before the agreement shape, as in every other
+    // instrument: the engine reporting its own state as wrong, or declining
+    // with a label it never registered, is a divergence whatever the pin did
+    // — never a gap the ledger can wait on, and never excused by the pin's
+    // own unrelated abort.
+    match &r.ironhorse_halt {
+        Halt::EngineInvariant(label) => {
+            return BootVerdict::Divergent(format!(
+                "ironhorse violated an engine invariant: {label} (pin completed={})",
+                matches!(
+                    r.agreement,
+                    Agreement::BothComplete | Agreement::OracleOnlyComplete
+                )
+            ))
+        }
+        Halt::Unsupported(op) if !xst::is_skip_eligible_label(op) => {
+            return BootVerdict::Divergent(format!(
+                "ironhorse declined with an unregistered label: {op} (pin completed={})",
+                matches!(
+                    r.agreement,
+                    Agreement::BothComplete | Agreement::OracleOnlyComplete
+                )
+            ))
+        }
+        _ => {}
+    }
     match r.agreement {
         Agreement::BothComplete => {
             if r.result_agrees {
@@ -724,34 +750,11 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
             }
         }
         // Both threw: a shared abort is not a boot divergence (the pin itself
-        // rejects the program), reported as the pin's reason — unless ironhorse
-        // did not throw but reported its own state as wrong, which the pin's
-        // unrelated abort cannot excuse.
-        Agreement::BothAbort => match &r.ironhorse_halt {
-            Halt::EngineInvariant(label) => BootVerdict::Divergent(format!(
-                "ironhorse violated an engine invariant where the pin aborted: {label}"
-            )),
-            _ => BootVerdict::NamedGap(format!("both-abort:{}", r.oracle_error)),
-        },
+        // rejects the program), reported as the pin's reason.
+        Agreement::BothAbort => BootVerdict::NamedGap(format!("both-abort:{}", r.oracle_error)),
         // ironhorse honestly aborted where the pin completed: the bundle hit an
-        // engine surface ironhorse does not model. Name the gap from the halt —
-        // unless the halt is the engine reporting its own state as wrong, or a
-        // declined label the engine never registered, either of which is a
-        // divergence, not a gap the ledger can wait on.
-        Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
-            Halt::EngineInvariant(label) => BootVerdict::Divergent(format!(
-                "ironhorse violated an engine invariant where the pin completed: {label}"
-            )),
-            Halt::Unsupported(op)
-                if !ironhorse_vm::halt_labels::is_declined_label(op)
-                    && !xst::HARNESS_DECLINED_LABELS.contains(op) =>
-            {
-                BootVerdict::Divergent(format!(
-                    "ironhorse declined with an unregistered label where the pin completed: {op}"
-                ))
-            }
-            _ => BootVerdict::NamedGap(boot_gap_key(&r)),
-        },
+        // engine surface ironhorse does not model. Name the gap from the halt.
+        Agreement::OracleOnlyComplete => BootVerdict::NamedGap(boot_gap_key(&r)),
         // ironhorse completed a program the pin rejected: over-acceptance.
         Agreement::IronhorseOnlyComplete => BootVerdict::Divergent(format!(
             "ironhorse completed a program the pin rejected: ironhorse={:?} pin aborted={:?}",

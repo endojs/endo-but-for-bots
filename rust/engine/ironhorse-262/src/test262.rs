@@ -116,9 +116,7 @@ pub fn classify(source: &str) -> Class {
         // Only a label the engine has registered as a declined surface (or
         // one of the runner's own) earns the skip; an unregistered label is
         // the engine granting itself an exemption, and fails.
-        if ironhorse_vm::halt_labels::is_declined_label(op)
-            || crate::xst::HARNESS_DECLINED_LABELS.contains(&op)
-        {
+        if crate::xst::is_skip_eligible_label(op) {
             return Class::Skipped(format!("unsupported-opcode:{}", op));
         }
         return Class::Divergent(Box::new(r));
@@ -191,9 +189,9 @@ pub fn classify(source: &str) -> Class {
         Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
             Halt::Throw { rendered: thrown, .. } => {
                 let missing = crate::xst::missing_global_binding(thrown)
-                    .map(|name| (name.to_string(), crate::xst::oracle_binds_global(name)));
+                    .map(|name| (name.to_string(), crate::xst::probe_global(name)));
                 match missing {
-                    Some((name, Some(true))) => {
+                    Some((name, Some(binding))) if binding.oracle && !binding.ironhorse => {
                         Class::Skipped(format!("ironhorse-missing-global:{name}"))
                     }
                     Some((_, None)) => Class::Skipped("oracle-machine-error".into()),

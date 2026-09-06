@@ -185,6 +185,7 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
                 "negative-oracle-unexpected",
                 "oracle-shim-unsafe",
                 "oracle-gate-off",
+                "oracle-unresolved-binding:",
                 "quarantine:",
             ];
             if INFRASTRUCTURE_REASONS
