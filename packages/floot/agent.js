@@ -1739,7 +1739,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   /** @type {Map<string, any>} */
   const backendAdmins = new Map();
-  const terminatedBackends = new Set();
 
   // One streaming provider per model. Sessions that don't pin a model share the
   // entry under the empty-string key (the factory's configured default model).
@@ -1977,10 +1976,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
         agents.delete(id);
         const admin = backendAdmins.get(id);
         if (admin) {
+          // A stop, not a deletion: the backend keeps the session's durable
+          // workspace and state, so a revival that failed past this point —
+          // an oracle lookup, say — can be revived again with them intact.
           try {
             await E(admin).terminate();
             backendAdmins.delete(id);
-            terminatedBackends.add(id);
           } catch (cleanupError) {
             throw new AggregateError(
               [error, cleanupError],
@@ -2148,19 +2149,28 @@ export const make = (hostPowers, _context, { env } = {}) => {
       try {
         await E(admin).terminate();
         backendAdmins.delete(id);
-        terminatedBackends.add(id);
       } catch (error) {
         failures.push(error);
       }
-    } else if (entry.backendId && !terminatedBackends.has(id)) {
-      try {
-        const backend = (await getHostedBackends()).get(entry.backendId);
-        if (!backend) {
-          throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
+    }
+    if (entry.backendId) {
+      // Termination is a stop: it releases the slice, the mount, and the
+      // lease and keeps the workspace and Codex state. Deletion removes those
+      // through the factory's idempotent destroy, which first stops any
+      // instance it still runs — so it also reaches a backend instance whose
+      // admin facet died with an earlier incarnation of this factory. Not
+      // while termination is refusing, though: a session with an unsettled
+      // Endo tool call stays intact for the lifecycle retry.
+      if (failures.length === 0) {
+        try {
+          const backend = (await getHostedBackends()).get(entry.backendId);
+          if (!backend) {
+            throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
+          }
+          await E(backend.factory).destroy(harden({ sessionId: id }));
+        } catch (error) {
+          failures.push(error);
         }
-        await E(backend.factory).destroy(harden({ sessionId: id }));
-      } catch (error) {
-        failures.push(error);
       }
     } else if (entry.model === CLAUDE_CLI_MODEL_ID) {
       // Terminate only a client this session actually obtained.
@@ -2215,7 +2225,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
     }
     agents.delete(id);
     facets.delete(id);
-    terminatedBackends.delete(id);
   };
 
   const finishSessionDeletion = async id => {
