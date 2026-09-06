@@ -738,10 +738,13 @@ fn assert_every_persist_verb_refuses_non_quiescent(m: Interp, shape: &str) {
 }
 
 /// Architecture review F047: the gate is on the DATA PATH, not on three
-/// convenience verbs. `snapshot_image` — the only way to obtain an image
-/// of a live machine outside the crate — refuses by the same name the
-/// verbs do, so `image_to_batch(&image) + commit` and `write_machine(&image)`
-/// cannot persist a machine no gate has seen: they never see a machine.
+/// convenience verbs. `snapshot_image` — the only route from a live
+/// machine to its image that the crate offers — refuses by the same name
+/// the verbs do, so `image_to_batch(&image) + commit` and
+/// `write_machine(&image)` never see a machine the gate refused. (What
+/// remains reachable is hand-assembly through `MachineImage::from_arenas`
+/// over the vm's public arenas: an unchecked encoder input on the same
+/// footing as a crafted image, not a machine verb.)
 #[test]
 fn the_image_of_a_halted_machine_is_unobtainable() {
     let m = halted_machine();

@@ -834,8 +834,10 @@ pub fn compartment_dual_run(source: &str) -> Option<CompartmentDualRun> {
     let b = machine.new_compartment();
     let shared_intrinsics = std::rc::Rc::ptr_eq(a.intrinsics(), b.intrinsics());
 
-    let ra = a.evaluate_with_symbols(&bytecode, &symbols);
-    let rb = b.evaluate_with_symbols(&bytecode, &symbols);
+    // Compared against the oracle, so in the harness's shape: the shim's
+    // post-run `String(result)` makes an uncoercible completion an abort.
+    let ra = a.evaluate_with_symbols(&bytecode, &symbols).host_coerced();
+    let rb = b.evaluate_with_symbols(&bytecode, &symbols).host_coerced();
 
     Some(CompartmentDualRun {
         source: source.to_string(),

@@ -142,20 +142,26 @@ pub trait MachineSnapshot {
     /// value stack, the program symbol names, the metering state, and
     /// the side-table rows — after [`Self::persist_gate`] admits it.
     ///
-    /// This is the ONLY way to obtain an image of a live machine outside
-    /// this crate, and it is gated by construction: the encoder
+    /// This is the only route from a live machine to its image that this
+    /// crate offers, and it is gated by construction: the encoder
     /// ([`write_machine`]), the store batch builder
     /// (`store::image_to_batch`) and every store's `commit` are pure
-    /// functions of an image, never of a machine, so the gate cannot be
-    /// bypassed by reaching for the data path directly (F047: the gate
-    /// used to be attached to three convenience verbs while this method
-    /// handed out ungated images, and in-tree helpers already used
+    /// functions of an image, never of a machine, so the data path
+    /// cannot see a machine the gate refused (F047: the gate used to be
+    /// attached to three convenience verbs while this method handed out
+    /// ungated images, and in-tree helpers already used
     /// `image_to_batch(&m.snapshot_image(..)) + commit` to persist
-    /// machines no gate had seen). A crafted or mutated image is still
-    /// a legitimate encoder input — that is how the refusal tests and
-    /// the fuzz targets exercise the reader — but it starts from an
-    /// admitted image or from arbitrary data, never from a halted
-    /// machine.
+    /// machines no gate had seen). The gate is the whole persist
+    /// predicate set — [`Self::persist_gate`] plus the stored-key-id
+    /// audit the store verbs run — so an admitted image is exactly what
+    /// [`begin_store_session`] would commit.
+    ///
+    /// What stays reachable is hand-assembly: `MachineImage::from_arenas`
+    /// over the vm's public arenas plus the `with_*` builders, which the
+    /// fuzz targets need to synthesize images from arbitrary data. That
+    /// is an unchecked encoder input on the same footing as a crafted or
+    /// mutated image (how the refusal tests exercise the reader), not a
+    /// machine verb; nothing in this crate persists a machine through it.
     fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError>;
 
     /// Serialize this machine to the in-memory `XS_M` container bytes.
@@ -225,17 +231,29 @@ impl MachineSnapshot for Interp {
 
     fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError> {
         self.persist_gate()?;
-        Ok(ungated_image(self, signature))
+        let image = ungated_image(self, signature);
+        // The id-space audit (what remains of the wave-4 P1 gate): with
+        // string keys living in the NAME table and symbol keys traveling
+        // in the SYMB table, a LIVE machine cannot store an id outside
+        // both — ids only ever come from minting. Finding one would mean
+        // this process corrupted its own tables; refuse rather than hand
+        // out the contradiction. Asked of the IMAGE, so the witness is
+        // what a store or blob would actually hold, and asked here so
+        // the gate and the store verbs admit the same images.
+        if image.stored_unregistered_key_id().is_some() {
+            return Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(
+                "stored property id outside the name and symbol-key tables",
+            )));
+        }
+        Ok(image)
     }
 }
 
 /// Build the plain-data image of `interp` WITHOUT consulting the persist
-/// gate. Crate-private on purpose (architecture review F047): the two
-/// callers are the gated [`MachineSnapshot::snapshot_image`] and
-/// [`begin_store_session`], which runs the same predicates itself so it
-/// can hand the machine back beside a [`StoreError`]. Nothing outside
-/// this crate can reach an image of a machine the gate has not seen.
-pub(crate) fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
+/// gate: the body of [`MachineSnapshot::snapshot_image`], and its only
+/// caller. Private on purpose (architecture review F047): nothing in
+/// this crate hands out an image of a machine the gate has not seen.
+fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
     // The carried atoms (see the suspend-point contract): arenas +
     // stack + the name table + meter, plus the side-table ledger's
     // serialized rows (arrays, collections, `Symbol.for` registry)
@@ -992,42 +1010,28 @@ pub fn begin_store_session(
         Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
         Err(e) => return Err((interp, e)),
     }
-    // A persist verb requires a QUIESCENT crank boundary (wave-6
-    // W6-10): a halted crank may leave pending microtasks, a populated
-    // call stack, live handlers, a set exception, and a mid-frame value
-    // stack — a checkpoint there serializes the mid-frame stack while
-    // silently dropping the rest — and even a table-empty halt leaves
-    // the boundary registers rooted, so the predicate's first conjunct
-    // is the crank-lifecycle latch (review F011). The managed lifecycle
-    // rewinds halted cranks; this gate covers every other caller.
-    if !interp.is_quiescent() {
-        return Err((interp, StoreError::MachineNotQuiescent));
-    }
-    // The four SILENT-WRONG Pending rows (wave-6 W6-9): a resumed heap
-    // holding one answers wrong values, not visible failures. Refuse by
-    // name until their atoms land (the recorded G3 lift).
-    if let Some(row) = interp.stored_unpersistable_row() {
-        return Err((interp, StoreError::PendingStateUnsupported { row }));
-    }
-    // The id-space audit (what remains of the wave-4 P1 gate): with
-    // string keys living in the NAME table and symbol keys traveling in
-    // the SYMB table, a LIVE machine cannot store an id outside both —
-    // ids only ever come from minting. Finding one here would mean this
-    // process corrupted its own tables; refuse rather than persist the
-    // contradiction. Asked of the IMAGE, which this path builds in full
-    // anyway, so the witness is what the store would actually hold.
-    // The ungated builder is correct here: the two gate predicates ran
-    // above, phrased as `StoreError`s so the machine travels back with
-    // the refusal.
-    let image = ungated_image(&interp, signature);
-    if image.stored_unregistered_key_id().is_some() {
-        return Err((
-            interp,
-            StoreError::Snapshot(SnapshotError::Corrupt(
-                "stored property id outside the name and symbol-key tables",
-            )),
-        ));
-    }
+    // The persist gate, on the data path (review F047): the ONLY way to
+    // an image of this machine is the gated `snapshot_image`, whose
+    // refusals are re-phrased as `StoreError`s so the machine travels
+    // back beside them. Its predicates, in order: a QUIESCENT crank
+    // boundary (wave-6 W6-10 — a halted crank may leave pending
+    // microtasks, a populated call stack, live handlers, a set
+    // exception and a mid-frame value stack, and even a table-empty
+    // halt leaves the boundary registers rooted, hence the lifecycle
+    // latch, review F011; the managed lifecycle rewinds halted cranks),
+    // the SILENT-WRONG Pending rows refused by name (wave-6 W6-9), and
+    // the stored-key-id audit of the image itself.
+    let image = match interp.snapshot_image(signature) {
+        Ok(image) => image,
+        Err(MachineSnapshotError::NotQuiescent) => {
+            return Err((interp, StoreError::MachineNotQuiescent));
+        }
+        Err(MachineSnapshotError::PendingStateUnsupported { row }) => {
+            return Err((interp, StoreError::PendingStateUnsupported { row }));
+        }
+        Err(MachineSnapshotError::Snapshot(e)) => return Err((interp, StoreError::Snapshot(e))),
+        Err(MachineSnapshotError::Io(e)) => return Err((interp, StoreError::Io(e.to_string()))),
+    };
     let batch = image_to_batch(&image, 1, "");
     if let Err(e) = store.commit(&batch) {
         // A failed commit hands the machine back with its dirt intact.
