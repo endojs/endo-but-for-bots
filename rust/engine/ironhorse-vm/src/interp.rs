@@ -13835,8 +13835,16 @@ impl Interp {
                     // resolve against it (and, for a `GET_THIS_VARIABLE` callee,
                     // the `DUB`'d copy becomes the receiver). When no environment
                     // is active this returns `None` without metering, so the
-                    // empty-chain sentinel path below is byte-identical.
-                    if let Some(target) = self.resolve_env_reference(name) {
+                    // empty-chain sentinel path below is byte-identical. A
+                    // `with` object's trap or accessor may throw during the
+                    // walk; that throw is a catchable guest error.
+                    let resolved = dispatch_result!(
+                        self.resolve_env_reference(code, name),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    if let Some(target) = resolved {
                         self.push(Slot::of(Kind::Reference, Payload::Reference(target)));
                         pc += ilen;
                         continue;
@@ -14025,10 +14033,13 @@ impl Interp {
                     let envref = self.pop();
                     // A real `Reference` (not the `EnvReference` sentinel) means
                     // `EVAL_REFERENCE` resolved the name to a live `with`/eval
-                    // object environment; do an ordinary property get on it
+                    // object environment; do a full `[[Get]]` on it
                     // (`mxBehaviorGetProperty`, metered exactly like
                     // `GET_PROPERTY` — no built-in step for a data property, the
-                    // getter's `mxMeterOne` for an accessor).
+                    // getter's `mxMeterOne` for an accessor). The `with` object
+                    // may be a Proxy, so this is the `mop_*` seam, not the
+                    // ordinary-object fast path, and a trap or getter throw is a
+                    // catchable guest error.
                     if envref.kind == Kind::Reference {
                         if let Payload::Reference(inst) = envref.value {
                             if self.is_environment_instance(inst) {
@@ -14044,7 +14055,7 @@ impl Interp {
                                 continue;
                             }
                             let v = dispatch_result!(
-                                self.ordinary_get(code, inst, name, envref),
+                                self.mop_get(code, inst, name, envref),
                                 pc,
                                 self,
                                 return_depth
@@ -14217,14 +14228,19 @@ impl Interp {
                     let envref = self.pop();
                     // A real `Reference` (not the `EnvReference` sentinel) means
                     // the name resolved to a live `with`/eval object
-                    // environment; do an ordinary property set on it. XS's
+                    // environment; do a full `[[Set]]` on it. XS's
                     // `SET_VARIABLE` runs `fxRunHas` before the store (its host
                     // teardown is the one built-in step every `SET_VARIABLE`
                     // meters, present here too) then `mxBehaviorSetProperty`
-                    // (metered like `SET_PROPERTY`). A sloppy failed set (frozen
-                    // / non-writable) silently keeps the RHS as the result; a
-                    // strict callee — unreachable, `with` is a strict-mode
-                    // SyntaxError — would throw.
+                    // (metered like `SET_PROPERTY`). Both go through the
+                    // `mop_*` seam so a Proxy `with` object observes its `has`
+                    // and `set` traps and an accessor binding runs its setter
+                    // (ECMA-262 Object Environment Record `SetMutableBinding`);
+                    // a chain-only `instance_has`/`ordinary_set` would write
+                    // through the membrane to the target. A sloppy failed set
+                    // (frozen / non-writable) silently keeps the RHS as the
+                    // result; a strict callee — unreachable, `with` is a
+                    // strict-mode SyntaxError — would throw.
                     if envref.kind == Kind::Reference {
                         if let Payload::Reference(inst) = envref.value {
                             if self.is_environment_instance(inst) {
@@ -14245,10 +14261,15 @@ impl Interp {
                                     EnvironmentSet::Missing => {}
                                 }
                             }
-                            let (_present, recursions) = self.instance_has(inst, name);
+                            let (_present, recursions) = dispatch_result!(
+                                self.mop_has_with_recursions(code, inst, name),
+                                pc,
+                                self,
+                                return_depth
+                            );
                             self.meter.tick_code_n(recursions);
                             let _accepted = dispatch_result!(
-                                self.ordinary_set(code, inst, name, value, envref),
+                                self.mop_set(code, inst, name, value, envref),
                                 pc,
                                 self,
                                 return_depth
@@ -14262,9 +14283,15 @@ impl Interp {
                     // A frame-local var writes its scope slot. A global name
                     // writes through the global object's full [[Set]] path so
                     // accessor/non-writable descriptors installed reflectively
-                    // remain binding-correct. An absent name first materializes
-                    // the ordinary writable global property (a sloppy global),
-                    // at the same measured creation boundary as before.
+                    // remain binding-correct. An absent name is an unresolvable
+                    // reference: in strict code `PutValue` throws a
+                    // `ReferenceError` (ECMA-262 6.2.5.6 step 3.a) before the
+                    // global object is consulted; in sloppy code it becomes
+                    // `Set(globalThis, name, value, false)`, which creates the
+                    // ordinary writable global property only when the global
+                    // is still extensible and otherwise fails silently. A
+                    // frozen or sealed `globalThis` therefore never gains a
+                    // binding by bare assignment.
                     if self.id_map.contains_key(&name) {
                         if !self.resolve_set(name, value) {
                             // An initialized `const` reached by name (a `with`
@@ -14275,7 +14302,20 @@ impl Interp {
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     } else {
-                        if !self.global_props.contains_key(&name) {
+                        if !self.global_props.contains_key(&name) && self.strict {
+                            // XS's `SET_VARIABLE` strict arm:
+                            // `mxRunDebug(XS_REFERENCE_ERROR, "set %s: undefined
+                            // variable", ...)`, the write-side twin of the
+                            // `GET_VARIABLE` unresolved arm above.
+                            let error = self.internal_error(
+                                "ReferenceError",
+                                format!("set {}: undefined variable", self.id_name(name)),
+                            );
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        }
+                        if !self.global_props.contains_key(&name)
+                            && self.instance_extensible(self.global_obj)
+                        {
                             self.materialize_global_property(name);
                             // Creating a sloppy global through `SET_VARIABLE`
                             // dispatches XS's setter machinery
@@ -50571,12 +50611,25 @@ impl Interp {
     /// descends); the `@@unscopables` consultation is charged only on a hit
     /// via [`WITH_UNSCOPABLES_GET_METERING`], matching the extra host `mxGetID`
     /// XS runs only when the property is present.
-    fn is_scopable_slot(&mut self, obj: crate::value::SlotIndex, id: u16) -> bool {
-        let (present, recursions) = self.instance_has(obj, id);
+    ///
+    /// Both lookups route through the complete internal-method seam
+    /// (`mop_has`/`mop_get`), never the slot-chain-only `instance_*`
+    /// helpers: an object environment over a Proxy must observe its `has`
+    /// and `get` traps (ECMA-262 `HasBinding` on an Object Environment
+    /// Record is `HasProperty` then `Get` of `@@unscopables`), and a
+    /// `with` over a membrane is exactly where a chain-only walk would see
+    /// through to the target. A trap may throw, so the check is fallible.
+    fn is_scopable_slot(
+        &mut self,
+        code: &[u8],
+        obj: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<bool, Halt> {
+        let (present, recursions) = self.mop_has_with_recursions(code, obj, id)?;
         self.meter.tick_raw(WITH_SCOPABLE_HAS_METERING);
         self.meter.tick_code_n(recursions);
         if !present {
-            return false;
+            return Ok(false);
         }
         // Consult `obj[@@unscopables]` only when the property is present, as
         // XS does. The well-known symbol's key id is minted on first use; a
@@ -50584,19 +50637,20 @@ impl Interp {
         // it, so `unscopables` is `undefined` and never blocks.
         self.meter.tick_raw(WITH_UNSCOPABLES_GET_METERING);
         if let Some(unscopables_id) = self.well_known_symbol_property_id("unscopables") {
-            let blocklist = self.instance_get(obj, unscopables_id);
+            let receiver = Slot::of(Kind::Reference, Payload::Reference(obj));
+            let blocklist = self.mop_get(code, obj, unscopables_id, receiver)?;
             if let Payload::Reference(list) = blocklist.value {
                 if blocklist.kind == Kind::Reference {
                     // A further host `mxGetID(id)` on the blocklist object.
                     self.meter.tick_raw(WITH_UNSCOPABLES_BLOCKLIST_GET_METERING);
-                    let flag = self.instance_get(list, id);
+                    let flag = self.mop_get(code, list, id, blocklist)?;
                     if self.truthy(&flag) {
-                        return false;
+                        return Ok(false);
                     }
                 }
             }
         }
-        true
+        Ok(true)
     }
 
     /// Whether `inst` is one of the exotic environment instances allocated by
@@ -50695,14 +50749,19 @@ impl Interp {
     /// and resolves to the environment instance itself. Returns `None`
     /// immediately — and meters
     /// nothing — when no environment is active, preserving the empty-chain
-    /// dispatch cost exactly.
-    fn resolve_env_reference(&mut self, name: u16) -> Option<crate::value::SlotIndex> {
+    /// dispatch cost exactly. Fallible because a `with` object's `has` or
+    /// `@@unscopables` lookup may run a Proxy trap or accessor that throws.
+    fn resolve_env_reference(
+        &mut self,
+        code: &[u8],
+        name: u16,
+    ) -> Result<Option<crate::value::SlotIndex>, Halt> {
         if self.env.kind != Kind::Reference {
-            return None;
+            return Ok(None);
         }
         let mut env = match self.env.value {
             Payload::Reference(r) => r,
-            _ => return None,
+            _ => return Ok(None),
         };
         while !env.is_null() {
             let behavior = self.slots.get(env).next;
@@ -50710,19 +50769,19 @@ impl Interp {
                 let beh = self.slots.get(behavior);
                 if beh.kind == Kind::Reference {
                     if let Payload::Reference(obj) = beh.value {
-                        if self.is_scopable_slot(obj, name) {
-                            return Some(obj);
+                        if self.is_scopable_slot(code, obj, name)? {
+                            return Ok(Some(obj));
                         }
                     }
                 } else if self.environment_property(env, name).is_some() {
                     // `mxBehaviorHasProperty` on an environment instance is a
                     // direct id walk with no allocation or metering.
-                    return Some(env);
+                    return Ok(Some(env));
                 }
             }
             env = self.instance_prototype(env);
         }
-        None
+        Ok(None)
     }
 
     /// Whether `name` is bound by a **declarative/closure** environment on the
