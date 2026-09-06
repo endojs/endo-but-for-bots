@@ -2641,7 +2641,7 @@ bite-checked by reverting the fix under the lock). Statuses:
   path — `write_machine`, `image_to_batch`, `commit` — never sees a
   machine the gate refused, and the trait's permissive default is
   gone (architecture review F047; the incremental
-  `checkpoint_to_store` keeps its inline gate in the same order).
+  `checkpoint_to_store` now runs its inline gate in the same order).
   The same pass made `is_quiescent` a lifecycle predicate — a
   `last_crank_completed` latch as its first conjunct, so a
   table-empty halt at a top-level meter check, the dispatch ceiling

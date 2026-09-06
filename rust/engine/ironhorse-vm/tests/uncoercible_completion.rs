@@ -74,19 +74,24 @@ fn ordinary_completions_and_halts_pass_through_the_fold_unchanged() {
     assert!(out.completed && quiescent);
     assert_eq!(out.result, "[object Object]");
     assert_eq!(out.coercion_error, None, "a plain object coerces");
-    let before = (out.completed, out.result.clone(), format!("{:?}", out.halt), out.computrons);
+    let before = (out.completed, out.result.clone(), out.halt.clone(), out.computrons);
     let after = out.host_coerced();
     assert_eq!(
         before,
-        (after.completed, after.result.clone(), format!("{:?}", after.halt), after.computrons)
+        (after.completed, after.result.clone(), after.halt.clone(), after.computrons)
     );
 
     let (out, quiescent) = run("var x = 0; throw 'boom';");
     assert!(!out.completed && !quiescent);
     assert_eq!(out.coercion_error, None, "a halt has no completion to coerce");
     assert!(matches!(out.halt, Halt::Throw { .. }));
+    let before = (out.completed, out.result.clone(), out.halt.clone(), out.computrons);
     let after = out.host_coerced();
-    assert!(!after.completed && matches!(after.halt, Halt::Throw { .. }));
+    assert_eq!(
+        before,
+        (after.completed, after.result.clone(), after.halt.clone(), after.computrons),
+        "a halt passes through the fold untouched, message included"
+    );
 }
 
 /// The documented limit of the object arm: it tests the prototype link,
