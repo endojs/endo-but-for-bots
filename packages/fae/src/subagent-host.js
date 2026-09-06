@@ -197,6 +197,10 @@ export const provisionFaeAgent = async ({
           SUBAGENT_PARENT: name,
           SUBAGENT_DEPTH: `${depth + 1}`,
           SUBAGENT_MAX_DEPTH: `${maxDepth}`,
+          // The operator's standing prompt, so every agent this spawner
+          // creates inherits it rather than the stock one: a delegation must
+          // not be a way out of the deployment's instructions.
+          SUBAGENT_SYSTEM_PROMPT: systemPrompt || '',
         }),
       });
       spawnerLocator = /** @type {string} */ (
@@ -439,6 +443,9 @@ harden(releaseFaeAgent);
  * @param {number} options.depth - Depth of the agents this spawner creates.
  * @param {number} options.maxDepth
  * @param {number} [options.maxSubagents]
+ * @param {string} [options.systemPrompt] - The operator's standing prompt for
+ *   the parent, which every subagent inherits as its own standing prompt; the
+ *   parent model's instructions are appended beneath it.
  */
 export const makeSubagentSpawner = ({
   provideContext,
@@ -448,6 +455,7 @@ export const makeSubagentSpawner = ({
   depth,
   maxDepth,
   maxSubagents = DEFAULT_MAX_SUBAGENTS,
+  systemPrompt,
 }) => {
   // The parse the whole scheme rests on is "every segment matches
   // `agentNamePattern`, joined by the infix". The child segment is checked in
@@ -496,9 +504,9 @@ export const makeSubagentSpawner = ({
     async spawn(name, options = {}) {
       assertSubagentName(name);
       return serially(async () => {
-        const { systemPrompt } = options;
-        systemPrompt === undefined ||
-          (typeof systemPrompt === 'string' && systemPrompt.length <= 32_768) ||
+        const { systemPrompt: childPrompt } = options;
+        childPrompt === undefined ||
+          (typeof childPrompt === 'string' && childPrompt.length <= 32_768) ||
           Fail`Subagent system prompt must be a string of at most 32768 characters`;
         const {
           hostAgent,
@@ -519,7 +527,8 @@ export const makeSubagentSpawner = ({
           depth,
           maxDepth,
           authSecretLocator,
-          delegatedPrompt: systemPrompt,
+          systemPrompt,
+          delegatedPrompt: childPrompt,
           // Subagents are working memory, not infrastructure: a daemon restart
           // should not resurrect a tree of them behind the user's back.
           pin: false,

@@ -26,6 +26,9 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
   const cancelled = [];
   /** @type {string[]} */
   const removed = [];
+  /** Caplet environments keyed by result name. */
+  /** @type {Map<string, Record<string, string> | undefined>} */
+  const envs = new Map();
   let nextId = 0;
 
   /** Caplet result names keyed by the powers guest they die with. */
@@ -77,6 +80,7 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
     },
     async makeUnconfined(_worker, _specifier, options = {}) {
       onStep({ op: 'makeUnconfined', name: options.resultName });
+      envs.set(options.resultName, options.env);
       bind(options.resultName);
       const siblings = dependents.get(options.powersName) || [];
       siblings.push(options.resultName);
@@ -99,7 +103,7 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       names.delete(key);
     },
   });
-  return { hostAgent, names, cancelled, removed };
+  return { hostAgent, names, cancelled, removed, envs };
 };
 
 const provisionOptions = {
@@ -451,6 +455,36 @@ test('a subagent spawned during a teardown is not stranded', async t => {
     [],
     `nothing of the released subtree may survive (spawn: ${spawnOutcome})`,
   );
+});
+
+test('a subagent inherits the operator prompt beneath its parent model’s instructions', async t => {
+  const { hostAgent, envs } = makeFakeHost();
+  const operatorPrompt = 'Only answer questions about X; never use exec.';
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 2,
+    systemPrompt: operatorPrompt,
+  });
+  await spawner.spawn('c', { systemPrompt: 'Summarize what you find.' });
+  // The child's standing prompt is the operator's; the parent model's text
+  // is appended beneath it, not put in its place.
+  t.like(envs.get('p.sub.c-driver'), {
+    FAE_SYSTEM_PROMPT: operatorPrompt,
+    FAE_SUBAGENT_PROMPT: 'Summarize what you find.',
+  });
+  // And the child's own spawner carries it to the next level.
+  t.like(envs.get('p.sub.c-spawner'), {
+    SUBAGENT_SYSTEM_PROMPT: operatorPrompt,
+  });
 });
 
 test('two stops of one subagent do not cancel it twice', async t => {
