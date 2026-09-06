@@ -73,7 +73,7 @@ createSession({
   backendId,
   modelId,
   reasoningEffort,
-})
+});
 ```
 
 `listBackends()` returns live backend descriptors.
@@ -88,7 +88,11 @@ session.
 Creation persists `creating`, provisions preset objects and the backend, then
 persists `ready`.
 Deletion persists `deleting`, terminates the backend through its admin facet,
-removes the session guest, then removes the registry entry.
+destroys its durable state through the factory, removes the session guest, then
+removes the registry entry.
+Termination alone is a stop: it releases the slice, the mount, and the lease
+but keeps the workspace and Codex state, which is what lets a session whose
+revival failed part-way be revived again with its contents intact.
 A cleanup failure persists `error` and remains retriable rather than falsely
 reporting deletion.
 On revival, `creating` entries finish provisioning, `ready` entries revive,
