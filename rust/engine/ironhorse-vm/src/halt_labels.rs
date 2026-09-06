@@ -101,7 +101,6 @@ pub const DECLINED_LABELS: &[&str] = &[
     "exponentiation:result-too-large",
     "fill:oversized-array-like",
     "flat:oversized-array-like",
-    "flat:recursion-depth",
     "for_in:non-object-receiver",
     "for_of:weak-collection",
     "generator:new-target",
