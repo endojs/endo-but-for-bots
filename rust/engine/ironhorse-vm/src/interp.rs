@@ -16243,7 +16243,7 @@ impl Interp {
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
-                        None => return Halt::Unsupported("get_closure:no-cell"),
+                        None => return Halt::EngineInvariant("get_closure:no-cell"),
                     }
                     pc += op.size() as usize;
                 }
@@ -18711,7 +18711,7 @@ impl Interp {
     fn enter_call(&mut self, argc: usize, ret_pc: usize, has_target: bool) -> Result<usize, Halt> {
         let len = self.stack.len();
         if len < argc + 4 {
-            return Err(Halt::Unsupported("call:stack-underflow"));
+            return Err(Halt::EngineInvariant("call:stack-underflow"));
         }
         let base = len - argc - 4; // index of THIS
         let func_slot = self.stack[base + 1];
@@ -19130,7 +19130,7 @@ impl Interp {
                 self.unwind_native_try(stack_base, call_depth, 0);
                 Ok(Err(value))
             }
-            Err(Halt::Resume(_)) => Err(Halt::Unsupported("native-try:resume-escaped-fence")),
+            Err(Halt::Resume(_)) => Err(Halt::EngineInvariant("native-try:resume-escaped-fence")),
             Err(halt) => Err(halt),
         };
         debug_assert!(
@@ -50073,14 +50073,14 @@ impl Interp {
                 // A `Kind::Symbol` slot always carries its descriptor
                 // reference; anything else is a port invariant break, not
                 // guest behavior.
-                _ => Err(Halt::Unsupported("to_property_id:symbol-without-descriptor")),
+                _ => Err(Halt::EngineInvariant("to_property_id:symbol-without-descriptor")),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
             // `to_property_key` returns a string or a symbol; anything else
             // is a port invariant break.
-            _ => return Err(Halt::Unsupported("to_property_id:non-string-key")),
+            _ => return Err(Halt::EngineInvariant("to_property_id:non-string-key")),
         };
         let id = self.intern_key(&name);
         // A runtime-computed key can be the first observation of a standard
