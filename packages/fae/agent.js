@@ -333,6 +333,10 @@ export const spawnWorkerLoop = async (
       powers,
       spawner,
       delegations,
+      // The inbox loop dismisses every claimed reply (see below), so a reply's
+      // attachments cannot be adopted afterwards; the tool must not say they
+      // can.
+      retainsAttachments: false,
     })) {
       localTools.set(name, tool);
     }
