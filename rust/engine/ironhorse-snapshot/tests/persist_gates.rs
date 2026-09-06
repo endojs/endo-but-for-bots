@@ -892,7 +892,7 @@ fn a_synthetic_host_throw_leaves_a_quiescent_machine_whose_twins_agree() {
         cont.link_intrinsics(&n1);
         let o = cont.run(&b1);
         assert!(!o.completed, "{name}: the host-boundary coercion is reported as a throw");
-        assert!(matches!(o.halt, ironhorse_vm::Halt::Throw(_)), "{name}: {:?}", o.halt);
+        assert!(matches!(o.halt, ironhorse_vm::Halt::Throw { .. }), "{name}: {:?}", o.halt);
         assert!(
             cont.is_quiescent(),
             "{name}: the engine's crank completed, so the machine is at a boundary"
