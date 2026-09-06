@@ -4077,11 +4077,13 @@ pub struct RunOutcome {
     /// for every other completion and for every halt.
     ///
     /// The object arm is the harness's APPROXIMATION, not a `ToPrimitive`
-    /// evaluation: it tests the prototype link only, so a null-prototype
+    /// evaluation: it tests the prototype link of an ordinary object
+    /// that is neither an array nor a boot native, so a null-prototype
     /// object carrying its own `toString` is flagged although `String()`
-    /// would succeed, and an object whose null-prototype ancestor is one
-    /// hop up is not flagged although `String()` would throw. It has
-    /// always been this predicate (it was the halt rewrite before), and
+    /// would succeed, while an object whose null-prototype ancestor is
+    /// one hop up, or an array re-prototyped to `null`, is not flagged
+    /// although `String()` would throw. It has always been this
+    /// predicate (it was the halt rewrite before), and
     /// it exists for oracle agreement on the shapes the corpus produces;
     /// an embedder should read it as "the harness would report an abort
     /// here", not as a verdict on the guest value.

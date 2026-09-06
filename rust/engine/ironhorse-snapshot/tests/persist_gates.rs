@@ -805,8 +805,12 @@ fn a_stored_unregistered_key_id_refuses_the_gated_image_and_every_verb() {
     // The global `x`'s property slot carries `x`'s program id.
     let names = m.program_symbol_names().to_vec();
     let x_id = names.iter().position(|name| name == "x").expect("x is a program symbol") as u16 + 1;
+    // A LIVE slot: the audit skips free records, so a freed record with
+    // a stale `x` id at a lower index would be poisoned harmlessly and
+    // misreport the gate as broken.
     let holder = (0..m.slots.capacity())
         .map(SlotIndex)
+        .filter(|&i| !m.slots.is_free_index(i))
         .find(|&i| m.slots.get(i).id == x_id)
         .expect("a live slot keyed by x");
     let unregistered = names.len() as u16 + 1;
