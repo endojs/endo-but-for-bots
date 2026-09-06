@@ -232,21 +232,22 @@ pub mod engine {
         }
 
         /// The check cadence the meter is armed with, `None` when
-        /// un-bounded. Clamped into `1..=crank_limit`: a zero interval
-        /// would read as "un-armed" to the meter, and a cadence coarser
-        /// than the limit is never useful — the meter scales the
-        /// interval into 16.16 raw units with saturation, so an interval
-        /// of `2^48` computrons or more would be armed but never
-        /// consult the host, enforcing nothing while claiming a bound
-        /// (adversarial review). Clamping to the limit keeps every
-        /// `PerCrank` policy enforceable: the host is consulted at least
-        /// once per limit's worth of computrons.
+        /// un-bounded. Clamped into `1..=min(crank_limit, 2^48 - 1)`: a
+        /// zero interval would read as "un-armed" to the meter; a
+        /// cadence coarser than the limit is never useful; and the meter
+        /// scales the interval into 16.16 raw units with saturation, so
+        /// an interval of `2^48` computrons or more would be armed but
+        /// never consult the host, enforcing nothing while claiming a
+        /// bound (adversarial review). The clamp keeps every `PerCrank`
+        /// policy enforceable: the host is consulted at least once per
+        /// limit's worth of computrons, and the largest cadence is one
+        /// the meter can actually reach.
         fn check_interval(&self) -> Option<u64> {
             match self {
                 MeterBounds::PerCrank {
                     check_interval,
                     crank_limit,
-                } => Some((*check_interval).clamp(1, (*crank_limit).max(1))),
+                } => Some((*check_interval).clamp(1, (*crank_limit).clamp(1, (1 << 48) - 1))),
                 MeterBounds::Unbounded => None,
             }
         }
@@ -704,7 +705,9 @@ pub mod engine {
         /// cadence, is bounded from its next crank on. Either way
         /// [`Self::eval`] re-bases the window at the crank start, so
         /// the distinction only matters for the gap between resume and
-        /// the next crank, where nothing runs. Un-bounded policy: a
+        /// the next crank, where no crank runs (a collection there may
+        /// checkpoint the resume-time window, which the next crank
+        /// start overwrites). Un-bounded policy: a
         /// store that carries an armed meter gets a host that always
         /// continues, so the explicit opt-out means "refuse nothing"
         /// instead of "abort everything"; a never-armed store stays

@@ -196,26 +196,35 @@ fn a_store_written_unbounded_is_bounded_from_its_next_crank() {
 /// store, and rewound after a refusal — agree on every side of the
 /// limit: admitted above the cost, admitted inside the slop zone (the
 /// crank ends before the next consultation), refused once a
-/// consultation falls past the limit.
+/// consultation falls past the limit, and, decisively, refused at the
+/// one limit the old phase-carrying window admitted on a fresh machine.
 #[test]
 fn a_refusal_depends_on_the_crank_and_the_policy_not_on_history() {
-    const PRELUDE: &str = "var n = 0; var i = 0; n = 1; n";
+    // The prelude is deliberately costly (about 5,000 computrons): it is
+    // what puts a phase-carrying window off the crank boundary. Under
+    // the old code a fresh machine's window ran from boot, so the
+    // probe's consultations fell at `k * INTERVAL - prelude` into it;
+    // re-based, they fall at `k * INTERVAL`. The discriminating limit
+    // below sits between the two.
+    const PRELUDE: &str = "var n = 0; var i = 0; for (i = 0; i < 280; i++) { i = i; } n = 1; n";
     // Costs about 21,000 computrons: the host is consulted at roughly
     // 10,000 and 20,000 computrons into the crank and the crank ends
     // a comfortable margin past the second.
     const PROBE: &str = "var n; var i; for (i = 0; i < 1200; i++) { i = i; } n";
     const INTERVAL: u64 = 10_000;
 
-    // Calibrate the probe's cost on an un-bounded persistent machine
-    // (the meter counts identically armed or not), so the test does not
-    // pin a cost-table constant.
+    // Calibrate both cranks on an un-bounded persistent machine (the
+    // meter counts identically armed or not), so the test pins no
+    // cost-table constant. The prelude is the first crank, as in every
+    // history below, so its reading is exactly the index a fresh
+    // machine's probe starts from.
     let calib = tempfile::tempdir().expect("temp dir");
     let mut m =
         PersistentMachine::open(&options(calib.path(), MeterBounds::Unbounded)).expect("open");
-    let before = m.eval(PRELUDE).expect("prelude").computrons;
+    let prelude = m.eval(PRELUDE).expect("prelude").computrons;
     let after = m.eval(PROBE).expect("probe").computrons;
     m.close().expect("close");
-    let cost = after - before;
+    let cost = after - prelude;
     // The second consultation lands within one loop iteration (well
     // under 500 computrons) past 20,000; the crank must end after it
     // and before the third, for the slop-zone case below to be exact.
@@ -223,6 +232,15 @@ fn a_refusal_depends_on_the_crank_and_the_policy_not_on_history() {
         cost > 2 * INTERVAL + 500 && cost < 3 * INTERVAL,
         "probe cost {cost}"
     );
+    // For the discriminating case: the old fresh window's consultations
+    // at `10,000 - prelude` and `20,000 - prelude` must both clear the
+    // limit below, and its third at `30,000 - prelude` must fall past
+    // the crank's end.
+    assert!(
+        prelude > 3_000 && prelude < 3 * INTERVAL - cost,
+        "prelude cost {prelude} against probe cost {cost}"
+    );
+    let discriminating = 2 * INTERVAL - prelude / 2;
 
     // A history is a closure that hands back a bounded machine ready to
     // run the probe, with the prelude's state in place.
@@ -270,14 +288,30 @@ fn a_refusal_depends_on_the_crank_and_the_policy_not_on_history() {
         );
         // Just under the cost, inside the slop zone: the consultation
         // at ~20,000 sees the meter under the limit and the crank ends
-        // before the next one, so it is admitted — on every history,
-        // which is the point. (A window left on a foreign phase would
-        // have refused it on some machines and not others.)
+        // before the next one, so it is admitted — on every history.
         assert_eq!(
             run_probe(cost - 50, history).unwrap_or_else(|e| panic!("{history}: {e}")),
             "1",
             "{history}: admitted inside the slop zone"
         );
+        // The discriminating limit: re-based, the consultation at
+        // ~20,000 finds the meter past it, so refused everywhere. Under
+        // the old phase-carrying window a FRESH machine consulted at
+        // `20,000 - prelude`, under the limit, and its next
+        // consultation lay past the crank's end, so it admitted the
+        // crank while a migrated machine (re-armed at resume, hence on
+        // the crank boundary) refused it: the replica fork this locks
+        // out.
+        match run_probe(discriminating, history) {
+            Err(MachineError::MeterAbort { computrons, limit }) => {
+                assert_eq!(limit, discriminating, "{history}");
+                assert!(computrons > limit, "{history}: {computrons}");
+            }
+            other => panic!(
+                "{history}: expected a refusal at the discriminating limit \
+                 {discriminating} (a phase-carrying window admits it), got {other:?}"
+            ),
+        }
         // One interval under the cost: the consultation at ~20,000
         // finds the meter past the limit, so refused everywhere.
         match run_probe(cost - INTERVAL, history) {

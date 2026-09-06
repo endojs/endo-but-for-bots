@@ -467,8 +467,9 @@ crank's own cost and the policy, whatever the machine's suspend,
 rewind, or migration history.
 Un-metered execution is an explicit `MeterBounds::Unbounded` opt-in.
 The policy is consensus-relevant like the checkpoint cadence, and like
-the cadence it is not recorded in the store: replicas must agree on it
-out of band to refuse the same cranks.
+the cadence it is not recorded in the store (only the armed interval
+rides the `METR` atom, never the limit): replicas must agree on it out
+of band to refuse the same cranks.
 The meter interrupts loops and regexp matches within one check
 interval of the limit; a single built-in still runs to completion
 before the refusal lands (F021/F073), and the heap ceiling and
