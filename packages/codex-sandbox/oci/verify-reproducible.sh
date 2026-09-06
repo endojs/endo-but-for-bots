@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 first="localhost/endo-codex-repro-first:$$"
 second="localhost/endo-codex-repro-second:$$"
 first_layout=$(mktemp -d "${TMPDIR:-/tmp}/endo-codex-oci-first.XXXXXX")
