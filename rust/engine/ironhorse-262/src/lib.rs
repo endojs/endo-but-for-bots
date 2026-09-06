@@ -792,7 +792,10 @@ pub struct CompartmentDualRun {
     pub a_result: String,
     /// Compartment B's completion value string.
     pub b_result: String,
-    /// The two compartments referenced the same machine intrinsics graph.
+    /// The two compartments held the same machine intrinsics marker
+    /// (`Rc::ptr_eq`). Marker identity only: each evaluation links the
+    /// intrinsics into a fresh `Interp`, so no intrinsic *object* is
+    /// shared — see `ironhorse_vm::compartment`'s realm decision.
     pub shared_intrinsics: bool,
     /// Compartment A's computrons (same bytecode → same as the oracle's
     /// run-only count for a bit-exact program).
@@ -803,10 +806,9 @@ pub struct CompartmentDualRun {
 
 impl CompartmentDualRun {
     /// RESULT agreement (the compartment acceptance bar): the oracle and
-    /// BOTH compartments completed with the same completion value, over
-    /// one shared intrinsics graph. A completion mismatch or a
-    /// cross-compartment disagreement is a divergence, never a silent
-    /// pass.
+    /// BOTH compartments completed with the same completion value, on
+    /// one machine. A completion mismatch or a cross-compartment
+    /// disagreement is a divergence, never a silent pass.
     pub fn result_agrees(&self) -> bool {
         self.oracle_completed
             && self.both_completed
@@ -824,8 +826,8 @@ impl CompartmentDualRun {
     }
 }
 
-/// Evaluate `source` in two compartments over one machine's shared
-/// intrinsics and compare against the oracle reference. Post stage-6 flip
+/// Evaluate `source` in two compartments on one machine and compare
+/// against the oracle reference. Post stage-6 flip
 /// the bytecode/symbols the compartments evaluate come from the **default
 /// (ironhorse) compiler** — this was the review ledger's standing residual
 /// ("the ironhorse-vm compartment evaluate path still oracle-compiles"), a

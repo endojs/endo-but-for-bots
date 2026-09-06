@@ -73,6 +73,8 @@ pub const DECLINED_LABELS: &[&str] = &[
     "call:non-user-function-receiver",
     "callback:non-user-function",
     "collection-constructor:weak-symbol-oracle-version",
+    "compartment:dynamic-import",
+    "compartment:heap-endowment",
     "concat:isConcatSpreadable-symbol",
     "concat:oversized-spreadable",
     "concat:sparse-arg",

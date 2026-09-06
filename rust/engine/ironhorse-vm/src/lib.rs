@@ -208,7 +208,10 @@ mod tests {
     }
 
     #[test]
-    fn compartments_share_intrinsics_but_not_globals() {
+    fn compartments_do_not_share_globals() {
+        // Intrinsic *sharing* is not delivered by this surface (each
+        // evaluation builds a fresh `Interp`; see `compartment`'s module
+        // documentation), so this pins only the half that is true.
         let m = Machine::new();
         let mut a = m.new_compartment();
         let b = m.new_compartment();

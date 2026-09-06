@@ -923,41 +923,56 @@ linker tranche.
 The stage-4b **compartment** child (3/5) grows the stage-1 `Compartment.evaluate`
 seam into the full **native `Compartment`** the SES suites probe
 (`ironhorse_vm::compartment`, `xsModule.c`'s compartment half): **per-compartment
-globals** over the machine's shared `Rc` intrinsics with **endowments** copied
-onto the new global at construction; a **`globalThis`** whose identity is the
+globals** on one machine with **endowments** copied
+onto the new global at construction (arena-free primitives only: an object,
+string, BigInt or symbol endowment is refused as the named skip
+`compartment:heap-endowment`, because each evaluation runs in a fresh `Interp`
+and the payload's slot or chunk index would point into no arena); a
+**`globalThis`** whose identity is the
 compartment's own — distinct per compartment (nested compartments included),
 stable for one compartment — read via `Compartment::global_this`; **nested
-compartments** (`Compartment::new_compartment`) minting a child over the **same**
-machine intrinsics with fresh globals and a fresh globalThis identity (a
+compartments** (`Compartment::new_compartment`) minting a child on the **same**
+machine with fresh globals and a fresh globalThis identity (a
 Compartment created inside a compartment chains correctly); and **module-map
 integration** — a compartment owns a `module::ModuleGraph` (the `new
 Compartment({ modules, resolveHook, importHook })` surface), and a **static**
 `import { x } from 'm'` resolves through **this** compartment's map
 (`Compartment::import_static`), so two compartments with different maps for the
 same specifier import different modules. The per-compartment evaluator
-(`evaluate_with_symbols`) relinks a program's intrinsic references to the shared
-intrinsics by the XS symbol atom (exactly as `run_program_with_symbols` does for
-the top-level realm) and seeds this compartment's own globals, so two compartments
-over one machine diverge exactly and only in their own globals.
+(`evaluate_with_symbols`) links a program's intrinsic references by the XS symbol
+atom (exactly as `run_program_with_symbols` does for the top-level realm) and
+seeds this compartment's own globals, so two compartments on one machine diverge
+exactly and only in their own globals.
+
+**Realm decision of record (architecture review F059).** The intrinsics are
+linked into a **fresh `Interp` per evaluation**: there is no realm object below
+`Interp`, so two compartments — and two evaluations of one compartment — share
+**no primordial object**, and `compartment::Intrinsics` is a per-machine marker
+with no graph and no writer for `locked_down`. What the surface delivers today is
+isolation (disjoint heaps); requirement 5's "per-compartment globals over shared
+frozen intrinsics" waits on the realm split recorded in
+`designs/ironhorse-engine.md` § Hardened JavaScript and Compartment. Read the
+`Rc::ptr_eq` assertions below as marker identity, not shared intrinsics.
 
 **Compartment differential (the acceptance evidence).** `built-ins/Compartment`
 does not exist upstream, so the corpus is the evidence: `stage4-compartment.js`
 (29 programs) is compiled once on the oracle and its exact bytecode evaluated in
-**two** compartments over **one** machine's shared intrinsics
+**two** compartments on **one** machine
 (`ironhorse_262::compartment_dual_run`), asserting **RESULT agreement** (both
-compartments == the oracle's completion value, over one `Rc::ptr_eq` intrinsics
-graph — evaluate faithfulness, shared-intrinsics identity, cross-compartment
-values) **plus computron agreement** (the same bytecode with no globals seeded
+compartments == the oracle's completion value, holding one `Rc::ptr_eq`
+intrinsics marker — evaluate faithfulness, cross-compartment isolation)
+**plus computron agreement** (the same bytecode with no globals seeded
 reproduces the oracle's run-only count). A **global-separation** differential
 seeds the same global id with a different value in each of two compartments and
 confirms each renders its **own** binding — matching the oracle's `String()` of
 that value while diverging between the compartments. Locked as two `cargo test`
 bars (`stage4_compartment_corpus_agrees_across_two_compartments`,
-`compartments_isolate_their_own_globals_against_a_seeded_value`) alongside **12
-ironhorse-side unit tests** (`ironhorse_vm::compartment::tests` — isolation, shared
-intrinsics, distinct/stable globalThis, nested chaining, endowments, constructor
-resolve/import-hook shape, static-import module-map resolution, module-map
-isolation, cross-compartment live indirect binding, dynamic-import named skip).
+`compartments_isolate_their_own_globals_against_a_seeded_value`) alongside **13
+ironhorse-side unit tests** (`ironhorse_vm::compartment::tests` — isolation, one
+intrinsics marker, distinct/stable globalThis, nested chaining, endowments,
+heap-endowment refusal, constructor resolve/import-hook shape, static-import
+module-map resolution, module-map isolation, cross-compartment live indirect
+binding, dynamic-import named skip).
 **Named skips** (self-naming, never a wrong value): dynamic
 `compartment.import()` (`compartment:dynamic-import`), the async host loader the
 static half does not build. **Scope fold (recorded honestly):** Ironhorse models
