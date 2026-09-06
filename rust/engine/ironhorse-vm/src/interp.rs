@@ -13138,20 +13138,27 @@ impl Interp {
         }
     }
 
-    /// Render an uncaught thrown value the way XS's host boundary does
-    /// (`fxToString` on the exception): a thrown user object runs its guest
-    /// `toString` (sta.js's `Test262Error` carries one), so the abort value
-    /// matches the oracle's rendering of the same failure. Engine-built
-    /// native errors (in `error_data`) keep the static render — their
-    /// `Error.prototype.toString` shape is already mirrored — and any
-    /// failure inside the guest coercion falls back to the static render.
+    /// Render an uncaught thrown value the way the oracle shim's host
+    /// boundary does (`String(exception)` after `fxRunScript`): a thrown user
+    /// object runs its guest `toString` (sta.js's `Test262Error` carries
+    /// one), so the abort value matches the oracle's rendering of the same
+    /// failure. Engine-built native errors (in `error_data`) keep the static
+    /// render — their `Error.prototype.toString` shape is already mirrored —
+    /// and any failure inside the guest coercion falls back to it.
+    ///
+    /// Called from [`Self::run`] only, once the halt has actually reached the
+    /// host. An escape out of a nested dispatch is not yet uncaught — a
+    /// native `mxTry` (a promise executor, a reaction, a disposer) may still
+    /// catch it, and XS's `mxCatch` copies `mxException` without running any
+    /// guest code — so the escape sites carry the static render and the
+    /// guest `toString` runs here or never (review round 3). The shim's
+    /// stringification is post-run, so its metering is discarded too: the
+    /// oracle records the run-only count at the throw.
     fn render_uncaught(&mut self, code: &[u8], v: Slot) -> String {
-        // Rendering is a host diagnostic boundary, not a second guest throw.
-        // In particular, a native driver such as Array.fromAsync catches the
-        // original `Halt::Throw` after this returns and takes its rejection
-        // reason from the halt's value. If the diagnostic ToPrimitive itself fails,
-        // discard that failed attempt completely so it cannot replace the
-        // original reason (or leave an extra callback frame/meter charge).
+        // Rendering is a host diagnostic boundary, not a second guest throw:
+        // if the diagnostic ToPrimitive itself fails, discard that attempt
+        // completely so it cannot replace the original value (or leave an
+        // extra callback frame behind).
         let saved_exception = self.exception;
         let saved_meter = self.meter.clone();
         let stack_base = self.stack.len();
@@ -13162,6 +13169,7 @@ impl Interp {
                 match self.to_primitive(code, v, true) {
                     Ok(prim) => {
                         self.exception = saved_exception;
+                        self.meter = saved_meter;
                         if prim.kind == Kind::String {
                             if let Payload::String(off) = prim.value {
                                 return self.str_text(off);
@@ -13293,6 +13301,18 @@ impl Interp {
                 halt = h;
             }
             self.result = script_result;
+        }
+        // THIS is the host boundary for an uncaught throw. The escape sites
+        // carry the static render; the guest-visible `String(exception)` the
+        // oracle shim performs (a thrown object's own `toString`) runs here,
+        // exactly once, and only for a throw nothing native caught — so a
+        // promise executor's thrown object never has its `toString` run
+        // (XS's `mxCatch` copies `mxException` silently), and a throw that
+        // crossed an `eval` unit's re-raise renders from the value it
+        // carried, not the inner unit's static text.
+        if let Halt::Throw { value, .. } = halt {
+            let rendered = self.render_uncaught(code, value);
+            halt = Halt::Throw { value, rendered };
         }
         // The ENGINE's verdict on this crank, fixed here — before the two
         // host-boundary coercions below rewrite the REPORTED halt. This
@@ -17428,7 +17448,7 @@ impl Interp {
                                 }
                                 None => {
                                     self.meter_host_escape();
-                                    let rendered = self.render_uncaught(code, v);
+                                    let rendered = self.render(&v);
                                     return Halt::Throw { value: v, rendered };
                                 }
                             }
@@ -18095,7 +18115,7 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            let rendered = self.render_uncaught(code, v);
+                            let rendered = self.render(&v);
                             return Halt::Throw { value: v, rendered };
                         }
                     }
@@ -18118,7 +18138,7 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            let rendered = self.render_uncaught(code, v);
+                            let rendered = self.render(&v);
                             return Halt::Throw { value: v, rendered };
                         }
                     }
