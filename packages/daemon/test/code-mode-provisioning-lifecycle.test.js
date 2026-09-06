@@ -24,6 +24,7 @@ import { realizeEndoProvisionOnHost } from '../../agentry/src/code-mode-provisio
 /* eslint-enable import/no-relative-packages */
 
 import { makeProvisioningFixture } from './_code-mode-provisioning-fixture.js';
+import { quiesceGitMaintenance } from './_git-fixture.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +37,7 @@ test.serial(
     await execFileAsync('git', ['init', '-q', '-b', 'main'], {
       cwd: fixture.workspace,
     });
+    await quiesceGitMaintenance(fixture.workspace);
     await execFileAsync('git', ['add', 'README.md'], {
       cwd: fixture.workspace,
     });
@@ -54,6 +56,7 @@ test.serial(
       { cwd: fixture.workspace },
     );
     await execFileAsync('git', ['init', '--bare', '-q', bareRemote]);
+    await quiesceGitMaintenance(bareRemote);
 
     const host = await fixture.connectHost('provision-host');
     await E(host).makeDirectory(['tools']);
@@ -241,6 +244,7 @@ test.serial(
     await execFileAsync('git', ['init', '-q', '-b', 'main'], {
       cwd: fixture.workspace,
     });
+    await quiesceGitMaintenance(fixture.workspace);
     await execFileAsync('git', ['add', 'README.md'], {
       cwd: fixture.workspace,
     });
@@ -259,6 +263,7 @@ test.serial(
       { cwd: fixture.workspace },
     );
     await execFileAsync('git', ['init', '--bare', '-q', bareRemote]);
+    await quiesceGitMaintenance(bareRemote);
 
     const host = await fixture.connectHost('persistence-probe-host');
 
@@ -347,9 +352,11 @@ test.serial(
     await execFileAsync('git', ['init', '-q', '-b', 'main'], {
       cwd: nestedPath,
     });
+    await quiesceGitMaintenance(nestedPath);
     await execFileAsync('git', ['init', '-q', '-b', 'main'], {
       cwd: outsidePath,
     });
+    await quiesceGitMaintenance(outsidePath);
     await symlink(nestedPath, nestedLink, 'dir');
 
     const persistence = await normalizeEndoProvisionSpec(
