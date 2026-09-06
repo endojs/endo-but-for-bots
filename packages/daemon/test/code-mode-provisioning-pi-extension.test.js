@@ -23,6 +23,7 @@ import { makeEndoCodeModePiExtension } from '../../agentry/endo-code-mode-pi-ext
 /* eslint-enable import/no-relative-packages */
 
 import { makeProvisioningFixture } from './_code-mode-provisioning-fixture.js';
+import { quiesceGitMaintenance } from './_git-fixture.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -116,6 +117,7 @@ test.serial(
     await execFileAsync('git', ['init', '-q', '-b', 'main'], {
       cwd: fixture.workspace,
     });
+    await quiesceGitMaintenance(fixture.workspace);
     await execFileAsync('git', ['add', 'README.md'], {
       cwd: fixture.workspace,
     });

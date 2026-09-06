@@ -27,6 +27,7 @@ import {
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { lineageOf, makeMount } from '../src/mount.js';
+import { quiesceGitMaintenance, removeRepoTree } from './_git-fixture.js';
 
 /** @import { GitRebaseInput } from '@endo/exo-git' */
 
@@ -41,8 +42,9 @@ const execFileAsync = nodePromisify(execFile);
  */
 const provisionGitWorktree = async t => {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'native-git-'));
-  t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+  t.teardown(() => removeRepoTree(root));
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  await quiesceGitMaintenance(root);
   // Some CI / dev environments enable `commit.gpgSign` at user-global
   // level; that surfaces here because `provisionGitWorktree` does not
   // override gpg config per-invocation.  Pin the repo-local config to
@@ -1604,6 +1606,8 @@ test('NativeGitBackend rejects a swapped .git directory after construction', asy
     force: true,
   });
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+  // The swap discarded the repo-local config the fixture had pinned.
+  await quiesceGitMaintenance(repoRoot);
   await execFileAsync('git', ['config', '--local', 'commit.gpgsign', 'false'], {
     cwd: repoRoot,
   });
@@ -2565,11 +2569,10 @@ test('NativeGitBackend.remoteFetch rejects repo-local URL rewrites', async t => 
   const remoteParent = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'native-git-remote-'),
   );
-  t.teardown(() =>
-    fs.promises.rm(remoteParent, { recursive: true, force: true }),
-  );
+  t.teardown(() => removeRepoTree(remoteParent));
   const remoteRoot = path.join(remoteParent, 'remote.git');
   await execFileAsync('git', ['clone', '--bare', sourceRepo, remoteRoot]);
+  await quiesceGitMaintenance(remoteRoot);
 
   const repoRoot = await provisionGitWorktree(t);
   await execFileAsync(
@@ -4860,8 +4863,9 @@ test('NativeGitBackend stays usable when the first commit lands on an empty repo
   const repoRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'native-git-empty-'),
   );
-  t.teardown(() => fs.promises.rm(repoRoot, { recursive: true, force: true }));
+  t.teardown(() => removeRepoTree(repoRoot));
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+  await quiesceGitMaintenance(repoRoot);
   await fs.promises.writeFile(path.join(repoRoot, 'first.txt'), 'hello\n');
 
   const backend = makeNativeGitBackend({ repoRoot });

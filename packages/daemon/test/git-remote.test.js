@@ -36,6 +36,7 @@ import {
 import { start, stop, purge, makeEndoClient } from '../index.js';
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { lineageOf, makeMount } from '../src/mount.js';
+import { quiesceGitMaintenance, removeRepoTree } from './_git-fixture.js';
 
 const execFileAsync = nodePromisify(execFile);
 const exampleCredential = () =>
@@ -120,7 +121,9 @@ const provisionHostContext = async t => {
   t.teardown(async () => {
     await stop(config);
     cancel(Error('teardown'));
-    await fs.promises.rm(root, { recursive: true, force: true });
+    // The daemon clones repositories under its state directory, so this
+    // delete races the same background packing (see `removeRepoTree`).
+    await removeRepoTree(root);
   });
   return { host: E(getBootstrap()).host(), config };
 };
@@ -130,8 +133,9 @@ const provisionHostContext = async t => {
  */
 const provisionGitContext = async t => {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'git-remote-'));
-  t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+  t.teardown(() => removeRepoTree(root));
   await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  await quiesceGitMaintenance(root);
   await execFileAsync(
     'git',
     [
@@ -163,11 +167,10 @@ const provisionBareRemote = async (t, sourceRepo) => {
   const remoteParent = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'git-remote-bare-'),
   );
-  t.teardown(() =>
-    fs.promises.rm(remoteParent, { recursive: true, force: true }),
-  );
+  t.teardown(() => removeRepoTree(remoteParent));
   const remoteRoot = path.join(remoteParent, 'remote.git');
   await execFileAsync('git', ['clone', '--bare', sourceRepo, remoteRoot]);
+  await quiesceGitMaintenance(remoteRoot);
   return remoteRoot;
 };
 
