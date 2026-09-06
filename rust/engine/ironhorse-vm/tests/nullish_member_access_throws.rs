@@ -59,6 +59,18 @@ fn writing_a_property_of_null_or_undefined_throws() {
 }
 
 #[test]
+fn the_other_nullish_coercions_carry_the_same_message() {
+    // `TO_INSTANCE` (destructuring), `DELETE_PROPERTY(_AT)` and `IN` raised
+    // a messageless TypeError; XS's texts, per the oracle.
+    assert_throws_type_error("var {a} = null", "cannot coerce null to object");
+    assert_throws_type_error("var {a} = undefined", "cannot coerce undefined to object");
+    assert_throws_type_error("delete null.x", "cannot coerce null to object");
+    assert_throws_type_error("var k='x'; delete undefined[k]", "cannot coerce undefined to object");
+    assert_throws_type_error("'x' in null", "in: not an object");
+    assert_throws_type_error("'x' in 5", "in: not an object");
+}
+
+#[test]
 fn a_nullish_guard_takes_the_throwing_path_not_the_wrong_branch() {
     // The silent form: before the fix `x.y` was `undefined` and the guard
     // fell through to "no".

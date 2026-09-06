@@ -14041,10 +14041,12 @@ impl Interp {
                         // Already an object — ToObject is identity, no allocation.
                         Kind::Reference | Kind::Instance => {}
                         // null / undefined → catchable TypeError.
-                        Kind::Null | Kind::Undefined => {
-                            let error = self.build_error("TypeError", 0, 0);
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
-                        }
+                        Kind::Null | Kind::Undefined => dispatch_halt!(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(top.kind)),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                         // A `Number`/`Integer`/`Boolean` primitive's ToObject
                         // boxes to its `%Number.prototype%`/`%Boolean.prototype%`
                         // wrapper. These wrappers carry **no exotic own
@@ -15376,10 +15378,12 @@ impl Interp {
                                 *s = Slot::boolean(deleted);
                             }
                         }
-                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
-                            let error = self.build_error("TypeError", 0, 0);
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
-                        }
+                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => dispatch_halt!(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                         // ToObject succeeds for every other primitive. Such a
                         // temporary wrapper has no configurable own property
                         // with this identifier, so deletion succeeds.
@@ -15458,10 +15462,12 @@ impl Interp {
                                 self.delete_own_property(inst, id)
                             }
                         }
-                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
-                            let error = self.build_error("TypeError", 0, 0);
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
-                        }
+                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => dispatch_halt!(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                         // String wrapper index properties are non-configurable.
                         Payload::String(off) if numeric_index.is_some() => {
                             numeric_index.unwrap() as usize >= self.str_len(off)
@@ -17210,10 +17216,14 @@ impl Interp {
                     let key = self.pop();
                     let objref = match obj.value {
                         Payload::Reference(r) => r,
-                        _ => {
-                            let error = self.build_error("TypeError", 0, 0);
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
-                        }
+                        // `k in 5` / `k in null`: `mxRunDebug(XS_TYPE_ERROR, "in:
+                        // not an object")`.
+                        _ => dispatch_halt!(
+                            self.catchable_type_error_msg("in: not an object".into()),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                     };
                     // The spec checks that the RHS is an object before
                     // coercing the LHS. In particular, an object key's
@@ -26159,18 +26169,18 @@ impl Interp {
         }
     }
 
-    /// Normalize one operation executed behind Array.from's native try
-    /// boundary. A JS throw becomes its realm value; an implementation halt
-    /// remains a halt.
+    /// Normalize one operation executed behind a native try boundary
+    /// (Array.from's steps, the resolving function's `Get(resolution,
+    /// "then")`). A JS throw becomes its realm value; an implementation halt
+    /// remains a halt. This is [`Self::native_try`]: the fence is taken
+    /// BEFORE the operation runs, so a caller's live `try` never sees the
+    /// throw — classifying afterwards let `Promise.resolve({ get then() {
+    /// throw 5 } })` land in the caller's catch where XS rejects the promise.
     fn array_from_try<T>(
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T, Halt>,
     ) -> Result<Result<T, Slot>, Halt> {
-        let stack_base = self.stack.len();
-        let call_depth = self.call_stack.len();
-        let jump_depth = self.jumps.len();
-        let result = operation(self);
-        self.from_async_try(result, stack_base, call_depth, jump_depth)
+        self.native_try(operation)
     }
 
     /// IteratorClose for an already-abrupt Array.from completion. The original
@@ -45343,7 +45353,6 @@ impl Interp {
     /// remove the speculative host-boundary residual, leaving just the plain
     /// `throw` opcode metering XS's `fxJump`-to-`mxCatch` path incurs.
     #[inline]
-    #[allow(dead_code)] // consumed by the deferred promise handler-throw increment
     fn unmeter_host_escape(&mut self) {
         self.meter.tick_code();
         self.meter.untick_raw(THROW_HOST_ESCAPE_METERING);
