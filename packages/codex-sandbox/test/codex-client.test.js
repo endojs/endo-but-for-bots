@@ -62,6 +62,7 @@ const makeQueue = () => {
  *   modelListResult?: any,
  *   accountReadResult?: any,
  *   existingTurnIds?: string[],
+ *   announceTurns?: boolean,
  * }} [options]
  */
 const makeFixture = ({
@@ -76,6 +77,7 @@ const makeFixture = ({
   modelListResult,
   accountReadResult,
   existingTurnIds = [],
+  announceTurns = true,
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
@@ -140,20 +142,33 @@ const makeFixture = ({
         });
         break;
       }
-      case 'turn/start':
+      case 'turn/start': {
         turnNumber += 1;
         for (const event of beforeTurnResponse) push(event);
+        const id =
+          turnIdValue === undefined ? `turn-${turnNumber}` : turnIdValue;
         push({
           id: message.id,
-          result: {
-            turn: {
-              id:
-                turnIdValue === undefined ? `turn-${turnNumber}` : turnIdValue,
-              status: turnStatus,
-            },
-          },
+          result: { turn: { id, status: turnStatus } },
         });
+        // The app-server announces the turn it accepted; only from then on
+        // does it honour `turn/interrupt` for it.
+        if (
+          announceTurns &&
+          typeof id === 'string' &&
+          id !== '' &&
+          turnStatus === 'inProgress'
+        ) {
+          push({
+            method: 'turn/started',
+            params: {
+              threadId: message.params.threadId,
+              turn: { id, status: 'inProgress' },
+            },
+          });
+        }
         break;
+      }
       case 'turn/interrupt':
         push(
           interruptError
@@ -224,6 +239,18 @@ const drain = async reader => {
   for await (const event of iterateReader(reader)) events.push(event);
   return events;
 };
+
+// Everything the fixture does is microtask-driven, so one trip through the
+// timer queue is enough to know that nothing else is going to happen.
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const STARTED_TURN_1 = harden({
+  method: 'turn/started',
+  params: {
+    threadId: 'thread-saved',
+    turn: { id: 'turn-1', status: 'inProgress' },
+  },
+});
 
 test('initializes, persists a new thread, and streams normalized events', async t => {
   /** @type {string | undefined} */
@@ -1703,11 +1730,18 @@ test('ambiguous turn-start write failure poisons the session', async t => {
   });
 });
 
-test('interrupt during deferred turn start closes the ambiguous session', async t => {
+test('an interrupt requested while turn/start is unanswered waits for the announcement', async t => {
+  // Verified against codex-cli 0.152.0: `turn/interrupt` sent before the
+  // `turn/started` notification is refused with "no active turn to
+  // interrupt" and the turn runs to completion. The client used to treat the
+  // refusal as a session failure, so a stop pressed at once quarantined the
+  // session.
   const queue = makeQueue();
   /** @type {any[]} */
   const sent = [];
   let closed = false;
+  /** @type {any} */
+  let heldTurnStart;
   const client = makeCodexClient({
     sessionId: 'deferred-turn-start',
     threadId: 'thread-saved',
@@ -1729,6 +1763,17 @@ test('interrupt during deferred turn start closes the ambiguous session', async 
             id: message.id,
             result: { data: [], nextCursor: null, backwardsCursor: null },
           });
+        } else if (message.method === 'turn/start') {
+          heldTurnStart = message;
+        } else if (message.method === 'turn/interrupt') {
+          queue.push({ id: message.id, result: {} });
+          queue.push({
+            method: 'turn/completed',
+            params: {
+              threadId: 'thread-saved',
+              turn: { id: message.params.turnId, status: 'interrupted' },
+            },
+          });
         }
       },
       close: async () => {
@@ -1738,19 +1783,94 @@ test('interrupt during deferred turn start closes the ambiguous session', async 
     }),
   });
   const readerP = client.send('first');
-  readerP.catch(() => undefined);
   await null;
   for (let tries = 0; tries < 200; tries += 1) {
-    if (sent.some(message => message.method === 'turn/start')) break;
+    if (heldTurnStart) break;
     // eslint-disable-next-line no-await-in-loop
     await null;
   }
-  t.true(sent.some(message => message.method === 'turn/start'));
-  await t.throwsAsync(() => client.interrupt(), {
-    message: /id was confirmed/,
+  t.truthy(heldTurnStart);
+  const interrupted = client.interrupt();
+  await flush();
+  t.false(
+    sent.some(message => message.method === 'turn/interrupt'),
+    'nothing to address yet',
+  );
+  queue.push({
+    id: heldTurnStart.id,
+    result: { turn: { id: 'turn-1', status: 'inProgress' } },
   });
-  t.true(closed);
-  t.regex((await drain(await readerP)).at(-1).reason, /id was confirmed/);
+  const reader = await readerP;
+  await flush();
+  t.false(
+    sent.some(message => message.method === 'turn/interrupt'),
+    'the turn has an id but is not announced: asking now would be refused',
+  );
+  queue.push(STARTED_TURN_1);
+  await interrupted;
+  t.true(sent.some(message => message.method === 'turn/interrupt'));
+  t.deepEqual((await drain(reader)).at(-1), {
+    type: 'abort',
+    reason: 'Codex turn interrupted',
+  });
+  t.false(closed);
+  t.false((await client.status()).terminated);
+});
+
+test('an interrupt between the turn/start response and turn/started is deferred, not refused', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    announceTurns: false,
+  });
+  const reader = await fixture.client.send('first');
+  const interrupted = fixture.client.interrupt();
+  await flush();
+  t.false(fixture.sent.some(message => message.method === 'turn/interrupt'));
+  fixture.push(STARTED_TURN_1);
+  await interrupted;
+  t.true(fixture.sent.some(message => message.method === 'turn/interrupt'));
+  t.deepEqual((await drain(reader)).at(-1), {
+    type: 'abort',
+    reason: 'Codex turn interrupted',
+  });
+  t.false((await fixture.client.status()).terminated);
+});
+
+test('an interrupt for a turn that ends before its announcement has nothing to do', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    announceTurns: false,
+  });
+  const reader = await fixture.client.send('first');
+  const interrupted = fixture.client.interrupt();
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  await interrupted;
+  t.false(fixture.sent.some(message => message.method === 'turn/interrupt'));
+  t.deepEqual((await drain(reader)).at(-1), {
+    type: 'end',
+    checkpoint: 'turn-1',
+  });
+  t.false((await fixture.client.status()).terminated);
+});
+
+test('a turn the app-server never announces cannot be interrupted, so the session is quarantined', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    announceTurns: false,
+    clientOptions: { requestTimeoutMs: 50 },
+  });
+  const reader = await fixture.client.send('first');
+  await t.throwsAsync(() => fixture.client.interrupt(), {
+    message: /not announced before the interrupt deadline/,
+  });
+  t.true(fixture.isClosed());
+  t.regex((await drain(reader)).at(-1).reason, /not announced/);
 });
 
 test('interrupt during thread startup is a terminating barrier', async t => {

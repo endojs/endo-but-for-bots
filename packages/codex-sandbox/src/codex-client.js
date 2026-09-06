@@ -123,6 +123,10 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
  * @property {string} [errorReason]
  * @property {Promise<void>} terminal
  * @property {() => void} resolveTerminal
+ * @property {Promise<string>} started - Resolves with the turn id once the
+ *   app-server has announced the turn with `turn/started`, which is the
+ *   earliest it will honour `turn/interrupt` for it.
+ * @property {(turnId: string) => void} resolveStarted
  * @property {ReturnType<typeof setTimeout>} [terminalTimer]
  * @property {ReturnType<typeof setTimeout>} [wallTimer]
  * @property {number} events
@@ -528,23 +532,48 @@ export const makeCodexClient = ({
     }
     turn.interrupted = true;
     turn.interruptReason = reason;
-    await null;
-    if (!turn.turnId) {
-      const failure = Error(
-        'Codex turn could not be interrupted before its id was confirmed',
+    // The app-server honours `turn/interrupt` only for a turn it has announced
+    // with `turn/started`. Asked earlier — and the announcement can trail the
+    // `turn/start` response, let alone a response still in flight — it answers
+    // "no active turn to interrupt" and the turn runs on regardless. So wait
+    // for the announcement, or for the turn to end on its own, in which case
+    // there is nothing left to interrupt. A turn that is never announced is a
+    // wedged app-server, which the deadline turns into a session failure.
+    /** @type {string | undefined} */
+    let turnId;
+    {
+      const timeoutFailure = Error(
+        'Codex turn was not announced before the interrupt deadline',
       );
-      failSession(failure);
-      return failure;
+      /** @type {ReturnType<typeof setTimeout> | undefined} */
+      let timer;
+      const deadline = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(timeoutFailure), requestTimeoutMs);
+      });
+      try {
+        turnId = await Promise.race([
+          turn.started,
+          turn.terminal.then(() => undefined),
+          deadline,
+        ]);
+      } catch {
+        if (active !== turn) return undefined;
+        failSession(timeoutFailure);
+        return timeoutFailure;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
     }
+    if (turnId === undefined || active !== turn) return undefined;
     try {
       await audit('turn-interrupt-requested', {
         threadId: turn.threadId,
-        turnId: turn.turnId,
+        turnId,
         reason,
       });
       await request('turn/interrupt', {
         threadId: turn.threadId,
-        turnId: turn.turnId,
+        turnId,
       });
     } catch (error) {
       if (active !== turn) return undefined;
@@ -892,7 +921,11 @@ export const makeCodexClient = ({
     if (!sameTurn(params)) return;
     switch (method) {
       case 'turn/started':
-        if (params.turn?.id && active) active.turnId = `${params.turn.id}`;
+        if (active) {
+          // `sameTurn` correlated this announcement to the active turn by its
+          // id, so an interrupt waiting on it can address the turn from here.
+          active.resolveStarted(`${eventTurnId}`);
+        }
         pushTurn({ type: 'phase', phase: 'thinking' });
         break;
       case 'item/agentMessage/delta':
@@ -1428,12 +1461,20 @@ export const makeCodexClient = ({
           resolveTerminal = () => resolve(undefined);
         })
       );
+      let resolveStarted = (/** @type {string} */ _turnId) => {};
+      const started = /** @type {Promise<string>} */ (
+        new Promise(resolve => {
+          resolveStarted = resolve;
+        })
+      );
       const turn = {
         threadId: currentThreadId,
         push: channel.push,
         interrupted: false,
         terminal,
         resolveTerminal,
+        started,
+        resolveStarted,
         events: 0,
         bytes: 0,
         toolCalls: 0,
