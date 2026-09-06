@@ -20,6 +20,10 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 ironhorse-fuzz = { path = ".." }
+# The no-abort target drives the compiler and the VM directly (no oracle
+# comparison), on a thread of the engine's documented stack size.
+ironhorse-compile = { path = "../../ironhorse-compile" }
+ironhorse-vm = { path = "../../ironhorse-vm" }
 
 [[bin]]
 name = "differential_source"
@@ -72,6 +76,12 @@ doc = false
 [[bin]]
 name = "snapshot_decoder"
 path = "fuzz_targets/snapshot_decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "guest_no_abort"
+path = "fuzz_targets/guest_no_abort.rs"
 test = false
 doc = false
 
