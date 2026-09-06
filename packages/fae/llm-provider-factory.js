@@ -18,7 +18,13 @@ const ProviderFactoryInterface = M.interface('LLMProviderFactory', {
  * On each form submission, stores `{ host, model, authSecretName }` as a named
  * value in the HOST agent's petstore so it's accessible to everything, and puts
  * the submitted token in the daemon's secret manager under `secrets/<name>-auth`
- * so the credential itself never becomes a readable pet-store value.
+ * so the config value every reader holds never carries the credential.
+ *
+ * The submission itself is a daemon form value, and the daemon has no notion
+ * of a secret form field yet, so that record still holds the token as it was
+ * typed; it is reachable only by whoever can read this caplet's mailbox, and
+ * it cannot be rotated or revoked in place. Rotation and revocation act on the
+ * `SecretBlob`, which is what every provider reads.
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
