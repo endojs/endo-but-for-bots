@@ -191,7 +191,11 @@ pub fn classify(source: &str) -> Class {
                 let missing = crate::xst::missing_global_binding(thrown)
                     .map(|name| (name.to_string(), crate::xst::probe_global(name)));
                 match missing {
-                    Some((name, Some(binding))) if binding.oracle && !binding.ironhorse => {
+                    Some((name, Some(binding)))
+                        if binding.oracle
+                            && !binding.ironhorse
+                            && !crate::xst::source_declares(&r.source, &name) =>
+                    {
                         Class::Skipped(format!("ironhorse-missing-global:{name}"))
                     }
                     Some((_, None)) => Class::Skipped("oracle-machine-error".into()),

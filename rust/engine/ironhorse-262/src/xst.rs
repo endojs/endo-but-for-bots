@@ -349,7 +349,7 @@ fn ironhorse_completed(a: Agreement) -> bool {
     )
 }
 
-fn oracle_completed(a: Agreement) -> bool {
+pub(crate) fn oracle_completed(a: Agreement) -> bool {
     matches!(a, Agreement::BothComplete | Agreement::OracleOnlyComplete)
 }
 
@@ -524,7 +524,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     } else {
                         Verdict::Covered
                     }
-                } else if let Some(skip) = oracle_unresolved_name_skip(&run.oracle_error) {
+                } else if let Some(skip) = oracle_unresolved_name_skip(run) {
                     skip
                 } else if cfg.oracle && oracle_missing_intl(run) {
                     // The same missing `Intl`, wrapped by an assertion-based
@@ -673,7 +673,11 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                 // and not reached — either way the engine's scope resolution
                 // lied, and that stays the failure it is.
                 Some(name) => match probe_global(name) {
-                    Some(binding) if binding.oracle && !binding.ironhorse => {
+                    Some(binding)
+                        if binding.oracle
+                            && !binding.ironhorse
+                            && !source_declares(&run.source, name) =>
+                    {
                         Verdict::RunSkip(format!("ironhorse-missing-global:{name}"))
                     }
                     Some(binding) => oracle_disagreement(
@@ -801,24 +805,65 @@ pub(crate) fn probe_global(name: &str) -> Option<GlobalBinding> {
 /// ironhorse's own throw goes unjudged — but only when the name is one XS
 /// really could not have bound: a host intrinsic the pinned build lacks and
 /// ironhorse has (`Intl`) is the oracle's known host gap; a name neither
-/// engine binds in an empty program is one the program bound and XS still
-/// could not resolve (an XS defect on a program-level binding), an oracle-side
-/// surprise. A name the oracle **does** bind in an empty program was made
-/// unresolvable by this program (a `delete globalThis.Array`, a `with`
-/// shadow), which is exactly the reference behavior the shared-abort
-/// comparison exists to judge, so it falls through.
-fn oracle_unresolved_name_skip(oracle_error: &str) -> Option<Verdict> {
-    let name = missing_global_binding(oracle_error)?;
+/// engine binds in an empty program **and the program declares** is one XS
+/// still could not resolve (an XS defect on a program-level binding), an
+/// oracle-side surprise. Everything else falls through: a name the oracle
+/// binds in an empty program was made unresolvable by this program (a
+/// `delete globalThis.Array`, a `with` shadow), and a name neither binds nor
+/// the program declares is a feature global both engines lack, reached by XS
+/// after a prefix ironhorse diverged on — in both, ironhorse's different
+/// constructor is exactly the reference behavior the shared-abort comparison
+/// exists to judge.
+fn oracle_unresolved_name_skip(run: &DualRun) -> Option<Verdict> {
+    let name = missing_global_binding(&run.oracle_error)?;
     match probe_global(name) {
         Some(binding) if !binding.oracle && binding.ironhorse => Some(Verdict::RunSkip(format!(
             "oracle-host-missing-global:{name}"
         ))),
-        Some(binding) if !binding.oracle && !binding.ironhorse => Some(Verdict::RunSkip(format!(
-            "oracle-unresolved-binding:{name}"
-        ))),
+        Some(binding)
+            if !binding.oracle && !binding.ironhorse && source_declares(&run.source, name) =>
+        {
+            Some(Verdict::RunSkip(format!("oracle-unresolved-binding:{name}")))
+        }
         Some(_) => None,
         None => Some(Verdict::RunSkip("oracle-machine-error".into())),
     }
+}
+
+/// Does `source` declare `name`? A whole-word occurrence preceded by a
+/// declaration keyword (`var`, `let`, `const`, `function`, `class`, or the
+/// `*` of `function*`) or followed by a plain `=` (a sloppy-mode implicit
+/// global). Textual and deliberately over-inclusive on the "declares" side
+/// (a parameter or `catch` name is missed, an unrelated `foo = 1` is not):
+/// it is consulted only to *withhold* a skip, so a miss in either direction
+/// leaves the failure visible rather than laundering it.
+pub(crate) fn source_declares(source: &str, name: &str) -> bool {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    let mut start = 0;
+    while let Some(p) = source[start..].find(name) {
+        let at = start + p;
+        let end = at + name.len();
+        start = end;
+        let whole = !source[..at].ends_with(is_word) && !source[end..].starts_with(is_word);
+        if !whole {
+            continue;
+        }
+        let before = source[..at].trim_end();
+        let keyword = ["var", "let", "const", "function", "class"]
+            .iter()
+            .any(|kw| {
+                before.ends_with(kw) && !before[..before.len() - kw.len()].ends_with(is_word)
+            })
+            || before.ends_with("function*")
+            || before.ends_with("function *");
+        let after = source[end..].trim_start();
+        let assigned =
+            after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>");
+        if keyword || assigned {
+            return true;
+        }
+    }
+    false
 }
 
 /// Is `label` one the differential instruments may treat as an honest skip:
@@ -3352,6 +3397,63 @@ mod tests {
     }
 
     #[test]
+    fn a_program_declared_name_the_oracle_also_binds_is_still_a_failure() {
+        // The probe alone would call this a missing intrinsic (the oracle
+        // binds `Compartment`, ironhorse does not), but the program declared
+        // its own `Compartment`, so ironhorse failing to resolve it is a
+        // scope-resolution lie about the program's binding.
+        let mut run = synthetic_oracle_only(Halt::Throw(
+            "ReferenceError: get Compartment: undefined variable".into(),
+        ));
+        run.source = "var Compartment = {}; Compartment.x = 1;".into();
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("spurious ReferenceError")
+        ));
+    }
+
+    #[test]
+    fn an_oracle_miss_on_a_feature_global_neither_engine_has_is_judged() {
+        // XS reached an unimplemented feature global after a prefix on which
+        // ironhorse diverged with a different error. Neither engine binds the
+        // name and the program never declared it, so this is not an XS miss
+        // on a program binding: ironhorse's different constructor is the
+        // abort-type divergence it would be for any other native error.
+        assert_eq!(
+            probe_global("Float128Array"),
+            Some(GlobalBinding {
+                oracle: false,
+                ironhorse: false
+            })
+        );
+        let mut run = synthetic_abort(Halt::Throw("TypeError".into()), "TypeError");
+        run.oracle_error = "ReferenceError: get Float128Array: undefined variable".into();
+        run.source = "var a = []; a.length = 1; new Float128Array(a);".into();
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("abort-type divergence")
+        ));
+    }
+
+    #[test]
+    fn source_declares_recognizes_the_declaration_forms() {
+        assert!(source_declares("var foo = 1;", "foo"));
+        assert!(source_declares("let foo;", "foo"));
+        assert!(source_declares("const foo = 1;", "foo"));
+        assert!(source_declares("function foo() {}", "foo"));
+        assert!(source_declares("function* foo() {}", "foo"));
+        assert!(source_declares("class foo {}", "foo"));
+        assert!(source_declares("foo = 1;", "foo"));
+        assert!(source_declares("  foo\n  = 1;", "foo"));
+        assert!(!source_declares("foo();", "foo"));
+        assert!(!source_declares("if (foo == 1) {}", "foo"));
+        assert!(!source_declares("if (foo === 1) {}", "foo"));
+        assert!(!source_declares("var f = foo => 1;", "foo"));
+        assert!(!source_declares("var foobar = 1; var xfoo = 2;", "foo"));
+        assert!(!source_declares("myvar foo", "foo"));
+    }
+
+    #[test]
     fn missing_global_binding_parses_only_the_engine_shape() {
         assert_eq!(
             missing_global_binding("ReferenceError: get Intl: undefined variable"),
@@ -3405,10 +3507,11 @@ mod tests {
             ),
             crate::report::Category::Skipped
         );
-        // A name neither engine binds is one the program bound and XS still
-        // could not resolve: an oracle-side surprise on a program-level
+        // A name neither engine binds that the program declares is one XS
+        // still could not resolve: an oracle-side surprise on a program-level
         // binding, not a host gap and not an ironhorse failure.
         run.oracle_error = "ReferenceError: get x: undefined variable".into();
+        run.source = "var x = 1; { function x() {} } x;".into();
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::RunSkip("oracle-unresolved-binding:x".into())
