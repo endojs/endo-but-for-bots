@@ -56,6 +56,15 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
 
    Creates the pinned `floot-factory` and a default session.
 
+   Re-running the script is safe: it keeps the factory host and every session,
+   re-creates only the factory caplet against the current checkout, and replaces
+   the secret only when a key is given.
+   A daemon that runs it from `ENDO_EXTRA` forwards only `ENDO_`-prefixed
+   variables, so every knob is also read as `ENDO_FLOOT_*` and the key as
+   `ENDO_FLOOT_AUTH_TOKEN`.
+   `FLOOT_MAX_TOOL_ROUNDS` (default 48) caps the provider calls one turn may
+   make before Floot gives up with its tool-step fallback.
+
 3. **Provision the voice caplets.** Ensure `uv`, `piper`, and a voice model are
    present, then:
 
