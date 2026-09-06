@@ -6,7 +6,7 @@
 use ironhorse_snapshot::machine::{begin_store_session, resume_from_store, MachineSnapshot};
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
+use ironhorse_vm::{parse_symbols, Interp, RunOutcome};
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
@@ -15,6 +15,17 @@ fn sig() -> Signature {
 fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
+}
+
+/// Relink and run a later crank on `m`. A crank's symbol atom is its own,
+/// so its ids must be relinked against the machine's realm table before it
+/// runs; run raw, `CRANKS[1]`'s `var n` shifts every later id onto the
+/// wrong crank-1 name, and `keep.v` reads a property of `undefined` — which
+/// the engine used to answer silently (a coincidental result this test
+/// then compared against itself) and now refuses with a `TypeError`.
+fn run_crank(m: &mut Interp, crank: &(Vec<u8>, Vec<String>)) -> RunOutcome {
+    let bytecode = m.relink_crank(&crank.0, &crank.1).expect("relink");
+    m.run(&bytecode)
 }
 
 const CRANKS: [&str; 2] = [
@@ -38,7 +49,7 @@ fn collected_machine_keeps_executing_and_agrees() {
     let mut base = Interp::new();
     base.link_intrinsics(&compiled[0].1);
     assert!(base.run(&compiled[0].0).completed);
-    let b2 = base.run(&compiled[1].0);
+    let b2 = run_crank(&mut base, &compiled[1]);
     assert!(b2.completed);
 
     // Collected between cranks: same results, same computrons (GC is
@@ -53,7 +64,7 @@ fn collected_machine_keeps_executing_and_agrees() {
         stats.chunk_bytes_after < stats.chunk_bytes_before,
         "dead strings compact away"
     );
-    let o2 = m.run(&compiled[1].0);
+    let o2 = run_crank(&mut m, &compiled[1]);
     assert!(o2.completed, "halt: {:?}", o2.halt);
     assert_eq!(o2.result, b2.result, "array/string/object survive GC");
     assert_eq!(o2.computrons, b2.computrons, "meter unperturbed by GC");
@@ -81,11 +92,11 @@ fn collected_machine_checkpoints_and_resumes_exactly() {
         .map_err(|(_, e)| e)
         .expect("begin");
     let mut oracle = session.into_machine();
-    let expected = oracle.run(&compiled[1].0);
+    let expected = run_crank(&mut oracle, &compiled[1]);
     assert!(expected.completed);
 
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
-    let got = resumed.machine_mut().run(&compiled[1].0);
+    let got = run_crank(resumed.machine_mut(), &compiled[1]);
     assert_eq!(got.result, expected.result);
     assert_eq!(got.computrons, expected.computrons);
     assert_eq!(

@@ -4041,6 +4041,14 @@ macro_rules! dispatch_result {
     };
 }
 
+/// XS's `fxToInstance` diagnostic for a member access on a nullish base
+/// (`null.f`, `undefined[k]`, `null.f = v`): `TypeError: cannot coerce null
+/// to object` / `… undefined to object`. The oracle's `String(e)` verbatim.
+fn cannot_coerce_to_object(kind: Kind) -> String {
+    let what = if kind == Kind::Null { "null" } else { "undefined" };
+    format!("cannot coerce {what} to object")
+}
+
 /// The result of running one program's bytecode on ironhorse-vm.
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
@@ -14944,6 +14952,16 @@ impl Interp {
                                 dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                         }
+                    } else if matches!(obj.kind, Kind::Null | Kind::Undefined) {
+                        // `null.f = v`: `mxToInstance(mxStack + 1)` throws before
+                        // the store (`fxToInstance`); the assignment is a
+                        // catchable `TypeError`, not a silent no-op (review F007).
+                        dispatch_halt!(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
+                            pc,
+                            self,
+                            return_depth
+                        );
                     }
                     self.push(value);
                     pc += ilen;
@@ -15293,6 +15311,16 @@ impl Interp {
                         Payload::BigInt(_) if !self.bigint_proto.is_null() => {
                             self.instance_get(self.bigint_proto, id)
                         }
+                        // `null.f` / `undefined.f`: `mxToInstance(mxStack)` throws
+                        // before the lookup (`fxToInstance`). Reading a property
+                        // of a nullish base is a catchable `TypeError`, never
+                        // `undefined` (review F007).
+                        _ if matches!(obj.kind, Kind::Null | Kind::Undefined) => dispatch_halt!(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                         _ => Slot::undefined(),
                     };
                     self.push(v);
@@ -46072,6 +46100,10 @@ impl Interp {
             };
             return Ok(self.instance_get(self.bigint_proto, id));
         }
+        // `null[k]` / `undefined[k]`: `fxToInstance` throws (review F007).
+        if matches!(obj.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
+        }
         let inst = match obj.value {
             Payload::Reference(i) => i,
             _ => return Ok(Slot::undefined()),
@@ -46156,6 +46188,10 @@ impl Interp {
         value: Slot,
         define: bool,
     ) -> Result<(), Halt> {
+        // `null[k] = v` / `undefined[k] = v`: `fxToInstance` throws (review F007).
+        if matches!(obj.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
+        }
         let inst = match obj.value {
             Payload::Reference(i) => i,
             _ => return Ok(()),
