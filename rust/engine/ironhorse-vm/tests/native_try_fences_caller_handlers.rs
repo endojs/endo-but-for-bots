@@ -112,3 +112,23 @@ fn a_throwing_then_getter_during_resolution_rejects_instead_of_reaching_the_call
     );
     assert_eq!(r, "ok/rejected:5");
 }
+
+#[test]
+fn a_natively_caught_throw_never_runs_the_thrown_objects_tostring() {
+    // XS's `mxCatch` copies `mxException`; only the host boundary's
+    // `String(exception)` runs a thrown object's `toString`. Rendering the
+    // value at the escape site ran it for every throw a native try was
+    // about to catch (review round 3; XS answers `0` for each).
+    for source in [
+        "var n=0; new Promise(function(){ throw { toString(){ n++; return 'x' } } }); n",
+        "var n=0; Promise.resolve({ get then(){ throw { toString(){ n++; return 'x' } } } }); n",
+        "var n=0; try { Array.from([1], function(){ throw { toString(){ n++; return 'x' } } }) } \
+         catch(e) { n += 100 } n",
+        "var n=0; try { throw { toString(){ n++; return 'x' } } } catch(e) {} n",
+    ] {
+        let out = run(source);
+        assert!(out.completed, "halt: {:?}\n  {source}", out.halt);
+        let expected = if source.contains("Array.from") { "100" } else { "0" };
+        assert_eq!(out.result, expected, "{source}");
+    }
+}

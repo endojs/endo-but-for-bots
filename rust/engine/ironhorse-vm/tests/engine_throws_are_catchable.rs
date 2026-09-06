@@ -10,11 +10,30 @@
 //! rejected the promise with `undefined`. XS throws a `TypeError` the
 //! program can catch, and rejects with it.
 
-use ironhorse_vm::{run_program_with_symbols, Interp, RunOutcome};
+use ironhorse_vm::{Interp, RunOutcome};
+
+/// The eval bridge needs a compiler wired in (the 262 harness's wiring, in
+/// miniature); a bare `run_program` answers `eval:no-compiler`.
+struct TestCompiler;
+impl ironhorse_vm::SourceCompiler for TestCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        match ironhorse_compile::compile_atoms_with(source, strict) {
+            Ok((bytecode, symbols)) => Ok(ironhorse_vm::CompiledSource { bytecode, symbols }),
+            Err(_) => Err(ironhorse_vm::SourceCompileError::Syntax(String::new())),
+        }
+    }
+}
 
 fn run(source: &str) -> RunOutcome {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("source compiles");
-    run_program_with_symbols(&bytecode, &symbols)
+    let mut m = Interp::new();
+    m.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
+    m.set_source_compiler(std::rc::Rc::new(TestCompiler));
+    m.run(&bytecode)
 }
 
 fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
@@ -116,5 +135,23 @@ fn an_uncaught_engine_error_still_escapes_to_the_host_with_its_rendering() {
             assert_eq!(rendered, "TypeError: invalid prototype")
         }
         other => panic!("expected an uncaught TypeError, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_uncaught_throw_renders_with_its_guest_tostring_once_at_the_host_boundary() {
+    // The oracle's abort value is `String(exception)`: a thrown object's own
+    // `toString`, run once, after the crank. That includes a throw that
+    // crossed an `eval` unit's re-raise — which used to arrive with the
+    // inner unit's static `[object Object]` text.
+    for (source, rendered) in [
+        ("throw { toString(){ return 'custom' } }", "custom"),
+        ("eval(\"throw { toString: function(){ return 'custom'; } }\")", "custom"),
+        ("function f(){ throw { toString(){ return 'deep' } } } [1].forEach(f)", "deep"),
+        ("var n=0; throw { toString(){ n++; return 'n=' + n } }", "n=1"),
+    ] {
+        let out = run(source);
+        assert!(!out.completed, "{source}");
+        assert_eq!(out.halt.thrown_rendering(), Some(rendered), "{source}");
     }
 }

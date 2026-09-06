@@ -56,6 +56,28 @@ const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Programs whose COMPUTRONS must also match: an uncaught throw rendered
+/// through the thrown object's own `toString`. The oracle shim records the
+/// run-only count before it stringifies the exception, so the guest
+/// `toString` the port runs at its host boundary must leave no charge.
+const METER_EXACT: &[&str] = &[
+    "throw { toString(){ return 'custom' } }",
+    "var n=0; throw { toString(){ n++; return 'n=' + n } }",
+    "throw {a:1}",
+];
+
+#[test]
+fn an_uncaught_throws_host_rendering_is_not_metered() {
+    for src in METER_EXACT {
+        let run = dual_run(src).expect("the pinned XS oracle machine must start");
+        assert!(run.error_agrees, "{src}: {run:?}");
+        assert_eq!(
+            run.oracle_computrons, run.ironhorse_computrons,
+            "{src}: the post-run `String(exception)` must add no run computrons"
+        );
+    }
+}
+
 #[test]
 fn error_model_agrees_with_the_oracle() {
     let programs: &[&str] = &[
@@ -137,6 +159,14 @@ fn error_model_agrees_with_the_oracle() {
         "function f(){ [1].forEach(function(){ nosuchvar }) } f()",
         "new Promise(function(){ throw 1 }); 'done'",
         "throw {toString(){ return 'obj' }}",
+        // --- the host boundary renders once, and only for a true escape ---
+        "var n=0; new Promise(function(){ throw { toString(){ n++; return 'x' } } }); n",
+        "var n=0; Promise.resolve({ get then(){ throw { toString(){ n++; return 'x' } } } }); n",
+        "var n=0; try { Array.from([1], function(){ throw { toString(){ n++; return 'x' } } }) } catch(e) { n += 100 } n",
+        "var n=0; try { throw { toString(){ n++; return 'x' } } } catch(e) {} n",
+        "throw { toString(){ return 'custom' } }",
+        "eval(\"throw { toString: function(){ return 'custom'; } }\")",
+        "function f(){ throw { toString(){ return 'deep' } } } [1].forEach(f)",
         // --- fence edge cases, disposers, eval and generator value carrying ---
         // handlers left behind on a native try (debug_assert hunting)
         "var r=0; new Promise(function(){ try { return 1 } catch(e) {} }); r='ok'; r",

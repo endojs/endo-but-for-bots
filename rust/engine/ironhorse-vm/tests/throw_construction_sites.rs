@@ -9,9 +9,11 @@
 //! 2. the dispatch loop's own inline unwinds — the `THROW` and `RETHROW`
 //!    opcodes and a rejected `await` resume — which do the same unwind
 //!    with the value already in hand;
-//! 3. the two post-run harness shims in `run`, which model the oracle
-//!    shim's `String(result)` failing on a `Symbol` or a null-prototype
-//!    object completion. No guest value exists there, so they are
+//! 3. `run`, the host boundary, which re-renders a throw that nothing
+//!    native caught (the guest `toString` the oracle shim's
+//!    `String(exception)` runs), and whose two post-run harness shims model
+//!    the shim's `String(result)` failing on a `Symbol` or a null-prototype
+//!    object completion — no guest value exists there, so they are
 //!    `Halt::synthetic_throw`, the harness-only constructor.
 //!
 //! Every other `Halt::Throw(...)` an engine helper used to build inline
@@ -128,6 +130,9 @@ fn halt_throw_is_constructed_only_where_the_jump_chain_was_unwound() {
         ("fn raise_js(", 1),
         // THROW, RETHROW, rejected-await resume.
         ("fn dispatch_at_inner(", 3),
+        // The host boundary re-renders the carried value (guest `toString`)
+        // once nothing native caught the throw.
+        ("    pub fn run(&mut self, code: &[u8]) -> RunOutcome {", 1),
         // `Halt::synthetic_throw`'s own body.
         ("pub fn synthetic_throw(", 1),
     ];
