@@ -115,6 +115,12 @@ pub fn classify(source: &str) -> Class {
     if let Halt::Unsupported(op) = r.ironhorse_halt {
         return Class::Skipped(format!("unsupported-opcode:{}", op));
     }
+    // One of the interpreter's own guards fired on bytecode the oracle
+    // produced: the engine's state is wrong, a real failure whatever the
+    // oracle then did — never an honest skip.
+    if let Halt::EngineInvariant(_) = r.ironhorse_halt {
+        return Class::Divergent(Box::new(r));
+    }
     // Empty/undecodable bytecode: a parse-phase negative test (the oracle
     // compiler rejected the source, which ironhorse's loader cannot mirror —
     // compiler parity is a separate axis, stages 1–4 keep the oracle
@@ -168,9 +174,19 @@ pub fn classify(source: &str) -> Class {
         // ironhorse completed a program the oracle rejected: a real
         // over-acceptance the bar must surface.
         Agreement::IronhorseOnlyComplete => Class::Divergent(Box::new(r)),
-        // ironhorse aborted (an internal-limit throw) where the oracle
-        // completed: an ironhorse limitation, not a semantic lie — skipped.
-        Agreement::OracleOnlyComplete => Class::Skipped("ironhorse-aborted".into()),
+        // ironhorse aborted where the oracle completed. An uncaught throw on
+        // a program the oracle ran to completion is a wrong answer (a failed
+        // harness assertion or a spurious engine error), never a limitation —
+        // except the one honest shape, a host intrinsic the port has not
+        // landed, which names itself; only the engine's own limits (stack
+        // geometry, meter, step ceiling) are the other honest skip.
+        Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
+            Halt::Throw(thrown) => match crate::xst::missing_global_binding(&r.source, thrown) {
+                Some(name) => Class::Skipped(format!("ironhorse-missing-global:{name}")),
+                None => Class::Divergent(Box::new(r)),
+            },
+            _ => Class::Skipped("ironhorse-aborted-limit".into()),
+        },
     }
 }
 
