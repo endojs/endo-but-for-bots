@@ -65,9 +65,10 @@ fn raw_string_len(src: &str, i: usize) -> Option<usize> {
 /// A lexer-aware pass over Rust source: line comments, (nested) block
 /// comments, and raw strings (`r"…"`, `r#"…"#`) are replaced by spaces
 /// (newlines kept, so line arithmetic survives); string and character
-/// literals are kept verbatim under the same rule `literal_end` applies, so
-/// the passes that follow see exactly the literals this one kept. Escapes
-/// inside literals are honoured so a `\"` cannot end a string early.
+/// literals are kept verbatim, delimited by [`literal_end`] itself, so every
+/// pass over the result agrees with this one about where a literal begins and
+/// ends. Escapes inside literals are honoured so a `\"` cannot end a string
+/// early.
 pub fn code_only(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
@@ -105,22 +106,6 @@ pub fn code_only(src: &str) -> String {
             }
             blank(&mut out, &rest[..j]);
             i += j;
-        } else if rest.starts_with('"') || rest.starts_with("b\"") {
-            let open = if rest.starts_with('b') { 2 } else { 1 };
-            let mut j = open;
-            loop {
-                match rest.as_bytes().get(j) {
-                    Some(b'\\') => j += 2,
-                    Some(b'"') => {
-                        j += 1;
-                        break;
-                    }
-                    Some(_) => j += 1,
-                    None => break,
-                }
-            }
-            out.push_str(&rest[..j]);
-            i += j;
         } else if let Some(end) = raw_string_len(src, i) {
             // A raw string is blanked, not kept: a label is never a raw
             // string (one used as an argument surfaces as an unregistered
@@ -129,26 +114,14 @@ pub fn code_only(src: &str) -> String {
             // the later passes share.
             blank(&mut out, &rest[..end]);
             i += end;
-        } else if rest.starts_with('\'') {
-            // A char literal (`'a'`, `'\n'`, `'\u{1F600}'`) or a lifetime /
-            // label (`'a`, `'static`): only the former has a closing quote
-            // within a few bytes.
-            let close = rest[1..].find('\'').map(|n| n + 1);
-            match close {
-                Some(c)
-                    if c <= 12
-                        && !rest[1..c].contains(|ch: char| {
-                            ch.is_whitespace() || ch == ';' || ch == ',' || ch == '>'
-                        }) =>
-                {
-                    out.push_str(&rest[..=c]);
-                    i += c + 1;
-                }
-                _ => {
-                    out.push('\'');
-                    i += 1;
-                }
-            }
+        } else if let Some(end) = literal_end(src, i) {
+            // A string or char literal, kept verbatim under the one rule the
+            // later passes apply — `literal_end` is the only definition of
+            // where a literal ends, so no pass can disagree with another
+            // about what is inside one. A byte string's `b` prefix is copied
+            // as an ordinary character before its quote opens here.
+            out.push_str(&src[i..end]);
+            i = end;
         } else {
             let c = rest.chars().next().unwrap();
             out.push(c);
