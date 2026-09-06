@@ -361,7 +361,7 @@ LLM-agent stack).*
 | [endor-git-bindings](endor-git-bindings.md) | 2026-07-15 | 2026-08-14 | Proposed |
 | [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-09-06 | In Progress |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
-| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | — | Approved |
+| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-06 | Approved |
 | [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | — | Not Started |
 | [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | — | In Progress |
 | [test262-fixture-consolidation](test262-fixture-consolidation.md) | 2026-08-06 | 2026-08-14 | In Progress |

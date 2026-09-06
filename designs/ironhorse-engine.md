@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
+| **Updated** | 2026-09-06 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -605,16 +606,53 @@ breakpoint lands in stage 7 rather than as a C patch.
 Native, from the start, as in XS: `lockdown`, `harden`, `petrify`,
 and `mutabilities` port from `xsLockdown.c`; `Compartment` ports
 from `xsModule.c` with per-compartment globals and evaluators over
-shared frozen intrinsics. The stage 1 slice already carves the
-architectural seams these need: intrinsics are created once per
-machine and referenced per-realm, every evaluator is reachable for
-per-compartment replacement, and `harden`'s transitive freeze
-worklist operates on the slot arena. The acceptance bar is that
+shared frozen intrinsics. `harden`'s transitive freeze worklist
+operates on the slot arena. The acceptance bar is that
 the endor daemon's actual boot sequence (`polyfills.js`, then
 `ses_boot.js` lockdown, then the HandledPromise shim, per
 [daemon-endor-architecture](daemon-endor-architecture.md) §
 Unified runner) runs identically on both engines, plus the SES
 test suites XS itself is exercised against.
+
+**Status and the realm decision of record (2026-09-06).**
+The deep architecture review (`rust/engine/ARCHITECTURE-REVIEW.md`
+§ 3.7, F059) found that the "intrinsics created once per machine
+and referenced per realm" seam this section previously claimed
+for stage 1 does not exist: there is no realm object below
+`Interp`, so `Compartment::evaluate*` builds a fresh `Interp` per
+call and two compartments share no primordial object.
+`ironhorse_vm::compartment::Intrinsics` is a per-machine marker
+with no intrinsic graph and no writer for `locked_down`.
+The decision is to keep the host-side `Compartment` surface, make
+it honest, and land the realm split as the implementation of this
+requirement rather than delete the surface:
+
+- `Compartment`, `Machine` and `Intrinsics` stay public because
+  `rust/endo` and `ironhorse-262` build on them, but their
+  documentation states that isolation (disjoint heaps) is what they
+  deliver today and sharing is not.
+- A heap-backed endowment (an object, string, BigInt or symbol,
+  whose payload is a slot or chunk index) is refused as the named
+  skip `compartment:heap-endowment` rather than seeded into an
+  arena it does not belong to.
+- The realm split to come: extract `Realm { global_obj,
+  global_props, symbol table, installed_names_len }` from `Interp`
+  so one machine owns the primordial graph and N realms share it;
+  change `Compartment::evaluate*` to take `&mut Interp`; make
+  `Intrinsics` hold the frozen graph, with `locked_down` written
+  by a real `lockdown`.
+  Requirement 5's acceptance bar is unreachable until this lands.
+
+The same review's integrity findings (F015 `harden` stale marks,
+F057 frozen globals writable by bare name, F058 exotic objects
+unfreezable, F061 `with` and descriptor paths bypassing the
+`mop_*` seam) are pinned by
+`rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
+One divergence stays open there: `ironhorse-compile` scopes a
+strict-mode *program's* top-level `var` as a frame local rather than
+a global-object property, so `'use strict'; var g = 1;` leaves
+`globalThis.g` undefined; that is a compiler question for the
+differential harness, not an interpreter integrity gap.
 
 ### Minimizing `unsafe` (requirement 2)
 
