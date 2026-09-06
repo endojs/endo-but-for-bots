@@ -3571,7 +3571,7 @@ mod tests {
         let out = run_program_bounded(&[0xC1, 0xA9, 0xC1, 0xC1], DECODER_STEP_LIMIT);
         assert_eq!(
             out.halt,
-            ironhorse_vm::Halt::Unsupported("async:non-boundary-return"),
+            ironhorse_vm::Halt::EngineInvariant("async:non-boundary-return"),
             "the malformed async exit must fail before it can self-feed"
         );
         assert!(
@@ -3712,7 +3712,7 @@ mod hostile_suspend_tests {
         let out = ironhorse_vm::run_program_with_symbols(&patched, &symbols);
         assert_eq!(
             out.halt,
-            ironhorse_vm::Halt::Unsupported("yield:stack-underflow"),
+            ironhorse_vm::Halt::EngineInvariant("yield:stack-underflow"),
             "the YIELD guard refuses a frame drained below its run base"
         );
     }
