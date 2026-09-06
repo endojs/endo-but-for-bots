@@ -27,7 +27,7 @@
 //!     desugaring moves to the coder.
 
 use crate::ast::{flags, Item, Node, Value};
-use crate::parser::{ParseError, ParseErrorKind, Parser};
+use crate::parser::{ParseError, ParseErrorKind, Parser, STATEMENT_COST};
 use crate::token::{classify_word, Token};
 use crate::token_flags::{has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME};
 
@@ -262,8 +262,14 @@ impl Parser {
 
     /// `fxStatement`. `block_it` mirrors XS: `1` = a block context (lexical
     /// declarations allowed), `0` = a single-statement slot (loop/if body,
-    /// label), `-1` = program/case body.
+    /// label), `-1` = program/case body. One [`STATEMENT_COST`] recursion
+    /// point: blocks, `if`/loop bodies, labels, `switch` cases, `try`
+    /// clauses and function bodies all nest through here.
     pub(crate) fn statement(&mut self, block_it: i32) -> PResult<()> {
+        self.nested(STATEMENT_COST, |p| p.statement_inner(block_it))
+    }
+
+    fn statement_inner(&mut self, block_it: i32) -> PResult<()> {
         let line = self.cur.line;
         match self.cur.token {
             Token::Semicolon => {
@@ -819,8 +825,14 @@ impl Parser {
 
     /// `fxBinding` — one binding target (identifier / object / array),
     /// optionally with an `= initializer`. `flags_arg & 1` enables the
-    /// initializer.
+    /// initializer. One [`STATEMENT_COST`] recursion point: a nested
+    /// destructuring pattern (`[[[a]]]`, `{a: {b: {c}}}`) recurses here per
+    /// level.
     pub(crate) fn binding(&mut self, token: Token, flags_arg: u32) -> PResult<()> {
+        self.nested(STATEMENT_COST, |p| p.binding_inner(token, flags_arg))
+    }
+
+    fn binding_inner(&mut self, token: Token, flags_arg: u32) -> PResult<()> {
         let line = self.cur.line;
         if self.cur.token == Token::Identifier {
             let sym = self.cur.symbol.clone().unwrap_or_default();

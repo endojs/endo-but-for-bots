@@ -38,8 +38,11 @@ pub use coder::{
 pub use error::{LexError, LexErrorKind};
 pub use lexer::{BigIntLiteral, Lexeme, Lexer};
 pub use meter::ParseMeter;
-pub use parser::{ParseError, ParseErrorKind, Parser};
-pub use scoper::{scope_module, scope_program, ScopeTree};
+pub use parser::{
+    ParseError, ParseErrorKind, Parser, CASCADE_COST, OPERAND_COST, PARSER_STACK_BUDGET,
+    STATEMENT_COST,
+};
+pub use scoper::{scope_module, scope_program, ScopeTree, TREE_DEPTH_LIMIT};
 pub use token::Token;
 
 /// Parse `source` as a Script and return the whole-parse **parse-meter
