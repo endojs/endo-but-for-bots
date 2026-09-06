@@ -124,14 +124,22 @@ pub mod engine {
     /// readings rather than a placeholder.
     #[derive(Debug)]
     pub struct EvalOutcome {
-        /// Completion value under ECMAScript `String()` semantics.
+        /// Completion value under ECMAScript `String()` semantics, or
+        /// the engine's display rendering when `String()` cannot coerce
+        /// the value (see `coercion_error`).
         pub result: String,
-        /// `true` when the program reached RETURN/END and the harness
-        /// could render its completion value. A Symbol or
-        /// null-prototype completion reads `false` with a synthetic
-        /// `TypeError` `Halt::Throw` even though the engine finished
-        /// the crank (see the rewind note in `eval`).
+        /// `true` when the program reached RETURN/END and drained its
+        /// jobs: the engine's own verdict, which `is_quiescent()` agrees
+        /// with. A Symbol or null-prototype completion reads `true`
+        /// here; the oracle harness's `String(result)` failure for it is
+        /// reported beside the completion, never as a halt.
         pub completed: bool,
+        /// The `TypeError` the oracle harness's post-run `String(result)`
+        /// would throw for this completion value (a Symbol, a
+        /// null-prototype object), carried through from the engine so a
+        /// host that wants the harness's verdict can apply it. The
+        /// managed lifecycle does not: the crank completed.
+        pub coercion_error: Option<String>,
         /// Computrons, the meter's release-versioned count.
         pub computrons: u64,
         /// Dispatched opcodes before the invocation baseline.
@@ -147,6 +155,7 @@ pub mod engine {
             EvalOutcome {
                 result: o.result,
                 completed: o.completed,
+                coercion_error: o.coercion_error,
                 computrons: o.computrons,
                 dispatched: o.dispatched,
                 meter_raw: o.meter_raw,
