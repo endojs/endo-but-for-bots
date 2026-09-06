@@ -964,7 +964,16 @@ mod tests {
                 _ => {}
             }
         }
-        let body = &src[open..=end];
+        // Parse CODE, not prose: a `//` comment inside the body that
+        // names a field must neither satisfy the forward check (a
+        // dropped conjunct surviving as a remark) nor trip the reverse
+        // one (a remark about an unclassified field).
+        let body: String = src[open..=end]
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<&str>>()
+            .join("\n");
+        let body = body.as_str();
 
         // Forward: every EmptyAtBoundary field is required empty.
         for t in SideTable::ALL {

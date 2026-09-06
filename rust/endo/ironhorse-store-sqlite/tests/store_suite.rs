@@ -1,8 +1,9 @@
 //! Instantiates the shared **backend-parameterized store acceptance
 //! suite** (`ironhorse_snapshot::store_suite`) against the SQLite
 //! backend, in-memory and on-disk — the seven-way metamorphic
-//! determinism runner, the lazy working-set bound, and the checkpoint
-//! acceptance locks. The reference backends run the identical suite
+//! determinism runner, the lazy working-set bound, the checkpoint
+//! acceptance locks, the resume-equals-uninterrupted twin, and the
+//! boundary-collection twins. The reference backends run the identical suite
 //! in the engine workspace, so backend parity is enforced by one
 //! instrument rather than hand-mirrored tests; the real-JS lifecycle
 //! scenarios in `engine_lifecycle.rs` remain this backend's own

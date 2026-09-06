@@ -709,14 +709,18 @@ fn every_admitted_fixture_resumes_faithfully() {
 // property (architecture review F011, F030/F022). The `throw` fixture
 // above halts with a populated catch chain and a set exception, so
 // the table-shaped conjuncts of `is_quiescent` catch it. A crank that
-// halts at a loop-closing meter check, at the dispatch ceiling, or at
-// a decode fault leaves every table EMPTY -- and before the
-// `last_crank_completed` conjunct, such a machine passed every persist
-// verb while its `result`/`locals`/`id_map` registers, live GC roots
-// the restore path never reinstates, stayed populated: after one
-// boundary collection the continuous machine and its resumed twin held
-// different free lists and different canonical bytes while agreeing on
-// every result and computron.
+// halts at a top-level loop-closing meter check, at the dispatch
+// ceiling before any dispatch, or at a decode fault leaves every table
+// EMPTY -- and before the `last_crank_completed` conjunct, such a
+// machine passed every persist verb while its `result`/`locals`/
+// `id_map` registers, live GC roots the restore path never reinstates,
+// stayed populated: after one boundary collection the continuous
+// machine and its resumed twin held different free lists and different
+// canonical bytes while agreeing on every result and computron.
+// (Removing the latch conjunct fails the meter-abort and pre-dispatch
+// cases below; the mid-loop step-limit case is caught by the value
+// stack it leaves mid-expression, and stands as the ceiling's
+// every-verb lock rather than a latch lock.)
 
 fn assert_every_persist_verb_refuses_non_quiescent(m: Interp, shape: &str) {
     assert!(!m.is_quiescent(), "{shape}: a halted crank is not a quiescent boundary");
@@ -748,7 +752,10 @@ fn a_meter_aborted_crank_refuses_every_persist_verb() {
     assert_every_persist_verb_refuses_non_quiescent(m, "meter abort");
 }
 
-/// The dispatch-ceiling halt, at the loop top of a top-level frame.
+/// The dispatch-ceiling halt mid-loop in a top-level frame. The value
+/// stack is mid-expression at that loop top, so the table conjuncts
+/// already refuse this shape; the latch-only ceiling shape is the
+/// pre-dispatch one in the next test.
 #[test]
 fn a_step_limited_crank_refuses_every_persist_verb() {
     let (b, n) = compile("var i = 0; for (i = 0; i < 100000; i++) { i = i; } i");

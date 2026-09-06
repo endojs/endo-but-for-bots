@@ -81,9 +81,12 @@ pub enum MachineSnapshotError {
     Io(io::Error),
     Snapshot(SnapshotError),
     /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
-    /// its last crank halted, leaving pending microtasks / frames / an
-    /// exception that no snapshot carries. Rewind or complete a crank
-    /// before persisting.
+    /// its last crank halted. A halt may leave pending microtasks /
+    /// frames / an exception that no snapshot carries; even one that
+    /// leaves every table empty (a top-level meter abort, the dispatch
+    /// ceiling, a decode fault) leaves the boundary registers rooted,
+    /// which a resumed twin would not share (review F011). Rewind or
+    /// complete a crank before persisting.
     NotQuiescent,
     /// The heap holds live state in a SILENT-WRONG Pending side table
     /// (wave-6 W6-9: proxies, accessors, typed arrays) - a resumed
@@ -965,11 +968,13 @@ pub fn begin_store_session(
         Err(e) => return Err((interp, e)),
     }
     // A persist verb requires a QUIESCENT crank boundary (wave-6
-    // W6-10): a halted crank leaves pending microtasks, a populated
+    // W6-10): a halted crank may leave pending microtasks, a populated
     // call stack, live handlers, a set exception, and a mid-frame value
     // stack — a checkpoint there serializes the mid-frame stack while
-    // silently dropping the rest. The managed lifecycle rewinds halted
-    // cranks; this gate covers every other caller.
+    // silently dropping the rest — and even a table-empty halt leaves
+    // the boundary registers rooted, so the predicate's first conjunct
+    // is the crank-lifecycle latch (review F011). The managed lifecycle
+    // rewinds halted cranks; this gate covers every other caller.
     if !interp.is_quiescent() {
         return Err((interp, StoreError::MachineNotQuiescent));
     }
