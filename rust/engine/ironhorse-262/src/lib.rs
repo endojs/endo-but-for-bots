@@ -723,19 +723,33 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
                 ))
             }
         }
-        Agreement::BothAbort => {
-            // Both threw: a shared abort is not a boot divergence (the pin
-            // itself rejects the program), reported as the pin's reason.
-            BootVerdict::NamedGap(format!("both-abort:{}", r.oracle_error))
-        }
+        // Both threw: a shared abort is not a boot divergence (the pin itself
+        // rejects the program), reported as the pin's reason — unless ironhorse
+        // did not throw but reported its own state as wrong, which the pin's
+        // unrelated abort cannot excuse.
+        Agreement::BothAbort => match &r.ironhorse_halt {
+            Halt::EngineInvariant(label) => BootVerdict::Divergent(format!(
+                "ironhorse violated an engine invariant where the pin aborted: {label}"
+            )),
+            _ => BootVerdict::NamedGap(format!("both-abort:{}", r.oracle_error)),
+        },
         // ironhorse honestly aborted where the pin completed: the bundle hit an
         // engine surface ironhorse does not model. Name the gap from the halt —
-        // unless the halt is the engine reporting its own state as wrong, which
-        // is a divergence, not a gap the ledger can wait on.
+        // unless the halt is the engine reporting its own state as wrong, or a
+        // declined label the engine never registered, either of which is a
+        // divergence, not a gap the ledger can wait on.
         Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
             Halt::EngineInvariant(label) => BootVerdict::Divergent(format!(
                 "ironhorse violated an engine invariant where the pin completed: {label}"
             )),
+            Halt::Unsupported(op)
+                if !ironhorse_vm::halt_labels::is_declined_label(op)
+                    && !xst::HARNESS_DECLINED_LABELS.contains(op) =>
+            {
+                BootVerdict::Divergent(format!(
+                    "ironhorse declined with an unregistered label where the pin completed: {op}"
+                ))
+            }
             _ => BootVerdict::NamedGap(boot_gap_key(&r)),
         },
         // ironhorse completed a program the pin rejected: over-acceptance.
