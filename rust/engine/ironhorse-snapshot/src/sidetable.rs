@@ -62,12 +62,25 @@
 //!   dispatch loop halts on it before the next instruction and
 //!   `is_quiescent` refuses a poisoned machine, so it is provably false
 //!   at every boundary a snapshot can be taken from.
+//! - `last_crank_completed` — the crank-lifecycle latch (architecture
+//!   review F011): dropped at `run` entry, set at exit from the engine's
+//!   own halt, and the FIRST conjunct of `is_quiescent`. Provably true at
+//!   every boundary a snapshot can be taken from, and a fresh machine —
+//!   which every restore lands on — starts true. It exists because the
+//!   table conjuncts cannot see a crank halted at a top-level meter
+//!   check, the dispatch ceiling, or a decode fault: every table is
+//!   empty there, yet the boundary registers were never cleared.
 //!
 //! The registry of ALL these classifications is now MECHANICAL:
 //! [`tests::ledger_classification_reconciles_with_the_interp_struct`]
 //! parses `Interp`'s field list from source and reconciles it two-way
 //! against the classified groups, so a new field cannot land
-//! unclassified and a stale entry cannot linger.
+//! unclassified and a stale entry cannot linger. The quiescence
+//! predicate itself is reconciled the same way by
+//! [`tests::empty_at_boundary_rows_match_the_quiescence_predicate`]: every
+//! `EmptyAtBoundary` row must be required empty, and every field the
+//! predicate names — emptiness and lifecycle conjuncts alike — must be
+//! classified, so a conjunct cannot be dropped silently.
 //!
 //! **Boot-derived / program-symbol caches — re-derived, never stored.** These
 //! are pure functions of the boot procedure and the program's `symbol_names`,
@@ -730,6 +743,12 @@ mod tests {
             // reports the poisoned machine non-quiescent, so no snapshot
             // ever needs to carry it.
             "id_space_exhausted",
+            // The crank-lifecycle latch (review F011): dropped at `run`
+            // entry, set at exit from the engine's own halt, and the
+            // first conjunct of `is_quiescent`. Provably TRUE at every
+            // persistable boundary; a restore lands on a fresh machine,
+            // which starts true.
+            "last_crank_completed",
         ];
         const HOST_WIRING: &[&str] = &[
             "meter_host", "source_compiler", "cost", "step_limit", "n_dispatched",
@@ -896,13 +915,33 @@ mod tests {
     /// (the persist gates all run the predicate; `persist_gates.rs`
     /// enforces THAT behaviorally). Parse the predicate's body from
     /// source and reconcile, both ways: every EmptyAtBoundary field
-    /// appears in it, and every `is_empty()`-checked field in it is
-    /// accounted for — an EmptyAtBoundary row, the value stack (an
-    /// arena, serialized empty via `STAC`), or `async_gen_run_stack`
+    /// appears in it, and every field the predicate names is accounted
+    /// for — an EmptyAtBoundary row, the value stack (an arena,
+    /// serialized empty via `STAC`), `async_gen_run_stack`
     /// (quiescence-empty, but riding the still-Pending
-    /// `AsyncGenerators` variant for the instance table it names).
+    /// `AsyncGenerators` variant for the instance table it names), or
+    /// one of the NON-emptiness conjuncts listed below, each a
+    /// documented transient. The reverse direction reads every
+    /// `self.<field>` mention, not only the `is_empty()` ones, and the
+    /// forward direction requires each listed non-emptiness conjunct
+    /// to be present, so a lifecycle conjunct cannot be dropped
+    /// silently (architecture review F011: the predicate was a
+    /// table-emptiness test standing in for a lifecycle property).
     #[test]
     fn empty_at_boundary_rows_match_the_quiescence_predicate() {
+        /// The conjuncts of `is_quiescent` that are not `is_empty()`
+        /// tests on a ledger row: each is a transient the module docs
+        /// classify, and each must stay in the predicate.
+        const NON_EMPTINESS_CONJUNCTS: &[&str] = &[
+            // The crank-lifecycle latch, the first conjunct.
+            "last_crank_completed",
+            // The Proxy-trap context, refused if leaked.
+            "array_iterator_proxy_get_context",
+            // The in-flight thrown value.
+            "exception",
+            // The property-key id-space poison latch.
+            "id_space_exhausted",
+        ];
         let src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../ironhorse-vm/src/interp.rs"
@@ -939,26 +978,48 @@ mod tests {
                 );
             }
         }
-        // Reverse: every field the predicate requires empty is
-        // accounted for by the classification.
+        // Forward, the lifecycle half: every documented non-emptiness
+        // conjunct is still in the predicate. The latch in particular
+        // is what keeps a table-empty halt out of the persist verbs.
+        for field in NON_EMPTINESS_CONJUNCTS {
+            assert!(
+                body.contains(&format!("self.{field}")),
+                "is_quiescent no longer tests `{field}`; a documented conjunct was dropped"
+            );
+        }
+        // Reverse: every field the predicate names — an emptiness test
+        // or otherwise — is accounted for by the classification.
         let empty_rows: Vec<&str> = SideTable::ALL
             .iter()
             .filter(|t| t.descriptor().coverage == Coverage::EmptyAtBoundary)
             .flat_map(|t| t.descriptor().field.split('/'))
             .collect();
+        let mut named = 0usize;
         for cap in body.split("self.").skip(1) {
-            let Some(field) = cap.split(".is_empty()").next() else { continue };
-            if !cap[field.len()..].starts_with(".is_empty()") {
+            let field: &str = cap
+                .split(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+                .next()
+                .unwrap_or("");
+            if field.is_empty() {
                 continue;
             }
-            let accounted = empty_rows.contains(&field)
-                || field == "stack"
-                || field == "async_gen_run_stack";
+            named += 1;
+            let is_emptiness = cap[field.len()..].starts_with(".is_empty()");
+            let accounted = if is_emptiness {
+                empty_rows.contains(&field) || field == "stack" || field == "async_gen_run_stack"
+            } else {
+                NON_EMPTINESS_CONJUNCTS.contains(&field)
+            };
             assert!(
                 accounted,
-                "is_quiescent requires `{field}` empty but the ledger does not classify it EmptyAtBoundary (or document its exception)"
+                "is_quiescent tests `{field}` but the ledger does not classify it \
+                 (EmptyAtBoundary for an emptiness conjunct, NON_EMPTINESS_CONJUNCTS otherwise)"
             );
         }
+        assert!(
+            named >= empty_rows.len() + NON_EMPTINESS_CONJUNCTS.len(),
+            "parse sanity: the predicate names {named} fields"
+        );
     }
 
     /// The restore-time rebuild rows are classified [`Coverage::RebuiltAtRestore`],

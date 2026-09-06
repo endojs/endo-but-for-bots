@@ -4438,6 +4438,18 @@ pub struct Interp {
     /// and [`Self::is_quiescent`] reports a poisoned machine
     /// non-quiescent so the persist gates refuse it.
     id_space_exhausted: bool,
+    /// Lifecycle latch: did the most recent [`Self::run`] leave the
+    /// machine at a COMPLETED crank boundary? `true` on a fresh machine
+    /// (a restore lands on one, and a linked machine that never ran is
+    /// at its boot boundary); cleared at run entry and set at run exit
+    /// from the engine's OWN halt — the dispatch reached `END` and the
+    /// job queue drained — before the host-boundary coercions rewrite
+    /// the reported halt. The first conjunct of [`Self::is_quiescent`]:
+    /// a crank halted by a top-level meter check, the dispatch ceiling,
+    /// or a decode fault leaves every table empty, so table emptiness
+    /// alone admitted it to the persist verbs while its boundary
+    /// registers stayed rooted (architecture review F011).
+    last_crank_completed: bool,
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
@@ -5713,6 +5725,7 @@ impl Interp {
             next_symbol_key_id: u16::MAX,
             installed_names_len: 0,
             id_space_exhausted: false,
+            last_crank_completed: true,
             symbol_names: Vec::new(),
             error_data: std::collections::HashMap::new(),
             wrapper_data: std::collections::HashMap::new(),
@@ -12511,16 +12524,32 @@ impl Interp {
     }
 
     /// Whether the machine stands at a QUIESCENT crank boundary — the
-    /// precondition every persist verb requires (wave-6 W6-10). A crank
-    /// that HALTED (uncaught throw, meter abort, unsupported opcode)
-    /// returns with pending microtasks, a populated call stack, live
-    /// handlers, a set exception, and a mid-frame value stack; a
-    /// checkpoint there would serialize the mid-frame stack while
-    /// silently dropping the rest — a resumed chimera. The managed
+    /// precondition every persist verb requires (wave-6 W6-10).
+    ///
+    /// Quiescence is a LIFECYCLE property first and a table-emptiness
+    /// property second. The first conjunct is the `last_crank_completed`
+    /// latch: the most recent crank ran to its own `END` and drained its job
+    /// queue. A crank that HALTED may leave pending microtasks, a
+    /// populated call stack, live handlers, a set exception, and a
+    /// mid-frame value stack — the table conjuncts below see those — but
+    /// a crank halted at a top-level meter check, at the dispatch
+    /// ceiling, or at a decode fault leaves every table empty and is a
+    /// halt all the same: its boundary registers were never cleared, so
+    /// a checkpoint there would root pages a resumed twin frees and the
+    /// two would fork at their next collection while answering every
+    /// crank identically (architecture review F011). The managed
     /// lifecycle rewinds halted cranks; this is the seam-level gate for
     /// every other caller.
+    ///
+    /// The two synthetic host-boundary throws [`Self::run`] mints for a
+    /// completion value the harness's `String(result)` cannot coerce are
+    /// NOT halts in this sense: the engine's crank completed and its
+    /// registers cleared before the reported halt was rewritten, so the
+    /// machine is quiescent even though the [`RunOutcome`] says
+    /// `completed: false`.
     pub fn is_quiescent(&self) -> bool {
-        self.call_stack.is_empty()
+        self.last_crank_completed
+            && self.call_stack.is_empty()
             && self.stack.is_empty()
             && self.jumps.is_empty()
             && self.promise_jobs.is_empty()
@@ -13095,6 +13124,11 @@ impl Interp {
         // unaffected: `enter_call` sets it per callee and unwind/resume
         // restore it.
         self.strict = false;
+        // The lifecycle latch drops at entry: from here until the exit
+        // below the machine is mid-crank, and any observer that asks
+        // `is_quiescent` (a re-entrant host, a panic-recovery path) is
+        // told so. It is re-established from the engine's own halt.
+        self.last_crank_completed = false;
         let mut halt = self.dispatch(code);
         // Pump-loop latch: after the script settles, drain the promise job
         // queue with metering still accumulating — the host-driven microtask
@@ -13112,6 +13146,17 @@ impl Interp {
             }
             self.result = script_result;
         }
+        // The ENGINE's verdict on this crank, fixed here — before the two
+        // host-boundary coercions below rewrite the REPORTED halt. This
+        // is what the boundary-register clear and the quiescence latch
+        // key on: the dispatch reached `END` and the job queue drained,
+        // so the machine stands at a crank boundary whatever the harness
+        // makes of the completion value (architecture review F030/F022:
+        // keying the clear on the post-coercion `completed` skipped it
+        // for a Symbol or null-prototype completion, leaving live GC
+        // roots the restore path never reinstates on a machine every
+        // persist verb accepted).
+        let engine_completed = halt == Halt::Return;
         // A program that completes with a Symbol *value* is coerced to a
         // string by the harness (`String(result)`), which throws — so the
         // oracle reports the run as an abort, not a completion. Mirror that:
@@ -13143,21 +13188,24 @@ impl Interp {
         } else {
             String::new()
         };
-        // Boundary-register hygiene (wave-6 W6-11): on a COMPLETED
-        // crank, the host has its rendered completion above and the
-        // next crank's prologue rebuilds locals — but between here and
-        // there these registers were live GC ROOTS the restore path
-        // never reinstates, so an uninterrupted machine's boundary
-        // collection retained pages its resumed twin freed (free-list
-        // divergence, which feeds replica-visible allocation order).
-        // Clear them at the boundary so both twins root the same set.
-        // A HALTED crank keeps everything: the quiescence gate refuses
-        // it and the managed lifecycle rewinds it whole.
-        if completed {
+        // Boundary-register hygiene (wave-6 W6-11): on a crank the
+        // ENGINE completed, the host has its rendered completion above
+        // (or the synthetic coercion throw) and the next crank's
+        // prologue rebuilds locals — but between here and there these
+        // registers were live GC ROOTS the restore path never
+        // reinstates, so an uninterrupted machine's boundary collection
+        // retained pages its resumed twin freed (free-list divergence,
+        // which feeds replica-visible allocation order). Clear them at
+        // the boundary so both twins root the same set. A HALTED crank
+        // keeps everything: the lifecycle latch below keeps the
+        // quiescence gate refusing it and the managed lifecycle rewinds
+        // it whole.
+        if engine_completed {
             self.result = Slot::undefined();
             self.locals.clear();
             self.id_map.clear();
         }
+        self.last_crank_completed = engine_completed;
         // `active_segment` identifies only the buffer of the dispatch in
         // progress. Every surviving function has its own `func_segments`
         // entry, so no segment cursor crosses a crank boundary.

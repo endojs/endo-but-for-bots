@@ -8,7 +8,9 @@
 
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::store_suite::{lazy_working_set_bound, metamorphic_suite};
+use ironhorse_snapshot::store_suite::{
+    boundary_collection_twins, lazy_working_set_bound, metamorphic_suite,
+};
 
 mod common;
 
@@ -20,6 +22,11 @@ fn memory_store_agrees_seven_ways() {
 #[test]
 fn memory_store_lazy_resume_faults_only_the_working_set() {
     lazy_working_set_bound(MemoryStore::new);
+}
+
+#[test]
+fn memory_store_twins_agree_after_a_boundary_collection() {
+    boundary_collection_twins(MemoryStore::new);
 }
 
 /// Fresh single-file stores under one test-owned temp dir, removed at
@@ -49,6 +56,11 @@ fn file_store_agrees_seven_ways() {
 #[test]
 fn file_store_lazy_resume_faults_only_the_working_set() {
     with_file_stores("working-set", |fresh| lazy_working_set_bound(&mut *fresh));
+}
+
+#[test]
+fn file_store_twins_agree_after_a_boundary_collection() {
+    with_file_stores("boundary-collection", |fresh| boundary_collection_twins(fresh));
 }
 
 /// Frozen golden vector (collaborator-review follow-up): every other
