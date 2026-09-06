@@ -91,3 +91,24 @@ fn the_callers_handler_chain_survives_the_fence() {
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "caught:3");
 }
+
+#[test]
+fn a_throwing_then_getter_during_resolution_rejects_instead_of_reaching_the_caller() {
+    // `fxResolvePromise` reads `resolution.then` inside its own `mxTry`: an
+    // accessor that throws rejects the promise with the thrown value. The
+    // port classified the throw AFTER the getter ran, so the caller's live
+    // `try` had already consumed it (`caught:5` where XS answers `ok`).
+    let out = run(
+        "var r=0; try { Promise.resolve({ get then(){ throw 5 } }); r='ok' } \
+         catch(e){ r='caught:'+e } r",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "ok");
+    let r = two_cranks(
+        "var r = 0; var rej = 0; var p; \
+         try { p = Promise.resolve({ get then(){ throw 5 } }); r = 'ok' } catch(e) { r = 'caught:' + e } \
+         p.then(null, function(e){ rej = 'rejected:' + e; });",
+        "r + '/' + rej",
+    );
+    assert_eq!(r, "ok/rejected:5");
+}
