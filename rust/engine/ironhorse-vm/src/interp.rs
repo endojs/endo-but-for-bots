@@ -18983,6 +18983,13 @@ impl Interp {
             Some(Payload::Reference(f)) => f,
             _ => return None,
         };
+        // Only a user function has a body segment to dispatch over. A
+        // non-callable reference (a plain object, an array) is not a
+        // cross-segment callee: it stays in-loop, where `enter_call` raises
+        // the catchable `TypeError` `Call` requires (review F024).
+        if !self.functions.contains_key(&f) {
+            return None;
+        }
         let seg = self.callee_segment(f);
         (seg != self.active_segment).then_some(seg)
     }
