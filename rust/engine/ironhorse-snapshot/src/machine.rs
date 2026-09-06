@@ -146,15 +146,19 @@ pub trait MachineSnapshot {
     /// crate offers, and it is gated by construction: the encoder
     /// ([`write_machine`]), the store batch builder
     /// (`store::image_to_batch`) and every store's `commit` are pure
-    /// functions of an image, never of a machine, so the data path
+    /// functions of an image, never of a machine, so the IMAGE data path
     /// cannot see a machine the gate refused (F047: the gate used to be
     /// attached to three convenience verbs while this method handed out
     /// ungated images, and in-tree helpers already used
     /// `image_to_batch(&m.snapshot_image(..)) + commit` to persist
     /// machines no gate had seen). The gate is the whole persist
     /// predicate set — [`Self::persist_gate`] plus the stored-key-id
-    /// audit the store verbs run — so an admitted image is exactly what
-    /// [`begin_store_session`] would commit.
+    /// audit — so an admitted image is exactly what
+    /// [`begin_store_session`] commits. The one persist path that does
+    /// not go through an image is the incremental `checkpoint_to_store`,
+    /// which builds its batch from the dirty pages; it runs the same
+    /// predicates inline, in the same order, without the audit (a live
+    /// machine's stored ids come only from minting).
     ///
     /// What stays reachable is hand-assembly: `MachineImage::from_arenas`
     /// over the vm's public arenas plus the `with_*` builders, which the
@@ -165,8 +169,11 @@ pub trait MachineSnapshot {
     fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError>;
 
     /// Serialize this machine to the in-memory `XS_M` container bytes.
-    /// Refuses a machine that fails [`Self::persist_gate`] - the blob
-    /// verbs carry the same preconditions as the store verbs.
+    /// Refuses whatever [`Self::snapshot_image`] refuses — a machine
+    /// that fails [`Self::persist_gate`], or one whose image stores a
+    /// property id outside the name and symbol-key tables
+    /// (`Snapshot(Corrupt(..))`) — so the blob verbs carry exactly the
+    /// preconditions `begin_store_session` does.
     fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
         Ok(write_machine(&self.snapshot_image(signature)?))
     }
@@ -1030,6 +1037,8 @@ pub fn begin_store_session(
             return Err((interp, StoreError::PendingStateUnsupported { row }));
         }
         Err(MachineSnapshotError::Snapshot(e)) => return Err((interp, StoreError::Snapshot(e))),
+        // Unreachable for `Interp` (`snapshot_image` does no I/O); kept
+        // so the match stays exhaustive if the error type grows an arm.
         Err(MachineSnapshotError::Io(e)) => return Err((interp, StoreError::Io(e.to_string()))),
     };
     let batch = image_to_batch(&image, 1, "");
@@ -1103,13 +1112,24 @@ pub fn checkpoint_to_store(
     // `begin_store_session` / `resume_from_store` keep the full-image
     // audit for adopted bytes.
     //
-    if let Some(row) = session.interp.stored_unpersistable_row_at_checkpoint() {
-        return Err(StoreError::PendingStateUnsupported { row });
-    }
-    // And the quiescence gate (wave-6 W6-10): a halted crank must be
-    // rewound, never checkpointed - see begin_store_session.
+    // The incremental path's gate. It cannot ride `snapshot_image`: a
+    // checkpoint builds its batch from the DIRTY pages and the small
+    // state, never from a full image, which is what keeps it O(dirty).
+    // So the predicates run inline here, in the same order as the gated
+    // image (review F047) so a machine refuses by the same name on
+    // either verb: the quiescence gate first (wave-6 W6-10: a halted
+    // crank must be rewound, never checkpointed — see
+    // begin_store_session), then the pending rows, walked over the
+    // dirty pages only (the clean pages were admitted by the checkpoint
+    // that committed them). The stored-key-id audit is not repeated
+    // here: a live machine's stored ids come only from minting, and the
+    // audit exists for adopted bytes, which begin/resume/import run it
+    // on.
     if !session.interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
+    }
+    if let Some(row) = session.interp.stored_unpersistable_row_at_checkpoint() {
+        return Err(StoreError::PendingStateUnsupported { row });
     }
     let stored = store.manifest()?;
     if stored.epoch != session.epoch {
@@ -1442,8 +1462,9 @@ pub fn resume_from_store(
     // wave 5). `resume_from_store_lazy` deliberately reads no heap rows
     // at open — that is the whole point of lazy resume — so it cannot
     // ask this question, and does not pretend to; what protects it is
-    // that every WRITE path audits, so no store this code produces can
-    // hold one.
+    // that every path that ADOPTS bytes audits (begin, import, eager
+    // resume), and the incremental checkpoint only ever writes ids a
+    // live machine minted, so no store this code produces can hold one.
     if image.stored_unregistered_key_id().is_some() {
         return Err(StoreError::Snapshot(
             crate::format::SnapshotError::Corrupt(
