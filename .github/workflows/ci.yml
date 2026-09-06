@@ -823,13 +823,16 @@ jobs:
       - name: Test oracle-linked engine crates (rust/engine workspace)
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
-        # The regexp parity and unicode-sets suites recurse deeply in
-        # debug builds (the pure-Rust port keeps XS's recursive
-        # compile/match shape), overflowing the 2 MiB default test-
-        # thread stack. 16 MiB matches what the suites need locally;
-        # the recursion depth is an engine property, not this lane's.
+        # The engine's native recursion is bounded by its own budget
+        # (`NATIVE_DEPTH_LIMIT`), calibrated to the thread stack it
+        # documents in `ironhorse_vm::NATIVE_STACK_BYTES`: 32 MiB for an
+        # unoptimized build, where the monolithic dispatch frames are an
+        # order of magnitude larger. Suites that drive the engine on the
+        # harness thread inherit cargo's 2 MiB default, so give them the
+        # contract stack; the tests that pin the budget's boundaries
+        # spawn threads of that size themselves.
         env:
-          RUST_MIN_STACK: '16777216'
+          RUST_MIN_STACK: '33554432'
         run: cargo test -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz
   test-ocapn-python:
     name: test-ocapn-python

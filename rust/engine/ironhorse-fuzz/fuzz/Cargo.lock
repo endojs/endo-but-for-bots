@@ -216,7 +216,9 @@ dependencies = [
 name = "ironhorse-fuzz-targets"
 version = "0.0.0"
 dependencies = [
+ "ironhorse-compile",
  "ironhorse-fuzz",
+ "ironhorse-vm",
  "libfuzzer-sys",
 ]
 

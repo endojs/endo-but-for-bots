@@ -22,6 +22,69 @@ the oracle: the `c/moddable` pin).
 | `ironhorse-compile` | `#![forbid(unsafe_code)]` | The pure-Rust compiler port (lexer → parser → scoper → coder) whose bytecode AND `SYMB` atom equal the XS oracle's byte for byte (stage 5, § Stage 5). Now the dual-run default (`Compiler::Ironhorse`). |
 | `ironhorse-snapshot` | `#![forbid(unsafe_code)]` | The `XS_M`-atom machine-image writer/reader and arena serializer: content-addressed suspend/resume of a metered `ironhorse-vm` machine, byte-exact round-trip with meter state preserved across suspend (stage 6, § Stage 6). |
 
+## Native recursion budget and stack contract
+
+Guest code halts the crank, never the process. Every engine crate is
+`#![forbid(unsafe_code)]`, so a panic is a crashed crank and not a compromised
+daemon; a native stack overflow is not a panic, it is a `SIGABRT` no
+`catch_unwind` contains, and until the budget below landed every native
+recursion the engine performed on a guest's behalf ran on the host's terms.
+`DISPATCH_REENTRY_LIMIT` bounded exactly one family (bytecode re-entry through
+`dispatch_at`); a Proxy forwarding through a Proxy (or a spec-legal Proxy
+prototype cycle), a built-in re-entering a built-in (`join` → `toString` →
+`join` over a self-containing array), `JSON.parse`/`JSON.stringify`, the
+host-boundary renderer, `flat`, an ordinary prototype chain read through the
+MOP, the async-generator drain, and the whole compile front end (parser,
+scoper, coder, regexp compiler) each terminated by overflowing the thread stack
+at a depth that depended on the host stack size and the build profile.
+
+The invariant, not the sites, is what landed:
+
+- **VM** — one counter, `Interp::native_depth`, charged by every re-entry
+  point and checked against `NATIVE_DEPTH_LIMIT` (512 units). A frame is
+  charged by size class: a `dispatch_at` re-entry or a `call_native` /
+  `call_native_method` activation (the crate's two monolithic dispatch
+  functions, tens to hundreds of KiB unoptimized) costs `HEAVY_FRAME_COST` (4);
+  a `mop_*`/Proxy internal method, a JSON walker level, a `flat` level or a
+  renderer level costs `LIGHT_FRAME_COST` (1). So the budget admits 128 heavy
+  frames — 63 nested callbacks beneath the top-level program, the allowance the
+  old limit gave — or 512 light ones, and a mix is bounded by the heavier
+  corner rather than by their sum. Past the ceiling the crank halts with
+  `Halt::StackOverflow`, the abort-to-host XS raises from `fxCheckCStack`.
+  Ordinary prototype chains are walked in place (XS's `fxGetProperty` loop),
+  the async-generator drain is a loop, and the renderer refuses a
+  self-containing completion or thrown value the way XS's `fxToString` aborts
+  on it.
+- **Parser** — `PARSER_STACK_BUDGET` (1,024 units) charged by frame class: a
+  full expression-cascade re-entry costs `CASCADE_COST` (8) plus the operand
+  charges on the way down (about 100 nested parentheses, brackets, calls,
+  arrow bodies or template substitutions), a nested statement, `new` operand or
+  destructuring level `STATEMENT_COST` (2, so 512), an assignment / unary /
+  conditional operand `OPERAND_COST` (1, so about 1,000). Refused with XS's
+  own `fxCheckParserStack` wording, a `SyntaxError` "stack overflow".
+- **Scoper and coder** — `TREE_DEPTH_LIMIT` (2,048 tree levels) for the flat
+  runs the grammar folds into left-nested chains (`a + a + … + a`, `a.b.c…`),
+  which the parser never recursed for. Same `SyntaxError`.
+- **Regexp compiler** — `MAX_NESTING_DEPTH` (512 nested groups or `v`-mode
+  classes), a `SyntaxError` "too much nesting". Pattern *length* is linear:
+  `disjunction_parse`, `measure` and `emit` walk the `Sequence` and
+  `Disjunction` spines iteratively where `xsre.c` tail-recurses.
+
+The counters are deterministic, so the depth at which a program is refused is
+a property of the program and part of the release-versioned contract; what
+those frames cost in host stack is a property of the build. The engine states
+that requirement in `ironhorse_vm::NATIVE_STACK_BYTES`: **32 MiB for an
+unoptimized build** (the worst corner measures about 13 MiB), **8 MiB for an
+optimized one** (under 2 MiB measured) — the sizes the `rust/endo` worker
+threads and the test262 harness allocate, and a libFuzzer main thread has.
+Run the engine on a thread of at least that size; cargo's 2 MiB test threads
+are below it, which is why the oracle-linked CI lane sets `RUST_MIN_STACK` and
+why the boundary-pinning tests spawn their own threads. Those tests are
+`ironhorse-vm/tests/native_recursion_budget.rs` (one family per test at the
+documented size), `ironhorse-compile/tests/recursion_bounds.rs` (every parser
+and tree boundary pinned exactly), the `recursion_bounds` module in
+`ironhorse-regexp/src/compile.rs`, and the `guest_no_abort` fuzz target.
+
 ## Building the oracle: the `c/moddable` pin
 
 `xs-oracle` compiles the XS engine from the `c/moddable`
@@ -115,7 +178,7 @@ reached, measured against the **8.3.1** oracle from that stage on.
 | 4 | `ArrayBuffer.prototype.transfer*` do not use `@@species` — `36aa1485a4`, `eff30ae5ba` | `xsDataView.c` | **in-oracle** | `transfer`/`transferToFixedLength` are a recognized-but-unimplemented named skip (`array-buffer-transfer:unsupported`, `interp.rs:11926`) — no species lookup exists to be wrong. | **No action.** Auto-inherits the no-species behavior when `transfer` is implemented against the 8.2.3 oracle. |
 | 5 | `Array.from` / `Array.fromAsync` don't throw on `undefined` mapFn (#1645) — `d8baa8cdf7` | `xsArray.c` | **post-8.2.3** | Both are honest named skips today (`Array.from:iterator-protocol-metering`, `Array.fromAsync:async-iteration`). The change: `mapFn` is used only when `mxArgc > 1 && !mxIsUndefined(argv(1))` — `undefined` ⇒ no mapper (identity). | **Follow-up:** honor the `undefined`-mapper guard when these statics are implemented, oracle now at 8.3.1. |
 | 6 | Private property defined in a module namespace object — `a3da68e484` | `xsAll.h`, `xsModule.c`, `xsProperty.c` | **post-8.2.3** | Module coder + private fields both exist. The change: `fxDefine/Get/SetPrivateProperty` redirect a module `instance` to `mxModuleInstanceExports(instance)->value.reference` before walking properties. | **Follow-up:** mirror the module-instance → exports redirect in the private-property path once module-namespace + private-field interaction is exercised, oracle now at 8.3.1. |
-| 7 | Native stack overflow reported natively, not as JS (#1635) + parser stack margin — `bc5a1ecfdb`, `82e80152a3`, `ebc286a46c`, `da87ebd954` | `xsMemory.c`, `xsSyntaxical.c` | **all in-oracle** | `ironhorse-vm` already models overflow as `Halt::StackOverflow` = "an abort to the host, not a catchable `RangeError`" (`interp.rs:2431`, `:73`, `:7113`) — exactly `bc5a1ecfdb`'s semantics — and the parser carries its own stack checks. | **Already mirrored.** Oracle-covered; margin/overhead tuning is behavior-neutral. |
+| 7 | Native stack overflow reported natively, not as JS (#1635) + parser stack margin — `bc5a1ecfdb`, `82e80152a3`, `ebc286a46c`, `da87ebd954` | `xsMemory.c`, `xsSyntaxical.c` | **all in-oracle** | `ironhorse-vm` models overflow as `Halt::StackOverflow` = "an abort to the host, not a catchable `RangeError`" — exactly `bc5a1ecfdb`'s semantics. XS bounds its *native* recursion (`fxCheckCStack`, `fxCheckParserStack`) by a stack-address margin that varies with host, thread and build; ironhorse bounds the same recursions by deterministic counters (§ Native recursion budget and stack contract): the VM's `NATIVE_DEPTH_LIMIT`, the parser's `PARSER_STACK_BUDGET`, the scoper/coder `TREE_DEPTH_LIMIT`, and the regexp compiler's `MAX_NESTING_DEPTH`. | **Mirrored as counters.** The refusal shape agrees (host abort in the VM, `SyntaxError` "stack overflow" in the parser); the depth is a release-versioned contract rather than the oracle's host-dependent margin. |
 | 8 | `String.prototype.trim` optimization — `f5615ff3fb` | `xsString.c` | post-8.2.3 | behavior-neutral fast path. | **Optional / no action** — no observable semantics delta. |
 
 Net, after the `port-xs-oracle-bump-8-3-1` bump: **items 2, 4, and 7 are
@@ -151,7 +214,10 @@ cargo fuzz run parser -- -max_total_time=30   # bounded, mirrors the old CI smok
 
 The maintained targets are `differential_source`, `bytecode_decoder`,
 `differential_stage2b`, `differential_regexp`, `differential_regexp_surface`,
-`parser`, `differential_compile`, `snapshot_roundtrip`, and `snapshot_decoder`.
+`parser`, `differential_compile`, `snapshot_roundtrip`, `snapshot_decoder`, and
+`guest_no_abort` (no oracle: its only assertion is that an arbitrary guest
+program halts the crank rather than the process — see § Native recursion
+budget).
 Crashing inputs land in `fuzz/artifacts/`; reduce with `cargo fuzz tmin <target>
 <input>`. A finding's durable regression is a Rust unit test in `ironhorse-vm` (the
 `fuzz/corpus` and `fuzz/artifacts` trees are gitignored, so a corpus seed cannot be
