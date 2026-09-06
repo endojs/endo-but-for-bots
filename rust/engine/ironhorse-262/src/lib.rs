@@ -1504,7 +1504,9 @@ mod tests {
         // `String()` of that value...
         assert_eq!(ra.result, one.result, "compartment A sees its own 11");
         assert_eq!(rb.result, two.result, "compartment B sees its own 22");
-        // ...and the two compartments diverge over one shared intrinsics graph.
+        // ...and the two compartments diverge while holding one machine's
+        // intrinsics MARKER (marker identity, not a shared primordial graph —
+        // see `ironhorse_vm::compartment`'s realm decision).
         assert_ne!(ra.result, rb.result);
         assert!(std::rc::Rc::ptr_eq(a.intrinsics(), b.intrinsics()));
     }

@@ -321,8 +321,11 @@ pub mod engine {
     }
 
     impl Machine {
-        /// Create a fresh machine over shared intrinsics, metered under
-        /// [`MeterBounds::default`].
+        /// Create a fresh machine, metered under [`MeterBounds::default`].
+        ///
+        /// Each `evaluate` builds its own realm; the machine's
+        /// `Intrinsics` is a marker, not a shared frozen primordial graph
+        /// (see `ironhorse_vm::compartment`'s realm decision).
         pub fn new() -> Machine {
             Machine::with_bounds(MeterBounds::default())
         }
@@ -398,7 +401,8 @@ pub mod engine {
             }
         }
 
-        /// Shared intrinsics for this machine.
+        /// This machine's intrinsics marker (not a shared primordial
+        /// graph — see `ironhorse_vm::compartment`).
         pub fn intrinsics(&self) -> &Intrinsics {
             self.inner.intrinsics().as_ref()
         }

@@ -7,6 +7,9 @@
 //!
 //! - a Proxy `with` object observes its `has`, `get` and `set` traps (a
 //!   membrane's whole premise), and a trap throw is a catchable guest error;
+//! - a store the object environment REJECTS (frozen, non-writable,
+//!   getter-only, or a `set` trap answering false) throws a TypeError in
+//!   strict code, where the `[[Set]]` failure flag was previously discarded;
 //! - an **exotic** own property — an array's or String wrapper's `length`, a
 //!   function's `length`/`name` — is a scopable binding, where a chain-only
 //!   walk saw none and let the name fall through to the enclosing scope.
@@ -163,6 +166,66 @@ fn with_proxy_over_a_function_target_binds_the_callee() {
         "var r = 0; \
          with (new Proxy({}, {has: function (t, k) { return k === 'f'; }, \
                              get: function () { return function () { return typeof this; }; }})) { r = f(); } r",
+    );
+}
+
+// ---- A rejected strict store throws ------------------------------------
+
+#[test]
+fn a_strict_store_into_a_with_object_throws_when_rejected() {
+    // `with` is itself a strict-mode SyntaxError, but `S` on the Reference is
+    // the strictness of the code containing the ASSIGNMENT, so a strict store
+    // against an object environment is reachable two ways: a strict function
+    // written in a sloppy `with` body and closing over it, and a strict direct
+    // `eval` inside one. Both routes previously answered `'set'` where XS
+    // throws a TypeError, for every rejecting shape.
+    //
+    // Route (a), a strict closure, over the three rejecting shapes:
+    result_only(
+        "var o={x:1}; var f; with(o){ f=function(){'use strict'; x=2; return 'set'; }; } \
+         Object.freeze(o); var r='?'; try{ r=f(); }catch(e){ r=e.name; } r+':'+o.x",
+    );
+    result_only(
+        "var o={}; Object.defineProperty(o,'x',{value:1,writable:false,configurable:true}); var f; \
+         with(o){ f=function(){'use strict'; x=2; return 'set'; }; } \
+         var r='?'; try{ r=f(); }catch(e){ r=e.name; } r+':'+o.x",
+    );
+    result_only(
+        "var o={ get x(){ return 1; } }; var f; \
+         with(o){ f=function(){'use strict'; x=2; return 'set'; }; } \
+         var r='?'; try{ r=f(); }catch(e){ r=e.name; } r+':'+o.x",
+    );
+    // Route (b), a strict direct `eval` inside a sloppy `with`:
+    result_only(
+        "var o={x:1}; Object.freeze(o); var out={v:'no-throw'}; \
+         with(o){ try{ eval(\"'use strict'; x = 2;\"); }catch(e){ out.v=e.name; } } out.v+':'+o.x",
+    );
+    // And a Proxy whose `set` trap answers false.
+    result_only(
+        "var p=new Proxy({x:1},{set:function(){ return false; }}); var f; \
+         with(p){ f=function(){'use strict'; x=2; return 'set'; }; } \
+         var r='?'; try{ r=f(); }catch(e){ r=e.name; } r",
+    );
+}
+
+#[test]
+fn a_sloppy_store_into_a_with_object_stays_silent() {
+    // The controls that make the assertions above meaningful: the same rejecting
+    // shapes in sloppy code must keep answering the RHS with no error, and a
+    // setter that throws must surface ITS error rather than a TypeError.
+    exact(
+        "var o={x:1}; var f; with(o){ f=function(){ x=2; return 'set'; }; } \
+         Object.freeze(o); var r='?'; try{ r=f(); }catch(e){ r=e.name; } r+':'+o.x",
+    );
+    exact(
+        "var o={ get x(){ return 1; } }; var f; with(o){ f=function(){ x=2; return 'set'; }; } \
+         var r='?'; try{ r=f(); }catch(e){ r=e.name; } r+':'+o.x",
+    );
+    // A binding that vanished between the reference and the store stays a
+    // ReferenceError from the outer resolution, not a TypeError.
+    exact(
+        "var o={x:1}; var f; with(o){ f=function(){'use strict'; x=2; return 'set'; }; } \
+         delete o.x; var r='?'; try{ r=f(); }catch(e){ r=e.name; } r+':'+('x' in o)+':'+o.x",
     );
 }
 

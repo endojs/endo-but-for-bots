@@ -180,7 +180,19 @@ fn a_hardened_function_keeps_its_name_against_redefinition() {
 // ---- F059: compartments cannot observe each other ----------------------
 
 #[test]
-fn a_compartment_cannot_observe_a_siblings_intrinsic_mutation() {
+fn two_compartment_evaluations_do_not_share_a_heap() {
+    // This pins the ABSENCE of requirement 5, not its presence, and is named
+    // so: each `evaluate*` builds a fresh `Interp`, so a mutation of one
+    // evaluation's `Object.prototype` cannot reach another because the two are
+    // unrelated heaps. It therefore cannot fail while that remains true.
+    //
+    // MUST BE REVISITED AT THE REALM SPLIT. Under genuinely shared frozen
+    // intrinsics the mutation would be rejected rather than succeed, and the
+    // isolation asserted below would come from the freeze instead of from
+    // disjoint heaps. The first assertion is deliberately only "the mutating
+    // program ran", not "the mutation took effect", so that landing the realm
+    // split does not require weakening a test that looks like it guards
+    // isolation.
     let machine = Machine::new();
     let a = machine.new_compartment();
     let b = machine.new_compartment();
@@ -189,10 +201,25 @@ fn a_compartment_cannot_observe_a_siblings_intrinsic_mutation() {
     let (probe, probe_symbols) = compile("var r = typeof Object.prototype.leak; r");
     let ra = a.evaluate_with_symbols(&mutate, &mutate_symbols);
     assert!(ra.completed, "{:?}", ra.halt);
-    assert_eq!(ra.result, "number");
     let rb = b.evaluate_with_symbols(&probe, &probe_symbols);
     assert!(rb.completed, "{:?}", rb.halt);
     assert_eq!(rb.result, "undefined", "a sibling's mutation must not leak");
+}
+
+#[test]
+fn a_name_keyed_endowment_is_not_a_binding() {
+    // `define_global` records a name-keyed endowment that no evaluation reads:
+    // the evaluators seed only the id-keyed map, because the bytecode addresses
+    // a global by interned symbol id. Pinned so the documented inertness cannot
+    // drift back into an implied binding.
+    let machine = Machine::new();
+    let mut c = machine.new_compartment();
+    c.define_global("endowed", ironhorse_vm::Slot::integer(7));
+    assert!(c.global("endowed").is_some(), "recorded on the lookup surface");
+    let (bytecode, symbols) = compile("var r = typeof endowed; r");
+    let outcome = c.evaluate_with_symbols(&bytecode, &symbols);
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert_eq!(outcome.result, "undefined", "name-keyed endowments are inert");
 }
 
 // ---- F061: `with` over a Proxy or accessor -----------------------------
@@ -210,24 +237,61 @@ fn with_over_a_proxy_resolves_through_its_has_and_get_traps() {
 
 #[test]
 fn with_over_a_proxy_assigns_through_its_set_trap() {
+    // The `has` trap is logged too: a store against an object environment runs
+    // `HasBinding` and then `SetMutableBinding`'s own `HasProperty`, so `has`
+    // fires twice before `set`. That sequence is XS's own — the oracle agrees
+    // byte for byte in `ironhorse-262/tests/with_statement_mop.rs` — so pinning
+    // it here keeps a future "optimization" from dropping one of them.
     let r = eval(
         "var log = []; \
-         with (new Proxy({x: 1}, {has: () => true, set: (t, k, v) => { log.push(k + '=' + v); return true; }})) { \
+         with (new Proxy({x: 1}, {has: (t, k) => { log.push('has'); return true; }, \
+                                  set: (t, k, v) => { log.push('set:' + k + '=' + v); return true; }})) { \
            x = 9; \
          } log.join()",
     );
-    assert_eq!(r, "x=9");
+    assert_eq!(r, "has,has,set:x=9");
 }
 
 #[test]
 fn with_consults_unscopables_through_the_get_trap() {
-    let r = eval(
+    // Blocked by `@@unscopables`: the name resolves outward.
+    let blocked = eval(
         "var x = 'outer'; var out = {}; \
          with (new Proxy({x: 'inner'}, {get: (t, k) => k === Symbol.unscopables ? {x: true} : t[k]})) { \
            out.v = x; \
          } out.v",
     );
-    assert_eq!(r, "outer");
+    assert_eq!(blocked, "outer");
+    // Control, and the half that makes the assertion above meaningful: with the
+    // blocklist entry gone the SAME shape must bind the proxy's own property.
+    // Without it the test would pass for the wrong reason — a `with` head whose
+    // binding is never found at all also answers "outer".
+    let bound = eval(
+        "var x = 'outer'; var out = {}; \
+         with (new Proxy({x: 'inner'}, {get: (t, k) => k === Symbol.unscopables ? undefined : t[k]})) { \
+           out.v = x; \
+         } out.v",
+    );
+    assert_eq!(bound, "inner");
+}
+
+#[test]
+fn a_property_descriptor_is_read_through_the_mop_seam() {
+    // `descriptor_from_object` must not be chain-only: a descriptor supplied as
+    // a Proxy has to be read through its traps, or `defineProperty` installs a
+    // silently wrong property with no throw and no named skip. Pinned here
+    // because the design document cites the descriptor path alongside `with`.
+    //
+    // The target must actually CARRY `value`: `ToPropertyDescriptor` runs
+    // `HasProperty(desc, 'value')` before `Get`, so over an empty target the
+    // read never happens and `undefined` is the correct answer — which is why
+    // the architecture review's own probe for this was a false positive.
+    let r = eval(
+        "var o = {}; var out = {}; \
+         Object.defineProperty(o, 'k', new Proxy({value: 0}, {get: (t, k) => k === 'value' ? 7 : t[k]})); \
+         out.v = String(o.k); out.v",
+    );
+    assert_eq!(r, "7");
 }
 
 #[test]
