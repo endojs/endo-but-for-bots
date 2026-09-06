@@ -35,9 +35,15 @@ other sessions.
   not a read-only outer mount: the outer mount is necessarily writable by
   app-server so it can maintain thread and rollout state.
   Automatic `/tmp` and `TMPDIR` writable-root expansion is disabled; the
-  app-server environment pins `HOME`, `CODEX_HOME`, `TMPDIR`, `TMP`, and `TEMP`
-  to the declared paths; all caller-supplied environment entries, including
-  proxy and credential variables, are rejected.
+  app-server transport sets exactly `HOME`, `CODEX_HOME`, `TMPDIR`, `TMP`,
+  `TEMP`, `LANG`, `LC_ALL`, and `TZ`, and rejects every per-spawn addition,
+  including proxy and credential variables.
+  That is the whole of what the transport enforces: `@endo/sandbox` layers a
+  spawn's environment over the slice's own, and the policy attestation does not
+  yet cover the slice environment, so an operator's `makeSlice` must place no
+  credential or proxy setting there.
+  Attesting the slice environment belongs with the sandbox enforcement work
+  below.
 - No host device, home, daemon socket, Podman/Docker socket, credential store,
   or path belonging to another session is mounted.
 - The attestation reports `devices: "none"`, `hostSockets: "none"`,
