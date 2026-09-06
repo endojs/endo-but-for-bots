@@ -44,7 +44,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ironhorse_vm::source_scan::{
-    balanced_args, code_only, marker_positions, rs_files, string_literals,
+    balanced_args, code_only, literal_end, marker_positions, rs_files, string_literals,
 };
 
 use ironhorse_vm::halt_labels::{DECLINED_HELPER_LABELS, DECLINED_LABELS, ENGINE_INVARIANT_LABELS};
@@ -200,6 +200,13 @@ fn fn_body(marker: &str) -> String {
         let mut depth = 0usize;
         let mut k = j;
         loop {
+            // Braces inside a literal are text, not structure: the same rule
+            // every other pass here applies, so a label containing `{` or `}`
+            // cannot truncate the body or run the scan off its end.
+            if let Some(end) = literal_end(src, k) {
+                k = end;
+                continue;
+            }
             match bytes[k] {
                 b'{' => depth += 1,
                 b'}' => {
