@@ -41,8 +41,15 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     (bytecode, parse_symbols(&symbols))
 }
 
+/// One crank's host-visible verdict: the completion flag and the
+/// rendered result. Both must agree across the seven ways — a crank
+/// reported as a synthetic host-boundary throw in one variant and as a
+/// completion in another would be a divergence the result string
+/// alone could hide.
+type CrankResult = (bool, String);
+
 struct Baseline {
-    results: Vec<String>,
+    results: Vec<CrankResult>,
     /// Cumulative computrons AFTER EVERY CRANK, not just the last: a
     /// mid-run meter divergence that reconverges by the final crank
     /// must still fail (the collaborator review's finding).
@@ -57,13 +64,19 @@ fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline
     let mut computrons = Vec::new();
     for (i, (bytecode, _)) in compiled.iter().enumerate() {
         let o = m.run(bytecode);
+        // The suite's real precondition is a QUIESCENT boundary after
+        // every crank, not a completed one: a crank whose completion
+        // value the harness cannot coerce (a Symbol, a null-prototype
+        // object) is reported as a throw yet leaves the engine at a
+        // clean boundary, and the seven ways must agree on it too. A
+        // crank that genuinely halts fails here, loudly.
         assert!(
-            o.completed,
-            "{scenario} baseline crank {} completes (halt: {:?})",
+            m.is_quiescent(),
+            "{scenario} baseline crank {} must leave a quiescent machine (halt: {:?})",
             i + 1,
             o.halt
         );
-        results.push(o.result);
+        results.push((o.completed, o.result));
         computrons.push(o.computrons);
     }
     Baseline {
@@ -77,7 +90,7 @@ fn assert_agrees(
     variant: &str,
     scenario: &str,
     baseline: &Baseline,
-    results: &[String],
+    results: &[CrankResult],
     computrons: &[u64],
     final_blob: &[u8],
 ) {
@@ -96,7 +109,7 @@ fn assert_agrees(
 }
 
 /// Variant 2: blob suspend/resume between every crank.
-fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, Vec<u64>, Vec<u8>) {
+fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
@@ -107,7 +120,7 @@ fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<String>, Vec<u64>, Vec<
             m = from_snapshot_bytes(&bytes, &sig()).expect("blob resumes");
         }
         let o = m.run(bytecode);
-        results.push(o.result);
+        results.push((o.completed, o.result));
         computrons.push(o.computrons);
     }
     (results, computrons, m.write_snapshot(&sig()).expect("quiescent machine snapshots"))
@@ -136,7 +149,7 @@ fn run_store<S: HeapStore + 'static>(
     store: S,
     compiled: &[(Vec<u8>, Vec<String>)],
     mode: Resume,
-) -> (Vec<String>, Vec<u64>, Vec<u8>) {
+) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
     let mut computrons = Vec::new();
@@ -145,7 +158,7 @@ fn run_store<S: HeapStore + 'static>(
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
-    results.push(o.result);
+    results.push((o.completed, o.result));
     computrons.push(o.computrons);
     let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
@@ -197,7 +210,7 @@ fn run_store<S: HeapStore + 'static>(
             }
         }
         let o = session.machine_mut().run(bytecode);
-        results.push(o.result);
+        results.push((o.completed, o.result));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
         if let Resume::LazyAdversarialEvict = mode {
@@ -233,7 +246,7 @@ fn run_store<S: HeapStore + 'static>(
 fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     store: S,
     compiled: &[(Vec<u8>, Vec<String>)],
-) -> (Vec<String>, Vec<u64>, Vec<u8>) {
+) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
     let mut computrons = Vec::new();
@@ -241,7 +254,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
-    results.push(o.result);
+    results.push((o.completed, o.result));
     computrons.push(o.computrons);
     let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
@@ -249,7 +262,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
 
     for (bytecode, _) in compiled.iter().skip(1) {
         let o = session.machine_mut().run(bytecode);
-        results.push(o.result);
+        results.push((o.completed, o.result));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     }
@@ -495,6 +508,109 @@ pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
             "var i; var s; last.v + 1",
         ],
     );
+    // The halted-but-quiescent class (architecture review F030/F022):
+    // a crank whose completion value the oracle harness's
+    // `String(result)` cannot coerce is REPORTED as a synthetic
+    // `TypeError` throw, but the engine's own crank completed and its
+    // boundary registers cleared, so the machine persists and every
+    // way must agree on the verdict, the computrons, and the bytes.
+    // Until this scenario the suite asserted every crank completed and
+    // was blind to the class; before the register-clear fix the twins
+    // agreed here and forked at their next collection
+    // (`boundary_collection_twins` is the instrument for that half).
+    carry(
+        &mut fresh,
+        "synthetic-host-throw",
+        "Symbol('k'); Object.create(null); o.p;",
+        &[
+            "o = { p: 20 }; s = Symbol('k'); s",
+            "t = Object.create(null); t",
+            "t = o.p + 22; t",
+        ],
+    );
+}
+
+/// The continuous-versus-resumed IMAGE comparison after a boundary
+/// collection, against a backend (architecture review F011,
+/// F030/F022). The seven-way runner compares results, computrons and
+/// final bytes, and is blind to a machine whose boundary registers
+/// stayed rooted: two such twins answer every crank identically while
+/// their free lists, live counts and canonical bytes diverge at the
+/// first collection — a durable-heap fork with no observable in the
+/// runner. So: for each scenario, run crank 1 uninterrupted and on a
+/// machine that slept in the store; collect BOTH at the boundary; run
+/// the same crank 2; and require live counts, verdicts, computrons and
+/// canonical bytes to agree.
+pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
+    // Crank 1's bindings are LEXICAL: a top-level `let` lives in the
+    // frame's `locals` register, not on the global object, so `a` and
+    // the completion value are rooted by nothing but the boundary
+    // registers — the roots the restore path never reinstates, and the
+    // reason a `var` fixture cannot see this class (`g` is the one
+    // global the observation reads).
+    let pre = "var g; var t; \
+               if (0) { let a = 0; let b = 0; let s = 0; a.p; b.q; g.q; \
+                        Symbol('k'); Object.create(null); } ";
+    let observe = format!("{pre} t = g.q * 21; t");
+    for (name, completion) in [
+        ("a rendered completion", "let s = 7; s"),
+        // The two synthetic host-boundary throws: the engine completed,
+        // the harness could not coerce the value.
+        ("a Symbol completion", "let s = Symbol('k'); s"),
+        ("a null-prototype completion", "let s = Object.create(null); s"),
+    ] {
+        let (b1, n1) = compile(&format!(
+            "{pre} let a = {{ p: 1 }}; let b = {{ q: 2 }}; g = b; {completion}"
+        ));
+        let (b2, n2) = compile(&observe);
+        assert_eq!(n1, n2, "{name}: both cranks intern the same symbols");
+
+        let mut cont = Interp::new();
+        cont.link_intrinsics(&n1);
+        let o1 = cont.run(&b1);
+        assert!(cont.is_quiescent(), "{name}: crank 1 leaves a boundary ({:?})", o1.halt);
+
+        let store = Rc::new(RefCell::new(fresh()));
+        let mut sleeper = Interp::new();
+        sleeper.link_intrinsics(&n1);
+        let s1 = sleeper.run(&b1);
+        assert_eq!((s1.completed, s1.result), (o1.completed, o1.result), "{name}: crank 1");
+        drop(
+            begin_store_session(sleeper, &sig(), &mut *store.borrow_mut())
+                .map_err(|(_, e)| e)
+                .unwrap_or_else(|e| panic!("{name}: begin: {e:?}")),
+        );
+        let mut resumed = resume_from_store(&*store.borrow(), &sig())
+            .unwrap_or_else(|e| panic!("{name}: resume: {e:?}"));
+        let twin = resumed.machine_mut();
+
+        let cont_gc = cont.collect_garbage();
+        let twin_gc = twin.collect_garbage();
+        assert_eq!(
+            cont_gc.slots_live, twin_gc.slots_live,
+            "{name}: the boundary must root the same live set on both twins"
+        );
+        let co = cont.run(&b2);
+        let to = twin.run(&b2);
+        assert_eq!(
+            (co.completed, co.result.as_str()),
+            (true, "42"),
+            "{name}: continuous crank 2 ({:?})",
+            co.halt
+        );
+        assert_eq!(
+            (to.completed, to.result.as_str()),
+            (true, "42"),
+            "{name}: resumed crank 2 ({:?})",
+            to.halt
+        );
+        assert_eq!(co.computrons, to.computrons, "{name}: computrons agree");
+        assert_eq!(
+            cont.write_snapshot(&sig()).expect("continuous snapshots"),
+            twin.write_snapshot(&sig()).expect("resumed snapshots"),
+            "{name}: continuous and resumed canonical bytes agree after a boundary collection"
+        );
+    }
 }
 
 /// The lazy wake really is lazy against this backend: after a lazy

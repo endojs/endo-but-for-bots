@@ -9,7 +9,8 @@
 //! deeper coverage (full close/reopen cycles, sidecar removal).
 
 use ironhorse_snapshot::store_suite::{
-    checkpoint_acceptance, lazy_working_set_bound, metamorphic_suite, resume_equals_uninterrupted,
+    boundary_collection_twins, checkpoint_acceptance, lazy_working_set_bound, metamorphic_suite,
+    resume_equals_uninterrupted,
 };
 use ironhorse_store_sqlite::SqliteHeapStore;
 
@@ -22,6 +23,11 @@ fn in_memory() -> SqliteHeapStore {
 #[test]
 fn sqlite_in_memory_agrees_seven_ways() {
     metamorphic_suite(in_memory);
+}
+
+#[test]
+fn sqlite_in_memory_twins_agree_after_a_boundary_collection() {
+    boundary_collection_twins(in_memory);
 }
 
 #[test]
@@ -68,6 +74,11 @@ fn sqlite_on_disk_agrees_seven_ways() {
 #[test]
 fn sqlite_on_disk_lazy_resume_faults_only_the_working_set() {
     with_disk_stores("working-set", |fresh| lazy_working_set_bound(&mut *fresh));
+}
+
+#[test]
+fn sqlite_on_disk_twins_agree_after_a_boundary_collection() {
+    with_disk_stores("boundary-collection", |fresh| boundary_collection_twins(fresh));
 }
 
 #[test]

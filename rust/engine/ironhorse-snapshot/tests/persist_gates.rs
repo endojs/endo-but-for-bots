@@ -13,6 +13,13 @@
 //! - A resumed machine must be re-armable WITHOUT destroying its
 //!   restored computron count (W6-13): `arm_meter` (a fresh window)
 //!   zeroes the index by design; `rearm_meter` preserves it.
+//! - Quiescence is a LIFECYCLE property (architecture review F011,
+//!   F030/F022): a crank halted at a top-level meter check, the
+//!   dispatch ceiling, or a decode fault leaves every table empty and
+//!   must still be refused by every verb, while the synthetic
+//!   host-boundary throw for an uncoercible completion value must
+//!   leave a quiescent machine whose continuous and resumed twins
+//!   agree after a boundary collection.
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
@@ -693,6 +700,216 @@ fn every_admitted_fixture_resumes_faithfully() {
             (continuous.completed, continuous.result.as_str()),
             "{name}: an ADMITTED machine must resume faithfully (halt {:?})",
             resumed.halt
+        );
+    }
+}
+
+// ---------------------------------------------------------------
+// Quiescence is a LIFECYCLE property, not a table-emptiness
+// property (architecture review F011, F030/F022). The `throw` fixture
+// above halts with a populated catch chain and a set exception, so
+// the table-shaped conjuncts of `is_quiescent` catch it. A crank that
+// halts at a loop-closing meter check, at the dispatch ceiling, or at
+// a decode fault leaves every table EMPTY -- and before the
+// `last_crank_completed` conjunct, such a machine passed every persist
+// verb while its `result`/`locals`/`id_map` registers, live GC roots
+// the restore path never reinstates, stayed populated: after one
+// boundary collection the continuous machine and its resumed twin held
+// different free lists and different canonical bytes while agreeing on
+// every result and computron.
+
+fn assert_every_persist_verb_refuses_non_quiescent(m: Interp, shape: &str) {
+    assert!(!m.is_quiescent(), "{shape}: a halted crank is not a quiescent boundary");
+    match m.write_snapshot(&sig()) {
+        Err(MachineSnapshotError::NotQuiescent) => {}
+        other => panic!("{shape}: the blob verb must refuse as NotQuiescent: {other:?}"),
+    }
+    let mut store = MemoryStore::new();
+    match begin_store_session(m, &sig(), &mut store) {
+        Err((_, StoreError::MachineNotQuiescent)) => {}
+        Err((_, other)) => panic!("{shape}: the store verb refused by the wrong gate: {other:?}"),
+        Ok(_) => panic!("{shape}: the store verb must refuse"),
+    }
+    assert!(store.manifest().is_err(), "{shape}: a refused begin writes nothing");
+}
+
+/// A metered crank the host refuses at a TOP-LEVEL loop-closing check:
+/// the call stack, catch chain, and value stack are all empty at that
+/// check, so only the lifecycle conjunct can see the halt.
+#[test]
+fn a_meter_aborted_crank_refuses_every_persist_verb() {
+    let (b, n) = compile("var i = 0; for (i = 0; i < 100000; i++) { i = i; } i");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    m.arm_meter(1, Box::new(|_| false));
+    let o = m.run(&b);
+    assert!(matches!(o.halt, ironhorse_vm::Halt::MeterAbort), "fixture: {:?}", o.halt);
+    assert!(!o.completed);
+    assert_every_persist_verb_refuses_non_quiescent(m, "meter abort");
+}
+
+/// The dispatch-ceiling halt, at the loop top of a top-level frame.
+#[test]
+fn a_step_limited_crank_refuses_every_persist_verb() {
+    let (b, n) = compile("var i = 0; for (i = 0; i < 100000; i++) { i = i; } i");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let o = m.run_bounded(&b, 50);
+    assert!(matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)), "fixture: {:?}", o.halt);
+    assert!(!o.completed);
+    assert_every_persist_verb_refuses_non_quiescent(m, "step limit");
+}
+
+/// The ceiling reached BEFORE any dispatch, and a decode fault on an
+/// empty buffer: nothing ran, every table is empty, and the crank still
+/// did not complete. The lifecycle gate refuses these too -- the managed
+/// lifecycle rewinds a halted crank whole, whatever its shape.
+#[test]
+fn a_crank_that_halted_before_dispatching_refuses_every_persist_verb() {
+    let (b, n) = compile("var i = 0; i");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let o = m.run_bounded(&b, 0);
+    assert!(matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)), "fixture: {:?}", o.halt);
+    assert_every_persist_verb_refuses_non_quiescent(m, "step limit before dispatch");
+
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let o = m.run(&[]);
+    assert!(matches!(o.halt, ironhorse_vm::Halt::Decode(_)), "fixture: {:?}", o.halt);
+    assert_every_persist_verb_refuses_non_quiescent(m, "decode fault");
+}
+
+/// Checkpointing a bound session after a table-empty halt refuses and
+/// writes nothing, exactly as the `throw` shape does.
+#[test]
+fn a_meter_aborted_crank_refuses_checkpoint_and_writes_nothing() {
+    let (b0, n0) = compile("var x = 0; var i = 0; x = 1; x");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n0);
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("a clean machine begins");
+    assert!(session.machine_mut().run(&b0).completed);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("clean checkpoint");
+    let epoch_before = store.manifest().unwrap().epoch;
+
+    let (b1, n1) = compile("var x; var i; for (i = 0; i < 100000; i++) { x = x + 1; } x");
+    let b1 = session.machine_mut().relink_crank(&b1, &n1).expect("relink");
+    session.machine_mut().arm_meter(1, Box::new(|_| false));
+    let o = session.machine_mut().run(&b1);
+    assert!(matches!(o.halt, ironhorse_vm::Halt::MeterAbort), "fixture: {:?}", o.halt);
+    match checkpoint_to_store(&mut session, &sig(), &mut store) {
+        Err(StoreError::MachineNotQuiescent) => {}
+        other => panic!("a meter-aborted crank must not checkpoint: {other:?}"),
+    }
+    assert_eq!(
+        store.manifest().unwrap().epoch,
+        epoch_before,
+        "the refusal must land before anything is written"
+    );
+}
+
+/// A resumed machine, and a machine that has never run, both stand at a
+/// clean boundary: the lifecycle conjunct starts true and a restore
+/// lands on a fresh machine.
+#[test]
+fn a_fresh_and_a_resumed_machine_are_quiescent() {
+    let (b, n) = compile("var x = 0; x = 41; x");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    assert!(m.is_quiescent(), "a linked machine that never ran is at a boundary");
+    assert!(m.run(&b).completed);
+    let bytes = m.write_snapshot(&sig()).expect("snapshots");
+    let resumed = from_snapshot_bytes(&bytes, &sig()).expect("resumes");
+    assert!(resumed.is_quiescent(), "a resumed machine is at a boundary");
+    resumed.write_snapshot(&sig()).expect("and snapshots again");
+}
+
+/// After a halted crank, the NEXT completed crank restores quiescence:
+/// the latch is per-crank, not a lifetime poison. The halt here is the
+/// pre-dispatch ceiling, the one shape that leaves NO mid-frame debris,
+/// so the latch is the only conjunct refusing (a halt mid-frame leaves
+/// stack debris a later run does not sweep — the managed lifecycle
+/// rewinds such a machine rather than running over it).
+#[test]
+fn a_completed_crank_after_a_halt_restores_quiescence() {
+    let (b_halt, n) = compile("var i = 0; i");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let o = m.run_bounded(&b_halt, 0);
+    assert!(matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)), "fixture: {:?}", o.halt);
+    assert!(!m.is_quiescent(), "the latch alone refuses");
+    let (b_ok, n_ok) = compile("var i; i = 7; i");
+    let b_ok = m.relink_crank(&b_ok, &n_ok).expect("relink");
+    let o = m.run(&b_ok);
+    assert!(o.completed, "{:?}", o.halt);
+    assert!(m.is_quiescent(), "a completed crank is a boundary again");
+    m.write_snapshot(&sig()).expect("and the blob verb admits it");
+}
+
+/// The two synthetic HOST-BOUNDARY throws -- a completion value the
+/// oracle harness's `String(result)` cannot coerce (a Symbol, a
+/// null-prototype object) -- are minted AFTER the engine's own crank
+/// completed and its job queue drained. The machine IS at a clean
+/// boundary, so the boundary registers must clear exactly as for a
+/// rendered completion; before this fix the rewrite happened first and
+/// the clear was skipped, so `result`/`locals`/`id_map` stayed rooted
+/// and the continuous and resumed twins forked at the next collection
+/// while agreeing on every result and computron (F030/F022, reproduced
+/// end to end in the review).
+#[test]
+fn a_synthetic_host_throw_leaves_a_quiescent_machine_whose_twins_agree() {
+    for (name, completion) in [
+        ("a Symbol completion", "let s = Symbol('k'); s"),
+        ("a null-prototype completion", "let s = Object.create(null); s"),
+    ] {
+        // Both cranks intern the same program symbols, in order (the
+        // dead mention block), so the twins run identical bytecode.
+        // Crank 1's bindings are LEXICAL: `let` lives in the frame's
+        // `locals` register, not on the global object, so `a` and the
+        // completion value are rooted by nothing but the boundary
+        // registers — exactly the roots the restore path never
+        // reinstates. (`g` is the one global the observation reads.)
+        let pre = "var g; var t; \
+                   if (0) { let a = 0; let b = 0; let s = 0; a.p; b.q; g.q; \
+                            Symbol('k'); Object.create(null); } ";
+        let (b1, n1) = compile(&format!(
+            "{pre} let a = {{ p: 1 }}; let b = {{ q: 2 }}; g = b; {completion}"
+        ));
+        let (b2, n2) = compile(&format!("{pre} t = g.q * 21; t"));
+        assert_eq!(n1, n2, "{name}: both cranks intern the same symbols");
+
+        let mut cont = Interp::new();
+        cont.link_intrinsics(&n1);
+        let o = cont.run(&b1);
+        assert!(!o.completed, "{name}: the host-boundary coercion is reported as a throw");
+        assert!(matches!(o.halt, ironhorse_vm::Halt::Throw(_)), "{name}: {:?}", o.halt);
+        assert!(
+            cont.is_quiescent(),
+            "{name}: the engine's crank completed, so the machine is at a boundary"
+        );
+        // Persist right at that boundary: the resumed twin.
+        let bytes = cont.write_snapshot(&sig()).expect("the boundary snapshots");
+        let mut twin = from_snapshot_bytes(&bytes, &sig()).expect("resumes");
+
+        // Both twins collect at the boundary and run the same next crank.
+        let cont_gc = cont.collect_garbage();
+        let twin_gc = twin.collect_garbage();
+        assert_eq!(
+            cont_gc.slots_live, twin_gc.slots_live,
+            "{name}: the boundary registers must not root anything the twin cannot see"
+        );
+        let co = cont.run(&b2);
+        let to = twin.run(&b2);
+        assert_eq!((co.completed, co.result.as_str()), (true, "42"), "{name}: {:?}", co.halt);
+        assert_eq!((to.completed, to.result.as_str()), (true, "42"), "{name}: {:?}", to.halt);
+        assert_eq!(co.computrons, to.computrons, "{name}: computrons agree");
+        assert_eq!(
+            cont.write_snapshot(&sig()).expect("continuous snapshots"),
+            twin.write_snapshot(&sig()).expect("resumed snapshots"),
+            "{name}: the continuous and resumed images must agree byte-for-byte"
         );
     }
 }
