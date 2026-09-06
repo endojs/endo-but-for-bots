@@ -445,7 +445,9 @@ steps of a match, charging what the match has accumulated so far, so
 an armed crank limit can halt a catastrophic backtracking match
 instead of waiting for it to finish; the charge is the same
 `match_meter_raw` armed or un-armed, so the stride changes when the
-meter is consulted and never what is counted.
+meter is consulted and never what is counted; like every consultation
+point it is outside the `METR` cost-table gate, which covers what a
+program is charged, not where it can be interrupted.
 And the check point is fail-closed: a meter that is armed (the
 snapshot carries `interval != 0`) but has no host attached aborts at
 its first check rather than running unbounded, because the host

@@ -17,11 +17,13 @@ fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
     (b, ironhorse_vm::parse_symbols(&s))
 }
 
-/// `/(a+)+b/` over 26 `a`s: 2^26-ish backtracking steps, each metered
-/// one computron. Small enough that a regressed seam still terminates
-/// (and then fails the computron assertion below) rather than hanging
-/// the suite; far larger than the limit the armed host enforces.
-const CATASTROPHIC: &str = "var re = /(a+)+b/; var s = 'aaaaaaaaaaaaaaaaaaaaaaaaaa'; re.test(s)";
+/// `/(a+)+b/` over 20 `a`s: about 2^20 backtracking paths, some twenty
+/// million metered steps (one computron each), run to completion. Small
+/// enough that a regressed seam still terminates in about a second of
+/// debug-build time (and then fails the computron assertion below)
+/// rather than hanging the suite; hundreds of times larger than the
+/// limit the armed host enforces.
+const CATASTROPHIC: &str = "var re = /(a+)+b/; var s = 'aaaaaaaaaaaaaaaaaaaa'; re.test(s)";
 
 #[test]
 fn an_armed_meter_halts_a_catastrophic_regexp_match_mid_way() {
@@ -38,7 +40,7 @@ fn an_armed_meter_halts_a_catastrophic_regexp_match_mid_way() {
     );
     // The abort landed INSIDE the match: the meter stopped within a few
     // check strides of the limit, not after the whole exponential
-    // search was charged (which would be tens of millions).
+    // search was charged (which is tens of millions of computrons).
     let slack = 4 * ironhorse_regexp::MATCH_CHECK_STRIDE + 1_000;
     assert!(
         out.computrons < LIMIT + slack,
@@ -65,8 +67,17 @@ fn armed_and_unarmed_runs_meter_a_regexp_identically() {
     metered.link_intrinsics(&n);
     // Interval 1: the host is consulted at every check point, including
     // the in-match strides — the seam's charging order is fully
-    // exercised.
-    metered.arm_meter(1, Box::new(|_| true));
+    // exercised. Count the consultations so the test cannot pass by
+    // the armed run silently taking the unchecked path.
+    let consulted = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let seen = consulted.clone();
+    metered.arm_meter(
+        1,
+        Box::new(move |_| {
+            seen.set(seen.get() + 1);
+            true
+        }),
+    );
     let armed = metered.run(&b);
     assert!(armed.completed, "{:?}", armed.halt);
 
@@ -74,6 +85,15 @@ fn armed_and_unarmed_runs_meter_a_regexp_identically() {
     assert_eq!(
         unarmed.meter_raw, armed.meter_raw,
         "arming the meter must not change what a regexp match costs"
+    );
+    // Twenty matches of `(a|aa)+$` over sixteen `a`s take tens of
+    // thousands of steps each, so the in-match strides alone must have
+    // consulted the host far more often than the loop's own check
+    // points (one per iteration) could.
+    assert!(
+        consulted.get() > 500,
+        "the host must be consulted inside the matches: {} consultations",
+        consulted.get()
     );
 }
 

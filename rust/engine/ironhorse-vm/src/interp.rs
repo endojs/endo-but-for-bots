@@ -12567,7 +12567,10 @@ impl Interp {
     /// cannot travel in a snapshot, so the only correct resume of an
     /// armed machine reattaches one; anything else is a configuration
     /// error, and the run halts [`Halt::MeterAbort`] rather than
-    /// silently disabling the bound the snapshot says is in force.
+    /// silently disabling the bound the snapshot says is in force. The
+    /// rule fires only where checks fire: a crank with no loop-closing
+    /// point (straight-line code) still completes on such a machine,
+    /// exactly as an armed crank the host never refuses would.
     #[inline]
     fn check_meter(&mut self) -> MeterCheck {
         match self.meter_host.as_mut() {

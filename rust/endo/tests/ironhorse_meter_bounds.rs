@@ -14,8 +14,10 @@ use endo::ironhorse_engine::engine::{
 };
 
 const SPIN: &str = "var i = 0; while (true) { i = i + 1; }";
-const CATASTROPHIC_REGEXP: &str =
-    "var re = /(a+)+b/; var s = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; re.test(s)";
+/// About 2^20 backtracking paths: tens of millions of steps unmetered,
+/// which a regressed seam would run to completion in seconds and then
+/// fail the assertion below, rather than hang the suite.
+const CATASTROPHIC_REGEXP: &str = "var re = /(a+)+b/; var s = 'aaaaaaaaaaaaaaaaaaaa'; re.test(s)";
 
 fn options(dir: &std::path::Path, meter: MeterBounds) -> HeapStoreOptions {
     HeapStoreOptions {
@@ -64,8 +66,9 @@ fn a_catastrophic_regexp_is_refused_mid_match() {
     let m = Machine::with_bounds(MeterBounds::per_crank(100_000));
     match m.eval(CATASTROPHIC_REGEXP) {
         Err(MachineError::MeterAbort { computrons, .. }) => {
-            // 2^32-ish steps would be billions; the abort landed inside
-            // the match, within a stride or two of the limit.
+            // The whole search is tens of millions of computrons; the
+            // abort landed inside the match, within a stride or two of
+            // the limit.
             assert!(
                 computrons < 200_000,
                 "aborted mid-match, not after: {computrons}"
