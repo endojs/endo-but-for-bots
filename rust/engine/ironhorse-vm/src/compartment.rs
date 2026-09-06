@@ -316,8 +316,37 @@ impl Compartment {
     /// intrinsic-referencing program agree on the intrinsic surface but
     /// diverge exactly and only in their own globals.
     pub fn evaluate_with_symbols(&self, bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
-        let names = crate::symbols::parse_symbols(symbols);
+        self.evaluate_with_symbols_on(Interp::new(), bytecode, symbols)
+    }
+
+    /// [`Compartment::evaluate_with_symbols`] under an ARMED meter
+    /// (architecture review F014/F020): the same fresh interpreter, but
+    /// [`Interp::arm_meter`]ed with `interval` (computrons between host
+    /// consultations) and `host` before anything runs, so the host's
+    /// refusal halts the program with [`crate::Halt::MeterAbort`]. This is
+    /// the evaluator an embedder that bounds its cranks uses; the un-armed
+    /// form stays for the differential harness.
+    pub fn evaluate_with_symbols_metered(
+        &self,
+        bytecode: &[u8],
+        symbols: &[u8],
+        interval: u64,
+        host: Box<dyn FnMut(u64) -> bool>,
+    ) -> RunOutcome {
         let mut interp = Interp::new();
+        interp.arm_meter(interval, host);
+        self.evaluate_with_symbols_on(interp, bytecode, symbols)
+    }
+
+    /// The shared body of the symbol-linked evaluators: link, seed this
+    /// compartment's globals, run.
+    fn evaluate_with_symbols_on(
+        &self,
+        mut interp: Interp,
+        bytecode: &[u8],
+        symbols: &[u8],
+    ) -> RunOutcome {
+        let names = crate::symbols::parse_symbols(symbols);
         interp.link_intrinsics(&names);
         // Seed in ID ORDER (wave-6 W6-8): iterating the HashMap seeds
         // per-process SipHash order into the global object's property

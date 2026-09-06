@@ -99,6 +99,19 @@ impl Default for Meter {
     }
 }
 
+/// Scale a host **computron** interval to raw 16.16 units without
+/// truncation (architecture review F013). A plain `interval << 16` drops
+/// the high 16 bits of any interval at or above `2^48`, and an interval
+/// that is an exact multiple of `2^48` scales to `0`, which
+/// [`Meter::check`] reads as "metering disabled": a supervisor asking for
+/// an effectively unlimited but *armed* window would silently get an
+/// un-armed machine. Saturating keeps a non-zero interval non-zero, so
+/// the armed/un-armed distinction is never flipped by arithmetic.
+#[inline]
+pub(crate) fn scale_interval(interval: u64) -> u64 {
+    interval.checked_mul(1 << 16).unwrap_or(u64::MAX)
+}
+
 impl Meter {
     pub fn new() -> Meter {
         Meter {
@@ -117,7 +130,7 @@ impl Meter {
     /// a caller that wants a raw-unit window must scale it itself
     /// (stage-2a review finding 2).
     pub fn begin(&mut self, interval: u64) {
-        let scaled = interval << 16;
+        let scaled = scale_interval(interval);
         self.interval = scaled;
         self.count = scaled;
         self.index = 0;
@@ -134,9 +147,26 @@ impl Meter {
     /// three counters, and the interp's `reattach_meter_host` installs
     /// the host without touching them (review finding 7).
     pub fn rearm(&mut self, interval: u64) {
-        let scaled = interval << 16;
+        let scaled = scale_interval(interval);
         self.interval = scaled;
         self.count = self.index.saturating_add(scaled);
+    }
+
+    /// Whether checks are armed (`interval != 0`). The armed/un-armed
+    /// distinction is carried by the snapshot ([`MeterState::interval`]),
+    /// so a restored machine reports armed exactly as it was suspended;
+    /// the host callback does not travel with it, which is why the
+    /// interpreter's check point fails closed on an armed meter with no
+    /// host attached (architecture review F014).
+    #[inline]
+    pub fn is_armed(&self) -> bool {
+        self.interval != 0
+    }
+
+    /// The armed check interval in raw 16.16 units (`0` when un-armed).
+    #[inline]
+    pub fn interval_raw(&self) -> u64 {
+        self.interval
     }
 
     /// Reset the raw index to zero (the oracle shim does this after
@@ -338,6 +368,32 @@ mod tests {
         assert_eq!(m.index, 0, "begin resets meterIndex to 0");
         assert_eq!(m.interval, 1 << 16, "interval scaled to raw units");
         assert_eq!(m.count, 1 << 16, "count armed at interval<<16");
+    }
+
+    #[test]
+    fn begin_saturates_rather_than_truncating_a_wide_interval() {
+        // F013: `interval << 16` silently loses the high bits at or
+        // above 2^48, and an exact multiple of 2^48 scales to zero, which
+        // `check` reads as "disabled". The armed distinction must survive
+        // any host interval.
+        let mut m = Meter::new();
+        m.begin(1 << 48);
+        assert!(m.is_armed(), "a 2^48 interval must stay armed");
+        assert_eq!(m.interval, u64::MAX, "saturates instead of wrapping to 0");
+        m.begin((1 << 48) + 5);
+        assert!(m.is_armed());
+        assert_eq!(m.interval, u64::MAX);
+        let mut r = Meter::new();
+        r.tick_code();
+        r.rearm(1 << 50);
+        assert!(r.is_armed(), "rearm saturates the same way");
+        assert_eq!(r.count, u64::MAX, "count saturates past the index");
+        // The un-armed default and the largest exactly representable
+        // interval are untouched.
+        let mut n = Meter::new();
+        assert!(!n.is_armed());
+        n.begin((1 << 48) - 1);
+        assert_eq!(n.interval, ((1u64 << 48) - 1) << 16);
     }
 
     #[test]

@@ -4073,11 +4073,14 @@ pub struct Interp {
     /// [`crate::cost`].
     cost: crate::cost::CostRecorder,
     /// The host metering callback, installed by [`Interp::arm_meter`].
-    /// `None` is the default un-metered interpreter the differential
-    /// harness uses: the check points then never consult a host and
-    /// never abort. When `Some`, each loop-closing check point passes
-    /// the current computron count to it and halts with
-    /// [`Halt::MeterAbort`] on refusal.
+    /// `None` on a never-armed meter is the default un-metered
+    /// interpreter the differential harness uses: the check points then
+    /// never consult a host and never abort. When `Some`, each
+    /// loop-closing check point passes the current computron count to it
+    /// and halts with [`Halt::MeterAbort`] on refusal. `None` on an
+    /// ARMED meter (restored from a snapshot without reattaching a host)
+    /// is the fail-closed state: every check point aborts
+    /// ([`Interp::check_meter`]).
     meter_host: Option<Box<dyn FnMut(u64) -> bool>>,
     /// Dispatch-count ceiling. `u64::MAX` (the default) is unbounded, so
     /// the oracle-differential harness sees exactly the historical
@@ -12487,6 +12490,25 @@ impl Interp {
         self.meter_host = Some(host);
     }
 
+    /// The embedder's resume form (architecture review F014/F020): make
+    /// a restored machine metered under `interval` whatever its snapshot
+    /// carried. If the meter was suspended armed under exactly this
+    /// `interval`, this is [`Self::reattach_meter_host`] — the window
+    /// continues untouched, so a sub-interval suspend/resume cycle never
+    /// moves the deadline. Otherwise (the store was written un-armed, or
+    /// under a different interval) it is [`Self::rearm_meter`]: a fresh
+    /// window opens from the preserved index. Either way the decision is
+    /// a pure function of the snapshot and the configuration, so replicas
+    /// configured alike consult their hosts at identical points, and no
+    /// path yields the fail-closed armed-without-host state.
+    pub fn attach_meter_host(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
+        if self.meter.interval_raw() == crate::meter::scale_interval(interval) {
+            self.reattach_meter_host(host);
+        } else {
+            self.rearm_meter(interval, host);
+        }
+    }
+
     /// The accumulated raw meter index (diagnostic; the same value the
     /// meter state serializes).
     pub fn meter_index(&self) -> u64 {
@@ -12533,14 +12555,43 @@ impl Interp {
     }
 
     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
-    /// only when metering is armed; otherwise (the default) it is a
-    /// no-op that keeps running. Adds nothing to `meterIndex`.
+    /// when one is installed; a fresh, never-armed machine (the default
+    /// the differential harness uses) keeps running. Adds nothing to
+    /// `meterIndex`.
+    ///
+    /// Fail-closed (architecture review F014): a meter that is ARMED
+    /// (`interval != 0`, which a snapshot carries) but has no host
+    /// attached — a restored machine whose embedder skipped every arm
+    /// form — aborts at its first check point instead of running
+    /// unbounded while reporting itself metered. The host callback
+    /// cannot travel in a snapshot, so the only correct resume of an
+    /// armed machine reattaches one; anything else is a configuration
+    /// error, and the run halts [`Halt::MeterAbort`] rather than
+    /// silently disabling the bound the snapshot says is in force.
     #[inline]
     fn check_meter(&mut self) -> MeterCheck {
         match self.meter_host.as_mut() {
             Some(host) => self.meter.check(host),
+            None if self.meter.is_armed() => MeterCheck::Abort,
             None => MeterCheck::Continue,
         }
+    }
+
+    /// Whether the meter is armed (`interval != 0`) — the state a
+    /// snapshot carries — independent of whether a host callback is
+    /// attached. An embedder resuming a machine consults this to decide
+    /// between [`Self::reattach_meter_host`] (the meter was armed when
+    /// suspended; continue its window exactly) and
+    /// [`Self::rearm_meter`] (it was not; open one now).
+    pub fn meter_is_armed(&self) -> bool {
+        self.meter.is_armed()
+    }
+
+    /// Whether a host callback is attached. `meter_is_armed() &&
+    /// !meter_host_attached()` is the fail-closed state every check
+    /// point aborts on.
+    pub fn meter_host_attached(&self) -> bool {
+        self.meter_host.is_some()
     }
 
     /// Accrue the program-frame + eval-environment setup overhead, once,
@@ -23535,11 +23586,7 @@ impl Interp {
         } else {
             0
         };
-        let outcome = {
-            let program = &self.regexps[&inst].program;
-            ironhorse_regexp::match_regexp(program, subject, start_i)
-        };
-        self.meter.tick_raw(outcome.match_meter_raw);
+        let outcome = self.match_regexp_metered(inst, subject, start_i)?;
         if !outcome.matched {
             if advance {
                 self.regexp_set_last_index(code, inst, Slot::integer(0))?;
@@ -23568,6 +23615,61 @@ impl Interp {
             self.regexp_set_last_index(code, inst, Slot::integer(end))?;
         }
         Ok((true, captures, outcome.names))
+    }
+
+    /// Run the compiled matcher for `inst` over `subject` and charge its
+    /// meter, interruptibly when a meter is armed (architecture review
+    /// F012: before this seam, all check points lay in the dispatch loop,
+    /// so a catastrophic backtracking match ran to completion, and an
+    /// armed crank limit structurally could not see it).
+    ///
+    /// Un-armed (the differential harness): the plain matcher, the whole
+    /// `match_meter_raw` charged once after it returns — bit-identical to
+    /// the historical behavior. Armed: the matcher calls back every
+    /// [`ironhorse_regexp::MATCH_CHECK_STRIDE`] steps; the callback
+    /// charges the meter INCREMENTALLY with what the match has accumulated
+    /// so far and runs the same `check` the loop-closing points run, so
+    /// the host sees the match's computrons on its normal cadence and its
+    /// refusal halts the crank with [`Halt::MeterAbort`]. The total
+    /// charged is the same `match_meter_raw` either way — the seam moves
+    /// WHEN the charge lands, never how much, so computrons are identical
+    /// armed and un-armed. An armed meter with no host attached fails
+    /// closed here exactly as [`Self::check_meter`] does.
+    fn match_regexp_metered(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        subject: &[u8],
+        start: i32,
+    ) -> Result<ironhorse_regexp::MatchOutcome, Halt> {
+        let program = &self.regexps[&inst].program;
+        if !self.meter.is_armed() && self.meter_host.is_none() {
+            let outcome = ironhorse_regexp::match_regexp(program, subject, start);
+            self.meter.tick_raw(outcome.match_meter_raw);
+            return Ok(outcome);
+        }
+        // Disjoint field borrows: the program is read from `regexps`
+        // while the meter and host are driven from the callback.
+        let meter = &mut self.meter;
+        let mut host = self.meter_host.as_mut();
+        let mut charged: u64 = 0;
+        let outcome = {
+            let mut check = |raw: u64| -> bool {
+                meter.tick_raw(raw - charged);
+                charged = raw;
+                match host.as_mut() {
+                    Some(h) => meter.check(h) == MeterCheck::Continue,
+                    // Armed, no host: fail closed (F014).
+                    None => false,
+                }
+            };
+            ironhorse_regexp::match_regexp_checked(program, subject, start, Some(&mut check))
+        };
+        // The tail the last stride did not cover.
+        meter.tick_raw(outcome.match_meter_raw - charged);
+        if outcome.aborted {
+            return Err(Halt::MeterAbort);
+        }
+        Ok(outcome)
     }
 
     /// `RegExp.prototype.exec(string)` (`fx_RegExp_prototype_exec`): the match
