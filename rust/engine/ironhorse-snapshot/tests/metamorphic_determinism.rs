@@ -278,14 +278,19 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for ArrayBuffer transfer methods and fixed-buffer
         // accessors, with boot-layout signature generation 17. Boot-heap
         // content only; format unchanged.
-        // Re-pinned 2026-09-06 for a boot-heap CONTENT move in the other
-        // direction: the test262 `$262` host object and its
-        // `detachArrayBuffer` native are no longer boot-minted (a hardened
-        // realm must not expose a memory-detach primitive; architecture
-        // review F143) — the conformance harness installs them explicitly
-        // above `boot_slot_count`. Boot-layout signature generation 18;
-        // format unchanged.
-        "b7e4bdc3da463e5151fffd2d32e91da58c12077045e708aae3b67662a3eb4f95",
+        // Re-pinned 2026-09-06 for a boot-heap CONTENT move: the test262
+        // `$262` host object and its `detachArrayBuffer` native are no longer
+        // boot-minted (a hardened realm must not expose a memory-detach
+        // primitive; architecture review F143) — the conformance harness
+        // installs them explicitly above `boot_slot_count`. Boot-layout
+        // signature generation 18; format unchanged.
+        // Re-pinned again at this merge for a GUEST-heap content move stacked
+        // on that one: this fixture's first crank is `var x = 5;`, and a
+        // Script's top-level `var` now creates its global property
+        // non-configurable, as `CreateGlobalVarBinding` requires with
+        // `D = false`. The only extra byte that moves is that property slot's
+        // flag (`XS_DONT_DELETE_FLAG`), which the image has always carried.
+        "7b720e196dc6a6dad35831c1cdfb576b9570797d6c85613acefc6c0c519ca5ab",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -476,8 +481,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // remain unchanged.
         // Re-pinned with the blob on 2026-09-06 for the removal of the
         // test262 `$262` host object from the boot heap (harness-only now),
-        // with boot generation 18. Schema and format remain unchanged.
-        "a2fb5b877c8ac1487af3ebe77105657bc64d2974265c13ce8e6281c44fbddc82",
+        // with boot generation 18, and again at this merge for the same
+        // one-byte guest-heap move the blob records (`var x = 5;` now creates
+        // a non-configurable global property). Schema and format unchanged.
+        "1e5769a092b1bc519d32b4810f7b11533c2ea731f5d9100483f067f4f8ade41a",
         "epoch-3 seal chain"
     );
 }

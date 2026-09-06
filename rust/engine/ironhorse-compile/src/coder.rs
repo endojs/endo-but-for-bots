@@ -933,23 +933,51 @@ pub enum Goal {
     Eval,
 }
 
-/// Whether `source` is a program whose [`Goal::Script`] bytecode deviates
-/// from its [`Goal::Eval`] bytecode: a **strict** program declaring a
-/// top-level `var` or function. Decided by the scoper (the program scope's
-/// strict flag and declare tokens), so it is exact rather than a textual
-/// heuristic. `false` for a source that does not parse. The byte-identity
-/// harnesses use it to tell the one sanctioned Script/eval split from a
-/// genuine finding, and the differential runner to name the oracle's
-/// eval-goal framing when it fails an official strict-mode assertion that
-/// the Script goal satisfies.
-pub fn script_goal_deviates(source: &str) -> bool {
+/// Whether `source` declares a top-level `var` or function — the programs
+/// whose observable behavior can differ between [`Goal::Script`] and
+/// [`Goal::Eval`], because only a declaration reaches
+/// GlobalDeclarationInstantiation / EvalDeclarationInstantiation. Decided by
+/// the scoper (the program scope's declare tokens), so it is exact rather
+/// than a textual heuristic; `false` for a source that does not parse.
+///
+/// The two goals differ for such a program in two independent ways, and this
+/// is the union of both, which is why it does not test strictness:
+///
+/// * **bytecode**, for a *strict* program only — the Script goal hoists the
+///   declaration to the global object where the eval goal keeps it a frame
+///   local ([`script_goal_deviates`]);
+/// * **runtime**, at either strictness — the `D` argument
+///   `CreateGlobalVarBinding` receives is `false` for a Script (the global
+///   property is non-configurable) and `true` for an eval.
+///
+/// The differential runner uses this to bound the class of programs whose
+/// disagreement with the eval-framed `xs-oracle` shim can be the goal framing.
+pub fn declares_top_level_var_or_function(source: &str) -> bool {
     let tree = match crate::scoper::scope_program(source, false) {
         Ok(tree) => tree,
         Err(_) => return false,
     };
-    let root = &tree.scopes[tree.root];
-    root.flags & crate::ast::flags::STRICT != 0
-        && root.declares.iter().any(|d| matches!(d.token, Token::Var | Token::Define))
+    tree.scopes[tree.root]
+        .declares
+        .iter()
+        .any(|d| matches!(d.token, Token::Var | Token::Define))
+}
+
+/// Whether `source` is a program whose [`Goal::Script`] **bytecode** deviates
+/// from its [`Goal::Eval`] bytecode: a **strict** program declaring a
+/// top-level `var` or function. The byte-identity harnesses use it to tell
+/// the one sanctioned Script/eval split from a genuine finding.
+///
+/// For the broader question "can this program *behave* differently under the
+/// two goals", use [`declares_top_level_var_or_function`]: a sloppy program's
+/// bytecode is identical under both goals yet its global bindings still differ
+/// in configurability.
+pub fn script_goal_deviates(source: &str) -> bool {
+    let strict = match crate::scoper::scope_program(source, false) {
+        Ok(tree) => tree.scopes[tree.root].flags & crate::ast::flags::STRICT != 0,
+        Err(_) => return false,
+    };
+    strict && declares_top_level_var_or_function(source)
 }
 
 /// The public entry: compile `source` as a top-level **Script**

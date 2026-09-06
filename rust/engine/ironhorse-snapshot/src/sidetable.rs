@@ -55,9 +55,16 @@
 //! - `pending_new_target` — armed by `SUPER` for the construct about to
 //!   happen; consumed by the construct frame and disarmed on unwind
 //!   (wave-6 W6-15).
-//! - `direct_eval_hoist`, `eval_direct`, `active_segment`,
-//!   `top_level_code` — the eval bridge's per-crank registers,
-//!   re-established at every run entry and save/restored around units.
+//! - `direct_eval_hoist`, `eval_program_hoist`, `eval_direct`,
+//!   `active_segment`, `top_level_code` — the eval bridge's per-crank
+//!   registers, re-established at every run entry and save/restored around
+//!   units. `eval_program_hoist` (the declaration-instantiation `D` argument:
+//!   an eval's global `var` is configurable, a Script's is not) is set and
+//!   restored around every nested eval unit, and at the top level only by
+//!   `Interp::set_eval_program_framing`, which exists solely for the
+//!   differential harness's oracle-framing reproduction and is never armed by
+//!   a production embedding — so it is `false` at every boundary a snapshot
+//!   can be taken from.
 //! - `id_space_exhausted` — the property-key id-space poison latch; the
 //!   dispatch loop halts on it before the next instruction and
 //!   `is_quiescent` refuses a poisoned machine, so it is provably false
@@ -728,6 +735,7 @@ mod tests {
             "args", "this_val", "this_captures", "cur_func", "cur_target", "target_func",
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
             "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
+            "eval_program_hoist",
             "eval_direct", "active_segment", "top_level_code", "result", "strict",
             // The native-recursion budget consumed by the activations in
             // flight; every guarded entry releases its charge on return,

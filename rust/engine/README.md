@@ -3153,6 +3153,66 @@ globalThis.g` is `1`; after `Object.freeze(globalThis)` a strict top-level
 control silently keeps `1`; a strict top-level function declaration is a global
 property; lexicals are not.
 
+**The same split decides `D`, so it is not confined to strict programs.**
+Declaration instantiation passes a `D` ("deletable") argument to
+`CreateGlobalVarBinding` / `CreateGlobalFunctionBinding`, which becomes the new
+global property's `configurable` attribute:
+GlobalDeclarationInstantiation passes `false`, EvalDeclarationInstantiation
+passes `true`. Ironhorse created every such binding configurable, so
+`delete globalThis.g` after a top-level `var g` answered `true` where the spec
+and node answer `false`. The interpreter now takes `D` from
+`Interp::eval_program_hoist` — set for a nested `eval` unit (direct *and*
+indirect, both of which are `D = true`) and clear for a top-level Script. The
+sloppy implicit global from an unqualified assignment (`x = 1`) is not a
+declaration and is unaffected; it is created on the `SET_VARIABLE` path, still
+configurable. Pinned in `hardened_js_boundary.rs` (Script direction, oracle-free)
+and `ironhorse-262/tests/global_binding_attributes.rs` (eval direction,
+dual-run — XS and node agree an eval-created global var stays deletable).
+
+Because the bytecode is identical for a sloppy program yet `D` still differs,
+the class of programs that can *behave* differently between the goals is wider
+than the class whose *bytes* differ. `ironhorse_compile::script_goal_deviates`
+answers the bytecode question (strict only) for the byte-identity harnesses;
+`declares_top_level_var_or_function` answers the behavioral one (either
+strictness) and is what the differential runner bounds its exclusion by.
+`ironhorse_262::ironhorse_eval_goal_error` reproduces *both* halves of the
+oracle's framing — the eval goal at compile time and eval declaration
+instantiation at run time, via `Interp::set_eval_program_framing`, which exists
+for that harness alone.
+
+**Cross-checked against a third Script-goal engine.** Because the pinned oracle
+compiles the eval goal, it cannot certify the fixed behavior; node can. Node's
+`vm.runInThisContext` compiles against the *real* global object, so it is a
+faithful Script goal (its `runInNewContext` is not — the contextified global is a
+proxy that reports `configurable: true` for a `var` binding and throws on
+`Object.freeze(globalThis)`, both artifacts). Across 25 probe programs covering
+the global-property, frozen-global, descriptor, lexical, and redeclaration
+surface, Ironhorse's Script goal agrees with node on every program this change
+concerns, including `'use strict'; var g=1; Object.freeze(globalThis); …` giving
+`TypeError:1:1` on both.
+
+Two disagreements in that probe are **pre-existing and unrelated** to the goal
+split, confirmed by reproducing them on paths this change does not touch:
+
+- A global `var` binding is created **configurable**, where ECMA-262
+  `CreateGlobalVarBinding` requires non-configurable; `delete globalThis.g`
+  therefore answers `true` instead of `false`. Reproduces identically for a
+  **sloppy** program, which this change leaves byte-identical.
+- Assignment to an unresolvable identifier in strict code (`'use strict'; x = 0`)
+  assigns instead of throwing `ReferenceError`. That program declares no
+  top-level `var`, so it is outside the deviating class entirely.
+
+A third pre-existing bug surfaced while attributing the `D` change and is worth
+naming here because it is what keeps two cases un-attributable (below):
+**property access on `undefined` does not throw**. `undefined.enumerable`
+answers `undefined` on Ironhorse where the spec, XS and node all raise a
+`TypeError`. The harness's `verifyEnumerable` reads
+`Object.getOwnPropertyDescriptor(obj, name).enumerable`, so on a missing
+property XS dies with `TypeError: cannot coerce undefined to object` while
+Ironhorse sails on to a different assertion failure. Ironhorse's
+`Object.getOwnPropertyDescriptor` itself is correct — it returns `undefined`
+for a missing property, exactly like XS.
+
 **Differential-harness expectations (knowingly updated).** The runner executes
 the Script goal, so strict-variant runs of official cases with top-level `var`s
 now hoist. Measured on `language/global-code` and `language/statements/variable`
@@ -3171,12 +3231,87 @@ failure was the bug). After, Ironhorse's Script goal satisfies it and the
 eval-framed shim still does not, which the runner would score as
 "over-acceptance". The new `oracle-xs-strict-script-eval-framing` run-skip
 (`xst.rs`, `oracle_eval_frames_strict_script`) names that exact oracle framing
-gap, narrowed on three ingredients: the oracle ran to its official assertion
-and threw `Test262Error`, Ironhorse completed, and the compiler itself
-(`ironhorse_compile::script_goal_deviates`) says the source is a strict program
-with a top-level `var`/function declaration. It classifies as infrastructure,
-like the other pinned-oracle defects. Neither case was in the ratchet's
-`covered.txt`, so the ratchet floor is untouched. One dual-run regression gate
+gap, and classifies as infrastructure like the other pinned-oracle defects. It
+**demonstrates** the attribution instead of pattern-matching the failure: on a
+source the compiler puts in the deviating class
+(`ironhorse_compile::script_goal_deviates`), it re-runs the source on Ironhorse
+compiled under the **oracle's own eval framing**
+(`ironhorse_262::ironhorse_eval_goal_error`) and requires that this reproduces
+the oracle's abort. Adopting the oracle's framing must turn Ironhorse's pass
+into the oracle's identical failure; if Ironhorse still passes, or fails with a
+different constructor or detail, something other than framing is in play and the
+case stays a gating failure.
+
+**Why those two directories were not a sufficient measurement.** They are not:
+a strict-heavy sweep of seven more subtrees (`directive-prologue`,
+`statements/function`, `expressions/assignment`, `statements/const`,
+`statements/let`, `annexB/language/global-code`, `eval-code`; 1384 cases) found
+**7 further cases in the same class**, all in `language/eval-code/indirect`, and
+they broke two of this exclusion's first-draft assumptions:
+
+- The gap does **not** always surface as a failed official assertion. An
+  **indirect** eval evaluates in the global scope, so under the oracle's framing
+  it simply cannot see a top-level `var` the framing kept eval-local, and the
+  case dies on a plain `ReferenceError: get <name>: undefined variable`. A
+  first-draft conjunct requiring `Test262Error` missed all six such cases and let
+  them score as over-acceptance failures. The conjunct is gone; the reproduction
+  check does the work.
+- Exact thrown-string equality is not always reachable, because Ironhorse's
+  thrown-*message* fidelity is not yet at XS parity: on
+  `var-env-func-init-multi` the re-framed run raises a bare `TypeError` where XS
+  raises `TypeError: call: not a function`. `reframed_abort_matches` accepts a
+  bare constructor that matches the oracle's, and nothing looser — never a
+  different constructor, never a differing detail message.
+
+With both corrections the strict-heavy sweep's failure count returns to its
+pre-change value (**1**, `expressions/assignment/S11.13.1_A5_T5.js`, which fails
+identically with the change reverted and is therefore pre-existing).
+
+**Two cases the `D` change leaves un-attributable (open).** Over the nine
+subtrees measured with the `D` fix in place (1594 cases), the failure count is
+**3** against a pre-`D` baseline of **1** — the same run with the `D` write
+disabled — at unchanged coverage (1461 both ways; the seven cases the fix moves
+were previously *skipped* as `shared-test262-failure`, i.e. both engines got the
+attribute wrong together). Five of the seven attribute cleanly. The strict
+variants of `language/global-code/decl-var.js` and `decl-func.js` do not, and
+the exclusion deliberately refuses to excuse them: under the oracle's framing
+the oracle raises `TypeError: cannot coerce undefined to object` while
+re-framed Ironhorse raises `Test262Error: Expected obj[brandNew] to have
+enumerable:true.` — the two engines fail the same case for *different* reasons,
+because of the undefined-property-access bug named above, which is not framing.
+`reframed_abort_matches` is doing its job here: relaxing it to accept any
+abort-vs-abort pair would let a genuine over-acceptance through, so these stay
+visible as failures until the underlying bug is fixed, at which point they
+should attribute on their own. Ironhorse's answer on both cases is the correct
+one (node agrees `verifyNotConfigurable` passes); only the *classification* is
+open.
+
+**Ratchet-floor impact (needs maintainer sign-off).** The sweep's covered count
+does drop, 1276 → 1270. Ten per-(case, mode) entries move in
+`language/eval-code`; four are re-attributions between skips
+(`shared-test262-failure` / `abort-value-differs` → the new named skip), but six
+move from **`pass` to the new skip**:
+
+| Case (strict variant), all `language/eval-code/indirect/` | In `covered.txt` |
+| --- | --- |
+| `always-non-strict.js` | yes |
+| `cptn-nrml-expr-obj.js` | yes |
+| `global-env-rec.js` | yes |
+| `global-env-rec-catch.js` | yes |
+| `global-env-rec-fun.js` | yes |
+| `global-env-rec-eval.js` | no |
+
+Those six were "passing" only because Ironhorse *shared* the oracle's
+eval-framing defect: both engines threw the same `ReferenceError`, so the
+dual-run scored agreement. Ironhorse is now correct on all six and the pinned
+oracle cannot certify that, so they become named infrastructure skips. Five are
+in the committed ratchet floor, whose rule is "no path in `covered.txt` may
+regress" — so this is a **deliberate, demonstrated-oracle-cause coverage loss
+that a maintainer should accept explicitly**, not a silent one. Recovering the
+coverage would require extending the `xs-oracle` shim to drive the Script goal
+(`fxParseScript(..., mxProgramFlag)` + `fxRunProgramEnvironment`), the same
+separately-audited C-seam extension this workspace declines elsewhere. One
+dual-run regression gate
 had pinned the bug itself: the strict `writable:false` entry of
 `ironhorse-262/tests/errors_coercions_strict.rs`
 (`global_descriptors_are_live_environment_bindings`) asserted agreement with

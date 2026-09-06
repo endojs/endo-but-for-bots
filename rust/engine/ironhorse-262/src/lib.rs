@@ -639,6 +639,45 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
     interp_with_source_bridge(&names).run(&bytecode).host_coerced().halt
 }
 
+/// Run `source` on ironhorse under the **oracle's own framing** and return the
+/// thrown value's string, or `None` if it completed, halted without a
+/// JavaScript throw, or did not compile.
+///
+/// The `xs-oracle` shim compiles *and runs* every source with the `eval`
+/// builtin's flags (`fxParseScript(..., mxProgramFlag | mxEvalFlag)`), so
+/// reproducing it takes both halves:
+///
+/// * the **eval goal** at compile time
+///   ([`ironhorse_compile::compile_with`]) — a strict program's top-level
+///   `var`/function declarations stay frame locals rather than hoisting;
+/// * eval **declaration-instantiation** at run time
+///   ([`ironhorse_vm::Interp::set_eval_program_framing`]) — a global binding
+///   the program does create is configurable (`D = true`), as an eval's is.
+///
+/// This is the attribution primitive for the places ironhorse deliberately
+/// diverges from the oracle (README § "Script goal vs. the oracle's eval
+/// framing"). When re-framing the source as the oracle frames it reproduces
+/// the oracle's abort, the divergence is *demonstrably* the goal framing and
+/// nothing else — the differential can name it instead of inferring it from
+/// the source's shape. The caller decides how closely the two aborts must
+/// agree (`xst::reframed_abort_matches`).
+pub fn ironhorse_eval_goal_error(source: &str) -> Option<String> {
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms_with(source, false)
+    }));
+    let (bytecode, symbols) = match compiled {
+        Ok(Ok((b, s))) => (b, s),
+        _ => return None,
+    };
+    let names = ironhorse_vm::parse_symbols(&symbols);
+    let mut interp = interp_with_source_bridge(&names);
+    interp.set_eval_program_framing(true);
+    match interp.run(&bytecode).halt {
+        Halt::Throw { rendered, .. } => Some(rendered),
+        _ => None,
+    }
+}
+
 /// Parse a corpus file: one program per non-empty, non-`//` line. Keeping
 /// entries to a single line keeps the completion value (the last expression)
 /// unambiguous. The per-stage `stage*_corpus()` accessors this once fed
