@@ -3958,7 +3958,13 @@ macro_rules! dispatch_result {
 /// The result of running one program's bytecode on ironhorse-vm.
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
-    /// `true` if the program completed normally.
+    /// `true` if the program completed normally AND the harness could
+    /// render its completion value. A Symbol or null-prototype
+    /// completion is reported `false` with a synthetic `TypeError`
+    /// [`Halt::Throw`] (the oracle shim's post-run `String(result)`),
+    /// yet the engine's own crank completed: the boundary registers are
+    /// cleared and [`Interp::is_quiescent`] holds. A host that needs the
+    /// engine's verdict rather than the harness's asks `is_quiescent`.
     pub completed: bool,
     /// Completion value rendered with ECMAScript `String()` semantics
     /// (valid when `completed`).

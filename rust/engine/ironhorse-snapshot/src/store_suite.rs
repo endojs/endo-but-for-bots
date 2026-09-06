@@ -1,7 +1,9 @@
 //! The **backend-parameterized store acceptance suite** (store seam
 //! design, decision 8): the metamorphic determinism runner (seven execution ways),
-//! the lazy working-set bound, and the checkpoint acceptance locks,
-//! generic over the [`HeapStore`] under test so every backend —
+//! the lazy working-set bound, the checkpoint acceptance locks, the
+//! resume-equals-uninterrupted twin, and the boundary-collection twins
+//! (continuous against resumed live counts and canonical bytes after a
+//! collection), generic over the [`HeapStore`] under test so every backend —
 //! in-crate reference or external (the daemon-side SQLite store) —
 //! runs the SAME instrument rather than a hand-copied subset.
 //!
@@ -41,12 +43,17 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     (bytecode, parse_symbols(&symbols))
 }
 
-/// One crank's host-visible verdict: the completion flag and the
-/// rendered result. Both must agree across the seven ways — a crank
-/// reported as a synthetic host-boundary throw in one variant and as a
-/// completion in another would be a divergence the result string
-/// alone could hide.
-type CrankResult = (bool, String);
+/// One crank's host-visible verdict: the completion flag, the rendered
+/// result, and the halt itself (rendered with `Debug`). All three must
+/// agree across the seven ways — every non-completion renders an empty
+/// result, so without the halt a crank reported as one synthetic
+/// host-boundary throw in one variant and as a different throw in
+/// another would be a divergence the flag and the string could hide.
+type CrankResult = (bool, String, String);
+
+fn crank_result(o: &ironhorse_vm::RunOutcome) -> CrankResult {
+    (o.completed, o.result.clone(), format!("{:?}", o.halt))
+}
 
 struct Baseline {
     results: Vec<CrankResult>,
@@ -76,7 +83,7 @@ fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline
             i + 1,
             o.halt
         );
-        results.push((o.completed, o.result));
+        results.push(crank_result(&o));
         computrons.push(o.computrons);
     }
     Baseline {
@@ -120,7 +127,7 @@ fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<CrankResult>, Vec<u64>,
             m = from_snapshot_bytes(&bytes, &sig()).expect("blob resumes");
         }
         let o = m.run(bytecode);
-        results.push((o.completed, o.result));
+        results.push(crank_result(&o));
         computrons.push(o.computrons);
     }
     (results, computrons, m.write_snapshot(&sig()).expect("quiescent machine snapshots"))
@@ -158,7 +165,7 @@ fn run_store<S: HeapStore + 'static>(
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
-    results.push((o.completed, o.result));
+    results.push(crank_result(&o));
     computrons.push(o.computrons);
     let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
@@ -210,7 +217,7 @@ fn run_store<S: HeapStore + 'static>(
             }
         }
         let o = session.machine_mut().run(bytecode);
-        results.push((o.completed, o.result));
+        results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
         if let Resume::LazyAdversarialEvict = mode {
@@ -254,7 +261,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o = m.run(&compiled[0].0);
-    results.push((o.completed, o.result));
+    results.push(crank_result(&o));
     computrons.push(o.computrons);
     let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
@@ -262,7 +269,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
 
     for (bytecode, _) in compiled.iter().skip(1) {
         let o = session.machine_mut().run(bytecode);
-        results.push((o.completed, o.result));
+        results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     }
@@ -574,7 +581,7 @@ pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut()
         let mut sleeper = Interp::new();
         sleeper.link_intrinsics(&n1);
         let s1 = sleeper.run(&b1);
-        assert_eq!((s1.completed, s1.result), (o1.completed, o1.result), "{name}: crank 1");
+        assert_eq!(crank_result(&s1), crank_result(&o1), "{name}: crank 1");
         drop(
             begin_store_session(sleeper, &sig(), &mut *store.borrow_mut())
                 .map_err(|(_, e)| e)
