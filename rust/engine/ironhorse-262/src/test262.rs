@@ -194,6 +194,7 @@ pub fn classify(source: &str) -> Class {
                 Some(crate::xst::MissingGlobal::OracleError) => {
                     Class::Skipped("oracle-machine-error".into())
                 }
+                // An unanswered probe is judged as the throw it is.
                 _ => Class::Divergent(Box::new(r)),
             },
             _ => Class::Skipped("ironhorse-aborted-limit".into()),
