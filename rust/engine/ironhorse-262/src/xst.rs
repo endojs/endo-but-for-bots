@@ -661,7 +661,9 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     format!("ironhorse failed a harness assertion the oracle passed: {thrown}"),
                 )
             }
-            Halt::Throw { rendered: thrown, .. } => match classify_missing_global(&run.source, thrown) {
+            Halt::Throw {
+                rendered: thrown, ..
+            } => match classify_missing_global(&run.source, thrown) {
                 // The one honest shape: a host intrinsic the port has not
                 // landed — the oracle binds the name in an empty program,
                 // ironhorse does not, and the program never declared it.
@@ -680,6 +682,14 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     ),
                 ),
                 Some(MissingGlobal::OracleError) => Verdict::RunSkip("oracle-machine-error".into()),
+                Some(MissingGlobal::Unprobeable(name)) => oracle_disagreement(
+                    cfg,
+                    "oracle-only-complete",
+                    format!(
+                        "ironhorse threw where the oracle completed: {thrown} (the global \
+                         probe for `{name}` did not complete on both engines)"
+                    ),
+                ),
                 // Any other uncaught throw is an error the oracle did not
                 // throw — a spurious engine error on a program the oracle
                 // completed, a wrong answer.
@@ -771,21 +781,37 @@ pub(crate) struct GlobalBinding {
 /// the identical `get <name>: undefined variable` text when they fail to fall
 /// through to the global object, which the oracle half alone would launder
 /// into a "missing intrinsic".
-pub(crate) fn probe_global(name: &str) -> Option<GlobalBinding> {
+pub(crate) fn probe_global(name: &str) -> Result<GlobalBinding, ProbeFailure> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<HashMap<String, GlobalBinding>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(&binding) = cache.lock().unwrap().get(name) {
-        return Some(binding);
+        return Ok(binding);
     }
-    let run = crate::dual_run(&format!("typeof {name}"))?;
+    let run = crate::dual_run(&format!("typeof {name}")).ok_or(ProbeFailure::MachineError)?;
+    // `typeof` never throws on an unresolvable reference, so a probe an engine
+    // did not complete says nothing about the binding — it is not "unbound",
+    // and no caller may treat it as such.
+    if run.agreement != Agreement::BothComplete {
+        return Err(ProbeFailure::Unanswered);
+    }
     let binding = GlobalBinding {
-        oracle: oracle_completed(run.agreement) && run.oracle_result != "undefined",
-        ironhorse: ironhorse_completed(run.agreement) && run.ironhorse_result != "undefined",
+        oracle: run.oracle_result != "undefined",
+        ironhorse: run.ironhorse_result != "undefined",
     };
     cache.lock().unwrap().insert(name.to_string(), binding);
-    Some(binding)
+    Ok(binding)
+}
+
+/// Why [`probe_global`] could not answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProbeFailure {
+    /// The oracle machine itself failed to start: infrastructure.
+    MachineError,
+    /// One engine did not complete the probe (an unrelated halt on the empty
+    /// program). Not an answer, and never grounds for a skip.
+    Unanswered,
 }
 
 /// What an **ironhorse** unresolved-name `ReferenceError` on a program the
@@ -799,8 +825,11 @@ pub(crate) enum MissingGlobal {
     /// The engine's scope resolution lied: the program bound the name, or
     /// ironhorse binds it too, or nobody binds it. Carries the probe answer.
     Spurious(String, GlobalBinding),
-    /// The oracle machine could not answer the probe.
+    /// The oracle machine could not run the probe: infrastructure.
     OracleError,
+    /// An engine did not complete the probe, so nothing is known about the
+    /// binding; judged as the throw it is, never skipped.
+    Unprobeable(String),
 }
 
 /// Classify an ironhorse throw on a program the oracle completed, when it has
@@ -808,11 +837,12 @@ pub(crate) enum MissingGlobal {
 pub(crate) fn classify_missing_global(source: &str, thrown: &str) -> Option<MissingGlobal> {
     let name = missing_global_binding(thrown)?;
     Some(match probe_global(name) {
-        Some(binding) if binding.oracle && !binding.ironhorse && !source_declares(source, name) => {
+        Ok(binding) if binding.oracle && !binding.ironhorse && !source_declares(source, name) => {
             MissingGlobal::Unlanded(name.to_string())
         }
-        Some(binding) => MissingGlobal::Spurious(name.to_string(), binding),
-        None => MissingGlobal::OracleError,
+        Ok(binding) => MissingGlobal::Spurious(name.to_string(), binding),
+        Err(ProbeFailure::MachineError) => MissingGlobal::OracleError,
+        Err(ProbeFailure::Unanswered) => MissingGlobal::Unprobeable(name.to_string()),
     })
 }
 
@@ -830,11 +860,11 @@ pub(crate) fn classify_missing_global(source: &str, thrown: &str) -> Option<Miss
 fn oracle_unresolved_name_skip(run: &DualRun) -> Option<Verdict> {
     let name = missing_global_binding(&run.oracle_error)?;
     match probe_global(name) {
-        Some(binding) if !binding.oracle && binding.ironhorse => Some(Verdict::RunSkip(format!(
+        Ok(binding) if !binding.oracle && binding.ironhorse => Some(Verdict::RunSkip(format!(
             "oracle-host-missing-global:{name}"
         ))),
-        Some(_) => None,
-        None => Some(Verdict::RunSkip("oracle-machine-error".into())),
+        Ok(_) | Err(ProbeFailure::Unanswered) => None,
+        Err(ProbeFailure::MachineError) => Some(Verdict::RunSkip("oracle-machine-error".into())),
     }
 }
 
@@ -1613,7 +1643,7 @@ fn module_dual_run(
         (true, false) => Agreement::OracleOnlyComplete,
     };
     let ironhorse_error = match &ironhorse.halt {
-        Halt::Throw { rendered: error, .. } => error.clone(),
+        Halt::Throw { rendered, .. } => rendered.clone(),
         _ => String::new(),
     };
     DualRun {
@@ -1702,7 +1732,7 @@ fn run_accepted_module(
             completed: ironhorse.completed,
             result: ironhorse.result.clone(),
             error: match &ironhorse.halt {
-                Halt::Throw { rendered: error, .. } => error.clone(),
+                Halt::Throw { rendered, .. } => rendered.clone(),
                 _ => String::new(),
             },
             computrons: ironhorse.computrons,
@@ -3283,7 +3313,9 @@ mod tests {
         // the oracle passed the case, so this is ironhorse computing a value
         // the assertion rejected — the dominant wrong-answer shape, which the
         // unconditional `ironhorse-aborted` skip used to absorb.
-        let run = synthetic_oracle_only(Halt::synthetic_throw("Test262Error: Expected SameValue(«1», «2») to be true"));
+        let run = synthetic_oracle_only(Halt::synthetic_throw(
+            "Test262Error: Expected SameValue(«1», «2») to be true",
+        ));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(detail) if detail.starts_with("ironhorse failed a harness assertion")
@@ -3309,12 +3341,14 @@ mod tests {
         // named global skip.
         assert_eq!(
             probe_global("x"),
-            Some(GlobalBinding {
+            Ok(GlobalBinding {
                 oracle: false,
                 ironhorse: false
             })
         );
-        let mut run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get x: undefined variable"));
+        let mut run = synthetic_oracle_only(Halt::synthetic_throw(
+            "ReferenceError: get x: undefined variable",
+        ));
         run.source = "function f(x) { return x; } f(1);".into();
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
@@ -3331,12 +3365,14 @@ mod tests {
         // intrinsic; the ironhorse half says the binding was there.
         assert_eq!(
             probe_global("Array"),
-            Some(GlobalBinding {
+            Ok(GlobalBinding {
                 oracle: true,
                 ironhorse: true
             })
         );
-        let run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get Array: undefined variable"));
+        let run = synthetic_oracle_only(Halt::synthetic_throw(
+            "ReferenceError: get Array: undefined variable",
+        ));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(detail) if detail.starts_with("spurious ReferenceError")
@@ -3389,12 +3425,14 @@ mod tests {
         // coverage gap that names the intrinsic to land.
         assert_eq!(
             probe_global("Compartment"),
-            Some(GlobalBinding {
+            Ok(GlobalBinding {
                 oracle: true,
                 ironhorse: false
             })
         );
-        let run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get Compartment: undefined variable"));
+        let run = synthetic_oracle_only(Halt::synthetic_throw(
+            "ReferenceError: get Compartment: undefined variable",
+        ));
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::RunSkip("ironhorse-missing-global:Compartment".into())
@@ -3414,7 +3452,9 @@ mod tests {
         // binds `Compartment`, ironhorse does not), but the program declared
         // its own `Compartment`, so ironhorse failing to resolve it is a
         // scope-resolution lie about the program's binding.
-        let mut run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get Compartment: undefined variable"));
+        let mut run = synthetic_oracle_only(Halt::synthetic_throw(
+            "ReferenceError: get Compartment: undefined variable",
+        ));
         run.source = "var Compartment = {}; Compartment.x = 1;".into();
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
@@ -3431,7 +3471,7 @@ mod tests {
         // abort-type divergence it would be for any other native error.
         assert_eq!(
             probe_global("Float128Array"),
-            Some(GlobalBinding {
+            Ok(GlobalBinding {
                 oracle: false,
                 ironhorse: false
             })
@@ -3500,7 +3540,7 @@ mod tests {
         // actually exhibited.
         assert_eq!(
             probe_global("Intl"),
-            Some(GlobalBinding {
+            Ok(GlobalBinding {
                 oracle: false,
                 ironhorse: true
             })
@@ -3580,85 +3620,23 @@ mod tests {
         }
     }
 
-    /// Blank line and block comments, leaving string literals (and their
-    /// contents, `//` included) intact.
-    fn strip_comments(src: &str) -> String {
-        let bytes = src.as_bytes();
-        let mut out = String::with_capacity(src.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            let rest = &src[i..];
-            if rest.starts_with("//") {
-                let end = rest.find('\n').unwrap_or(rest.len());
-                out.extend(std::iter::repeat(' ').take(end));
-                i += end;
-            } else if rest.starts_with("/*") {
-                let end = rest.find("*/").map_or(rest.len(), |n| n + 2);
-                out.extend(
-                    rest[..end]
-                        .chars()
-                        .map(|c| if c == '\n' { '\n' } else { ' ' }),
-                );
-                i += end;
-            } else if rest.starts_with('"') {
-                let mut j = 1;
-                loop {
-                    match rest.as_bytes().get(j) {
-                        Some(b'\\') => j += 2,
-                        Some(b'"') => {
-                            j += 1;
-                            break;
-                        }
-                        Some(_) => j += 1,
-                        None => break,
-                    }
-                }
-                out.push_str(&rest[..j]);
-                i += j;
-            } else {
-                let c = rest.chars().next().unwrap();
-                out.push(c);
-                i += c.len_utf8();
-            }
-        }
-        out
-    }
-
     #[test]
     fn harness_declined_labels_are_an_explicit_allowlist() {
         // Every `Halt::Unsupported("…")` the runner constructs outside its
         // tests is one of HARNESS_DECLINED_LABELS, so the runner cannot grant
         // itself a skip either.
-        fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    rs_files(&path, out);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-        let mut files = Vec::new();
-        rs_files(
-            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
-            &mut files,
-        );
+        use ironhorse_vm::source_scan::{
+            balanced_args, code_only, marker_positions, rs_files, string_literals,
+        };
         let mut found = std::collections::BTreeSet::new();
-        for path in files {
+        for path in rs_files(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))) {
             let src = std::fs::read_to_string(&path).unwrap();
-            // Non-test code only (each file's test module is its tail), with
-            // comments blanked — literal-aware, so a `//` inside a string does
-            // not cut the line and a block comment ending mid-line does not
-            // hide what follows it.
-            let code = strip_comments(src.split("#[cfg(test)]\nmod tests").next().unwrap_or(""));
-            let marker = "Halt::Unsupported(\"";
-            let mut start = 0;
-            while let Some(p) = code[start..].find(marker) {
-                let at = start + p + marker.len();
-                let end = at + code[at..].find('"').unwrap();
-                found.insert(code[at..end].to_string());
-                start = end;
+            // Non-test code only (each file's test module is its tail), lexed
+            // by the same scanner the engine registry uses.
+            let code = code_only(src.split("#[cfg(test)]\nmod tests").next().unwrap_or(""));
+            let marker = "Halt::Unsupported(";
+            for at in marker_positions(&code, marker) {
+                found.extend(string_literals(balanced_args(&code, at, marker)));
             }
         }
         let pinned: std::collections::BTreeSet<String> = HARNESS_DECLINED_LABELS

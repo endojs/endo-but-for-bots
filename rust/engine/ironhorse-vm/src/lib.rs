@@ -31,6 +31,8 @@ pub mod intl_number;
 pub mod meter;
 pub mod module;
 pub mod opcode;
+#[doc(hidden)]
+pub mod source_scan;
 pub mod symbols;
 pub mod value;
 
