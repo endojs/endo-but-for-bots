@@ -907,19 +907,16 @@ pub mod engine {
                 // completed cranks too, the documented rewind-window
                 // trade the policy opted into.
                 //
-                // `completed` is the HARNESS verdict, not the engine's:
-                // a crank whose completion value is a Symbol or a
-                // null-prototype object is reported as a synthetic
-                // `TypeError` throw the guest never made (the oracle
-                // shim's post-run `String(result)`), although the engine
-                // finished the crank and `is_quiescent()` holds. This
-                // path rewinds that class too. Deterministic across
-                // replicas (every replica rewinds the same crank), so
-                // not a fork — but a legal program is refused here, the
-                // guest-visible half of architecture review F030, which
-                // stays open until the coercion moves out of the engine
-                // into the 262 runner and `run` reports its raw
-                // completion.
+                // `completed` is the ENGINE's verdict: the crank reached
+                // its `END` and drained its jobs, and `is_quiescent()`
+                // agrees. A crank whose completion value the oracle
+                // harness's `String(result)` cannot coerce (a Symbol, a
+                // null-prototype object) completes here with the
+                // engine's own rendering; the harness's `TypeError`
+                // travels beside it in `coercion_error` and only the
+                // differential runners fold it into an abort. So this
+                // path rewinds genuine halts only, never a legal program
+                // (architecture review F030, closed).
                 let halt = outcome.halt;
                 if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
                     return Err(MachineError::Store(format!(

@@ -1231,7 +1231,7 @@ mod tests {
         // the mechanism a refusal depends on.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image(&sig()).expect("gated image");
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         store.commit(&image_to_batch(&image1, 1, "")).unwrap();
         let prev = store.manifest().unwrap();
@@ -1267,7 +1267,7 @@ mod tests {
     fn sql_abort_after_row_mutation_rolls_back_and_forces_a_cold_retry() {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image(&sig()).expect("gated image");
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         store.commit(&image_to_batch(&image1, 1, "")).unwrap();
         let prior = store.manifest().unwrap();
@@ -1292,7 +1292,7 @@ mod tests {
         .collect();
 
         assert!(m.run(&PROG_B).completed);
-        let image2 = m.snapshot_image(&sig());
+        let image2 = m.snapshot_image(&sig()).expect("gated image");
         let batch2 = image_to_batch(&image2, 2, &prior.seal);
 
         store
@@ -1381,14 +1381,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             store_to_image(&store).unwrap(),
-            session.machine().snapshot_image(&sig())
+            session.machine().snapshot_image(&sig()).expect("gated image")
         );
 
         assert!(session.machine_mut().run(&PROG_B).completed);
         checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
         assert_eq!(
             store_to_image(&store).unwrap(),
-            session.machine().snapshot_image(&sig())
+            session.machine().snapshot_image(&sig()).expect("gated image")
         );
         assert_eq!(
             export_to_container(&store).unwrap(),
@@ -1454,7 +1454,7 @@ mod tests {
             .unwrap();
         assert!(session.machine_mut().run(&PROG_B).completed);
         checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
-        let expected = session.machine().snapshot_image(&sig());
+        let expected = session.machine().snapshot_image(&sig()).expect("gated image");
         store.close().unwrap();
 
         let mut store = SqliteHeapStore::open(&path).unwrap();
@@ -1479,7 +1479,7 @@ mod tests {
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image = m.snapshot_image(&sig());
+        let image = m.snapshot_image(&sig()).expect("gated image");
         store.commit(&image_to_batch(&image, 1, "")).unwrap();
         assert!(
             !image.chunks.is_empty(),
@@ -1531,7 +1531,7 @@ mod tests {
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image(&sig()).expect("gated image");
         store.commit(&image_to_batch(&image1, 1, "")).unwrap();
 
         // Pick a page with outgoing edges (the boot region guarantees
@@ -1683,12 +1683,12 @@ mod tests {
 
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image(&sig()).expect("gated image");
         sqlite.commit(&image_to_batch(&image1, 1, "")).unwrap();
         memory.commit(&image_to_batch(&image1, 1, "")).unwrap();
 
         assert!(m.run(&PROG_B).completed);
-        let image2 = m.snapshot_image(&sig());
+        let image2 = m.snapshot_image(&sig()).expect("gated image");
         let prev = memory.manifest().unwrap().seal;
         sqlite.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
         memory.commit(&image_to_batch(&image2, 2, &prev)).unwrap();

@@ -3621,7 +3621,7 @@ mod tests {
         let mut m = Interp::new();
         let a = m.run(&PROG_A);
         assert!(a.completed);
-        m.snapshot_image(&sig())
+        m.snapshot_image(&sig()).expect("gated image")
     }
 
     #[test]
@@ -4025,7 +4025,7 @@ mod tests {
         // the next open as a length mismatch.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image(&sig()).expect("gated image");
         let mut store = MemoryStore::new();
         store.commit(&image_to_batch(&image1, 1, "")).unwrap();
         let prev = store.manifest().unwrap();
@@ -4122,7 +4122,7 @@ mod tests {
         // geometry fields overridden — only the counts drive the math.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image = m.snapshot_image(&sig());
+        let image = m.snapshot_image(&sig()).expect("gated image");
         let template = image_to_batch(&image, 1, "").manifest;
 
         let leaf_bytes = |i: u32, salt: u8| -> Vec<u8> { vec![salt, i as u8, (i >> 8) as u8] };
@@ -4241,7 +4241,7 @@ mod tests {
         // store accepted.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image(&sig()).expect("gated image");
         let mut store = MemoryStore::new();
         let batch1 = image_to_batch(&image1, 1, "");
         store.commit(&batch1).unwrap();
@@ -4260,7 +4260,7 @@ mod tests {
         assert_eq!(root1, batch1.manifest.root);
 
         assert!(m.run(&PROG_A).completed, "second crank grows the heap");
-        let image2 = m.snapshot_image(&sig());
+        let image2 = m.snapshot_image(&sig()).expect("gated image");
         let batch2 = image_to_batch(&image2, 2, &store.manifest().unwrap().seal);
         store.commit(&batch2).unwrap();
         let root2 = ledger
@@ -4287,7 +4287,7 @@ mod tests {
         // letting its two checks require different rows.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig());
+        let image1 = m.snapshot_image(&sig()).expect("gated image");
         let mut store = MemoryStore::new();
         store.commit(&image_to_batch(&image1, 1, "")).unwrap();
         let prev = store.manifest().unwrap();

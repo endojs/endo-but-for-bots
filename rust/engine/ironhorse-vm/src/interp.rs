@@ -4052,17 +4052,35 @@ fn cannot_coerce_to_object(kind: Kind) -> String {
 /// The result of running one program's bytecode on ironhorse-vm.
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
-    /// `true` if the program completed normally AND the harness could
-    /// render its completion value. A Symbol or null-prototype
-    /// completion is reported `false` with a synthetic `TypeError`
-    /// [`Halt::Throw`] (the oracle shim's post-run `String(result)`),
-    /// yet the engine's own crank completed: the boundary registers are
-    /// cleared and [`Interp::is_quiescent`] holds. A host that needs the
-    /// engine's verdict rather than the harness's asks `is_quiescent`.
+    /// `true` if the program completed normally: the dispatch reached
+    /// `END` and the job queue drained. This is the ENGINE's verdict,
+    /// and it agrees with [`Interp::is_quiescent`] by construction. It
+    /// is not the oracle harness's verdict: the harness's post-run
+    /// `String(result)` throws for a Symbol or null-prototype
+    /// completion, which [`Self::coercion_error`] records and
+    /// [`Self::host_coerced`] folds into an abort for a differential
+    /// comparison.
     pub completed: bool,
     /// Completion value rendered with ECMAScript `String()` semantics
-    /// (valid when `completed`).
+    /// (valid when `completed`). For a value `String()` cannot coerce
+    /// (see [`Self::coercion_error`]) this is the engine's display
+    /// rendering instead: a Symbol's descriptive string
+    /// (`Symbol(desc)`), the generic `[object Object]` stub for a
+    /// null-prototype object.
     pub result: String,
+    /// The `TypeError` the oracle shim's post-run `String(result)`
+    /// throws for this completion value, when it throws: a Symbol
+    /// (`cannot coerce symbol to string`) or a null-prototype ordinary
+    /// object with neither `toString` nor `valueOf` (`cannot convert
+    /// object to primitive value`). `None` for every other completion
+    /// and for every halt. The guest never threw this: it is a HOST
+    /// coercion the 262 runner and the fuzz harness emulate through
+    /// [`Self::host_coerced`], while an embedder that wants the raw
+    /// completion reads `completed`/`result` as they are (architecture
+    /// review F030: the engine used to rewrite the halt itself, so a
+    /// legal program was reported to the operator as an uncaught
+    /// `TypeError` and the managed lifecycle rewound it).
+    pub coercion_error: Option<String>,
     /// Computrons, comparable bit-for-bit with the oracle's run-only
     /// count: dispatched opcodes plus the invocation baseline.
     pub computrons: u64,
@@ -4075,6 +4093,37 @@ pub struct RunOutcome {
     pub meter_raw: u64,
     /// Why the run stopped.
     pub halt: Halt,
+}
+
+impl RunOutcome {
+    /// The outcome as the ORACLE HARNESS reports it: the xsnap shim
+    /// coerces the completion value with `String(result)` after the
+    /// run, so a completion that coercion cannot render is an abort on
+    /// the oracle's side. Fold [`Self::coercion_error`] the same way —
+    /// `completed` becomes `false`, `result` empties, and `halt` becomes
+    /// a [`Halt::Throw`] carrying the `TypeError` — so a differential
+    /// comparison sees the shape the oracle produces. The post-run
+    /// throw is outside the metered run in the shim, so the computrons
+    /// are untouched. Every other outcome passes through unchanged.
+    /// This is the differential harness's verb; an embedder that runs
+    /// guest programs for their own sake keeps the raw completion.
+    pub fn host_coerced(self) -> RunOutcome {
+        match self.coercion_error {
+            Some(message) => RunOutcome {
+                completed: false,
+                result: String::new(),
+                coercion_error: None,
+                // The harness's abort has no guest value behind it: the
+                // shim's `String(result)` threw outside the machine, and
+                // nothing guest-visible can catch it. That is exactly
+                // `synthetic_throw`'s contract, and it keeps this inside
+                // the locked set of `Halt::Throw` construction sites.
+                halt: Halt::synthetic_throw(message),
+                ..self
+            },
+            None => self,
+        }
+    }
 }
 
 /// One interpreter activation over a single top-level program frame
@@ -12657,12 +12706,13 @@ impl Interp {
     /// lifecycle rewinds halted cranks; this is the seam-level gate for
     /// every other caller.
     ///
-    /// The two synthetic host-boundary throws [`Self::run`] mints for a
-    /// completion value the harness's `String(result)` cannot coerce are
-    /// NOT halts in this sense: the engine's crank completed and its
-    /// registers cleared before the reported halt was rewritten, so the
-    /// machine is quiescent even though the [`RunOutcome`] says
-    /// `completed: false`.
+    /// A completion value the oracle harness's `String(result)` cannot
+    /// coerce (a Symbol, a null-prototype object) is NOT a halt in this
+    /// sense: [`Self::run`] reports it `completed` with the harness's
+    /// `TypeError` beside it in [`RunOutcome::coercion_error`], the
+    /// registers clear, and the machine is quiescent. Only the
+    /// differential harness folds that into an abort
+    /// ([`RunOutcome::host_coerced`]).
     pub fn is_quiescent(&self) -> bool {
         self.last_crank_completed
             && self.call_stack.is_empty()
@@ -13314,65 +13364,68 @@ impl Interp {
             let rendered = self.render_uncaught(code, value);
             halt = Halt::Throw { value, rendered };
         }
-        // The ENGINE's verdict on this crank, fixed here — before the two
-        // host-boundary coercions below rewrite the REPORTED halt. This
-        // is what the boundary-register clear and the quiescence latch
-        // key on: the dispatch reached `END` and the job queue drained,
-        // so the machine stands at a crank boundary whatever the harness
-        // makes of the completion value (architecture review F030/F022:
-        // keying the clear on the post-coercion `completed` skipped it
-        // for a Symbol or null-prototype completion, leaving live GC
-        // roots the restore path never reinstates on a machine every
-        // persist verb accepted).
-        let engine_completed = halt == Halt::Return;
-        // A program that completes with a Symbol *value* is coerced to a
-        // string by the harness (`String(result)`), which throws — so the
-        // oracle reports the run as an abort, not a completion. Mirror that:
-        // a Symbol completion becomes the same `TypeError` abort. The ToString
-        // throw is post-run in the shim, so it adds no run computrons (the
-        // meter already matches the oracle's run-only count).
-        if halt == Halt::Return && self.result.kind == Kind::Symbol {
-            halt = Halt::synthetic_throw("TypeError: cannot coerce symbol to string");
-        }
-        // The oracle shim stringifies the completion.  A bare ordinary object
-        // with a null prototype has neither `toString` nor `valueOf`, so
-        // `ToPrimitive` fails instead of producing the generic reference stub.
-        // Model that post-run harness conversion just as we do Symbol above.
-        if halt == Halt::Return {
-            if let Payload::Reference(object) = self.result.value {
-                if self.result.kind == Kind::Reference
-                    && self.instance_prototype(object).is_null()
-                    && !self.arrays.contains_key(&object)
-                    && self.native_of(object).is_none()
-                {
-                    halt = Halt::synthetic_throw("TypeError: cannot convert object to primitive value");
-                }
-            }
-        }
+        // The ENGINE's verdict on this crank: the dispatch reached `END`
+        // and the job queue drained, so the machine stands at a crank
+        // boundary. `completed`, the boundary-register clear and the
+        // quiescence latch all key on it, whatever the oracle harness
+        // makes of the completion value below (architecture review
+        // F030/F022: `run` used to rewrite this halt into a synthetic
+        // `TypeError` throw for a Symbol or null-prototype completion,
+        // which skipped the register clear on a machine every persist
+        // verb accepted, and reported a legal program to the operator as
+        // an uncaught error).
         let completed = halt == Halt::Return;
-        let result = if completed {
-            self.render(&self.result)
+        // The oracle shim coerces the completion with `String(result)`
+        // AFTER the run. Two completion values make that coercion throw:
+        // a Symbol (`ToString` of a Symbol is a TypeError), and a bare
+        // ordinary object with a null prototype (neither `toString` nor
+        // `valueOf`, so `ToPrimitive` fails instead of producing the
+        // generic reference stub). Record the harness's `TypeError`
+        // here, without rewriting the engine's verdict: the differential
+        // harness folds it into an abort through `RunOutcome::host_coerced`
+        // and an embedder keeps the completion. The throw is post-run in
+        // the shim, so it adds no run computrons (the meter already
+        // matches the oracle's run-only count).
+        let coercion_error = if !completed {
+            None
+        } else if self.result.kind == Kind::Symbol {
+            Some("TypeError: cannot coerce symbol to string".to_string())
+        } else if let Payload::Reference(object) = self.result.value {
+            (self.result.kind == Kind::Reference
+                && self.instance_prototype(object).is_null()
+                && !self.arrays.contains_key(&object)
+                && self.native_of(object).is_none())
+            .then(|| "TypeError: cannot convert object to primitive value".to_string())
         } else {
-            String::new()
+            None
         };
-        // Boundary-register hygiene (wave-6 W6-11): on a crank the
-        // ENGINE completed, the host has its rendered completion above
-        // (or the synthetic coercion throw) and the next crank's
-        // prologue rebuilds locals — but between here and there these
-        // registers were live GC ROOTS the restore path never
-        // reinstates, so an uninterrupted machine's boundary collection
-        // retained pages its resumed twin freed (free-list divergence,
-        // which feeds replica-visible allocation order). Clear them at
-        // the boundary so both twins root the same set. A HALTED crank
-        // keeps everything: the lifecycle latch below keeps the
-        // quiescence gate refusing it and the managed lifecycle rewinds
-        // it whole.
-        if engine_completed {
+        let result = if !completed {
+            String::new()
+        } else if self.result.kind == Kind::Symbol {
+            // `String(sym)` throws, so the `render` boundary has no
+            // `ToString` to mirror; the engine's own display rendering is
+            // the descriptive string `Symbol.prototype.toString` gives.
+            String::from_utf8_lossy(&self.symbol_descriptive_bytes(self.result)).into_owned()
+        } else {
+            self.render(&self.result)
+        };
+        // Boundary-register hygiene (wave-6 W6-11): on a COMPLETED
+        // crank, the host has its rendered completion above and the
+        // next crank's prologue rebuilds locals — but between here and
+        // there these registers were live GC ROOTS the restore path
+        // never reinstates, so an uninterrupted machine's boundary
+        // collection retained pages its resumed twin freed (free-list
+        // divergence, which feeds replica-visible allocation order).
+        // Clear them at the boundary so both twins root the same set.
+        // A HALTED crank keeps everything: the lifecycle latch below
+        // keeps the quiescence gate refusing it and the managed
+        // lifecycle rewinds it whole.
+        if completed {
             self.result = Slot::undefined();
             self.locals.clear();
             self.id_map.clear();
         }
-        self.last_crank_completed = engine_completed;
+        self.last_crank_completed = completed;
         // `active_segment` identifies only the buffer of the dispatch in
         // progress. Every surviving function has its own `func_segments`
         // entry, so no segment cursor crosses a crank boundary.
@@ -13380,6 +13433,7 @@ impl Interp {
         RunOutcome {
             completed,
             result,
+            coercion_error,
             // The meter now accrues everything XS's `meterIndex` does:
             // the per-opcode dispatch metering, the program-frame +
             // eval-environment setup overhead (at `BEGIN_*`, folding in
@@ -55938,10 +55992,15 @@ mod tests {
     }
 
     #[test]
-    fn bare_symbol_completion_is_a_typeerror_abort() {
-        // A program whose completion value is a Symbol aborts: the harness's
-        // `String(result)` throws (a symbol cannot coerce to a string). The
-        // exact XS bytecode for `Symbol()` (captured from the oracle).
+    fn bare_symbol_completion_is_a_completion_the_harness_coerces_to_a_typeerror() {
+        // A program whose completion value is a Symbol COMPLETES on the
+        // engine's side: `run` reports the raw completion with the
+        // Symbol's descriptive string. The oracle harness's post-run
+        // `String(result)` throws (a symbol cannot coerce to a string),
+        // which travels beside the completion as `coercion_error` and
+        // becomes the abort only through `host_coerced` (architecture
+        // review F030). The exact XS bytecode for `Symbol()` (captured
+        // from the oracle).
         let code: [u8; 15] = [
             0x0b, 0x00, 0x4b, 0xe0, 0x4d, 0x01, 0x00, 0x66, 0x01, 0x00, 0x28, 0xab, 0x00, 0xbb,
             0xa9,
@@ -55949,11 +56008,26 @@ mod tests {
         let mut interp = Interp::new();
         interp.link_intrinsics(&["Symbol".to_string()]);
         let out = interp.run(&code);
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed, "the engine's verdict is a completion");
+        assert_eq!(out.result, "Symbol()", "the engine's own display rendering");
         assert_eq!(
-            out.halt.thrown_rendering(),
-            Some("TypeError: cannot coerce symbol to string")
+            out.coercion_error.as_deref(),
+            Some("TypeError: cannot coerce symbol to string"),
+            "the harness's post-run coercion travels beside it"
         );
-        assert!(!out.completed);
+        assert!(interp.is_quiescent(), "and the machine is at a boundary");
+        let computrons = out.computrons;
+        let coerced = out.host_coerced();
+        assert_eq!(
+            coerced.halt.thrown_rendering(),
+            Some("TypeError: cannot coerce symbol to string"),
+            "the harness shape is the oracle's abort"
+        );
+        assert!(!coerced.completed);
+        assert_eq!(coerced.result, "");
+        assert_eq!(coerced.coercion_error, None, "folded, not duplicated");
+        assert_eq!(coerced.computrons, computrons, "post-run, so unmetered");
     }
 
     #[test]

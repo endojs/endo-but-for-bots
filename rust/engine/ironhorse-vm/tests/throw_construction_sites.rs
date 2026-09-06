@@ -162,20 +162,33 @@ fn halt_throw_is_constructed_only_where_the_jump_chain_was_unwound() {
          (catchable_type_error_msg or a sibling). All sites:\n{}",
         stray.join("\n")
     );
-    // The harness-only constructor: the two post-run shims in `run`, nowhere
-    // else in engine code.
+    // The harness-only constructor lives in the harness's own verb.
+    // `run` used to apply the post-run `String(result)` conversions
+    // itself, which reported a legal Symbol/null-prototype completion to
+    // every host as an uncaught throw (architecture review F030); it now
+    // reports the raw completion with `RunOutcome::coercion_error` beside
+    // it, and only `RunOutcome::host_coerced` — the verb the differential
+    // runners call — folds that into the oracle's abort shape. So `run`
+    // must construct NO synthetic throw, and `host_coerced` exactly one.
     let run_body = strip_comments(fn_body("    pub fn run(&mut self, code: &[u8]) -> RunOutcome {"));
     assert_eq!(
         count(&run_body, "Halt::synthetic_throw("),
-        2,
-        "run() models exactly two post-run harness conversions"
+        0,
+        "run() reports the engine's raw completion; the harness conversion \
+         belongs to RunOutcome::host_coerced"
+    );
+    let coerced_body = strip_comments(fn_body("pub fn host_coerced(self) -> RunOutcome {"));
+    assert_eq!(
+        count(&coerced_body, "Halt::synthetic_throw("),
+        1,
+        "host_coerced models the post-run harness conversion exactly once"
     );
     let synthetic_body = strip_comments(fn_body("pub fn synthetic_throw("));
     assert_eq!(
         count(engine, "Halt::synthetic_throw(") - count(&synthetic_body, "Halt::synthetic_throw("),
-        2,
-        "Halt::synthetic_throw is for the harness and run()'s post-run shims only; \
-         a guest-reachable error needs a real error object"
+        1,
+        "Halt::synthetic_throw is for the harness and host_coerced's post-run \
+         shim only; a guest-reachable error needs a real error object"
     );
     // And no native-try boundary reads the thrown value back out of the
     // register: it takes the value from the `Halt::Throw` it matched. The

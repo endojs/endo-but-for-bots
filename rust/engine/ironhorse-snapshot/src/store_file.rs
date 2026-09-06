@@ -838,7 +838,7 @@ mod tests {
     fn ran_image() -> crate::image::MachineImage {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        m.snapshot_image(&sig())
+        m.snapshot_image(&sig()).expect("gated image")
     }
 
     fn tmp_dir(name: &str) -> crate::test_dir::TempDir {

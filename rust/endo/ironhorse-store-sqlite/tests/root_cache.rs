@@ -41,7 +41,7 @@ fn two_epochs(path: &std::path::Path) -> (SqliteHeapStore, ironhorse_snapshot::i
         .expect("begin");
     assert!(session.machine_mut().run(&PROG_A).completed);
     assert_eq!(checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(), 2);
-    let image = session.machine().snapshot_image(&sig());
+    let image = session.machine().snapshot_image(&sig()).expect("gated image");
     (store, image)
 }
 

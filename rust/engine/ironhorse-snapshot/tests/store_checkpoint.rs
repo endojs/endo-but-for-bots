@@ -86,7 +86,7 @@ fn incremental_checkpoint_writes_only_dirty_rows() {
     );
     assert_eq!(
         store_to_image(&store).unwrap(),
-        session.machine().snapshot_image(&sig())
+        session.machine().snapshot_image(&sig()).expect("gated image")
     );
 
     checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
@@ -123,7 +123,7 @@ fn resumed_session_checkpoints_incrementally_across_reopen() {
     assert!(session.machine_mut().run(&PROG_B).completed);
     let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     assert_eq!(epoch, 2);
-    let expected = session.machine().snapshot_image(&sig());
+    let expected = session.machine().snapshot_image(&sig()).expect("gated image");
     assert_eq!(store_to_image(&store).unwrap(), expected);
 
     drop(store);
@@ -262,7 +262,7 @@ fn replayed_batch_is_refused() {
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
-    let image = m.snapshot_image(&sig());
+    let image = m.snapshot_image(&sig()).expect("gated image");
     store.commit(&image_to_batch(&image, 1, "")).unwrap();
     assert_eq!(
         store.commit(&image_to_batch(&image, 1, "")).unwrap_err(),
@@ -381,7 +381,7 @@ fn interleaving_store(fire_on: Interleave) -> InterleavingStore {
     assert!(m.run(&PROG_A).completed);
     let session = begin(m, &mut inner);
     let seal1 = inner.manifest().unwrap().seal;
-    let batch2 = image_to_batch(&session.machine().snapshot_image(&sig()), 2, &seal1);
+    let batch2 = image_to_batch(&session.machine().snapshot_image(&sig()).expect("gated image"), 2, &seal1);
     drop(session);
     let armed = fire_on == Interleave::Validation;
     InterleavingStore {
@@ -449,7 +449,7 @@ fn lazy_fault_refuses_row_read_across_a_foreign_commit() {
 fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
-    let image = m.snapshot_image(&sig());
+    let image = m.snapshot_image(&sig()).expect("gated image");
     let batch = image_to_batch(&image, 1, "");
 
     let mut foreign = batch.manifest.clone();
@@ -823,7 +823,7 @@ fn checkpoint_recovers_through_a_failed_commit() {
     assert_eq!(epoch, 2);
     assert_eq!(
         store_to_image(&store).unwrap(),
-        session.machine().snapshot_image(&sig()),
+        session.machine().snapshot_image(&sig()).expect("gated image"),
         "retried checkpoint equals the live machine"
     );
 
@@ -835,8 +835,8 @@ fn checkpoint_recovers_through_a_failed_commit() {
     ironhorse_snapshot::store::validate_store(&store, &sig()).unwrap();
     let resumed = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(
-        resumed.machine().snapshot_image(&sig()),
-        session.machine().snapshot_image(&sig()),
+        resumed.machine().snapshot_image(&sig()).expect("gated image"),
+        session.machine().snapshot_image(&sig()).expect("gated image"),
         "a resume sees exactly the recovered history"
     );
 }

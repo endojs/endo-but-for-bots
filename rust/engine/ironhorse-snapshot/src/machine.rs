@@ -130,25 +130,39 @@ const CAS_TMP_NAME: &str = ".snapshot.tmp";
 /// The xsnap-shaped machine snapshot surface, implemented for the ironhorse
 /// [`Interp`] (the engine's machine). See the module docs.
 pub trait MachineSnapshot {
+    /// The persist preconditions (wave-6 W6-10/12): a quiescent crank
+    /// boundary and no live state a resume cannot bring back. Required,
+    /// not defaulted: a permissive default was the one way an
+    /// implementor could hand out an image of a machine no gate had
+    /// seen (architecture review F047).
+    fn persist_gate(&self) -> Result<(), MachineSnapshotError>;
+
     /// Build the plain-data [`MachineImage`] of this machine under
     /// `signature` (its host callback-table version) — the arenas, the
-    /// value stack, the program symbol names, and the metering state.
-    fn snapshot_image(&self, signature: &Signature) -> MachineImage;
-
-    /// The persist preconditions for the blob verbs (wave-6 W6-10/12):
-    /// the same gates the store verbs enforce - a quiescent crank
-    /// boundary and no live dynamic-segment function. The default is
-    /// permissive for image-only implementors; [`Interp`] overrides it.
-    fn persist_gate(&self) -> Result<(), MachineSnapshotError> {
-        Ok(())
-    }
+    /// value stack, the program symbol names, the metering state, and
+    /// the side-table rows — after [`Self::persist_gate`] admits it.
+    ///
+    /// This is the ONLY way to obtain an image of a live machine outside
+    /// this crate, and it is gated by construction: the encoder
+    /// ([`write_machine`]), the store batch builder
+    /// (`store::image_to_batch`) and every store's `commit` are pure
+    /// functions of an image, never of a machine, so the gate cannot be
+    /// bypassed by reaching for the data path directly (F047: the gate
+    /// used to be attached to three convenience verbs while this method
+    /// handed out ungated images, and in-tree helpers already used
+    /// `image_to_batch(&m.snapshot_image(..)) + commit` to persist
+    /// machines no gate had seen). A crafted or mutated image is still
+    /// a legitimate encoder input — that is how the refusal tests and
+    /// the fuzz targets exercise the reader — but it starts from an
+    /// admitted image or from arbitrary data, never from a halted
+    /// machine.
+    fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError>;
 
     /// Serialize this machine to the in-memory `XS_M` container bytes.
     /// Refuses a machine that fails [`Self::persist_gate`] - the blob
     /// verbs carry the same preconditions as the store verbs.
     fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
-        self.persist_gate()?;
-        Ok(write_machine(&self.snapshot_image(signature)))
+        Ok(write_machine(&self.snapshot_image(signature)?))
     }
 
     /// Write this machine's heap snapshot to `file`, computing SHA-256 on
@@ -209,54 +223,65 @@ impl MachineSnapshot for Interp {
         Ok(())
     }
 
-    fn snapshot_image(&self, signature: &Signature) -> MachineImage {
-        // The carried atoms (see the suspend-point contract): arenas +
-        // stack + the name table + meter, plus the side-table ledger's
-        // serialized rows (arrays, collections, `Symbol.for` registry)
-        // and the symbol-key id table (SYMB). String keys — program
-        // symbols and runtime-interned names alike — travel inside the
-        // NAME table since the id-space unification, so the KEYS atom
-        // is retired and travels empty.
-        let tables = side_tables_of(self);
-        let (next_id, pairs) = self.symbol_key_table();
-        MachineImage::from_arenas(
-            signature.clone(),
-            &self.slots,
-            &self.chunks,
-            self.stack_slots(),
-            self.program_symbol_names().to_vec(),
-            Vec::new(),
-            crate::image::SymbolKeyImage { next_id, pairs },
-        )
-        .with_meter(self.meter_state())
-        .with_side_tables(
-            tables.arrays,
-            tables.collections,
-            tables.registry,
-            tables.errors,
-            tables.buffers,
-            tables.typed_arrays,
-            tables.data_views,
-        )
-        .with_language_rows(
-            tables.wrappers,
-            tables.regexps,
-            tables.arguments_brands,
-            tables.temporal,
-            tables.intl,
-        )
-        .with_iterators(tables.iterators)
-        .with_dates(tables.dates)
-        .with_function_state(tables.function_state)
-        .with_proxy_state(tables.proxy_state)
-        .with_accessors(tables.accessors)
-        .with_intl_bound_functions(tables.intl_bound_functions)
-        .with_private_elements(tables.private_elements)
-        .with_disposable_stacks(tables.disposable_stacks)
-        .with_generators(tables.generators)
-        .with_promise_cluster(tables.promise_cluster)
-        .with_name_floor(self.installed_names_floor())
+    fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError> {
+        self.persist_gate()?;
+        Ok(ungated_image(self, signature))
     }
+}
+
+/// Build the plain-data image of `interp` WITHOUT consulting the persist
+/// gate. Crate-private on purpose (architecture review F047): the two
+/// callers are the gated [`MachineSnapshot::snapshot_image`] and
+/// [`begin_store_session`], which runs the same predicates itself so it
+/// can hand the machine back beside a [`StoreError`]. Nothing outside
+/// this crate can reach an image of a machine the gate has not seen.
+pub(crate) fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
+    // The carried atoms (see the suspend-point contract): arenas +
+    // stack + the name table + meter, plus the side-table ledger's
+    // serialized rows (arrays, collections, `Symbol.for` registry)
+    // and the symbol-key id table (SYMB). String keys — program
+    // symbols and runtime-interned names alike — travel inside the
+    // NAME table since the id-space unification, so the KEYS atom
+    // is retired and travels empty.
+    let tables = side_tables_of(interp);
+    let (next_id, pairs) = interp.symbol_key_table();
+    MachineImage::from_arenas(
+        signature.clone(),
+        &interp.slots,
+        &interp.chunks,
+        interp.stack_slots(),
+        interp.program_symbol_names().to_vec(),
+        Vec::new(),
+        crate::image::SymbolKeyImage { next_id, pairs },
+    )
+    .with_meter(interp.meter_state())
+    .with_side_tables(
+        tables.arrays,
+        tables.collections,
+        tables.registry,
+        tables.errors,
+        tables.buffers,
+        tables.typed_arrays,
+        tables.data_views,
+    )
+    .with_language_rows(
+        tables.wrappers,
+        tables.regexps,
+        tables.arguments_brands,
+        tables.temporal,
+        tables.intl,
+    )
+    .with_iterators(tables.iterators)
+    .with_dates(tables.dates)
+    .with_function_state(tables.function_state)
+    .with_proxy_state(tables.proxy_state)
+    .with_accessors(tables.accessors)
+    .with_intl_bound_functions(tables.intl_bound_functions)
+    .with_private_elements(tables.private_elements)
+    .with_disposable_stacks(tables.disposable_stacks)
+    .with_generators(tables.generators)
+    .with_promise_cluster(tables.promise_cluster)
+    .with_name_floor(interp.installed_names_floor())
 }
 
 /// The machine's serialized side-table views (ledger rows `Arrays`/
@@ -991,7 +1016,10 @@ pub fn begin_store_session(
     // process corrupted its own tables; refuse rather than persist the
     // contradiction. Asked of the IMAGE, which this path builds in full
     // anyway, so the witness is what the store would actually hold.
-    let image = interp.snapshot_image(signature);
+    // The ungated builder is correct here: the two gate predicates ran
+    // above, phrased as `StoreError`s so the machine travels back with
+    // the refusal.
+    let image = ungated_image(&interp, signature);
     if image.stored_unregistered_key_id().is_some() {
         return Err((
             interp,
@@ -1684,7 +1712,7 @@ mod tests {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".to_string()]);
-        let mut image = m.snapshot_image(&sig());
+        let mut image = m.snapshot_image(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
             .find(|i| !free.contains(&(*i as u32)))
@@ -1718,7 +1746,7 @@ mod tests {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".to_string()]);
-        let mut image = m.snapshot_image(&sig());
+        let mut image = m.snapshot_image(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
             .find(|i| !free.contains(&(*i as u32)))
@@ -1749,7 +1777,7 @@ mod tests {
         use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".to_string()]);
-        let mut image = m.snapshot_image(&sig());
+        let mut image = m.snapshot_image(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
             .find(|i| !free.contains(&(*i as u32)))
@@ -1867,7 +1895,7 @@ mod tests {
     fn cost_table_mismatch_fails_closed() {
         let mut m = Interp::new();
         m.run(&PROG_A);
-        let mut image = m.snapshot_image(&sig());
+        let mut image = m.snapshot_image(&sig()).expect("gated image");
         image.meter.cost_table_version = "ironhorse-meter-999".to_string();
         let bytes = write_machine(&image);
         match from_snapshot_bytes(&bytes, &sig()) {
