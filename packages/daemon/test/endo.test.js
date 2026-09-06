@@ -4452,8 +4452,9 @@ test('a restored form still enforces its patterns', async t => {
   {
     const { host } = await makeHost(config, cancelled);
     // Surviving the round-trip must not mean the pattern went slack. Pin the
-    // message: a flattened pattern also rejects a string, but with
-    // "Must be: (an object)". Only a real `M.boolean()` says this.
+    // message, because rejection alone proves nothing: a flattened pattern
+    // rejects a string too, saying `Must be: {"payload":"boolean"}`. Only a
+    // real `M.boolean()` says this.
     await t.throwsAsync(
       () => E(host).submit(formNumber, harden({ approved: 'yes' })),
       { message: /field "approved".*Must be a boolean/ },
