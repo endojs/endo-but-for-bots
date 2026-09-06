@@ -3961,20 +3961,46 @@ pub enum Halt {
     AsyncYield(Slot),
 }
 
+/// Consume a [`Halt`] inside the bytecode dispatch loop. This is the ONLY
+/// way a `Halt::Resume` may be acted on: a handler that lives in a frame
+/// below this loop's `return_depth` belongs to an enclosing (Rust-level
+/// nested) dispatch, so the `Resume` propagates out to it; a handler in
+/// this loop's frames resumes here, paying XS's `mxFirstCode` meter check
+/// at the catch landing (`xsRun.c` `XS_CODE_CATCH`, after the `c_setjmp`
+/// restore). Every other halt leaves the loop as-is.
+///
+/// Every engine raise in the loop (`raise_js`, the `catchable_*` helpers)
+/// and every native re-entry that can raise must pass through here or
+/// [`dispatch_result!`]; `tests/dispatch_loop_control_transfer.rs` parses
+/// the source and fails on a hand-expanded arm, because the hand-expanded
+/// form is exactly what skipped the depth test (review F001) and what let
+/// an internal `Resume` escape to the host as a result (review F006).
+macro_rules! dispatch_halt {
+    ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr) => {
+        match $halt {
+            Halt::Resume(target) if $machine.call_stack.len() < $return_depth => {
+                return Halt::Resume(target);
+            }
+            Halt::Resume(target) => {
+                $program_counter = target;
+                if $machine.check_meter() == MeterCheck::Abort {
+                    return Halt::MeterAbort;
+                }
+                continue;
+            }
+            halt => return halt,
+        }
+    };
+}
+
 /// Propagate a native/helper result from the bytecode dispatch loop, resuming
-/// at a JavaScript catch/finally target when a native helper raised an error.
+/// at a JavaScript catch/finally target when a native helper raised an error
+/// (see [`dispatch_halt!`]).
 macro_rules! dispatch_result {
     ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr) => {
         match $expression {
             Ok(value) => value,
-            Err(Halt::Resume(target)) if $machine.call_stack.len() < $return_depth => {
-                return Halt::Resume(target);
-            }
-            Err(Halt::Resume(target)) => {
-                $program_counter = target;
-                continue;
-            }
-            Err(halt) => return halt,
+            Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth),
         }
     };
 }
@@ -9402,10 +9428,7 @@ impl Interp {
             // exactly as a native helper's `catchable_*` does.
             Halt::Throw(_) => {
                 let error = self.exception;
-                Err(match self.raise_js(error) {
-                    Ok(target) => Halt::Resume(target),
-                    Err(halt) => halt,
-                })
+                Err(self.raise_js(error))
             }
             // A coverage gap, meter abort, step-limit, or decode fault the
             // nested unit hit: propagate as-is (honest, non-result outcome).
@@ -13499,13 +13522,7 @@ impl Interp {
                                 // before the constructor body begins.
                                 if !self.cur_target {
                                     let error = self.build_error("TypeError", 0, 0);
-                                    pc = dispatch_result!(
-                                        self.raise_js(error),
-                                        pc,
-                                        self,
-                                        return_depth
-                                    );
-                                    continue;
+                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                 }
                                 self.run_constructor();
                             }
@@ -13514,13 +13531,7 @@ impl Interp {
                                 // uninitialized `this`; `super()` supplies it.
                                 if !self.cur_target {
                                     let error = self.build_error("TypeError", 0, 0);
-                                    pc = dispatch_result!(
-                                        self.raise_js(error),
-                                        pc,
-                                        self,
-                                        return_depth
-                                    );
-                                    continue;
+                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                 }
                                 self.this_val = Slot::uninitialized();
                             }
@@ -13670,8 +13681,7 @@ impl Interp {
                     // `CanDeclareGlobalFunction` (e.g. `function NaN(){}`)
                     // raises a realm `TypeError` here, before any body runs.
                     if let Err(error) = self.hoist_vars_to_global() {
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     // `fxRunEvalEnvironment` ends `the->scope = top + 1`,
                     // resetting the scope region: the hoisted vars now live
@@ -13806,13 +13816,7 @@ impl Interp {
                         .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(
-                            self.raise_js(error),
-                            pc,
-                            self,
-                            return_depth
-                        );
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     self.set_local(k, top);
@@ -13825,13 +13829,7 @@ impl Interp {
                         .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(
-                            self.raise_js(error),
-                            pc,
-                            self,
-                            return_depth
-                        );
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let v = self.pop();
                     self.set_local(k, v);
@@ -13855,8 +13853,7 @@ impl Interp {
                         // error. Mirrors the `GET_VARIABLE` unresolved arm.
                         None => {
                             let error = self.build_error("ReferenceError", 0, 0);
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     }
                 }
@@ -13909,16 +13906,7 @@ impl Interp {
                                         "ReferenceError",
                                         format!("get {}: undefined variable", self.id_name(name)),
                                     );
-                                    match self.raise_js(error) {
-                                        Ok(target) => {
-                                            pc = target;
-                                            if self.check_meter() == MeterCheck::Abort {
-                                                return Halt::MeterAbort;
-                                            }
-                                            continue;
-                                        }
-                                        Err(halt) => return halt,
-                                    }
+                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                 };
                                 self.push(v);
                                 pc += ilen;
@@ -13992,16 +13980,7 @@ impl Interp {
                                 "ReferenceError",
                                 format!("get {}: undefined variable", self.id_name(name)),
                             );
-                            match self.raise_js(error) {
-                                Ok(target) => {
-                                    pc = target;
-                                    if self.check_meter() == MeterCheck::Abort {
-                                        return Halt::MeterAbort;
-                                    }
-                                    continue;
-                                }
-                                Err(halt) => return halt,
-                            }
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     }
                     pc += ilen;
@@ -14022,16 +14001,7 @@ impl Interp {
                         // null / undefined → catchable TypeError.
                         Kind::Null | Kind::Undefined => {
                             let error = self.build_error("TypeError", 0, 0);
-                            match self.raise_js(error) {
-                                Ok(target) => {
-                                    pc = target;
-                                    if self.check_meter() == MeterCheck::Abort {
-                                        return Halt::MeterAbort;
-                                    }
-                                    continue;
-                                }
-                                Err(halt) => return halt,
-                            }
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                         // A `Number`/`Integer`/`Boolean` primitive's ToObject
                         // boxes to its `%Number.prototype%`/`%Boolean.prototype%`
@@ -14131,29 +14101,11 @@ impl Interp {
                                     }
                                     EnvironmentSet::Uninitialized => {
                                         let error = self.build_error("ReferenceError", 0, 0);
-                                        match self.raise_js(error) {
-                                            Ok(target) => {
-                                                pc = target;
-                                                if self.check_meter() == MeterCheck::Abort {
-                                                    return Halt::MeterAbort;
-                                                }
-                                                continue;
-                                            }
-                                            Err(halt) => return halt,
-                                        }
+                                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                     }
                                     EnvironmentSet::Const => {
                                         let error = self.build_error("TypeError", 0, 0);
-                                        match self.raise_js(error) {
-                                            Ok(target) => {
-                                                pc = target;
-                                                if self.check_meter() == MeterCheck::Abort {
-                                                    return Halt::MeterAbort;
-                                                }
-                                                continue;
-                                            }
-                                            Err(halt) => return halt,
-                                        }
+                                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                     }
                                     EnvironmentSet::Missing => {}
                                 }
@@ -14183,13 +14135,7 @@ impl Interp {
                             // reference). Same TypeError SET_LOCAL/SET_CLOSURE
                             // raise for the by-index forms.
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(
-                                self.raise_js(error),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     } else {
                         if !self.global_props.contains_key(&name) {
@@ -14220,13 +14166,7 @@ impl Interp {
                         );
                         if !accepted && self.strict {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(
-                                self.raise_js(error),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     }
                     // The property store itself is one built-in step
@@ -14500,13 +14440,7 @@ impl Interp {
                                     "TypeError",
                                     "iterator: not an object".into(),
                                 );
-                                pc = dispatch_result!(
-                                    self.raise_js(error),
-                                    pc,
-                                    self,
-                                    return_depth
-                                );
-                                continue;
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                             Err(halt) => return halt,
                         };
@@ -14520,7 +14454,7 @@ impl Interp {
                     if op == XS_CODE_FOR_AWAIT_OF {
                         if matches!(iterable.value, Payload::Reference(i) if self.async_generators.contains_key(&i))
                         {
-                            return self.catchable_type_error();
+                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
                         }
                     }
                     match iterable.value {
@@ -14578,8 +14512,7 @@ impl Interp {
                                 "TypeError",
                                 "call: not a function".into(),
                             );
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     }
                     pc += size as usize;
@@ -14750,8 +14683,7 @@ impl Interp {
                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
                         _ => {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
                     let flag = code[pc + ilen + 1];
@@ -14805,8 +14737,7 @@ impl Interp {
                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
                         _ => {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
                     let key = (object, brand);
@@ -14824,8 +14755,7 @@ impl Interp {
                         }
                     } else {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     };
                     self.push(value);
                     pc += ilen;
@@ -14842,8 +14772,7 @@ impl Interp {
                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
                         _ => {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
                     let key = (object, brand);
@@ -14861,14 +14790,12 @@ impl Interp {
                             }
                             None => {
                                 let error = self.build_error("TypeError", 0, 0);
-                                pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                                continue;
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                         }
                     } else {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(value);
                     pc += ilen;
@@ -14888,8 +14815,7 @@ impl Interp {
                         }
                         _ => {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
                     self.push(Slot::boolean(present));
@@ -14916,16 +14842,7 @@ impl Interp {
                             );
                             if !accepted && self.strict {
                                 let error = self.build_error("TypeError", 0, 0);
-                                match self.raise_js(error) {
-                                    Ok(target) => {
-                                        pc = target;
-                                        if self.check_meter() == MeterCheck::Abort {
-                                            return Halt::MeterAbort;
-                                        }
-                                        continue;
-                                    }
-                                    Err(halt) => return halt,
-                                }
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                         } else if self.arrays.contains_key(&inst)
                             && !self.arguments_objects.contains(&inst)
@@ -14940,13 +14857,7 @@ impl Interp {
                             if !self.array_length_writable(inst) {
                                 if self.strict {
                                     let error = self.build_error("TypeError", 0, 0);
-                                    match self.raise_js(error) {
-                                        Ok(target) => {
-                                            pc = target;
-                                            continue;
-                                        }
-                                        Err(halt) => return halt,
-                                    }
+                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                 }
                                 self.push(value);
                                 pc += ilen;
@@ -14967,13 +14878,7 @@ impl Interp {
                             );
                             if !accepted && self.strict {
                                 let error = self.build_error("TypeError", 0, 0);
-                                match self.raise_js(error) {
-                                    Ok(target) => {
-                                        pc = target;
-                                        continue;
-                                    }
-                                    Err(halt) => return halt,
-                                }
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                         } else if !dispatch_result!(
                             self.ordinary_set(code, inst, id, value, obj),
@@ -14991,16 +14896,7 @@ impl Interp {
                             // callee throws a realm-local, catchable TypeError.
                             if self.strict {
                                 let error = self.build_error("TypeError", 0, 0);
-                                match self.raise_js(error) {
-                                    Ok(target) => {
-                                        pc = target;
-                                        if self.check_meter() == MeterCheck::Abort {
-                                            return Halt::MeterAbort;
-                                        }
-                                        continue;
-                                    }
-                                    Err(halt) => return halt,
-                                }
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                         }
                     }
@@ -15177,24 +15073,14 @@ impl Interp {
                                 // (`GetViewByteLength` → out of bounds). `buffer`
                                 // returns the (detached) reference unconditionally.
                                 if self.detached_buffers.contains(&dv.buffer) {
-                                    dispatch_result!(
-                                        Err::<Slot, Halt>(self.catchable_type_error()),
-                                        pc,
-                                        self,
-                                        return_depth
-                                    )
+                                    dispatch_halt!(self.catchable_type_error(), pc, self, return_depth)
                                 } else {
                                     self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
                                     Slot::integer(dv.size as i32)
                                 }
                             } else if Some(id) == self.byte_offset_id {
                                 if self.detached_buffers.contains(&dv.buffer) {
-                                    dispatch_result!(
-                                        Err::<Slot, Halt>(self.catchable_type_error()),
-                                        pc,
-                                        self,
-                                        return_depth
-                                    )
+                                    dispatch_halt!(self.catchable_type_error(), pc, self, return_depth)
                                 } else {
                                     self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
                                     Slot::integer(dv.offset as i32)
@@ -15411,16 +15297,7 @@ impl Interp {
                             // yields `false` (fully modeled below).
                             if !deleted && self.strict {
                                 let error = self.build_error("TypeError", 0, 0);
-                                match self.raise_js(error) {
-                                    Ok(target) => {
-                                        pc = target;
-                                        if self.check_meter() == MeterCheck::Abort {
-                                            return Halt::MeterAbort;
-                                        }
-                                        continue;
-                                    }
-                                    Err(halt) => return halt,
-                                }
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                             if let Some(s) = self.stack.last_mut() {
                                 *s = Slot::boolean(deleted);
@@ -15428,13 +15305,7 @@ impl Interp {
                         }
                         _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
                             let error = self.build_error("TypeError", 0, 0);
-                            match self.raise_js(error) {
-                                Ok(target) => {
-                                    pc = target;
-                                    continue;
-                                }
-                                Err(halt) => return halt,
-                            }
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                         // ToObject succeeds for every other primitive. Such a
                         // temporary wrapper has no configurable own property
@@ -15516,13 +15387,7 @@ impl Interp {
                         }
                         _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
                             let error = self.build_error("TypeError", 0, 0);
-                            match self.raise_js(error) {
-                                Ok(target) => {
-                                    pc = target;
-                                    continue;
-                                }
-                                Err(halt) => return halt,
-                            }
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                         // String wrapper index properties are non-configurable.
                         Payload::String(off) if numeric_index.is_some() => {
@@ -15532,13 +15397,7 @@ impl Interp {
                     };
                     if !deleted && self.strict {
                         let error = self.build_error("TypeError", 0, 0);
-                        match self.raise_js(error) {
-                            Ok(target) => {
-                                pc = target;
-                                continue;
-                            }
-                            Err(halt) => return halt,
-                        }
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(Slot::boolean(deleted));
                     pc += size as usize;
@@ -15720,8 +15579,7 @@ impl Interp {
                         }
                         _ => {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
                     let proto = self.slots.alloc(Slot::instance(parent_proto));
@@ -15855,8 +15713,7 @@ impl Interp {
                     let parent = self.instance_prototype(self.cur_func);
                     if parent.is_null() || !self.functions.contains_key(&parent) {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.pending_new_target = Some(self.target_func);
                     self.push(Slot::uninitialized());
@@ -15980,11 +15837,10 @@ impl Interp {
                         }
                     });
                     if let Some((f, base)) = promise_fn {
-                        let result = if has_target {
-                            Err(self.catchable_type_error())
-                        } else {
-                            self.call_promise_function(code, f, base, argc)
-                        };
+                        if has_target {
+                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
+                        }
+                        let result = self.call_promise_function(code, f, base, argc);
                         dispatch_result!(
                             result,
                             pc,
@@ -16015,17 +15871,7 @@ impl Interp {
                         // throw a catchable TypeError, not trampoline.
                         let _ = base;
                         if has_target {
-                            dispatch_result!(
-                                Err::<(), Halt>(self.catchable_type_error()),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            if self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
-                            }
-                            pc = ret_pc;
-                            continue;
+                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
                         }
                         // A native receiver can be dispatched in place; a user
                         // receiver re-enters its bytecode frame through the
@@ -16065,17 +15911,7 @@ impl Interp {
                         // a constructor: `new fn.apply()` throws a catchable
                         // TypeError rather than trampolining.
                         if has_target {
-                            dispatch_result!(
-                                Err::<(), Halt>(self.catchable_type_error()),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            if self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
-                            }
-                            pc = ret_pc;
-                            continue;
+                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
                         }
                         // A native receiver dispatches in place (dense-array or
                         // no-array argument shapes); a user receiver re-enters
@@ -16124,17 +15960,7 @@ impl Interp {
                         // reject a direct `new method()` just as the
                         // `Reflect.construct` constructor gate already does.
                         if has_target {
-                            dispatch_result!(
-                                Err::<(), Halt>(self.catchable_type_error()),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            if self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
-                            }
-                            pc = ret_pc;
-                            continue;
+                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
                         }
                         dispatch_result!(
                             self.call_native_method(m, base, argc, code),
@@ -16156,17 +15982,7 @@ impl Interp {
                             // ultimate target with the bound args prepended
                             // (`new.target` → the ultimate target).
                             if !self.slot_is_constructor(bf) {
-                                dispatch_result!(
-                                    Err::<(), Halt>(self.catchable_type_error()),
-                                    pc,
-                                    self,
-                                    return_depth
-                                );
-                                if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
-                                }
-                                pc = ret_pc;
-                                continue;
+                                dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
                             }
                             match self.enter_construct_bound(bf, base, argc, ret_pc) {
                                 Ok(body_start) => {
@@ -16333,13 +16149,7 @@ impl Interp {
                             let s = self.slots.get(cell);
                             if s.kind == Kind::Uninitialized {
                                 let error = self.build_error("ReferenceError", 0, 0);
-                                pc = dispatch_result!(
-                                    self.raise_js(error),
-                                    pc,
-                                    self,
-                                    return_depth
-                                );
-                                continue;
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
@@ -16373,13 +16183,7 @@ impl Interp {
                         .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(
-                            self.raise_js(error),
-                            pc,
-                            self,
-                            return_depth
-                        );
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     self.write_closure_cell(k, top);
@@ -16441,13 +16245,7 @@ impl Interp {
                         .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(
-                            self.raise_js(error),
-                            pc,
-                            self,
-                            return_depth
-                        );
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let v = self.pop();
                     self.write_closure_cell(k, v);
@@ -16899,13 +16697,7 @@ impl Interp {
                     // fast kind for every other integral conversion.
                     if a.kind == Kind::BigInt {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(
-                            self.raise_js(error),
-                            pc,
-                            self,
-                            return_depth
-                        );
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(a);
                     pc += size as usize;
@@ -16936,8 +16728,7 @@ impl Interp {
                 XS_CODE_GET_THIS => {
                     if self.this_val.kind == Kind::Uninitialized {
                         let error = self.build_error("ReferenceError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(self.this_val);
                     pc += size as usize;
@@ -16982,8 +16773,7 @@ impl Interp {
                 XS_CODE_SET_THIS => {
                     if self.this_val.kind != Kind::Uninitialized {
                         let error = self.build_error("ReferenceError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.this_val = self.stack.last().copied().unwrap_or_else(Slot::undefined);
                     for capture in self.this_captures.drain(..) {
@@ -17013,8 +16803,7 @@ impl Interp {
                     // (ECMA-262 6.2.5.5), raised at use, after key evaluation.
                     if base.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let value = dispatch_result!(
                         self.ordinary_get(code, base, id, receiver),
@@ -17046,8 +16835,7 @@ impl Interp {
                     // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
                     if super_ref.next.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let value = dispatch_result!(
                         self.ordinary_get(code, super_ref.next, id, receiver),
@@ -17076,8 +16864,7 @@ impl Interp {
                     // (ECMA-262 6.2.5.6), raised after the RHS has evaluated.
                     if base.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, base, id, value, receiver),
@@ -17087,8 +16874,7 @@ impl Interp {
                     );
                     if !accepted {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(value);
                     pc += ilen;
@@ -17116,8 +16902,7 @@ impl Interp {
                     // after both the key and the RHS have evaluated.
                     if super_ref.next.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, super_ref.next, id, value, receiver),
@@ -17127,8 +16912,7 @@ impl Interp {
                     );
                     if !accepted {
                         let error = self.build_error("TypeError", 0, 0);
-                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                        continue;
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(value);
                     pc += size as usize;
@@ -17339,13 +17123,7 @@ impl Interp {
                         }
                         (Kind::BigInt, _) | (_, Kind::BigInt) => {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(
-                                self.raise_js(error),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                         _ => self.push(Slot::number(fx_pow(to_number(&a), to_number(&b)))),
                     }
@@ -17395,13 +17173,7 @@ impl Interp {
                         Payload::Reference(r) => r,
                         _ => {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(
-                                self.raise_js(error),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
                     // The spec checks that the RHS is an object before
@@ -18304,8 +18076,7 @@ impl Interp {
                             Payload::Reference(inst) if resource.kind == Kind::Reference => inst,
                             _ => {
                                 let error = self.build_error("TypeError", 0, 0);
-                                pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                                continue;
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                         };
                         let mut value = Slot::undefined();
@@ -18336,8 +18107,7 @@ impl Interp {
                         }
                         if !self.is_callable_value(value) {
                             let error = self.build_error("TypeError", 0, 0);
-                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
-                            continue;
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                         value
                     };
@@ -18862,10 +18632,7 @@ impl Interp {
             // target as though it were a function.
             _ => {
                 let error = self.build_error("TypeError", 0, 0);
-                return match self.raise_js(error) {
-                    Ok(target) => Err(Halt::Resume(target)),
-                    Err(halt) => Err(halt),
-                };
+                return Err(self.raise_js(error));
             }
         };
         // The single choke point every user-function dispatch funnels through.
@@ -19296,9 +19063,7 @@ impl Interp {
         match status {
             GenStatus::Next => Ok(self.new_generator_result(Slot::undefined(), true)),
             GenStatus::Return => Ok(self.new_generator_result(sent, true)),
-            GenStatus::Throw => self
-                .raise_js(sent)
-                .and_then(|target| Err(Halt::Resume(target))),
+            GenStatus::Throw => Err(self.raise_js(sent)),
         }
     }
 
@@ -25827,10 +25592,7 @@ impl Interp {
             let value_id = self.intern_key("[[PromiseFinallyValue]]");
             let value = self.instance_get(data.promise, value_id);
             if data.reject {
-                return match self.raise_js(value) {
-                    Ok(target) => Err(Halt::Resume(target)),
-                    Err(halt) => Err(halt),
-                };
+                return Err(self.raise_js(value));
             }
             return Ok(value);
         }
@@ -26271,10 +26033,7 @@ impl Interp {
         self.jumps = saved_jumps;
         match outcome {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => match self.raise_js(error) {
-                Ok(target) => Err(Halt::Resume(target)),
-                Err(halt) => Err(halt),
-            },
+            Ok(Err(error)) => Err(self.raise_js(error)),
             Err(halt) => Err(halt),
         }
     }
@@ -26291,10 +26050,7 @@ impl Interp {
         self.jumps = saved_jumps;
         match outcome {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => match self.raise_js(error) {
-                Ok(target) => Err(Halt::Resume(target)),
-                Err(halt) => Err(halt),
-            },
+            Ok(Err(error)) => Err(self.raise_js(error)),
             Err(halt) => Err(halt),
         }
     }
@@ -29885,10 +29641,7 @@ impl Interp {
             )?;
             Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
         } else if let Some(error) = pending_error {
-            match self.raise_js(error) {
-                Ok(target) => Err(Halt::Resume(target)),
-                Err(halt) => Err(halt),
-            }
+            Err(self.raise_js(error))
         } else {
             Ok(Slot::undefined())
         }
@@ -35471,10 +35224,7 @@ impl Interp {
         self.jumps = saved_jumps;
         match outcome {
             Ok(Ok(values)) => Ok(values),
-            Ok(Err(error)) => match self.raise_js(error) {
-                Ok(target) => Err(Halt::Resume(target)),
-                Err(halt) => Err(halt),
-            },
+            Ok(Err(error)) => Err(self.raise_js(error)),
             Err(halt) => Err(halt),
         }
     }
@@ -35896,10 +35646,7 @@ impl Interp {
         self.jumps = saved_jumps;
         match outcome {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => match self.raise_js(error) {
-                Ok(target) => Err(Halt::Resume(target)),
-                Err(halt) => Err(halt),
-            },
+            Ok(Err(error)) => Err(self.raise_js(error)),
             Err(halt) => Err(halt),
         }
     }
@@ -37748,10 +37495,7 @@ impl Interp {
 
     fn catchable_range_error(&mut self) -> Halt {
         let error = self.build_error("RangeError", 0, 0);
-        match self.raise_js(error) {
-            Ok(target) => Halt::Resume(target),
-            Err(halt) => halt,
-        }
+        self.raise_js(error)
     }
 
     /// String constructor statics. Both consume numeric arguments through
@@ -38680,10 +38424,7 @@ impl Interp {
         self.jumps = saved_jumps;
         match outcome {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => match self.raise_js(error) {
-                Ok(target) => Err(Halt::Resume(target)),
-                Err(halt) => Err(halt),
-            },
+            Ok(Err(error)) => Err(self.raise_js(error)),
             Err(halt) => Err(halt),
         }
     }
@@ -45351,15 +45092,13 @@ impl Interp {
                 } else if self.result.kind == Kind::Undefined {
                     if self.this_val.kind == Kind::Uninitialized {
                         let error = self.build_error("ReferenceError", 0, 0);
-                        self.raise_js(error)
-                            .and_then(|target| Err(Halt::Resume(target)))
+                        Err(self.raise_js(error))
                     } else {
                         Ok(self.this_val)
                     }
                 } else {
                     let error = self.build_error("TypeError", 0, 0);
-                    self.raise_js(error)
-                        .and_then(|target| Err(Halt::Resume(target)))
+                    Err(self.raise_js(error))
                 }
             }
             _ if self.result.kind != Kind::Reference => Ok(self.this_val),
@@ -45446,16 +45185,25 @@ impl Interp {
     /// chain as the `throw` opcode.  Native semantic failures must use this
     /// path so `try`/`catch`/`finally` can observe the realm-correct Error
     /// object instead of seeing an uncatchable host-side `Unsupported` halt.
-    fn raise_js(&mut self, value: Slot) -> Result<usize, Halt> {
+    ///
+    /// The result is always a control transfer for the enclosing dispatch
+    /// loop to consume: `Halt::Resume(target)` when a handler caught the
+    /// value (the loop that OWNS the handler's frame resumes there, which
+    /// [`dispatch_halt!`]'s depth test decides), or `Halt::Throw` when the
+    /// chain is empty and the throw escapes to the host. Yielding the caught
+    /// case as `Resume` rather than a bare `Ok(target)` is what makes the
+    /// depth test unskippable: a raise site cannot assign the target to its
+    /// own `pc` without going through the macro.
+    fn raise_js(&mut self, value: Slot) -> Halt {
         self.exception = value;
         match self.unwind_to_jump() {
-            Some(target) => Ok(target),
+            Some(target) => Halt::Resume(target),
             None => {
                 // Uncaught: the host-escape leaves the machine
                 // post-throw ([`Self::unwind_to_jump`] disarmed the
                 // pending new-target for every escape path, W6-15).
                 self.meter_host_escape();
-                Err(Halt::Throw(self.render(&value)))
+                Halt::Throw(self.render(&value))
             }
         }
     }
@@ -45465,10 +45213,7 @@ impl Interp {
     /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
     fn catchable_type_error(&mut self) -> Halt {
         let error = self.build_error("TypeError", 0, 0);
-        match self.raise_js(error) {
-            Ok(target) => Halt::Resume(target),
-            Err(halt) => halt,
-        }
+        self.raise_js(error)
     }
 
     /// Raise a realm-local, catchable `SyntaxError` from a native helper —
@@ -45479,10 +45224,7 @@ impl Interp {
     /// uncatchable host `Unsupported` halt.
     fn catchable_syntax_error(&mut self) -> Halt {
         let error = self.build_error("SyntaxError", 0, 0);
-        match self.raise_js(error) {
-            Ok(target) => Halt::Resume(target),
-            Err(halt) => halt,
-        }
+        self.raise_js(error)
     }
 
     /// As [`Self::catchable_syntax_error`], but carrying XS's parser diagnostic
@@ -45495,10 +45237,7 @@ impl Interp {
             return self.catchable_syntax_error();
         }
         let error = self.internal_error("SyntaxError", message);
-        match self.raise_js(error) {
-            Ok(target) => Halt::Resume(target),
-            Err(halt) => halt,
-        }
+        self.raise_js(error)
     }
 
     /// Adjust the meter for an uncaught throw escaping to the host: the
@@ -48181,10 +47920,7 @@ impl Interp {
         self.jumps = saved_jumps;
         match outcome {
             Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) => match self.raise_js(error) {
-                Ok(target) => Err(Halt::Resume(target)),
-                Err(halt) => Err(halt),
-            },
+            Ok(Err(error)) => Err(self.raise_js(error)),
             Err(halt) => Err(halt),
         }
     }
