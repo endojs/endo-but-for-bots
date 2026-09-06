@@ -1329,11 +1329,7 @@ export const makeMailboxMaker = ({
           throw new Error(`Missing value for field ${q(name)}`);
         }
         const effectivePattern = pattern !== undefined ? pattern : M.string();
-        mustMatch(
-          values[name],
-          /** @type {import('@endo/patterns').Pattern} */ (effectivePattern),
-          `field ${q(name)}`,
-        );
+        mustMatch(values[name], effectivePattern, `field ${q(name)}`);
       }
 
       // Marshal the values record.
