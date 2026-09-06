@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { ToolRecord } from '@endo/agent-tools' */
+/** @import { ToolRecord, ToolMakerOptions } from '@endo/agent-tools' */
 /** @import { CodeModeGlobal, Evaluate, EvaluateInput, EvaluateWithStoreValue, StoreValue } from './types.js' */
 
 import { makeTool } from '../tool.js';
@@ -56,9 +56,15 @@ const isResultName = value =>
  * @param {CodeModeGlobal[]} globals
  * @param {StoreValue | boolean} [storeValue] Storage authority, or `true` for
  *   a host that stores through another mechanism.
+ * @param {ToolMakerOptions} [options] Model-result presentation policy.
  * @returns {ToolRecord}
  */
-export const makeEvaluateTool = (evaluate, globals, storeValue) => {
+export const makeEvaluateTool = (
+  evaluate,
+  globals,
+  storeValue,
+  options = {},
+) => {
   const normalized = normalizeGlobals(globals);
   const evaluateWithStore = /** @type {EvaluateWithStoreValue} */ (evaluate);
   const hasStoreValue =
@@ -71,6 +77,7 @@ export const makeEvaluateTool = (evaluate, globals, storeValue) => {
     description:
       'Evaluate JavaScript source with the code-mode powers in lexical scope.',
     parameters,
+    resultPolicy: options.resultPolicy,
     execute: async args => {
       const { source, resultName } = args;
       if (typeof source !== 'string') {

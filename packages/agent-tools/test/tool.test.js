@@ -27,9 +27,34 @@ test('makeTool produces the advertised record shape', t => {
   t.is(tool.description, 'Echo its argument back.');
   t.is(tool.inputSchema, tool.parameters);
   t.is(typeof tool.invoke, 'function');
+  t.is(tool.resultPolicy, undefined);
   t.truthy(Object.isFrozen(tool));
   t.truthy(Object.isFrozen(parameters));
   t.truthy(Object.isFrozen(parameters.properties));
+});
+
+test('makeTool carries and hardens the model-result policy', t => {
+  const policy = { maxBytes: 64 };
+  const tool = makeTool({
+    name: 'bounded',
+    description: 'A bounded result.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    resultPolicy: policy,
+    execute: async () => 'result',
+  });
+
+  t.deepEqual(tool.resultPolicy, policy);
+  t.not(tool.resultPolicy, policy);
+  t.true(Object.isFrozen(tool.resultPolicy));
+  t.throws(() =>
+    makeTool({
+      name: 'invalid',
+      description: 'Invalid.',
+      parameters: { type: 'object', properties: {}, required: [] },
+      resultPolicy: { maxBytes: 0 },
+      execute: async () => 'result',
+    }),
+  );
 });
 
 test('invoke runs execute when no argGuards are supplied', async t => {

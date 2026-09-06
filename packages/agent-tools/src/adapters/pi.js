@@ -5,6 +5,9 @@
 /** @import { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core' */
 /** @import { ToolRecord } from '../types.js' */
 
+/** @type {TextEncoder} */
+const encoder = new TextEncoder();
+
 /**
  * `renderCall`/`renderResult` are typed opaquely here: this package does not
  * depend on Pi's TUI, so it neither knows nor constrains their real
@@ -30,6 +33,75 @@
  */
 const defaultRenderToolResult = result =>
   typeof result === 'string' ? result : JSON.stringify(result);
+
+/**
+ * Return the longest whole-code-point prefix whose UTF-8 encoding fits.
+ *
+ * @param {string} text
+ * @param {number} maxBytes
+ * @returns {{ text: string, bytes: number }}
+ */
+const utf8Prefix = (text, maxBytes) => {
+  let bytes = 0;
+  let end = 0;
+  for (const codePoint of text) {
+    const codePointBytes = encoder.encode(codePoint).length;
+    if (bytes + codePointBytes > maxBytes) break;
+    bytes += codePointBytes;
+    end += codePoint.length;
+  }
+  return { text: text.slice(0, end), bytes };
+};
+
+/**
+ * Apply a ToolRecord's policy to already-rendered model text.
+ *
+ * The marker is included in the byte budget. Its counters describe the exact
+ * UTF-8 byte counts known at this adapter boundary; no source-level result
+ * metadata is inferred or rewritten.
+ *
+ * @param {string} text
+ * @param {number} maxBytes
+ * @returns {string}
+ */
+const limitModelText = (text, maxBytes) => {
+  const totalBytes = encoder.encode(text).length;
+  if (totalBytes <= maxBytes) return text;
+
+  const makeDetailedMarker = retainedBytes =>
+    `\n[truncated: retained ${retainedBytes} bytes; omitted ${totalBytes - retainedBytes} bytes; total ${totalBytes} bytes]`;
+  const fallbackMarker = '[truncated]';
+  const smallestMarker = '[!]';
+  const markerBytes = marker => encoder.encode(marker).length;
+  const markerFor = retainedBytes => {
+    const detailed = makeDetailedMarker(retainedBytes);
+    if (markerBytes(detailed) <= maxBytes) return detailed;
+    if (markerBytes(fallbackMarker) <= maxBytes) return fallbackMarker;
+    if (markerBytes(smallestMarker) <= maxBytes) return smallestMarker;
+    throw new RangeError(
+      'resultPolicy.maxBytes is too small to include a truncation marker',
+    );
+  };
+
+  // The detailed marker contains the retained count, so solve the small
+  // budget equation to a fixed point. The fallback markers make the result
+  // stable immediately for unusually small policy limits.
+  let retainedBudget = maxBytes;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const prefix = utf8Prefix(text, retainedBudget);
+    const marker = markerFor(prefix.bytes);
+    const nextBudget = maxBytes - markerBytes(marker);
+    if (nextBudget === retainedBudget) {
+      return `${prefix.text}${marker}`;
+    }
+    retainedBudget = nextBudget;
+  }
+
+  const prefix = utf8Prefix(text, retainedBudget);
+  const marker = markerFor(prefix.bytes);
+  const finalPrefix = utf8Prefix(text, maxBytes - markerBytes(marker));
+  return `${finalPrefix.text}${markerFor(finalPrefix.bytes)}`;
+};
 
 /**
  * Bridge a provider-independent {@link ToolRecord} into a pi-agent-core
@@ -74,9 +146,17 @@ export const toPiAgentTool = (tool, options = {}) => {
         /** @type {Record<string, unknown>} */ (params ?? {}),
         { signal },
       );
+      const rendered = renderToolResult(result);
       /** @type {AgentToolResult<unknown>} */
       const toolResult = {
-        content: [{ type: 'text', text: renderToolResult(result) }],
+        content: [
+          {
+            type: 'text',
+            text: tool.resultPolicy
+              ? limitModelText(rendered, tool.resultPolicy.maxBytes)
+              : rendered,
+          },
+        ],
         details: result,
       };
       return toolResult;
