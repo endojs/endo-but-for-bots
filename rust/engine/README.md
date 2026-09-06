@@ -178,6 +178,42 @@ cargo run -p ironhorse-262 --bin endot-ih -- built-ins/Boolean
 cargo run -p ironhorse-262 --bin endot-ih -- -o report.yaml built-ins/Math
 ```
 
+### What the differential may skip: the halt taxonomy and its registry
+
+Both differential instruments (the fuzz targets' `differential_check*`
+bodies and `endot-ih`'s verdict arms) compare a run only after asking how
+ironhorse halted, and the answer decides whether the oracle gets to judge it:
+
+- `Halt::Unsupported(label)` — the engine **declined**: an unported opcode,
+  built-in, or value shape, or a deliberate value-dependent refusal.
+  This is the **only** skip-eligible halt (`unsupported-opcode:<label>` in the
+  report). Because that makes the label set an exemption the engine grants
+  itself, the set is pinned: `ironhorse-vm/tests/halt_label_registry.rs`
+  parses the engine sources and fails on any label that is not classified
+  there, so a new refusal is a visible registry edit rather than a string in a
+  `return`.
+- `Halt::EngineInvariant(label)` — the engine's **own state is wrong**: a
+  value-stack or frame underflow, a suspended generator or async instance with
+  no saved frame, a resolving function the promise machinery does not
+  recognize, a dispatch that reached a method routed elsewhere.
+  On oracle-produced bytecode this is a defect in the port, so it is a hard
+  failure at every discard site (`engine-invariant:<label>` in the report, a
+  `Divergence` in the fuzz targets), whatever the oracle then did.
+- An uncaught `Halt::Throw` where the oracle **completed** is a wrong answer,
+  not a limitation: test262 positive cases signal failure by throwing, so a
+  `Test262Error` here is ironhorse failing an assertion XS passes, and any
+  other error is one the oracle did not throw.
+  The one honest shape is the engine's `ReferenceError: get <Name>: undefined
+  variable` for a `<Name>` the assembled source never declares — the reference
+  engine bound a host intrinsic the port has not landed — reported as the named
+  skip `ironhorse-missing-global:<Name>`.
+  A shared abort where the oracle threw a native error constructor and
+  ironhorse threw a different one is likewise a failure (`abort-type
+  divergence`); the same constructor with a different message stays the
+  `abort-value-differs` skip until engine errors carry messages.
+- The engine's own limits (`StackOverflow`, `MeterAbort`, `StepLimit`) the
+  oracle cannot share stay the named skip `ironhorse-aborted-limit`.
+
 The stage-scoped curated corpora under `ironhorse-262/corpora/` are the
 bootstrap (stage-1 arithmetic/logic/control-flow; stage-2 var/loop/object;
 stage-2b functions/closures/exceptions; stage-3 language string values +

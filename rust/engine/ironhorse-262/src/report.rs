@@ -195,6 +195,7 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
                 || reason.starts_with("builtin-coercion-computron-gap")
                 || reason.starts_with("abort-value-differs")
                 || reason.starts_with("ironhorse-aborted")
+                || reason.starts_with("ironhorse-missing-global:")
                 || reason.starts_with("negative-")
                 || reason.starts_with("async:")
                 || reason == "shared-test262-failure"
@@ -202,7 +203,8 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
             {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
-                // ironhorse-aborted*, negative-*:pending-compiler,
+                // ironhorse-aborted*, ironhorse-missing-global:* (a host
+                // intrinsic the port has not landed), negative-*:pending-compiler,
                 // negative-type-unmatched:*, async:*, and
                 // compiler-unimplemented:* (an ironhorse-compile construct not
                 // yet ported) — all Ironhorse coverage gaps.

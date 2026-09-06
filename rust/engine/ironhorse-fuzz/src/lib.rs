@@ -1683,6 +1683,39 @@ fn as_ecma_number(s: &str) -> Option<f64> {
     s.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
+/// The one decision every differential body makes before comparing anything:
+/// does ironhorse's halt take the run out of the comparison, and in which
+/// direction?
+///
+/// * [`Halt::Unsupported`] is the **only** skip-eligible halt (`Some(Ok(()))`):
+///   the engine declined an unported opcode, built-in, or value shape, so the
+///   program is uncovered ground, not a finding. That label set is pinned by
+///   `ironhorse-vm/tests/halt_label_registry.rs`, so the engine cannot widen
+///   its own exemption by adding a label.
+/// * [`Halt::EngineInvariant`] is **never** skip-eligible (`Some(Err(_))`):
+///   one of the interpreter's own guards (a value-stack or frame underflow, a
+///   suspended instance with no frame, an unrecognized resolving function)
+///   fired on bytecode the oracle compiled and ran. That is a defect in the
+///   port whatever the oracle then did — it is reported even when the oracle
+///   also aborted, where the completion comparison alone would agree, and it
+///   is reported before the oracle's truncated-result carve-out, which is
+///   about the oracle's capture buffer and says nothing about the engine.
+/// * Anything else (`None`) proceeds to the completion / result / computron
+///   comparison.
+///
+/// [`Halt::Unsupported`]: ironhorse_vm::Halt::Unsupported
+/// [`Halt::EngineInvariant`]: ironhorse_vm::Halt::EngineInvariant
+fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), Divergence>> {
+    match halt {
+        ironhorse_vm::Halt::Unsupported(_) => Some(Ok(())),
+        ironhorse_vm::Halt::EngineInvariant(label) => Some(Err(Divergence {
+            source: source.to_string(),
+            detail: format!("engine invariant violated: {label}"),
+        })),
+        _ => None,
+    }
+}
+
 /// Target 1 body: run `source` on both engines, returning `Err` on any
 /// completion / result / computron divergence. `Ok(())` also covers the
 /// legitimate "ironhorse reached an opcode outside the stage-1 subset" case
@@ -1695,9 +1728,10 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
     };
     let ironhorse = run_program(&oracle.bytecode);
 
-    // Out-of-subset opcode: not a divergence, just uncovered ground.
-    if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
-        return Ok(());
+    // Out-of-subset opcode: not a divergence, just uncovered ground. An
+    // engine-invariant halt is the opposite: a finding before any comparison.
+    if let Some(verdict) = halt_precheck(source, &ironhorse.halt) {
+        return verdict;
     }
 
     if oracle.completed != ironhorse.completed {
@@ -1745,8 +1779,8 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
         None => return Ok(()),
     };
     let ironhorse = ironhorse_vm::run_program_with_symbols(&oracle.bytecode, &oracle.symbols);
-    if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
-        return Ok(());
+    if let Some(verdict) = halt_precheck(source, &ironhorse.halt) {
+        return verdict;
     }
     // The oracle captures the completion value into a fixed-size buffer; when
     // the value is longer than that buffer, `oracle.result` is a truncated
@@ -1802,8 +1836,8 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
         None => return Ok(()),
     };
     let ironhorse = run_program(&oracle.bytecode);
-    if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
-        return Ok(());
+    if let Some(verdict) = halt_precheck(source, &ironhorse.halt) {
+        return verdict;
     }
     // A completion value longer than the oracle's fixed capture buffer is a
     // truncated prefix on the oracle side; comparing it against the port's
@@ -1987,6 +2021,42 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The discard decision every differential body makes first: a declined
+    /// (`Unsupported`) halt is the one honest skip; an engine-invariant halt
+    /// is a finding before any comparison, so it cannot hide behind an
+    /// oracle that also aborted; everything else goes on to be compared.
+    #[test]
+    fn halt_precheck_skips_only_declined_halts() {
+        use ironhorse_vm::Halt;
+        assert!(matches!(
+            halt_precheck("1", &Halt::Unsupported("XS_CODE_FOO")),
+            Some(Ok(()))
+        ));
+        match halt_precheck("1", &Halt::EngineInvariant("add:stack-underflow")) {
+            Some(Err(divergence)) => {
+                assert_eq!(divergence.source, "1");
+                assert_eq!(
+                    divergence.detail,
+                    "engine invariant violated: add:stack-underflow"
+                );
+            }
+            other => panic!("engine invariant must be a divergence, got {other:?}"),
+        }
+        for halt in [
+            Halt::Return,
+            Halt::Throw("TypeError".into()),
+            Halt::MeterAbort,
+            Halt::StepLimit(1),
+            Halt::StackOverflow(1),
+            Halt::Decode("short".into()),
+        ] {
+            assert!(
+                halt_precheck("1", &halt).is_none(),
+                "{halt:?} must proceed to the comparison"
+            );
+        }
+    }
 
     /// Regression for continuous-fuzz finding `66facfd52ae8c673` (target
     /// `differential_source`). The exact 3-byte minimized input folds into

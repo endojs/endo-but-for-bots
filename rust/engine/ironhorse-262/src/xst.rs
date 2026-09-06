@@ -459,9 +459,12 @@ fn evaluate(cfg: &Config, source: &str, fm: &Frontmatter, meter_exact_gate: bool
 }
 
 fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Verdict {
-    // Structural ironhorse stops name themselves — the honest skip.
+    // Structural ironhorse stops name themselves — the honest skip. An
+    // engine-invariant halt is the opposite and is decided first: the engine
+    // reports its own state as wrong, which no agreement shape can excuse.
     match &run.ironhorse_halt {
         Halt::Unsupported(op) => return Verdict::RunSkip(format!("unsupported-opcode:{}", op)),
+        Halt::EngineInvariant(label) => return engine_invariant_failure(label),
         Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
@@ -502,7 +505,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
             }
         }
         Agreement::BothAbort => match &run.ironhorse_halt {
-            Halt::Throw(_) => {
+            Halt::Throw(thrown) => {
                 if run.error_agrees {
                     // A meter-exact gate outranks every abort disposition: an
                     // armed case that burns a different computron budget is a
@@ -521,13 +524,29 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                         Verdict::Covered
                     }
                 } else {
-                    // Both aborted but ironhorse threw a different value — the
-                    // oracle's real Error object ironhorse does not construct, a
-                    // built-in gap, not a covered-grammar divergence. An oracle
-                    // `Test262Error` paired with a divergent ironhorse throw
-                    // lands here, not in `shared-test262-failure`: nothing is
-                    // actually shared, so the divergence stays visible.
-                    Verdict::RunSkip("abort-value-differs".into())
+                    let oracle_ctor = constructor_name(&run.oracle_error);
+                    let ironhorse_ctor = constructor_name(thrown);
+                    if is_native_error_constructor(oracle_ctor) && oracle_ctor != ironhorse_ctor {
+                        // The oracle threw a native error constructor ironhorse
+                        // claims to implement, and ironhorse threw a different
+                        // one (or the harness's `Test262Error`): the error
+                        // model diverged, which is a wrong answer the bar
+                        // forbids, not a built-in gap.
+                        Verdict::Fail(format!(
+                            "abort-type divergence: oracle threw {:?} ironhorse threw {:?}",
+                            run.oracle_error, thrown
+                        ))
+                    } else {
+                        // Both aborted with the same constructor but a different
+                        // message (the port's engine errors carry no text yet),
+                        // or the oracle threw a value ironhorse does not
+                        // construct — a built-in gap, not a covered-grammar
+                        // divergence. An oracle `Test262Error` paired with a
+                        // divergent ironhorse throw lands here, not in
+                        // `shared-test262-failure`: nothing is actually shared,
+                        // so the divergence stays visible.
+                        Verdict::RunSkip("abort-value-differs".into())
+                    }
                 }
             }
             // ironhorse aborted for a limit reason (stack/meter) the oracle
@@ -615,9 +634,122 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                 Verdict::RunSkip("oracle-gate-off:ironhorse-only-complete".into())
             }
         }
-        // ironhorse aborted where the oracle completed — an ironhorse limitation.
-        Agreement::OracleOnlyComplete => Verdict::RunSkip("ironhorse-aborted".into()),
+        // ironhorse aborted where the oracle completed. Which way this goes
+        // depends on the halt, so the arm inspects it rather than skipping
+        // unconditionally: test262 positive cases signal failure by
+        // *throwing*, so an uncaught ironhorse throw on a program the oracle
+        // ran to completion is the dominant wrong-answer shape of a
+        // conformance run, not a limitation.
+        Agreement::OracleOnlyComplete => match &run.ironhorse_halt {
+            Halt::Throw(thrown) if constructor_name(thrown) == "Test262Error" => {
+                // ironhorse computed a value the harness's own assertion
+                // rejected, on a case XS passes: the assertion is the report.
+                Verdict::Fail(format!(
+                    "ironhorse failed a harness assertion the oracle passed: {thrown}"
+                ))
+            }
+            Halt::Throw(thrown) => match missing_global_binding(&run.source, thrown) {
+                // The one honest shape: the reference engine bound a name the
+                // program never declares, so the binding is a host intrinsic
+                // the port has not landed — an unlanded global, named.
+                Some(name) => Verdict::RunSkip(format!("ironhorse-missing-global:{name}")),
+                // Any other uncaught throw is an error the oracle did not
+                // throw — a spurious engine error, a ReferenceError on a
+                // binding the program does declare — a wrong answer on a
+                // program the oracle completed.
+                None => Verdict::Fail(format!(
+                    "ironhorse threw where the oracle completed: {thrown}"
+                )),
+            },
+            // The engine's own limits (stack geometry, meter, step ceiling)
+            // the oracle cannot share: an ironhorse limitation, honestly
+            // named, exactly as in the shared-abort arm above.
+            _ => Verdict::RunSkip("ironhorse-aborted-limit".into()),
+        },
     }
+}
+
+/// The verdict for an engine-invariant halt, wherever the run reached it: a
+/// hard failure naming the guard, so the report's `fail:` section carries the
+/// exact interpreter invariant that broke. Never a skip — the engine reporting
+/// its own state as wrong is the one outcome no agreement shape can excuse.
+fn engine_invariant_failure(label: &str) -> Verdict {
+    Verdict::Fail(format!("engine-invariant:{label}"))
+}
+
+/// The host intrinsic ironhorse could not resolve on a program the oracle ran
+/// to completion, when the uncaught throw has exactly that shape: the engine's
+/// `ReferenceError: get <name>: undefined variable` for a `<name>` the
+/// assembled source never declares. The reference engine bound the name and
+/// the program did not, so the binding is a global the port has not landed —
+/// the one uncaught throw that is an honest, named coverage gap rather than a
+/// wrong answer. A name the source *does* declare (`var`/`let`/`const`/
+/// `function`/`class`, or a sloppy-mode assignment) is not this shape: failing
+/// to resolve a declared binding is a spurious `ReferenceError`, which is the
+/// engine's error, not a missing intrinsic.
+pub(crate) fn missing_global_binding<'a>(source: &str, thrown: &'a str) -> Option<&'a str> {
+    let name = thrown
+        .strip_prefix("ReferenceError: get ")?
+        .strip_suffix(": undefined variable")?;
+    let identifier = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    (identifier && !source_declares(source, name)).then_some(name)
+}
+
+/// Does `source` declare `name`? A whole-word occurrence preceded by a
+/// declaration keyword (`var`, `let`, `const`, `function`, `class`, or the
+/// `*` of `function*`) or followed by a plain `=` (a sloppy-mode implicit
+/// global). Textual, deliberately: the question is whether the *program*
+/// could have bound the name, and any of these forms means it could.
+fn source_declares(source: &str, name: &str) -> bool {
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    let mut start = 0;
+    while let Some(p) = source[start..].find(name) {
+        let at = start + p;
+        let end = at + name.len();
+        start = end;
+        let whole = !source[..at].ends_with(is_word) && !source[end..].starts_with(is_word);
+        if !whole {
+            continue;
+        }
+        let before = source[..at].trim_end();
+        let keyword = ["var", "let", "const", "function", "class"]
+            .iter()
+            .any(|kw| {
+                before.ends_with(kw) && !before[..before.len() - kw.len()].ends_with(is_word)
+            })
+            || before.ends_with("function*")
+            || before.ends_with("function *");
+        let after = source[end..].trim_start();
+        let assigned =
+            after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>");
+        if keyword || assigned {
+            return true;
+        }
+    }
+    false
+}
+
+/// Is `name` one of the native error constructors the port claims to
+/// implement? A shared abort where the oracle threw one of these and
+/// ironhorse threw a different constructor is an error-model divergence, not
+/// a built-in gap; a harness `Test262Error` from the oracle is excluded because
+/// it means XS itself failed the case's assertion, so the oracle's throw is
+/// not a reference behavior ironhorse must reproduce.
+fn is_native_error_constructor(name: &str) -> bool {
+    matches!(
+        name,
+        "Error"
+            | "AggregateError"
+            | "EvalError"
+            | "RangeError"
+            | "ReferenceError"
+            | "SyntaxError"
+            | "TypeError"
+            | "URIError"
+    )
 }
 
 /// Did the oracle fail to complete because of a **fatal host abort** (a value-
@@ -762,9 +894,12 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
         return evaluate_negative_early(cfg, run, neg);
     }
     // A runtime negative ironhorse never reached (an unsupported opcode / decode
-    // stop) is an honest opcode skip, not a verdict.
+    // stop) is an honest opcode skip, not a verdict. An engine-invariant halt
+    // is a failure whatever the case expected: the engine did not throw the
+    // expected error, it reported its own state as wrong.
     match &run.ironhorse_halt {
         Halt::Unsupported(op) => return Verdict::RunSkip(format!("unsupported-opcode:{}", op)),
+        Halt::EngineInvariant(label) => return engine_invariant_failure(label),
         Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
@@ -1385,6 +1520,7 @@ fn run_accepted_module(
         Halt::Unsupported(op) => {
             return Verdict::RunSkip(format!("unsupported-opcode:{op}"));
         }
+        Halt::EngineInvariant(label) => return engine_invariant_failure(label),
         Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
@@ -2924,6 +3060,183 @@ mod tests {
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::RunSkip("abort-value-differs".into())
+        );
+    }
+
+    #[test]
+    fn abort_type_divergence_from_a_native_oracle_error_is_a_failure() {
+        // The oracle threw a native error constructor the port implements;
+        // ironhorse threw a different constructor. That is the error model
+        // diverging — a wrong answer — not a built-in gap to skip.
+        let mut run = synthetic_abort(Halt::Throw("RangeError".into()), "RangeError");
+        run.oracle_error = "TypeError: not a function".into();
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("abort-type divergence")
+        ));
+        // The harness's own assertion error counts as a different constructor
+        // too: ironhorse failed an assertion on a path where XS threw the
+        // real error.
+        let mut run = synthetic_abort(
+            Halt::Throw("Test262Error: Expected a TypeError".into()),
+            "Test262Error: Expected a TypeError",
+        );
+        run.oracle_error = "TypeError: not a function".into();
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn same_constructor_with_a_different_message_stays_a_named_skip() {
+        // Engine errors carry no message yet (the messaged builders are a
+        // separate stream), so a shared constructor with divergent text is
+        // still the honest `abort-value-differs` skip, not a failure.
+        let mut run = synthetic_abort(Halt::Throw("TypeError".into()), "TypeError");
+        run.oracle_error = "TypeError: not a function".into();
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("abort-value-differs".into())
+        );
+    }
+
+    /// A `DualRun` where the oracle completed and ironhorse did not.
+    fn synthetic_oracle_only(ironhorse_halt: Halt) -> DualRun {
+        let mut run = synthetic_abort(ironhorse_halt, "");
+        run.agreement = Agreement::OracleOnlyComplete;
+        run.oracle_result = "undefined".into();
+        run.oracle_parsed = true;
+        run
+    }
+
+    #[test]
+    fn a_harness_assertion_ironhorse_fails_where_the_oracle_completes_is_a_failure() {
+        // test262 positive cases signal failure by throwing `Test262Error`;
+        // the oracle passed the case, so this is ironhorse computing a value
+        // the assertion rejected — the dominant wrong-answer shape, which the
+        // unconditional `ironhorse-aborted` skip used to absorb.
+        let run = synthetic_oracle_only(Halt::Throw(
+            "Test262Error: Expected SameValue(«1», «2») to be true".into(),
+        ));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("ironhorse failed a harness assertion")
+        ));
+    }
+
+    #[test]
+    fn an_uncaught_engine_error_where_the_oracle_completes_is_a_failure() {
+        let run = synthetic_oracle_only(Halt::Throw("TypeError".into()));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("ironhorse threw where the oracle completed")
+        ));
+    }
+
+    #[test]
+    fn an_unresolved_declared_binding_is_a_spurious_reference_error() {
+        // The program declares `x`; ironhorse failed to resolve it where the
+        // oracle completed. That is the engine's scope resolution lying, not
+        // a missing intrinsic — never the named global skip.
+        let mut run = synthetic_oracle_only(Halt::Throw(
+            "ReferenceError: get x: undefined variable".into(),
+        ));
+        run.source = "var x = 1; function f() { return x; } f();".into();
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn an_unlanded_intrinsic_is_a_named_missing_global_skip() {
+        // The reference engine bound `Compartment`; the program never
+        // declares it. The binding is a host intrinsic the port lacks: an
+        // honest coverage gap that names the intrinsic to land.
+        let mut run = synthetic_oracle_only(Halt::Throw(
+            "ReferenceError: get Compartment: undefined variable".into(),
+        ));
+        run.source = "var c = new Compartment(); c.evaluate('1');".into();
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("ironhorse-missing-global:Compartment".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "ironhorse-missing-global:Compartment"
+            ),
+            crate::report::Category::Unsupported
+        );
+    }
+
+    #[test]
+    fn source_declares_recognizes_every_binding_form() {
+        assert!(source_declares("var foo = 1;", "foo"));
+        assert!(source_declares("let foo;", "foo"));
+        assert!(source_declares("const foo = 1;", "foo"));
+        assert!(source_declares("function foo() {}", "foo"));
+        assert!(source_declares("function* foo() {}", "foo"));
+        assert!(source_declares("class foo {}", "foo"));
+        assert!(source_declares("foo = 1;", "foo"));
+        assert!(source_declares("  foo\n  = 1;", "foo"));
+        // Uses, comparisons, arrows, and longer identifiers are not
+        // declarations of `foo`.
+        assert!(!source_declares("foo();", "foo"));
+        assert!(!source_declares("if (foo == 1) {}", "foo"));
+        assert!(!source_declares("if (foo === 1) {}", "foo"));
+        assert!(!source_declares("var f = foo => 1;", "foo"));
+        assert!(!source_declares("var foobar = 1; var xfoo = 2;", "foo"));
+        assert!(!source_declares("myvar foo", "foo"));
+    }
+
+    #[test]
+    fn an_engine_limit_where_the_oracle_completes_stays_a_named_skip() {
+        for halt in [Halt::StackOverflow(4), Halt::MeterAbort, Halt::StepLimit(7)] {
+            let run = synthetic_oracle_only(halt);
+            assert_eq!(
+                evaluate_positive(&Config::default(), &run, false),
+                Verdict::RunSkip("ironhorse-aborted-limit".into())
+            );
+        }
+    }
+
+    #[test]
+    fn an_engine_invariant_halt_is_a_failure_in_every_arm() {
+        // Whatever the agreement shape or the case's expectation, the engine
+        // reporting its own state as wrong is a hard failure that names the
+        // guard — the halt the differential exists to catch, and the one the
+        // old `unsupported-opcode:` skip used to launder.
+        let halt = Halt::EngineInvariant("end:frame-underflow");
+        let expected = Verdict::Fail("engine-invariant:end:frame-underflow".into());
+        let positive = synthetic_oracle_only(halt.clone());
+        assert_eq!(
+            evaluate_positive(&Config::default(), &positive, false),
+            expected
+        );
+        let shared = synthetic_abort(halt.clone(), "");
+        assert_eq!(
+            evaluate_positive(&Config::default(), &shared, false),
+            expected
+        );
+        let negative = Negative {
+            phase: "runtime".into(),
+            ty: "TypeError".into(),
+        };
+        assert_eq!(
+            evaluate_negative(&Config::default(), &shared, &negative),
+            expected
+        );
+        // And a declined halt keeps its honest skip in the same arms.
+        let declined = synthetic_abort(Halt::Unsupported("XS_CODE_FOO"), "");
+        assert_eq!(
+            evaluate_positive(&Config::default(), &declined, false),
+            Verdict::RunSkip("unsupported-opcode:XS_CODE_FOO".into())
+        );
+        assert_eq!(
+            evaluate_negative(&Config::default(), &declined, &negative),
+            Verdict::RunSkip("unsupported-opcode:XS_CODE_FOO".into())
         );
     }
 
