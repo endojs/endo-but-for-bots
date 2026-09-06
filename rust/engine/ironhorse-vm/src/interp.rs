@@ -18436,6 +18436,13 @@ impl Interp {
                 }
 
                 other => {
+                    // `XS_NO_CODE` (byte 0) has an empty mnemonic, and an
+                    // empty label names nothing to a reader and registers
+                    // nothing: give the nameless opcode its own literal so the
+                    // refusal still says what stopped the run.
+                    if other.name().is_empty() {
+                        return Halt::Unsupported("opcode:no-code");
+                    }
                     return Halt::Unsupported(other.name());
                 }
             }

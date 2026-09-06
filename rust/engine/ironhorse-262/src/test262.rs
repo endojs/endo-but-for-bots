@@ -193,10 +193,8 @@ pub fn classify(source: &str) -> Class {
                 Some(crate::xst::MissingGlobal::Unlanded(name)) => {
                     Class::Skipped(format!("ironhorse-missing-global:{name}"))
                 }
-                Some(crate::xst::MissingGlobal::OracleError) => {
-                    Class::Skipped("oracle-machine-error".into())
-                }
-                // An unanswered probe is judged as the throw it is.
+                // A probe that did not answer is no evidence of a host gap:
+                // the throw is judged as the throw it is.
                 _ => Class::Divergent(Box::new(r)),
             },
             _ => Class::Skipped("ironhorse-aborted-limit".into()),
