@@ -1,4 +1,5 @@
 import type { Passable } from '@endo/pass-style';
+import type { Pattern } from '@endo/patterns';
 import type { ERef } from '@endo/eventual-send';
 import type { FarRef } from '@endo/eventual-send';
 import type { CapTPOptions } from '@endo/captp';
@@ -743,10 +744,12 @@ export type FormField = {
   name: string;
   label: string;
   example?: string;
-  // Passable, not unknown: a field crosses CapTP and is persisted with the
-  // form's message formula, so neither of these can be an arbitrary value.
+  // Not `unknown`: a field crosses CapTP and is persisted with the form's
+  // message formula, so neither of these can be an arbitrary value. `pattern`
+  // is narrower still than passable — it is what `submit` hands to
+  // `mustMatch`, so it is an `@endo/patterns` pattern.
   default?: Passable;
-  pattern?: Passable;
+  pattern?: Pattern;
   secret?: boolean;
 };
 
