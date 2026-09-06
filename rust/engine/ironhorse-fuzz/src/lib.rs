@@ -1687,11 +1687,13 @@ fn as_ecma_number(s: &str) -> Option<f64> {
 /// does ironhorse's halt take the run out of the comparison, and in which
 /// direction?
 ///
-/// * [`Halt::Unsupported`] is the **only** skip-eligible halt (`Some(Ok(()))`):
-///   the engine declined an unported opcode, built-in, or value shape, so the
-///   program is uncovered ground, not a finding. That label set is pinned by
-///   `ironhorse-vm/tests/halt_label_registry.rs`, so the engine cannot widen
-///   its own exemption by adding a label.
+/// * [`Halt::Unsupported`] with a **registered** declined label
+///   (`ironhorse_vm::halt_labels::is_declined_label`) is the only skip-eligible
+///   halt (`Some(Ok(()))`): the engine declined an unported opcode, built-in,
+///   or value shape, so the program is uncovered ground, not a finding. The
+///   exemption is granted by that allowlist, not by the halt: an `Unsupported`
+///   whose label is not registered is a divergence (`Some(Err(_))`), so the
+///   engine cannot widen its own exemption by reaching for a new string.
 /// * [`Halt::EngineInvariant`] is **never** skip-eligible (`Some(Err(_))`):
 ///   one of the interpreter's own guards (a value-stack or frame underflow, a
 ///   suspended instance with no frame, an unrecognized resolving function)
@@ -1707,7 +1709,15 @@ fn as_ecma_number(s: &str) -> Option<f64> {
 /// [`Halt::EngineInvariant`]: ironhorse_vm::Halt::EngineInvariant
 fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), Divergence>> {
     match halt {
-        ironhorse_vm::Halt::Unsupported(_) => Some(Ok(())),
+        ironhorse_vm::Halt::Unsupported(label)
+            if ironhorse_vm::halt_labels::is_declined_label(label) =>
+        {
+            Some(Ok(()))
+        }
+        ironhorse_vm::Halt::Unsupported(label) => Some(Err(Divergence {
+            source: source.to_string(),
+            detail: format!("unregistered declined label: {label}"),
+        })),
         ironhorse_vm::Halt::EngineInvariant(label) => Some(Err(Divergence {
             source: source.to_string(),
             detail: format!("engine invariant violated: {label}"),
@@ -2029,10 +2039,21 @@ mod tests {
     #[test]
     fn halt_precheck_skips_only_declined_halts() {
         use ironhorse_vm::Halt;
-        assert!(matches!(
-            halt_precheck("1", &Halt::Unsupported("XS_CODE_FOO")),
-            Some(Ok(()))
-        ));
+        // A registered declined label (a literal, a helper's label, an opcode
+        // mnemonic) is the honest skip; an unregistered one is a finding.
+        for label in ["eval:no-compiler", "native-call:Proxy", "call"] {
+            assert!(
+                matches!(halt_precheck("1", &Halt::Unsupported(label)), Some(Ok(()))),
+                "{label} is registered and must skip"
+            );
+        }
+        match halt_precheck("1", &Halt::Unsupported("sneak:new-exemption")) {
+            Some(Err(divergence)) => assert_eq!(
+                divergence.detail,
+                "unregistered declined label: sneak:new-exemption"
+            ),
+            other => panic!("an unregistered label must be a divergence, got {other:?}"),
+        }
         match halt_precheck("1", &Halt::EngineInvariant("add:stack-underflow")) {
             Some(Err(divergence)) => {
                 assert_eq!(divergence.source, "1");

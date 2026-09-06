@@ -113,7 +113,15 @@ pub fn classify(source: &str) -> Class {
     // is the honest skip — the vast bulk of `language/`, each attributed to
     // the exact built-in/feature opcode that is not yet modeled.
     if let Halt::Unsupported(op) = r.ironhorse_halt {
-        return Class::Skipped(format!("unsupported-opcode:{}", op));
+        // Only a label the engine has registered as a declined surface (or
+        // one of the runner's own) earns the skip; an unregistered label is
+        // the engine granting itself an exemption, and fails.
+        if ironhorse_vm::halt_labels::is_declined_label(op)
+            || crate::xst::HARNESS_DECLINED_LABELS.contains(&op)
+        {
+            return Class::Skipped(format!("unsupported-opcode:{}", op));
+        }
+        return Class::Divergent(Box::new(r));
     }
     // One of the interpreter's own guards fired on bytecode the oracle
     // produced: the engine's state is wrong, a real failure whatever the
@@ -181,10 +189,17 @@ pub fn classify(source: &str) -> Class {
         // landed, which names itself; only the engine's own limits (stack
         // geometry, meter, step ceiling) are the other honest skip.
         Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
-            Halt::Throw { rendered: thrown, .. } => match crate::xst::missing_global_binding(&r.source, thrown) {
-                Some(name) => Class::Skipped(format!("ironhorse-missing-global:{name}")),
-                None => Class::Divergent(Box::new(r)),
-            },
+            Halt::Throw { rendered: thrown, .. } => {
+                let missing = crate::xst::missing_global_binding(thrown)
+                    .map(|name| (name.to_string(), crate::xst::oracle_binds_global(name)));
+                match missing {
+                    Some((name, Some(true))) => {
+                        Class::Skipped(format!("ironhorse-missing-global:{name}"))
+                    }
+                    Some((_, None)) => Class::Skipped("oracle-machine-error".into()),
+                    _ => Class::Divergent(Box::new(r)),
+                }
+            }
             _ => Class::Skipped("ironhorse-aborted-limit".into()),
         },
     }

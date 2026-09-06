@@ -173,7 +173,10 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
             }
         }
         Verdict::RunSkip => {
-            if reason == "oracle-host-missing-intl" || reason == "oracle-host-missing-temporal" {
+            if reason == "oracle-host-missing-intl"
+                || reason == "oracle-host-missing-temporal"
+                || reason.starts_with("oracle-host-missing-global:")
+            {
                 return Category::Skipped;
             }
             // Harness/oracle/infrastructure non-results — not an Ironhorse gap.
