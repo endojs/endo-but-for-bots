@@ -14395,7 +14395,9 @@ impl Interp {
                     };
                     let at = match self.resolve_at_key(key) {
                         Some(at) => at,
-                        None => return Halt::Unsupported("at:unresolved-key"),
+                        // Every primitive kind resolves; `None` is a payload that does
+                        // not match its kind, the engine's own value being malformed.
+                        None => return Halt::EngineInvariant("at:key-kind"),
                     };
                     if let Some(i) = idx {
                         self.stack[i] = at;

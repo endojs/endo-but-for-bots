@@ -661,36 +661,25 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     format!("ironhorse failed a harness assertion the oracle passed: {thrown}"),
                 )
             }
-            Halt::Throw { rendered: thrown, .. } => match missing_global_binding(thrown) {
-                // The one honest shape: the name ironhorse could not resolve
-                // is one the reference engine binds in an empty program and
-                // ironhorse does not, so the binding is a host intrinsic the
-                // port has not landed — an unlanded global, named. Both
-                // engines are asked directly (`probe_global`) rather than the
-                // source inspected: a name the program itself binds, by any
-                // of the language's many declaration forms, is unbound in an
-                // empty program, and a name ironhorse binds too was reachable
-                // and not reached — either way the engine's scope resolution
-                // lied, and that stays the failure it is.
-                Some(name) => match probe_global(name) {
-                    Some(binding)
-                        if binding.oracle
-                            && !binding.ironhorse
-                            && !source_declares(&run.source, name) =>
-                    {
-                        Verdict::RunSkip(format!("ironhorse-missing-global:{name}"))
-                    }
-                    Some(binding) => oracle_disagreement(
-                        cfg,
-                        "oracle-only-complete",
-                        format!(
-                            "spurious ReferenceError: ironhorse could not resolve `{name}` \
-                             (bound as a global by oracle={} ironhorse={})",
-                            binding.oracle, binding.ironhorse
-                        ),
+            Halt::Throw { rendered: thrown, .. } => match classify_missing_global(&run.source, thrown) {
+                // The one honest shape: a host intrinsic the port has not
+                // landed — the oracle binds the name in an empty program,
+                // ironhorse does not, and the program never declared it.
+                // Anything else with this shape is the engine's scope
+                // resolution lying about a binding that was there.
+                Some(MissingGlobal::Unlanded(name)) => {
+                    Verdict::RunSkip(format!("ironhorse-missing-global:{name}"))
+                }
+                Some(MissingGlobal::Spurious(name, binding)) => oracle_disagreement(
+                    cfg,
+                    "oracle-only-complete",
+                    format!(
+                        "spurious ReferenceError: ironhorse could not resolve `{name}` \
+                         (bound as a global by oracle={} ironhorse={})",
+                        binding.oracle, binding.ironhorse
                     ),
-                    None => Verdict::RunSkip("oracle-machine-error".into()),
-                },
+                ),
+                Some(MissingGlobal::OracleError) => Verdict::RunSkip("oracle-machine-error".into()),
                 // Any other uncaught throw is an error the oracle did not
                 // throw — a spurious engine error on a program the oracle
                 // completed, a wrong answer.
@@ -799,6 +788,34 @@ pub(crate) fn probe_global(name: &str) -> Option<GlobalBinding> {
     Some(binding)
 }
 
+/// What an **ironhorse** unresolved-name `ReferenceError` on a program the
+/// oracle completed means, decided once for every instrument.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MissingGlobal {
+    /// A host intrinsic the port has not landed: the oracle binds the name in
+    /// an empty program, ironhorse does not, and the program never declared
+    /// it. The one honest skip.
+    Unlanded(String),
+    /// The engine's scope resolution lied: the program bound the name, or
+    /// ironhorse binds it too, or nobody binds it. Carries the probe answer.
+    Spurious(String, GlobalBinding),
+    /// The oracle machine could not answer the probe.
+    OracleError,
+}
+
+/// Classify an ironhorse throw on a program the oracle completed, when it has
+/// the unresolved-name shape; `None` for any other throw.
+pub(crate) fn classify_missing_global(source: &str, thrown: &str) -> Option<MissingGlobal> {
+    let name = missing_global_binding(thrown)?;
+    Some(match probe_global(name) {
+        Some(binding) if binding.oracle && !binding.ironhorse && !source_declares(source, name) => {
+            MissingGlobal::Unlanded(name.to_string())
+        }
+        Some(binding) => MissingGlobal::Spurious(name.to_string(), binding),
+        None => MissingGlobal::OracleError,
+    })
+}
+
 /// The skip owed when the **oracle's** uncaught throw is its unresolved-name
 /// `ReferenceError`, or `None` when that throw is a reference behavior to be
 /// judged as usual. The oracle certified nothing on such a program, so
@@ -823,7 +840,9 @@ fn oracle_unresolved_name_skip(run: &DualRun) -> Option<Verdict> {
         Some(binding)
             if !binding.oracle && !binding.ironhorse && source_declares(&run.source, name) =>
         {
-            Some(Verdict::RunSkip(format!("oracle-unresolved-binding:{name}")))
+            Some(Verdict::RunSkip(format!(
+                "oracle-unresolved-binding:{name}"
+            )))
         }
         Some(_) => None,
         None => Some(Verdict::RunSkip("oracle-machine-error".into())),
@@ -833,10 +852,13 @@ fn oracle_unresolved_name_skip(run: &DualRun) -> Option<Verdict> {
 /// Does `source` declare `name`? A whole-word occurrence preceded by a
 /// declaration keyword (`var`, `let`, `const`, `function`, `class`, or the
 /// `*` of `function*`) or followed by a plain `=` (a sloppy-mode implicit
-/// global). Textual and deliberately over-inclusive on the "declares" side
-/// (a parameter or `catch` name is missed, an unrelated `foo = 1` is not):
-/// it is consulted only to *withhold* a skip, so a miss in either direction
-/// leaves the failure visible rather than laundering it.
+/// global) — but not a property access (`o.name = 1`), which binds nothing.
+/// Textual: a parameter, `catch` name, or destructuring target is missed,
+/// and an occurrence inside a string or comment is not. Where it withholds
+/// the missing-global skip a miss leaves the failure visible; where it grants
+/// the oracle-side unresolved-binding skip a false match would launder one,
+/// which is why the property-access shape, the common false match, is
+/// excluded.
 pub(crate) fn source_declares(source: &str, name: &str) -> bool {
     let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
     let mut start = 0;
@@ -857,8 +879,11 @@ pub(crate) fn source_declares(source: &str, name: &str) -> bool {
             || before.ends_with("function*")
             || before.ends_with("function *");
         let after = source[end..].trim_start();
-        let assigned =
-            after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>");
+        let property = before.ends_with('.');
+        let assigned = !property
+            && after.starts_with('=')
+            && !after.starts_with("==")
+            && !after.starts_with("=>");
         if keyword || assigned {
             return true;
         }
@@ -3402,9 +3427,7 @@ mod tests {
         // binds `Compartment`, ironhorse does not), but the program declared
         // its own `Compartment`, so ironhorse failing to resolve it is a
         // scope-resolution lie about the program's binding.
-        let mut run = synthetic_oracle_only(Halt::Throw(
-            "ReferenceError: get Compartment: undefined variable".into(),
-        ));
+        let mut run = synthetic_oracle_only(Halt::synthetic_throw("ReferenceError: get Compartment: undefined variable"));
         run.source = "var Compartment = {}; Compartment.x = 1;".into();
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
@@ -3426,7 +3449,7 @@ mod tests {
                 ironhorse: false
             })
         );
-        let mut run = synthetic_abort(Halt::Throw("TypeError".into()), "TypeError");
+        let mut run = synthetic_abort(Halt::synthetic_throw("TypeError"), "TypeError");
         run.oracle_error = "ReferenceError: get Float128Array: undefined variable".into();
         run.source = "var a = []; a.length = 1; new Float128Array(a);".into();
         assert!(matches!(
@@ -3451,6 +3474,8 @@ mod tests {
         assert!(!source_declares("var f = foo => 1;", "foo"));
         assert!(!source_declares("var foobar = 1; var xfoo = 2;", "foo"));
         assert!(!source_declares("myvar foo", "foo"));
+        assert!(!source_declares("var o = {}; o.foo = 1;", "foo"));
+        assert!(!source_declares("o?.foo = 1", "foo"));
     }
 
     #[test]
@@ -3579,14 +3604,34 @@ mod tests {
         // Every `Halt::Unsupported("…")` the runner constructs outside its
         // tests is one of HARNESS_DECLINED_LABELS, so the runner cannot grant
         // itself a skip either.
-        let mut found = std::collections::BTreeSet::new();
-        for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src")).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().map_or(true, |e| e != "rs") {
-                continue;
+        fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    rs_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
             }
+        }
+        let mut files = Vec::new();
+        rs_files(
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut files,
+        );
+        let mut found = std::collections::BTreeSet::new();
+        for path in files {
             let src = std::fs::read_to_string(&path).unwrap();
-            let code = src.split("#[cfg(test)]").next().unwrap_or("");
+            // Non-test code only (each file's test module is its tail), with
+            // line comments stripped so a commented-out site does not count.
+            let code: String = src
+                .split("#[cfg(test)]\nmod tests")
+                .next()
+                .unwrap_or("")
+                .lines()
+                .map(|l| l.split("//").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n");
             let marker = "Halt::Unsupported(\"";
             let mut start = 0;
             while let Some(p) = code[start..].find(marker) {
