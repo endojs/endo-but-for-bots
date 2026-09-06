@@ -22,7 +22,15 @@
 /// and a resume under a **different** cost-table version fails closed
 /// rather than silently continuing a meter whose weights changed — the
 /// metering analogue of the callback-table `SIGN` signature. Bump the
-/// trailing number whenever any metering weight or check point changes.
+/// trailing number whenever anything that changes WHAT a program is
+/// charged changes: a metering weight, or an increment point. The
+/// points at which the host is CONSULTED (the loop-closing checks, and
+/// the in-match stride [`ironhorse_regexp::MATCH_CHECK_STRIDE`]) are
+/// release-defined constants outside this gate: they decide where an
+/// armed crank can be interrupted, never how many computrons it has
+/// spent, so a resumed meter continues exactly across a change to them
+/// (design § Metering, "Check points and abort": the abort point is a
+/// release-defined outcome, not a cost-table fact).
 pub const COST_TABLE_VERSION: &str = "ironhorse-meter-1";
 
 /// `XS_CODE_METERING`: one bytecode dispatch.
@@ -107,6 +115,15 @@ impl Default for Meter {
 /// an effectively unlimited but *armed* window would silently get an
 /// un-armed machine. Saturating keeps a non-zero interval non-zero, so
 /// the armed/un-armed distinction is never flipped by arithmetic.
+///
+/// A saturated interval is a meter that is armed but whose window
+/// (`count == u64::MAX`) the index can never pass, so the host is never
+/// consulted — which is exactly what a host asking to be consulted every
+/// `2^48` or more computrons asked for (the raw index cannot reach `2^64`).
+/// Every such interval scales to the same value, so
+/// `Interp::attach_meter_host` treats them as one configuration. An
+/// embedder that means "no bound" says so by not arming at all rather
+/// than by an astronomically large interval.
 #[inline]
 pub(crate) fn scale_interval(interval: u64) -> u64 {
     interval.checked_mul(1 << 16).unwrap_or(u64::MAX)
