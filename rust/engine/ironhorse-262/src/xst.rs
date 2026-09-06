@@ -524,12 +524,15 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     } else {
                         Verdict::Covered
                     }
+                } else if cfg.oracle && oracle_missing_intl(run) {
+                    // The pinned build's missing `Intl`, direct or wrapped by
+                    // an assertion-based case into its Test262Error. Named
+                    // carve-outs run before the general probe here as they do
+                    // in the over-acceptance arm, so one host gap has one
+                    // report name whichever arm sees it.
+                    Verdict::RunSkip("oracle-host-missing-intl".into())
                 } else if let Some(skip) = oracle_unresolved_name_skip(run) {
                     skip
-                } else if cfg.oracle && oracle_missing_intl(run) {
-                    // The same missing `Intl`, wrapped by an assertion-based
-                    // case into its Test262Error.
-                    Verdict::RunSkip("oracle-host-missing-intl".into())
                 } else {
                     let oracle_ctor = constructor_name(&run.oracle_error);
                     let ironhorse_ctor = constructor_name(thrown);
@@ -3599,8 +3602,11 @@ mod tests {
         // oracle non-result named by the intrinsic — never the abort-type
         // failure, which is reserved for a reference behavior the oracle
         // actually exhibited.
+        // `Intl` has its own named carve-out, which wins in both arms; the
+        // probe generalizes it to any other intrinsic the pinned build lacks
+        // and ironhorse has.
         assert_eq!(
-            probe_global("Intl"),
+            probe_global("Temporal"),
             Ok(GlobalBinding {
                 oracle: false,
                 ironhorse: true
@@ -3611,12 +3617,17 @@ mod tests {
         run.oracle_parsed = true;
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
-            Verdict::RunSkip("oracle-host-missing-global:Intl".into())
+            Verdict::RunSkip("oracle-host-missing-intl".into())
+        );
+        run.oracle_error = "ReferenceError: get Temporal: undefined variable".into();
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-host-missing-global:Temporal".into())
         );
         assert_eq!(
             crate::report::classify(
                 crate::report::Verdict::RunSkip,
-                "oracle-host-missing-global:Intl"
+                "oracle-host-missing-global:Temporal"
             ),
             crate::report::Category::Skipped
         );
