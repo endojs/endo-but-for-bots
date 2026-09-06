@@ -373,7 +373,7 @@ pub fn oracle_negative_ok(ty: &str, run: &DualRun) -> bool {
 /// "Negative verdict").
 pub fn ironhorse_negative_ok(ty: &str, run: &DualRun) -> bool {
     match &run.ironhorse_halt {
-        Halt::Throw(s) => constructor_name(s) == ty,
+        Halt::Throw { rendered, .. } => constructor_name(rendered) == ty,
         Halt::StackOverflow(_) | Halt::MeterAbort => ty == "RangeError",
         _ => false,
     }
@@ -505,7 +505,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
             }
         }
         Agreement::BothAbort => match &run.ironhorse_halt {
-            Halt::Throw(thrown) => {
+            Halt::Throw { rendered: thrown, .. } => {
                 if run.error_agrees {
                     // A meter-exact gate outranks every abort disposition: an
                     // armed case that burns a different computron budget is a
@@ -1444,7 +1444,7 @@ fn module_dual_run(
         (true, false) => Agreement::OracleOnlyComplete,
     };
     let ironhorse_error = match &ironhorse.halt {
-        Halt::Throw(error) => error.clone(),
+        Halt::Throw { rendered, .. } => rendered.clone(),
         _ => String::new(),
     };
     DualRun {
@@ -1458,7 +1458,7 @@ fn module_dual_run(
         ironhorse_computrons: ironhorse.computrons,
         error_agrees: !oracle.completed
             && !ironhorse.completed
-            && matches!(ironhorse.halt, Halt::Throw(_))
+            && matches!(ironhorse.halt, Halt::Throw { .. })
             && oracle.error == ironhorse_error,
         oracle_error: oracle.error,
         ironhorse_error,
@@ -1535,7 +1535,7 @@ fn run_accepted_module(
             completed: ironhorse.completed,
             result: ironhorse.result.clone(),
             error: match &ironhorse.halt {
-                Halt::Throw(error) => error.clone(),
+                Halt::Throw { rendered, .. } => rendered.clone(),
                 _ => String::new(),
             },
             computrons: ironhorse.computrons,
@@ -2284,7 +2284,7 @@ mod tests {
         let meter = synthetic_abort(Halt::MeterAbort, "");
         assert!(ironhorse_negative_ok("RangeError", &meter));
 
-        let thrown = synthetic_abort(Halt::Throw("TypeError: bad".into()), "TypeError: bad");
+        let thrown = synthetic_abort(Halt::synthetic_throw("TypeError: bad"), "TypeError: bad");
         assert!(ironhorse_negative_ok("TypeError", &thrown));
         assert!(!ironhorse_negative_ok("RangeError", &thrown));
     }
@@ -3034,7 +3034,7 @@ mod tests {
     #[test]
     fn positive_shared_test262_error_is_not_covered() {
         let mut run = synthetic_abort(
-            Halt::Throw("Test262Error: assertion failed".into()),
+            Halt::synthetic_throw("Test262Error: assertion failed"),
             "Test262Error: assertion failed",
         );
         run.oracle_error = "Test262Error: assertion failed".into();
@@ -3052,7 +3052,7 @@ mod tests {
         // stay `abort-value-differs` (-> the Ironhorse backlog), never be
         // laundered into `shared-test262-failure`.
         let mut run = synthetic_abort(
-            Halt::Throw("TypeError: not a function".into()),
+            Halt::synthetic_throw("TypeError: not a function"),
             "TypeError: not a function",
         );
         run.oracle_error = "Test262Error: assertion failed".into();
@@ -3246,7 +3246,7 @@ mod tests {
         // violation even when both engines threw the same Test262Error — the
         // gate outranks the shared-abort shape.
         let mut run = synthetic_abort(
-            Halt::Throw("Test262Error: assertion failed".into()),
+            Halt::synthetic_throw("Test262Error: assertion failed"),
             "Test262Error: assertion failed",
         );
         run.oracle_error = "Test262Error: assertion failed".into();

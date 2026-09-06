@@ -17,7 +17,7 @@
 //! The interim fix floored the unwind at the nested run's `jumps_base`
 //! and escaped to the host with the correct thrown value — honest, but
 //! still divergent from XS, which COMPLETES these programs. The llm
-//! rebase superseded the floor: every engine throw now routes through
+//! rebase superseded the floor: every engine throw routes through
 //! `raise_js` (so `self.exception` is populated at the raise), the
 //! unwind restores the establishing frame's activation (`leave_call`
 //! per crossed frame, stack/locals/env cuts), and `Halt::Resume`
@@ -25,6 +25,15 @@
 //! dispatch nesting to the loop that owns the handler's frame. These
 //! locks now pin full XS agreement: the driver's catch catches, and
 //! the program completes with the thrown value.
+//!
+//! "Every engine throw routes through `raise_js`" was asserted here as
+//! fact while 29 native sites still built `Halt::Throw` inline (the
+//! architecture review's F004: recorded fixed, regressed). It is now a
+//! property of the type — `Halt::Throw` carries the thrown value, so an
+//! inline construction has no value to give — and of two source locks:
+//! `throw_construction_sites.rs` (where a `Throw` may be built) and
+//! `dispatch_loop_control_transfer.rs` (every raise in the loop takes
+//! the `return_depth` test that propagates `Resume` to the owning loop).
 
 use ironhorse_vm::{run_program_with_symbols, RunOutcome};
 

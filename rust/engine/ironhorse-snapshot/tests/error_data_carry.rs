@@ -30,7 +30,7 @@ use ironhorse_snapshot::machine::{
 use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
+use ironhorse_vm::{parse_symbols, Halt, Interp};
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
@@ -50,7 +50,18 @@ fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
     let (b, n) = compile(src);
     let b = m.relink_crank(&b, &n).expect("relink");
     let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
+    (o.completed, describe_halt(&o.halt), o.result, o.computrons)
+}
+
+/// The halt as the host observes it. An uncaught throw is its rendering:
+/// `Halt::Throw` also carries the thrown slot, whose arena index is not an
+/// observable (two machines that agree on every answer may still place
+/// the error record differently), so it is not part of the twin.
+fn describe_halt(halt: &Halt) -> String {
+    match halt {
+        Halt::Throw { rendered, .. } => format!("Throw({rendered:?})"),
+        other => format!("{other:?}"),
+    }
 }
 
 /// Run crank 1 and then the observation cranks uninterrupted, and the

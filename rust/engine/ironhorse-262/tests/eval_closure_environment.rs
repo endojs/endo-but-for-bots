@@ -101,7 +101,7 @@ fn eval_lexical_cell_preserves_tdz() {
     let run = run_program(&code);
     assert!(!run.completed);
     assert!(
-        matches!(run.halt, Halt::Throw(ref error) if error.contains("ReferenceError")),
+        matches!(run.halt, Halt::Throw { ref rendered, .. } if rendered.contains("ReferenceError")),
         "TDZ read must throw ReferenceError, got {:?}",
         run.halt
     );
@@ -127,7 +127,7 @@ fn eval_published_const_rejects_assignment() {
     let run = run_program(&code);
     assert!(!run.completed);
     assert!(
-        matches!(run.halt, Halt::Throw(ref error) if error.contains("TypeError")),
+        matches!(run.halt, Halt::Throw { ref rendered, .. } if rendered.contains("TypeError")),
         "const assignment must throw TypeError, got {:?}",
         run.halt
     );

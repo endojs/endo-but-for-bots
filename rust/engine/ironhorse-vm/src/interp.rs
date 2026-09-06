@@ -3931,9 +3931,20 @@ pub enum Halt {
     EngineInvariant(&'static str),
     /// The bytecode was truncated or an opcode byte was invalid.
     Decode(String),
-    /// A JS-level throw (only the shapes stage 1 models, e.g. an
-    /// explicit `throw`); carries a best-effort string.
-    Throw(String),
+    /// A JS-level throw that escaped every guest handler and reached the
+    /// host boundary. `value` is the thrown value itself — what a native
+    /// `mxTry` boundary (a promise executor, a reaction job, a disposer)
+    /// rejects with when it catches the escape instead of the host;
+    /// `rendered` is its host-boundary `String()` rendering, for
+    /// diagnostics and the oracle's thrown-value comparison.
+    ///
+    /// Constructed only where the jump chain has actually been unwound:
+    /// [`Interp::raise_js`], the dispatch loop's inline `THROW`/`RETHROW`/
+    /// rejected-`await` unwinds, and [`Halt::synthetic_throw`] for the
+    /// harness (`tests/throw_construction_sites.rs` locks the set). An
+    /// engine error built anywhere else must be a real error object routed
+    /// through `raise_js`, so guest `try`/`catch` can observe it.
+    Throw { value: Slot, rendered: String },
     /// The value stack was exhausted (XS's `fxOverflow` →
     /// `fxAbort(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)`): a fixed-geometry
     /// stack overflow. Like XS's, this is an **abort to the host**, not a
@@ -3959,6 +3970,31 @@ pub enum Halt {
     /// An async-generator body reached `YIELD`; its active request remains
     /// pending while the yielded value is assimilated as a promise.
     AsyncYield(Slot),
+}
+
+impl Halt {
+    /// A host-synthesized uncaught throw with no guest value behind it:
+    /// the stand-in for an abort the oracle shim reports OUTSIDE the
+    /// machine — a compiler early error the harness models as a thrown
+    /// `SyntaxError` before any bytecode ran, or the shim's post-run
+    /// `String(result)` failing on a `Symbol` completion. Nothing rejects a
+    /// promise with this value (no guest handler or native try is live), so
+    /// `value` is `undefined`. Engine code that has a guest to answer must
+    /// not use this; it builds a real error object and raises it.
+    pub fn synthetic_throw(rendered: impl Into<String>) -> Halt {
+        Halt::Throw {
+            value: Slot::undefined(),
+            rendered: rendered.into(),
+        }
+    }
+
+    /// The host-boundary rendering of an uncaught throw, if this is one.
+    pub fn thrown_rendering(&self) -> Option<&str> {
+        match self {
+            Halt::Throw { rendered, .. } => Some(rendered),
+            _ => None,
+        }
+    }
 }
 
 /// Consume a [`Halt`] inside the bytecode dispatch loop. This is the ONLY
@@ -9426,10 +9462,7 @@ impl Interp {
             // the realm error value. Re-raise it into the *caller's* frame so
             // the caller's `try`/catch (its restored jump chain) observes it —
             // exactly as a native helper's `catchable_*` does.
-            Halt::Throw(_) => {
-                let error = self.exception;
-                Err(self.raise_js(error))
-            }
+            Halt::Throw { value, .. } => Err(self.raise_js(value)),
             // A coverage gap, meter abort, step-limit, or decode fault the
             // nested unit hit: propagate as-is (honest, non-result outcome).
             other => Err(other),
@@ -13107,8 +13140,8 @@ impl Interp {
     fn render_uncaught(&mut self, code: &[u8], v: Slot) -> String {
         // Rendering is a host diagnostic boundary, not a second guest throw.
         // In particular, a native driver such as Array.fromAsync catches the
-        // original `Halt::Throw` after this returns and reads `self.exception`
-        // as its rejection reason. If the diagnostic ToPrimitive itself fails,
+        // original `Halt::Throw` after this returns and takes its rejection
+        // reason from the halt's value. If the diagnostic ToPrimitive itself fails,
         // discard that failed attempt completely so it cannot replace the
         // original reason (or leave an extra callback frame/meter charge).
         let saved_exception = self.exception;
@@ -13271,7 +13304,7 @@ impl Interp {
         // throw is post-run in the shim, so it adds no run computrons (the
         // meter already matches the oracle's run-only count).
         if halt == Halt::Return && self.result.kind == Kind::Symbol {
-            halt = Halt::Throw("TypeError: cannot coerce symbol to string".to_string());
+            halt = Halt::synthetic_throw("TypeError: cannot coerce symbol to string");
         }
         // The oracle shim stringifies the completion.  A bare ordinary object
         // with a null prototype has neither `toString` nor `valueOf`, so
@@ -13284,8 +13317,7 @@ impl Interp {
                     && !self.arrays.contains_key(&object)
                     && self.native_of(object).is_none()
                 {
-                    halt =
-                        Halt::Throw("TypeError: cannot convert object to primitive value".into());
+                    halt = Halt::synthetic_throw("TypeError: cannot convert object to primitive value");
                 }
             }
         }
@@ -14544,7 +14576,12 @@ impl Interp {
                 XS_CODE_CHECK_INSTANCE => {
                     let top = self.stack.last().copied().unwrap_or_else(Slot::undefined);
                     if top.kind != Kind::Reference {
-                        return Halt::Throw("iterator result: not an object".into());
+                        dispatch_halt!(
+                            self.catchable_type_error_msg("iterator result: not an object".into()),
+                            pc,
+                            self,
+                            return_depth
+                        );
                     }
                     pc += size as usize;
                 }
@@ -16153,7 +16190,7 @@ impl Interp {
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
-                        None => return Halt::Throw("get closure: no cell".into()),
+                        None => return Halt::Unsupported("get_closure:no-cell"),
                     }
                     pc += op.size() as usize;
                 }
@@ -17354,8 +17391,8 @@ impl Interp {
                                 }
                                 None => {
                                     self.meter_host_escape();
-                                    let text = self.render_uncaught(code, v);
-                                    return Halt::Throw(text);
+                                    let rendered = self.render_uncaught(code, v);
+                                    return Halt::Throw { value: v, rendered };
                                 }
                             }
                         }
@@ -18020,8 +18057,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            let text = self.render_uncaught(code, v);
-                            return Halt::Throw(text);
+                            let rendered = self.render_uncaught(code, v);
+                            return Halt::Throw { value: v, rendered };
                         }
                     }
                 }
@@ -18043,8 +18080,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            let text = self.render_uncaught(code, v);
-                            return Halt::Throw(text);
+                            let rendered = self.render_uncaught(code, v);
+                            return Halt::Throw { value: v, rendered };
                         }
                     }
                 }
@@ -18612,7 +18649,7 @@ impl Interp {
     fn enter_call(&mut self, argc: usize, ret_pc: usize, has_target: bool) -> Result<usize, Halt> {
         let len = self.stack.len();
         if len < argc + 4 {
-            return Err(Halt::Throw("call: stack underflow".into()));
+            return Err(Halt::Unsupported("call:stack-underflow"));
         }
         let base = len - argc - 4; // index of THIS
         let func_slot = self.stack[base + 1];
@@ -19010,16 +19047,9 @@ impl Interp {
         let jump_depth = self.jumps.len();
         match self.run_callback(code, func, this, args) {
             Ok(value) => Ok(Ok(value)),
-            Err(Halt::Throw(_)) => {
-                while self.call_stack.len() > call_depth {
-                    let _ = self.leave_call();
-                }
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jump_depth);
-                let thrown = self.exception;
-                self.exception = Slot::undefined();
-                self.unmeter_host_escape();
-                Ok(Err(thrown))
+            Err(Halt::Throw { value, .. }) => {
+                self.unwind_native_try(stack_base, call_depth, jump_depth);
+                Ok(Err(value))
             }
             Err(halt) => Err(halt),
         }
@@ -19562,13 +19592,12 @@ impl Interp {
                     ReactionKind::AsyncGeneratorReturn(gen),
                 )
             }
-            Halt::Throw(_) => {
+            Halt::Throw { value: reason, .. } => {
                 while self.call_stack.len() >= return_depth {
                     let _ = self.leave_call();
                 }
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
-                let reason = self.exception;
                 self.exception = Slot::undefined();
                 let data = self.async_generators.get_mut(&gen).unwrap();
                 data.state = AsyncGeneratorState::Completed;
@@ -19801,7 +19830,7 @@ impl Interp {
                 let resolve_fn = self.async_instances[&inst].resolve_fn;
                 self.settle_via_function(code, resolve_fn, ret)
             }
-            Halt::Throw(_) => {
+            Halt::Throw { value: reason, .. } => {
                 // A body throw that escaped every handler rejects the result
                 // promise (XS's `mxCatch` → `fxRejectException`), not the host.
                 while self.call_stack.len() >= return_depth {
@@ -19813,7 +19842,6 @@ impl Interp {
                 if self.jumps.len() > jumps_base {
                     self.jumps.truncate(jumps_base);
                 }
-                let reason = self.exception;
                 self.exception = Slot::undefined();
                 if let Some(a) = self.async_instances.get_mut(&inst) {
                     a.done = true;
@@ -25996,8 +26024,8 @@ impl Interp {
             // Run the handler(value). Success → resolve the derived with the
             // result; a throw → the derived is REJECTED with the thrown value
             // (XS's `fxOnResolvedPromise` `mxCatch`: `*argument = mxException;
-            // function = rejectFunction`). The thrown value is still in
-            // `self.exception` after the callback unwinds to the host boundary.
+            // function = rejectFunction`). The thrown value arrives in the
+            // `Halt::Throw` the native try catches at the host boundary.
             // The handler may be any callable — a user function, or a native /
             // bound / **promise resolving function** (the last is what
             // `promise.then(resolveFn, rejectFn)` installs, e.g. test262's
@@ -26520,20 +26548,21 @@ impl Interp {
     // `schedule_native_await` and the observable async behavior is exact.
     // ------------------------------------------------------------------
 
-    /// Unwind a JS throw that escaped a re-entrant callback/getter during a
-    /// fromAsync step: drop callee frames, restore the value/jump stacks to the
-    /// pre-call depths, take the pending exception, and re-normalize the meter
-    /// (as [`Self::run_callback_catching_throw`] does).
-    fn from_async_unwind(&mut self, sb: usize, cd: usize, jd: usize) -> Slot {
-        while self.call_stack.len() > cd {
+    /// Abandon what a native `mxTry` boundary caught a throw out of: pop the
+    /// callee activations opened since `call_depth`, cut the value stack and
+    /// the jump chain back to the recorded depths, clear the `mxException`
+    /// register (the catch consumed it), and reverse the host-escape metering
+    /// the escape speculatively paid — XS never left the machine. The thrown
+    /// value itself travels in the `Halt::Throw` the boundary matched, never
+    /// through the register, so a boundary cannot observe a stale one.
+    fn unwind_native_try(&mut self, stack_base: usize, call_depth: usize, jump_depth: usize) {
+        while self.call_stack.len() > call_depth {
             let _ = self.leave_call();
         }
-        self.stack.truncate(sb);
-        self.jumps.truncate(jd);
-        let thrown = self.exception;
+        self.stack.truncate(stack_base);
+        self.jumps.truncate(jump_depth);
         self.exception = Slot::undefined();
         self.unmeter_host_escape();
-        thrown
     }
 
     /// Convert a re-entrant result into a catchable outcome: `Ok(Ok(v))` on
@@ -26548,7 +26577,10 @@ impl Interp {
     ) -> Result<Result<T, Slot>, Halt> {
         match r {
             Ok(v) => Ok(Ok(v)),
-            Err(Halt::Throw(_)) => Ok(Err(self.from_async_unwind(sb, cd, jd))),
+            Err(Halt::Throw { value, .. }) => {
+                self.unwind_native_try(sb, cd, jd);
+                Ok(Err(value))
+            }
             Err(h) => Err(h),
         }
     }
@@ -31399,7 +31431,7 @@ impl Interp {
                 // `Object.assign`, `this` is deliberately `undefined`.
                 let target = match arg0.value {
                     Payload::Reference(target) if arg0.kind == Kind::Reference => target,
-                    _ => return Err(Halt::Throw("TypeError: copy target".into())),
+                    _ => return Err(self.catchable_type_error_msg("invalid object".into())),
                 };
                 let source_value = self
                     .stack
@@ -32056,7 +32088,7 @@ impl Interp {
                 let prototype = match arg0.value {
                     Payload::Reference(prototype) if arg0.kind == Kind::Reference => prototype,
                     _ if arg0.kind == Kind::Null => crate::value::SlotIndex::NULL,
-                    _ => return Err(Halt::Throw("TypeError: Object.create prototype".into())),
+                    _ => return Err(self.catchable_type_error_msg("invalid prototype".into())),
                 };
                 let object = self.new_object();
                 self.slots.get_mut(object).value = Payload::Reference(prototype);
@@ -32079,7 +32111,7 @@ impl Interp {
             NativeMethod::ObjectDefineProperties => {
                 let target = match arg0.value {
                     Payload::Reference(target) if arg0.kind == Kind::Reference => target,
-                    _ => return Err(Halt::Throw("TypeError: defineProperties target".into())),
+                    _ => return Err(self.catchable_type_error_msg("invalid object".into())),
                 };
                 let properties = self
                     .stack
@@ -32121,7 +32153,7 @@ impl Interp {
             NativeMethod::ObjectDefineProperty => {
                 let target = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(Halt::Throw("TypeError: defineProperty target".into())),
+                    _ => return Err(self.catchable_type_error_msg("invalid object".into())),
                 };
                 if self.is_ordinary_object(target)
                     || self.arrays.contains_key(&target)
@@ -32150,9 +32182,7 @@ impl Interp {
                             descriptor
                         }
                         _ => {
-                            return Err(Halt::Throw(
-                                "TypeError: descriptor is not an object".into(),
-                            ))
+                            return Err(self.catchable_type_error_msg("invalid descriptor".into()))
                         }
                     };
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
@@ -32187,9 +32217,7 @@ impl Interp {
                             descriptor
                         }
                         _ => {
-                            return Err(Halt::Throw(
-                                "TypeError: descriptor is not an object".into(),
-                            ))
+                            return Err(self.catchable_type_error_msg("invalid descriptor".into()))
                         }
                     };
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
@@ -45203,9 +45231,22 @@ impl Interp {
                 // post-throw ([`Self::unwind_to_jump`] disarmed the
                 // pending new-target for every escape path, W6-15).
                 self.meter_host_escape();
-                Halt::Throw(self.render(&value))
+                Halt::Throw {
+                    value,
+                    rendered: self.render(&value),
+                }
             }
         }
+    }
+
+    /// As [`Self::catchable_type_error`], carrying a diagnostic message so
+    /// the thrown `TypeError` renders `TypeError: <message>` — XS's
+    /// `mxTypeError("...")` texts (`invalid object`, `invalid descriptor`,
+    /// `cannot coerce null to object`, …), which the oracle's
+    /// `String(exception)` reports verbatim.
+    fn catchable_type_error_msg(&mut self, message: String) -> Halt {
+        let error = self.internal_error("TypeError", message);
+        self.raise_js(error)
     }
 
     /// Raise a realm-local TypeError from a native helper. The dispatch loop
@@ -49918,12 +49959,12 @@ impl Interp {
         if property_key.kind == Kind::Symbol {
             return match property_key.value {
                 Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
-                _ => Err(Halt::Throw("TypeError: invalid symbol".into())),
+                _ => Err(self.catchable_type_error_msg("invalid symbol".into())),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
-            _ => return Err(Halt::Throw("TypeError: invalid property key".into())),
+            _ => return Err(self.catchable_type_error_msg("invalid property key".into())),
         };
         let id = self.intern_key(&name);
         // A runtime-computed key can be the first observation of a standard
@@ -55632,7 +55673,7 @@ mod tests {
             // opcode reached after a clean dispatch), never be empty-by-bug.
             match out.halt {
                 Halt::Return
-                | Halt::Throw(_)
+                | Halt::Throw { .. }
                 | Halt::MeterAbort
                 | Halt::StepLimit(_)
                 | Halt::Unsupported(_)
@@ -55691,8 +55732,8 @@ mod tests {
         let code: [u8; 7] = [0x0b, 0x00, 0x4b, 0x72, 0x07, 0xd7, 0xa9];
         let out = Interp::new().run(&code);
         assert_eq!(
-            out.halt,
-            Halt::Throw("7".into()),
+            out.halt.thrown_rendering(),
+            Some("7"),
             "no handler ⇒ escape to host"
         );
         assert!(!out.completed);
@@ -55793,8 +55834,8 @@ mod tests {
         interp.link_intrinsics(&["Symbol".to_string()]);
         let out = interp.run(&code);
         assert_eq!(
-            out.halt,
-            Halt::Throw("TypeError: cannot coerce symbol to string".into())
+            out.halt.thrown_rendering(),
+            Some("TypeError: cannot coerce symbol to string")
         );
         assert!(!out.completed);
     }
@@ -55968,7 +56009,7 @@ mod tests {
         let mut interp = Interp::new();
         interp.link_intrinsics(&["TypeError".to_string()]);
         let out = interp.run(&code);
-        assert_eq!(out.halt, Halt::Throw("TypeError: nope".into()));
+        assert_eq!(out.halt.thrown_rendering(), Some("TypeError: nope"));
         assert!(!out.completed);
         assert_eq!(out.computrons, 12, "bit-exact host-escape computrons vs XS");
     }
@@ -56020,7 +56061,7 @@ mod tests {
         ];
         let out = Interp::new().run(&code);
         assert!(
-            matches!(out.halt, Halt::Throw(_)),
+            matches!(out.halt, Halt::Throw { .. }),
             "unbound global must miss"
         );
     }
