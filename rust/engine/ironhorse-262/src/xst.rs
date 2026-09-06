@@ -526,7 +526,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     }
                 } else if let Some(skip) = oracle_unresolved_name_skip(run) {
                     skip
-                } else if cfg.oracle && oracle_missing_intl_assertion(run) {
+                } else if cfg.oracle && oracle_missing_intl(run) {
                     // The same missing `Intl`, wrapped by an assertion-based
                     // case into its Test262Error.
                     Verdict::RunSkip("oracle-host-missing-intl".into())
@@ -689,7 +689,6 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                         binding.oracle, binding.ironhorse
                     ),
                 ),
-                Some(MissingGlobal::OracleError) => Verdict::RunSkip("oracle-machine-error".into()),
                 Some(MissingGlobal::Unprobeable(name)) => oracle_disagreement(
                     cfg,
                     "oracle-only-complete",
@@ -842,10 +841,11 @@ pub(crate) enum MissingGlobal {
     /// The engine's scope resolution lied: the program bound the name, or
     /// ironhorse binds it too, or nobody binds it. Carries the probe answer.
     Spurious(String, GlobalBinding),
-    /// The oracle machine could not run the probe: infrastructure.
-    OracleError,
-    /// An engine did not complete the probe, so nothing is known about the
-    /// binding; judged as the throw it is, never skipped.
+    /// The probe did not answer — an engine did not complete it, or the
+    /// oracle machine could not run it. Nothing is known about the binding,
+    /// so the throw is judged as the throw it is, never skipped: the case's
+    /// own dual run succeeded, and an auxiliary probe's failure is no
+    /// evidence of a host gap.
     Unprobeable(String),
 }
 
@@ -858,8 +858,7 @@ pub(crate) fn classify_missing_global(source: &str, thrown: &str) -> Option<Miss
             MissingGlobal::Unlanded(name.to_string())
         }
         Ok(binding) => MissingGlobal::Spurious(name.to_string(), binding),
-        Err(ProbeFailure::MachineError) => MissingGlobal::OracleError,
-        Err(ProbeFailure::Unanswered) => MissingGlobal::Unprobeable(name.to_string()),
+        Err(_) => MissingGlobal::Unprobeable(name.to_string()),
     })
 }
 
@@ -880,8 +879,7 @@ fn oracle_unresolved_name_skip(run: &DualRun) -> Option<Verdict> {
         Ok(binding) if !binding.oracle && binding.ironhorse => Some(Verdict::RunSkip(format!(
             "oracle-host-missing-global:{name}"
         ))),
-        Ok(_) | Err(ProbeFailure::Unanswered) => None,
-        Err(ProbeFailure::MachineError) => Some(Verdict::RunSkip("oracle-machine-error".into())),
+        Ok(_) | Err(_) => None,
     }
 }
 
@@ -1014,23 +1012,16 @@ fn oracle_host_aborted(run: &DualRun) -> bool {
 fn oracle_missing_intl(run: &DualRun) -> bool {
     run.oracle_parsed
         && (run.oracle_error == "ReferenceError: get Intl: undefined variable"
-            || (run.oracle_error.starts_with("Test262Error:")
+            // The assertion-wrapped form names no intrinsic — a case that
+            // observed the ReferenceError instead of its expected ECMA-402
+            // error and reported it through `Test262Error` — so it is scoped
+            // to a source that mentions `Intl`, exactly as the Temporal twin
+            // is. Without that conjunct any XS host gap reported through the
+            // same phrasing would be filed as this one, masking an
+            // over-acceptance or an abort-type divergence.
+            || (run.source.contains("Intl")
+                && run.oracle_error.starts_with("Test262Error:")
                 && run.oracle_error.ends_with("but got a ReferenceError")))
-}
-
-/// The **assertion-wrapped** form of the pinned oracle's missing `Intl`: a
-/// case that observed the ReferenceError instead of its expected ECMA-402
-/// error and reported it through `Test262Error`. Unlike [`oracle_missing_intl`]
-/// — whose direct form names the intrinsic and is already handled by
-/// [`oracle_unresolved_name_skip`]'s probe — the wrapped text names no
-/// intrinsic at all, so it is scoped to a source that mentions `Intl`, exactly
-/// as the Temporal twin is. Without that conjunct any XS host gap reported
-/// through the same phrasing would be filed as this one.
-fn oracle_missing_intl_assertion(run: &DualRun) -> bool {
-    run.oracle_parsed
-        && run.source.contains("Intl")
-        && run.oracle_error.starts_with("Test262Error:")
-        && run.oracle_error.ends_with("but got a ReferenceError")
 }
 
 fn oracle_missing_temporal(run: &DualRun) -> bool {
@@ -2656,7 +2647,8 @@ mod tests {
             "Test262Error: Expected a RangeError but got a ReferenceError",
             "Test262Error: context Expected a TypeError but got a ReferenceError",
         ] {
-            let run = synthetic_ironhorse_only_complete(true, error);
+            let mut run = synthetic_ironhorse_only_complete(true, error);
+            run.source = "new Intl.NumberFormat();".into();
             assert!(oracle_missing_intl(&run));
             assert_eq!(
                 evaluate_positive(&cfg, &run, false),
@@ -2664,8 +2656,15 @@ mod tests {
             );
         }
 
-        for error in ["ReferenceError: another missing binding"] {
-            let run = synthetic_ironhorse_only_complete(true, error);
+        // The assertion-wrapped phrasing on a case that names no Intl surface
+        // is some other XS host gap, and an unrelated missing binding is not
+        // this exclusion either: both stay judged.
+        for error in [
+            "ReferenceError: another missing binding",
+            "Test262Error: Expected a RangeError but got a ReferenceError",
+        ] {
+            let mut run = synthetic_ironhorse_only_complete(true, error);
+            run.source = "var d = new Date(); d.toLocaleString();".into();
             assert!(!oracle_missing_intl(&run));
             assert!(matches!(
                 evaluate_positive(&cfg, &run, false),

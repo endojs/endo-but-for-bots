@@ -120,6 +120,7 @@ pub const DECLINED_LABELS: &[&str] = &[
     "native-call:SharedArrayBuffer:growable",
     "native-call:TypedArray:bad-length",
     "number:unmodeled",
+    "opcode:no-code",
     "ordinary-ownKeys:unknown-key",
     "private:missing-brand",
     "property-key:id-space-exhausted",
@@ -364,8 +365,11 @@ mod tests {
         assert!(is_declined_label("call"));
         assert!(is_declined_label("in"));
         assert!(!is_declined_label("XS_CODE_CALL"));
-        // `XS_NO_CODE` renders as the empty mnemonic; it registers nothing.
+        // `XS_NO_CODE` renders as the empty mnemonic and registers nothing;
+        // the dispatch loop gives it the literal `opcode:no-code` instead, so
+        // no run can decline with a label that names nothing.
         assert!(!is_declined_label(""));
+        assert!(is_declined_label("opcode:no-code"));
         assert!(!is_declined_label("add:stack-underflow"));
         assert!(!is_declined_label("sneak:new-exemption"));
         assert!(!is_declined_label("XS_CODE_FOO"));
