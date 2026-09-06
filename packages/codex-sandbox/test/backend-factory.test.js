@@ -608,6 +608,11 @@ test('an unsettled tool call blocks teardown without destroying the session', as
             userAgent: 'codex-test',
           },
         });
+      } else if (message.method === 'account/read') {
+        push({
+          id: message.id,
+          result: { account: { type: 'apiKey' }, requiresOpenaiAuth: true },
+        });
       } else if (message.method === 'thread/start') {
         push({ id: message.id, result: { thread: { id: 'thread-1' } } });
       } else if (message.method === 'turn/start') {
