@@ -95,7 +95,7 @@
     "@endo/utf8": "workspace:^",
     "@endo/where": "workspace:^",
     "@endo/zip": "workspace:^",
-    "better-sqlite3": "^12.0.0",
+    "better-sqlite3": "^13.0.3",
     "ses": "workspace:^",
     "ws": "^8.21.3"
   },

@@ -2172,18 +2172,25 @@ test('a completion already in flight cannot resurrect a quarantined turn', async
   const held = new Promise(resolve => {
     releaseAudit = () => resolve(undefined);
   });
+  /** @type {(() => void) | undefined} */
+  let announceAudit;
+  const auditStarted = new Promise(resolve => {
+    announceAudit = () => resolve(undefined);
+  });
   const { client, push } = makeFixture({
-    interruptTerminal: false,
+    interruptError: 'interrupt failed',
     clientOptions: {
       requestTimeoutMs: 200,
       saveThreadState: async state => {
         saved.push(JSON.parse(JSON.stringify(state)));
       },
-      auditEvent: async event => {
+      auditEvent: async kind => {
         // A durable journal append is real I/O; the failure path awaits it
         // before delivering the abort, which is the window in which the
         // app-server's already-queued completion used to win.
-        if (event?.type === 'session-failed') await held;
+        if (kind !== 'session-failed') return;
+        /** @type {any} */ (announceAudit)();
+        await held;
       },
     },
   });
@@ -2194,14 +2201,13 @@ test('a completion already in flight cannot resurrect a quarantined turn', async
     for await (const event of iterateReader(reader)) events.push(event);
   })();
 
-  // The interrupt is acked but never confirmed, so the deadline quarantines the
-  // session; the completion the app-server had already emitted arrives during
-  // the session-failed audit.
+  // The refused interrupt quarantines the session; the completion the
+  // app-server had already emitted arrives during the session-failed audit.
   const interrupted = client.interrupt().then(
     () => undefined,
     error => error,
   );
-  await new Promise(resolve => setTimeout(resolve, 350));
+  await auditStarted;
   push({
     method: 'turn/completed',
     params: {
@@ -2209,7 +2215,7 @@ test('a completion already in flight cannot resurrect a quarantined turn', async
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await null;
   /** @type {any} */ (releaseAudit)();
   t.truthy(await interrupted);
   await draining;
