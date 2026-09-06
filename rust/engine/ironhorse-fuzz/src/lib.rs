@@ -1916,7 +1916,8 @@ pub fn decoder_is_panic_free(bytes: &[u8]) -> usize {
 //    a panic. Totality of the parser is the invariant the whole compiler
 //    (scoper, coder) and the differential target below lean on.
 //  - **Compile differential** ([`compile_differential_check`]): the same
-//    source through `ironhorse_compile::compile` and the XS oracle compiler,
+//    source through `ironhorse_compile::compile_with` (the eval-goal entry,
+//    the goal the oracle shim compiles) and the XS oracle compiler,
 //    comparing accept/reject agreement and — on accepts — byte identity.
 //    An oracle process crash (`run` returns `None`) is a NAMED outcome
 //    ([`CompileFuzzOutcome::OracleUnavailable`]), not a harness abort.
@@ -1993,8 +1994,13 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 
     // The coder still `panic!`s on unported constructs; catch it so a fold
     // is a named rejection, not a fuzzer abort.
+    // The eval-goal entry: the oracle shim compiles every source with the
+    // `eval` builtin's flags, so this is the entry its bytes are identical
+    // to. ironhorse's Script goal (`compile`) knowingly hoists a strict
+    // program's top-level `var`/function declarations to the global object
+    // (see `ironhorse_compile::Goal`), which is not a byte finding.
     let ironhorse = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ironhorse_compile::compile(source)
+        ironhorse_compile::compile_with(source, false)
     }));
     let ironhorse_bytes: Option<Vec<u8>> = match &ironhorse {
         Ok(Ok(b)) => Some(b.clone()),

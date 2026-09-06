@@ -33,7 +33,8 @@ pub use ironhorse_regexp::unicode;
 
 pub use ast::{Item, Node, TREE_DEPTH_LIMIT};
 pub use coder::{
-    compile, compile_atoms, compile_atoms_with, compile_module, compile_module_atoms, compile_with,
+    compile, compile_atoms, compile_atoms_goal, compile_atoms_with, compile_module,
+    compile_module_atoms, compile_with, script_goal_deviates, Goal,
 };
 pub use error::{LexError, LexErrorKind};
 pub use lexer::{BigIntLiteral, Lexeme, Lexer};

@@ -1,8 +1,9 @@
 //! Full-corpus **byte-identity differential** runner (stage-5 child 7/7,
 //! the STAGE BAR). For every source file in a test262 subtree (or the
 //! curated corpora), where the XS oracle compiler accepts the file,
-//! asserts `ironhorse_compile::compile(src)` == `xs_oracle::run(src).bytecode`
-//! byte for byte, and prints the honest
+//! asserts `ironhorse_compile::compile_with(src, false)` (the eval-goal
+//! entry — the goal the oracle shim compiles; see `compile_diff`'s module
+//! doc) == `xs_oracle::run(src).bytecode` byte for byte, and prints the honest
 //! `total / identical / divergent / oracle-rejected / ironhorse-rejected`
 //! split with NAMED divergence classes and per-file identification.
 //!

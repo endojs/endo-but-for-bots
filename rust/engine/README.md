@@ -3096,6 +3096,92 @@ surgery. The `Ironhorse` path is total over coder folds (`catch_unwind` → empt
 bytecode → a clean ironhorse-vm abort, never a harness panic). **Flipped in
 stage 6 child 1** — see § Stage 6.
 
+## Script goal vs. the oracle's eval framing: strict top-level `var` hoisting
+
+**Finding (architecture review item 8, frozen `globalThis` writable by bare
+name).** `'use strict'; var g = 1; globalThis.g` answered `undefined`, and after
+`Object.freeze(globalThis)` a strict top-level `g = 2` rebound `g` to `2` with
+no `TypeError`. The disassembly showed why: the strict program's `var` was a
+frame local (`var_local`/`set_local`/`get_local`) while the sloppy twin took
+`eval_environment`/`set_variable`/`get_variable` (a global-object property).
+ECMA-262 GlobalDeclarationInstantiation creates a global-object property for
+every top-level `var`/function declaration of a **Script**, strict or not.
+
+**What the oracle does, and why it is not the reference here.** The `xs-oracle`
+shim compiles every source with `fxParseScript(..., mxProgramFlag | mxEvalFlag)`
+— the `eval` builtin's flags (`xsGlobal.c` `fx_eval`), not the Script goal.
+Under `XS_TOKEN_EVAL`, XS's `fxScopeHoisted`/`fxScopeLookup` hoist `var`/`Define`
+only for a *sloppy* program (`xsScope.c`), and `fxScopeCodingEval` codes a strict
+program as `RESERVE` + `fxScopeCodingBlock` (frame locals) — which is correct for
+a strict **eval**, whose variable environment is fresh. So the shimmed oracle
+answers `undefined` and `2` too, byte-identically with the old ironhorse. XS's
+own test262 runner (`xst.c`, `xst262.c`) parses scripts with `mxProgramFlag`
+alone: `XS_TOKEN_PROGRAM` scoping and `fxScopeCodingProgram` +
+`fxRunProgramEnvironment`, which define the global property regardless of
+strictness. The divergence is therefore a **compiler framing bug**, not an XS
+property: ironhorse inherited eval-goal semantics for its Script goal.
+
+**Fix (`ironhorse-compile`).** The program compile is now goal-explicit
+(`coder::Goal`): `compile`/`compile_atoms` are the **Script** goal, and
+`compile_with`/`compile_atoms_with` (the runtime `eval`/`Function` source bridge)
+stay the **eval** goal. Both keep XS's eval-program frame shape; they differ in
+exactly one place. For a strict Script with a top-level `var`/function
+declaration the scoper (`scoper::run_goal`, `eval_scope_hoists_vars`) leaves the
+declaration unresolved as it does for a sloppy program, and the coder
+(`code_scope_eval`) emits the sloppy hoist header (`NEW_LOCAL` + `VAR_LOCAL`
+prelude, `EVAL_ENVIRONMENT`, then the lexical slots), so every access takes the
+symbol path and `ironhorse-vm`'s existing `EVAL_ENVIRONMENT` arm materializes the
+global property. `let`/`const`/`class` stay lexical. A strict Script with nothing
+to hoist, and every sloppy program, compile byte-identically to before. The
+strict eval goal is untouched, so a strict `eval('var x')` still keeps `x` local
+to the eval.
+
+**Byte-identity accounting.** The oracle remains the ground truth for the goal it
+compiles: `ironhorse-compile/tests/coder_byte_identity.rs`, the `compile-diff`
+harness (`ironhorse-262/src/compile_diff.rs`), and the fuzz compile differential
+now compare the **eval-goal** entry, which is byte-identical to the shim on every
+accepted source. The Script goal's single sanctioned deviation is locked two
+ways: `assert_identical` requires the Script bytes to equal the eval bytes for
+every corpus source *except* a strict program with top-level `var`/function
+declarations (decided by the scoper, not a byte heuristic), where they must
+differ; and `strict_script_hoists_top_level_declarations` pins the deviating
+bytes to the oracle's own bytes for the sloppy twin of the same source
+(re-stamped `BEGIN_STRICT`). The semantics are pinned in
+`ironhorse-vm/tests/hardened_js_boundary.rs`: `'use strict'; var g = 1;
+globalThis.g` is `1`; after `Object.freeze(globalThis)` a strict top-level
+`g = 2` throws `TypeError` and leaves `g` (and `globalThis.g`) at `1`; the sloppy
+control silently keeps `1`; a strict top-level function declaration is a global
+property; lexicals are not.
+
+**Differential-harness expectations (knowingly updated).** The runner executes
+the Script goal, so strict-variant runs of official cases with top-level `var`s
+now hoist. Measured on `language/global-code` and `language/statements/variable`
+(oracle on, `--update-expectations` before and after): 210 outcomes, 191 covered,
+0 failed, 19 named skips in both runs. Exactly two per-(case, mode) entries
+changed, both strict variants that assert a top-level `var` is an enumerable /
+writable property of `this`:
+
+| Case (strict variant) | Before | After |
+| --- | --- | --- |
+| `language/statements/variable/S12.2_A9.js` | `skip:shared-test262-failure` | `skip:oracle-xs-strict-script-eval-framing` |
+| `language/statements/variable/S12.2_A11.js` | `skip:shared-test262-failure` | `skip:oracle-xs-strict-script-eval-framing` |
+
+Before, both engines failed the official assertion identically (the shared
+failure was the bug). After, Ironhorse's Script goal satisfies it and the
+eval-framed shim still does not, which the runner would score as
+"over-acceptance". The new `oracle-xs-strict-script-eval-framing` run-skip
+(`xst.rs`, `oracle_eval_frames_strict_script`) names that exact oracle framing
+gap, narrowed on three ingredients: the oracle ran to its official assertion
+and threw `Test262Error`, Ironhorse completed, and the compiler itself
+(`ironhorse_compile::script_goal_deviates`) says the source is a strict program
+with a top-level `var`/function declaration. It classifies as infrastructure,
+like the other pinned-oracle defects. Neither case was in the ratchet's
+`covered.txt`, so the ratchet floor is untouched. The remaining shift is advisory
+computron telemetry for strict variants (`computron-gap` 157 → 185 across the two
+directories: the hoisted access path costs differently from the oracle's
+frame-local path); the exact-metering corpus (`ironhorse-meter-exact`,
+sloppy-only by policy, no `"use strict"` sources) is unaffected.
+
 ## Stage 6: the snapshot surface (`ironhorse-snapshot`, children 1–6)
 
 The metered `ironhorse-vm` machine becomes **suspendable**: an `XS_M`-atom

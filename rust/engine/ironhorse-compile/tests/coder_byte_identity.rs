@@ -1,4 +1,4 @@
-//! Byte-identity: `ironhorse_compile::compile(src)` must equal
+//! Byte-identity: `ironhorse_compile::compile_with(src, false)` must equal
 //! `xs_oracle::run(src).bytecode` byte for byte on a corpus of
 //! expression + simple-statement programs (stage-5 child 5/7 bar).
 //!
@@ -7,8 +7,20 @@
 //! single wrong byte fails the test. On divergence the harness prints an
 //! **opcode-level diff** from a small disassembler — a triage tool that
 //! pays for itself the first time a width or a branch displacement is off.
+//!
+//! The entry compared is the **eval goal** (`compile_with`), because that
+//! is the goal the oracle shim compiles every source as
+//! (`fxParseScript(..., mxProgramFlag | mxEvalFlag)`, the `eval` builtin's
+//! flags). ironhorse's **Script goal** (`compile`, what a top-level program
+//! runs as) deviates from those bytes in exactly one known place: a
+//! *strict* program's top-level `var`/function declarations hoist to the
+//! global object (ECMA-262 GlobalDeclarationInstantiation; `xst`'s
+//! `mxProgramFlag`-only parse) where the strict *eval* program XS codes
+//! keeps them as frame locals. [`assert_identical`] locks that
+//! characterization over the whole corpus, and
+//! [`strict_script_hoists_top_level_declarations`] pins the exact shape.
 
-use ironhorse_compile::{compile, compile_module};
+use ironhorse_compile::{compile, compile_module, compile_with, opcodes};
 
 // --------------------------- disassembler ----------------------------
 //
@@ -107,8 +119,21 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect::<Vec<_>>().join(" ")
 }
 
+/// Whether `src` is a strict program declaring a top-level `var` or
+/// function — the one program class whose Script-goal bytes deviate from
+/// the eval goal's (the module doc). The compiler's own answer
+/// (`ironhorse_compile::script_goal_deviates`, decided by the scoper), not
+/// a byte heuristic.
+fn strict_with_top_level_declarations(src: &str) -> bool {
+    ironhorse_compile::script_goal_deviates(src)
+}
+
 /// Assert byte-identity for every source, printing an opcode-level diff
-/// for the first few divergences.
+/// for the first few divergences. The eval-goal entry is compared (the
+/// module doc says why); the Script-goal entry must then match it exactly,
+/// except for a strict program with top-level `var`/function declarations,
+/// where it must differ (the hoist,
+/// [`strict_script_hoists_top_level_declarations`] pins the exact bytes).
 fn assert_identical(corpus: &[&str]) {
     let mut fails: Vec<String> = Vec::new();
     for &src in corpus {
@@ -120,6 +145,20 @@ fn assert_identical(corpus: &[&str]) {
             }
         };
         match compile(src) {
+            Ok(script) => {
+                let hoists = strict_with_top_level_declarations(src);
+                if hoists == (script == want) {
+                    fails.push(format!(
+                        "{src:?} SCRIPT GOAL {} the eval goal (strict top-level hoist expected: {hoists})\n  eval   {}\n  script {}",
+                        if hoists { "matches" } else { "deviates from" },
+                        hex(&want),
+                        hex(&script)
+                    ));
+                }
+            }
+            Err(e) => fails.push(format!("{src:?}: script-goal compile error {e:?}")),
+        }
+        match compile_with(src, false) {
             Ok(got) if got == want => {}
             Ok(got) => {
                 let wd = disasm(&want);
@@ -751,7 +790,8 @@ fn declarations_let_const_lexical() {
 fn declarations_strict_and_blocks() {
     assert_identical(&[
         // a `"use strict"` prologue makes the eval program strict: `var`
-        // reserves and binds a slot up front like a lexical
+        // reserves and binds a slot up front like a lexical (the eval
+        // goal; the Script goal hoists it — see the test below)
         "\"use strict\"; var x=1; x;", "\"use strict\"; let x=1; x;",
         "\"use strict\"; const y=2; y;", "\"use strict\"; var x=1; x=2; x;",
         "\"use strict\"; let a=1,b=2; a+b;",
@@ -761,6 +801,60 @@ fn declarations_strict_and_blocks() {
         "{ let x=1; } { let x=2; }", "if(1){ let x=1; x; }",
         "while(0){ let x=1; }", "{ { let x=1; x; } }",
     ]);
+}
+
+/// The Script goal's strict top-level hoist, pinned byte for byte. A strict
+/// Script's `var`/function declarations must take the sloppy hoist shape
+/// (`NEW_LOCAL` + `VAR_LOCAL` prelude, `EVAL_ENVIRONMENT`, then the symbol
+/// path for every access), so its bytes equal what the oracle codes for the
+/// **sloppy twin** — the same source with the directive prologue neutralized
+/// to a same-length plain string — after re-stamping the sloppy twin's
+/// `BEGIN_SLOPPY` header and prologue string. The eval goal of the same
+/// source stays byte-identical to the oracle (frame locals: `SET_LOCAL`).
+///
+/// The twin trick needs a program with no nested function (a nested
+/// function's own prologue would be sloppy in the twin), so the function
+/// declaration case is pinned at the semantic level by
+/// `ironhorse-vm/tests/hardened_js_boundary.rs` and at the byte level only
+/// as "deviates from the eval goal" by [`assert_identical`]'s invariant.
+#[test]
+fn strict_script_hoists_top_level_declarations() {
+    let cases: &[(&str, &str)] = &[
+        ("'use strict'; var g = 1; g = 2; g", "'use_strict'; var g = 1; g = 2; g"),
+        ("'use strict'; var g = 1; globalThis.g", "'use_strict'; var g = 1; globalThis.g"),
+        // Lexicals ride along in the hoist shape's lexical loop.
+        ("'use strict'; var g = 1; let h = 2; g + h", "'use_strict'; var g = 1; let h = 2; g + h"),
+        ("#!shebang\n\"use strict\"; var y = 3; y;", "#!shebang\n\"use_strict\"; var y = 3; y;"),
+    ];
+    for &(strict_src, sloppy_twin) in cases {
+        assert!(strict_with_top_level_declarations(strict_src), "{strict_src:?}");
+        let script = compile(strict_src).expect("script goal compiles");
+        let eval = compile_with(strict_src, false).expect("eval goal compiles");
+        let oracle = xs_oracle::run(strict_src).expect("oracle runs").bytecode;
+        assert_eq!(hex(&eval), hex(&oracle), "{strict_src:?}: eval goal must match the oracle");
+        // The sloppy twin's oracle bytes, re-stamped strict.
+        let twin = xs_oracle::run(sloppy_twin).expect("oracle runs twin").bytecode;
+        assert_eq!(twin[0] as i32, opcodes::XS_CODE_BEGIN_SLOPPY, "{sloppy_twin:?} is sloppy");
+        let mut want = twin.clone();
+        want[0] = opcodes::XS_CODE_BEGIN_STRICT as u8;
+        let needle = b"use_strict";
+        let at = want.windows(needle.len()).position(|w| w == needle).expect("prologue string");
+        want[at..at + needle.len()].copy_from_slice(b"use strict");
+        assert_eq!(
+            hex(&script),
+            hex(&want),
+            "{strict_src:?}: the strict Script must code the sloppy hoist shape\n  script {}\n  want   {}",
+            disasm(&script).join(" | "),
+            disasm(&want).join(" | ")
+        );
+        assert_ne!(hex(&script), hex(&eval), "{strict_src:?}: the two goals must differ");
+    }
+    // A strict Script with nothing to hoist keeps XS's strict shape exactly.
+    for src in ["'use strict'; let x = 1; x", "'use strict'; (function(){ return arguments; })"] {
+        assert!(!strict_with_top_level_declarations(src), "{src:?}");
+        let oracle = xs_oracle::run(src).expect("oracle runs").bytecode;
+        assert_eq!(hex(&compile(src).unwrap()), hex(&oracle), "{src:?}");
+    }
 }
 
 // `with` statements (child 6). The object becomes a `with` environment

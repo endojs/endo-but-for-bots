@@ -1,9 +1,24 @@
 //! The full-corpus **byte-identity differential harness** (stage-5 child
 //! 7/7, the STAGE BAR). For every source in the conformance corpus, where
 //! the XS oracle compiler *accepts* the file, this asserts that
-//! `ironhorse_compile::compile(source)` equals `xs_oracle::run(source).bytecode`
-//! **byte for byte** — XS's coder is the ground truth (design § roadmap
-//! row 5; Design Decisions 4 and 5).
+//! `ironhorse_compile::compile_with(source, false)` equals
+//! `xs_oracle::run(source).bytecode` **byte for byte** — XS's coder is the
+//! ground truth (design § roadmap row 5; Design Decisions 4 and 5).
+//!
+//! The eval-goal entry (`compile_with`) is the one compared because it is
+//! the goal the oracle shim compiles: `fxParseScript(..., mxProgramFlag |
+//! mxEvalFlag)`, the `eval` builtin's flags. ironhorse's Script-goal entry
+//! (`compile`, what the dual-run executes) deviates from those bytes in
+//! exactly one known place — a **strict** program's top-level
+//! `var`/function declarations hoist to the global object
+//! (`EVAL_ENVIRONMENT` + the symbol path) as ECMA-262
+//! GlobalDeclarationInstantiation and `xst`'s `mxProgramFlag`-only Script
+//! parse require, where the strict *eval* program XS codes keeps them as
+//! frame locals. That deviation is pinned by
+//! `ironhorse-vm/tests/hardened_js_boundary.rs` and the compile crate's
+//! byte-identity suite; comparing the eval goal here keeps every remaining
+//! byte difference a genuine finding (see `rust/engine/README.md` § "Script
+//! goal vs. the oracle's eval framing").
 //!
 //! **Stage bar** (design § Feasibility Verdict): `divergent == 0` *and*
 //! accept/reject agreement, over the full corpus. A byte divergence on a
@@ -150,7 +165,9 @@ fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, Str
 /// coder panic (the ported-surface fold). The caller silences the panic
 /// hook for the batch.
 fn ironhorse_compile(source: &str) -> Result<Result<Vec<u8>, String>, String> {
-    let caught = panic::catch_unwind(AssertUnwindSafe(|| ironhorse_compile::compile(source)));
+    // The eval-goal entry: the goal the oracle shim compiles (module doc).
+    let caught =
+        panic::catch_unwind(AssertUnwindSafe(|| ironhorse_compile::compile_with(source, false)));
     match caught {
         Ok(Ok(bytes)) => Ok(Ok(bytes)),
         Ok(Err(e)) => Ok(Err(format!("{:?}", e))),
@@ -510,7 +527,8 @@ pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
             }
         };
         let ironhorse = panic::catch_unwind(AssertUnwindSafe(|| {
-            ironhorse_compile::compile_atoms(source)
+            // The eval-goal entry, matching the bytecode gate's framing.
+            ironhorse_compile::compile_atoms_with(source, false)
         }));
         let ironhorse_syms = match ironhorse {
             Ok(Ok((_, syms))) => syms,
