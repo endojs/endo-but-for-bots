@@ -100,6 +100,52 @@ export const encodeJsonLine = (message, maxBytes = DEFAULT_MAX_LINE_BYTES) => {
 harden(encodeJsonLine);
 
 /**
+ * Flatten a tool result to the text a transcript shows.
+ *
+ * App-server reports results in the provider's own envelopes: a dynamic tool
+ * completes with `contentItems` (`{ type: 'inputText', text }` and its image and
+ * audio siblings), an MCP tool with `{ content: [{ type: 'text', text }, …] }`
+ * and an optional `structuredContent`, a shell command with a plain string. A
+ * transcript wants what the model saw, not the envelope, so text blocks are
+ * joined and anything without a text form is rendered as JSON rather than
+ * dropped.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+export const renderToolResult = value => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value
+      .map(block => {
+        if (typeof block === 'string') return block;
+        if (block && typeof block === 'object') {
+          const record = /** @type {Record<string, unknown>} */ (block);
+          if (typeof record.text === 'string') return record.text;
+        }
+        return JSON.stringify(block) ?? String(block);
+      })
+      .filter(text => text !== '')
+      .join('\n');
+  }
+  if (typeof value === 'object') {
+    const record = /** @type {Record<string, unknown>} */ (value);
+    if (Array.isArray(record.content)) {
+      const text = renderToolResult(record.content);
+      if (text !== '') return text;
+      if (record.structuredContent !== undefined) {
+        return JSON.stringify(record.structuredContent) ?? '';
+      }
+      return '';
+    }
+    if (typeof record.message === 'string') return record.message;
+  }
+  return JSON.stringify(value) ?? String(value);
+};
+harden(renderToolResult);
+
+/**
  * Convert app-server item records into a stable event vocabulary. Output is
  * intentionally small: downstream UI code must not depend on Codex's generated
  * version-specific schema.

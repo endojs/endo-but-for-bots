@@ -7,6 +7,13 @@
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+// Stands in for a result the backend never reported. Persisted as the tool
+// message's content, so the transcript says what happened instead of carrying
+// an empty result that reads as a tool still running.
+export const UNREPORTED_TOOL_RESULT =
+  'The backend completed the turn without reporting a result for this tool call.';
+harden(UNREPORTED_TOOL_RESULT);
+
 /**
  * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string }} options
  */
@@ -70,6 +77,7 @@ export const runHostedTurn = async ({
   let checkpoint;
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
   let usage;
+  /** @type {Array<{ id: string, name: string, args: string, result: string | null }>} */
   const toolCalls = [];
   const callsById = new Map();
   await null;
@@ -159,6 +167,20 @@ export const runHostedTurn = async ({
             typeof event.checkpoint === 'string' && event.checkpoint !== ''
               ? event.checkpoint
               : undefined;
+          // A tool the backend started and never reported on would otherwise
+          // sit in the transcript looking permanently in progress: the live
+          // view keeps it pending and the persisted history records an empty
+          // result. Settle it explicitly, on both.
+          for (const call of toolCalls) {
+            if (call.result === null) {
+              call.result = UNREPORTED_TOOL_RESULT;
+              writer.toolResult({
+                id: call.id,
+                name: call.name,
+                result: call.result,
+              });
+            }
+          }
           if (signal?.aborted && cancellationP) await cancellationP;
           return harden({
             finalContent,
