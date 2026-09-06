@@ -515,16 +515,18 @@ harden(makeSubagentDelegations);
  * @param {any} options.spawner - A `SubagentSpawner` capability.
  * @param {ReturnType<typeof makeSubagentDelegations>} options.delegations
  * @param {boolean} [options.retainsAttachments] - Whether a claimed reply stays
- *   in the inbox long enough to adopt what it carries. False for a harness that
- *   dismisses every message it handles, where telling the model to adopt would
- *   be a lie.
+ *   in the inbox long enough to adopt what it carries. Both harnesses dismiss
+ *   a claimed reply — a replayed one would start an exchange between two
+ *   models — so the default says plainly that attachments are not retained;
+ *   only a harness that keeps claimed replies may pass true, since telling the
+ *   model to adopt from a dismissed message is a lie.
  * @returns {Map<string, FaeTool>}
  */
 export const makeSubagentTools = ({
   powers,
   spawner,
   delegations,
-  retainsAttachments = true,
+  retainsAttachments = false,
 }) => {
   /** @type {Map<string, FaeTool>} */
   const tools = new Map();

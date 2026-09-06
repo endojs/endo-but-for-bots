@@ -110,16 +110,16 @@ Teardown is depth-first, so raising the depth bound does not strand a subtree.
 
 ### Attachments
 
-A reply may carry capabilities, and what happens to them follows each harness's
-existing dismissal policy rather than inventing a new one.
-Fae does not auto-dismiss, so `askSubagent` reports the reply's message number
-and edge names and tells the model to `adopt` them.
-A Floot session dismisses every message it handles, and a claimed reply is no
-exception: leaving one would mean that after a restart, with no ask pending, the
-reply replays as an ordinary message, the session answers it, and the subagent
-answers back — two models in an unbounded exchange.
-So Floot's `askSubagent` says plainly that the attachments were not retained and
-suggests asking the subagent to store the object under a pet name instead.
+A reply may carry capabilities, and both harnesses dismiss a claimed reply as
+soon as it is claimed: leaving one would mean that after a restart, with no ask
+pending, the reply replays as an ordinary message, the harness answers it, and
+the subagent answers back — two models in an unbounded exchange.
+So `askSubagent` says plainly that the attachments were not retained and
+suggests asking the subagent to store the object under a pet name and report
+the name instead.
+A harness that keeps claimed replies in its inbox may pass
+`retainsAttachments: true` to `makeSubagentTools`, and only then does the tool
+tell the model to `adopt`.
 
 ## Durability
 
