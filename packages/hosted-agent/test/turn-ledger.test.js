@@ -342,6 +342,83 @@ test('observing after settlement is refused and cannot rewrite the record', asyn
   });
 });
 
+/**
+ * A store whose writes do not complete in the order they were issued: a
+ * turn-id note takes longer to land than the completion that follows it. That
+ * is any real store under I/O, and the marker on disk must still end up
+ * describing the newer state.
+ */
+const makeReorderingStore = () => {
+  /** @type {any[]} */
+  const writes = [];
+  const persist = async record => {
+    if (record && record.status === 'started' && record.checkpoint) {
+      for (let tick = 0; tick < 3; tick += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await null;
+      }
+    }
+    writes.push(record === undefined ? null : { ...record });
+  };
+  return { writes, persist };
+};
+
+const COMMITTED = harden({
+  baseCheckpoint: 'turn-1',
+  checkpoint: 'turn-2',
+  status: 'completed',
+});
+
+test('a completion that lands while the turn id is being noted is the durable record too', async t => {
+  const { writes, persist } = makeReorderingStore();
+  const ledger = makeTurnLedger({ persist });
+  const turn = await ledger.begin({ baseCheckpoint: 'turn-1' });
+  const observing = turn.observe('turn-2');
+  // The note's write is in flight when the completion arrives.
+  await null;
+  const settled = await turn.settle({
+    type: 'completed',
+    checkpoint: 'turn-2',
+  });
+  t.true(settled.accepted);
+  await observing;
+  t.deepEqual(writes, [
+    { baseCheckpoint: 'turn-1', status: 'started' },
+    { baseCheckpoint: 'turn-1', checkpoint: 'turn-2', status: 'started' },
+    COMMITTED,
+  ]);
+
+  // The consequence of getting this wrong: a process that dies here and
+  // reloads the marker sees a turn still "started", and the consumer's
+  // acknowledgement of the commit it durably holds is refused forever.
+  const reloaded = makeTurnLedger({ persist, recovery: writes.at(-1) });
+  await reloaded.acknowledge('turn-2');
+  t.deepEqual(reloaded.status(), {
+    inFlight: false,
+    needsReconciliation: false,
+  });
+});
+
+test('a note queued behind a completion that already won is not written', async t => {
+  const { writes, persist } = makeReorderingStore();
+  const ledger = makeTurnLedger({ persist });
+  const turn = await ledger.begin({ baseCheckpoint: 'turn-1' });
+  // The completion latches before the note's write has begun: the note would
+  // describe a settled turn as still running, so nothing is written for it.
+  const observing = turn.observe('turn-2');
+  const settled = await turn.settle({
+    type: 'completed',
+    checkpoint: 'turn-2',
+  });
+  t.true(settled.accepted);
+  await observing;
+  t.deepEqual(writes, [
+    { baseCheckpoint: 'turn-1', status: 'started' },
+    COMMITTED,
+  ]);
+  t.deepEqual(ledger.getRecord(), COMMITTED);
+});
+
 test('a settlement that lands during a slow observe keeps its record', async t => {
   const store = makeStore();
   const ledger = makeTurnLedger({ persist: store.persist });

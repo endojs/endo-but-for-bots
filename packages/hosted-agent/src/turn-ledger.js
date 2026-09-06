@@ -64,6 +64,31 @@ export const makeTurnLedger = ({
   /** @type {InFlightTurn | undefined} */
   let inFlight;
 
+  // Durable writes land in the order they were issued. Two can be in flight
+  // at once — the provider's turn id being noted while the completion that
+  // followed it is already being recorded — and a store that completes them
+  // out of order would leave the marker describing the older state: on reload
+  // the turn reads as still running, and the consumer's acknowledgement of the
+  // commit it durably holds is refused. Serializing here keeps that guarantee
+  // the ledger's own rather than the store's.
+  /** @type {Promise<void>} */
+  let writes = Promise.resolve();
+  /**
+   * @template T
+   * @param {() => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  const inOrder = operation => {
+    const write = writes.then(operation);
+    writes = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    return write;
+  };
+  /** @param {TurnRecord | undefined} next */
+  const persistInOrder = next => inOrder(() => persist(next));
+
   return harden({
     /**
      * Write-ahead a turn and take the in-flight slot.
@@ -89,7 +114,7 @@ export const makeTurnLedger = ({
         status: /** @type {const} */ ('started'),
       });
       try {
-        await persist(next);
+        await persistInOrder(next);
       } catch (error) {
         inFlight = undefined;
         throw error;
@@ -143,7 +168,7 @@ export const makeTurnLedger = ({
               status: /** @type {const} */ ('completed'),
             });
             record = committed;
-            await persist(committed);
+            await persistInOrder(committed);
           }
           // An aborted or failed turn keeps the write-ahead marker: it is
           // exactly what reconciliation needs to roll the provider back.
@@ -171,9 +196,14 @@ export const makeTurnLedger = ({
             checkpoint,
             status: /** @type {const} */ ('started'),
           });
-          await persist(noted);
-          // A settlement that won the latch while this write was in flight
-          // owns the record; do not overwrite what it persisted.
+          await inOrder(async () => {
+            // A settlement that won the latch while this note was queued owns
+            // the record: writing the note now would describe a settled turn
+            // as still running.
+            if (turn.settled !== undefined) return;
+            await persist(noted);
+          });
+          // Likewise in memory: do not overwrite what a settlement persisted.
           if (turn.settled === undefined) record = noted;
         },
         settledOutcome: () => turn.settled,
@@ -198,7 +228,7 @@ export const makeTurnLedger = ({
       }
       (record.status === 'completed' && record.checkpoint === checkpoint) ||
         Fail`Checkpoint ${q(checkpoint)} is not awaiting acknowledgement`;
-      await persist(undefined);
+      await persistInOrder(undefined);
       record = undefined;
       needsReconciliation = false;
       await audit('turn-committed', { checkpoint });
@@ -234,7 +264,7 @@ export const makeTurnLedger = ({
         await audit('history-reconciled', {
           strategy: 'checkpoint-already-restored',
         });
-        await persist(undefined);
+        await persistInOrder(undefined);
         record = undefined;
         needsReconciliation = false;
         return false;
@@ -248,7 +278,7 @@ export const makeTurnLedger = ({
       restored === baseCheckpoint ||
         Fail`Revert did not restore the durable checkpoint`;
       await audit('history-reconciled', { strategy: 'checkpointed-revert' });
-      await persist(undefined);
+      await persistInOrder(undefined);
       record = undefined;
       needsReconciliation = false;
       return true;
