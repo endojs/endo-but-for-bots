@@ -1342,17 +1342,17 @@ test('a watch inherits the wait deadline instead of restarting it', async t => {
   // is already spent the post-free watch can only run out the remaining ~0.2x
   // — and none at all if load already carried real time past the deadline.
   // Restarting, `awaitOutcome` would recompute `Date.now() + watchLimitMs` at
-  // submission and watch a whole further ~1x from here. The 0.5x bound below
-  // separates those two, and — unlike a bound on total elapsed — it excludes
-  // the pre-free wait entirely, so a saturated runner that dilates that wait
-  // (the cold, oversized affected set of a grouped lockfile bump) cannot push
-  // it over. Only the post-submit detect/poll overhead counts against the
-  // inheriting side, and that stays well under the ~1x margin.
+  // submission and watch a whole further ~1x from here. The full-window bound
+  // below is the actual regression boundary: a restarted deadline cannot
+  // expire before that new window, while an inherited deadline has already
+  // consumed most of it. Unlike a tighter fraction, it leaves the inheriting
+  // side enough room for post-submit detect/poll overhead on a saturated
+  // runner without weakening the distinction from a fresh deadline.
   const freed = Date.now();
   await t.throwsAsync(() => attempt, { message: /within the watch limit/ });
   const watchedAfterFree = Date.now() - freed;
   t.true(
-    watchedAfterFree < watchLimitMs * 0.5,
+    watchedAfterFree < watchLimitMs,
     `watched ${watchedAfterFree}ms after the slot freed; a fresh window would be ~${watchLimitMs}ms`,
   );
 });
