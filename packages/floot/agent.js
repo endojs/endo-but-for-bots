@@ -48,8 +48,11 @@ import { makeReplyChannel } from './src/stream.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
-// produces a spoken reply.
-const MAX_TOOL_ROUNDS = 8;
+// produces a spoken reply. A safety ceiling, not a work budget: a coding turn
+// routinely takes dozens of tool rounds, and at 8 sessions bailed out mid-task
+// with the tool-step fallback. `FLOOT_MAX_TOOL_ROUNDS` overrides it per
+// deployment. The hosted backends run their own loops and never reach it.
+const DEFAULT_MAX_TOOL_ROUNDS = 48;
 const AGENT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const execFileAsync = promisify(execFile);
@@ -517,6 +520,8 @@ const provisionPresetObjects = async (
  *   `accountStatus`.
  * @param {string} [options.modelId] - The model this session runs, used to
  *   price its usage.
+ * @param {number} [options.maxToolRounds] - Provider calls one turn may make
+ *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @returns {Promise<{
  *   converse: (
@@ -536,7 +541,13 @@ export const makeStreamingAgent = async (
   _context,
   providerConfig,
   systemPrompt,
-  { spawner, accountOracle, modelId, timers } = {},
+  {
+    spawner,
+    accountOracle,
+    modelId,
+    timers,
+    maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
+  } = {},
 ) => {
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   const hostedClient = /** @type {any} */ (providerConfig).hostedClient;
@@ -832,7 +843,7 @@ export const makeStreamingAgent = async (
     // model creates mid-turn (e.g. via exec/store) is immediately callable.
     let finalContent = '';
     // Whether the model produced a plain (toolless) answer. If it never does
-    // within MAX_TOOL_ROUNDS, we send a fallback instead of an empty reply.
+    // within maxToolRounds, we send a fallback instead of an empty reply.
     let answered = false;
     // Token usage accumulates across this turn's rounds (each tool round is its
     // own provider call).
@@ -842,7 +853,7 @@ export const makeStreamingAgent = async (
 
     const loop = await runAgenticTurn({
       leafId: baseLeafId,
-      maxRounds: MAX_TOOL_ROUNDS,
+      maxRounds: maxToolRounds,
       getTools: async () => {
         if (signal?.aborted) throw Error('Floot turn aborted');
         return toolRegistry.snapshot();
@@ -949,7 +960,7 @@ export const makeStreamingAgent = async (
     answered = loop.answered;
 
     if (!answered) {
-      // The loop hit MAX_TOOL_ROUNDS while the model still wanted to call tools,
+      // The loop hit maxToolRounds while the model still wanted to call tools,
       // so it never produced a spoken answer. Persist and speak a fallback so the
       // turn ends on a well-formed assistant message instead of an empty reply
       // sitting atop a dangling tool_result.
@@ -957,7 +968,7 @@ export const makeStreamingAgent = async (
         "I wasn't able to finish that within my tool-step limit. Could you narrow it down or try again?";
       stagedMessages.push({ role: 'assistant', content: finalContent });
       console.error(
-        `[floot] turn hit MAX_TOOL_ROUNDS (${MAX_TOOL_ROUNDS}); sent fallback reply`,
+        `[floot] turn hit maxToolRounds (${maxToolRounds}); sent fallback reply`,
       );
     }
 
@@ -1950,6 +1961,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           agentConfig,
           sessionPrompt,
           harden({
+            maxToolRounds,
             ...(sessionDepth < maxSubagentDepth
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
               : {}),
@@ -2419,6 +2431,24 @@ export const make = (hostPowers, _context, { env } = {}) => {
     if (!Number.isInteger(value) || value < 0) {
       throw Error(
         `Invalid FLOOT_MAX_SUBAGENT_DEPTH ${JSON.stringify(configured)}`,
+      );
+    }
+    return value;
+  })();
+
+  // Provider calls one turn may make before the tool-step fallback. Read once
+  // here, where a bad value is a deployment error the operator sees at
+  // provisioning, rather than per session where it would surface as a failed
+  // turn much later.
+  const maxToolRounds = (() => {
+    const configured = env?.FLOOT_MAX_TOOL_ROUNDS;
+    if (configured === undefined || configured === '') {
+      return DEFAULT_MAX_TOOL_ROUNDS;
+    }
+    const value = Number(configured);
+    if (!Number.isInteger(value) || value < 1) {
+      throw Error(
+        `Invalid FLOOT_MAX_TOOL_ROUNDS ${JSON.stringify(configured)}`,
       );
     }
     return value;
