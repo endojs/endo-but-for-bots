@@ -184,25 +184,54 @@ pub const STACK_SLOT_RESERVED: usize = 32;
 /// separately.
 pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 
-/// Ceiling on **native `dispatch_at` re-entry depth**. An ordinary bytecode
-/// CALL loops within a single `dispatch_at` (it rewrites `pc` and pushes a
-/// `CallerState`), so deep JS recursion consumes value-stack slots, not native
-/// Rust stack, and is bounded by the [`STACK_SLOT_COUNT`] value-stack budget
-/// alone. But a callback (`Array.prototype.map`/`forEach`/…), an async body
-/// (`START_ASYNC`), an async-generator resume, and a generator resume each
-/// drive the callee by *recursively* calling `dispatch_at` on the native stack.
-/// The value-stack budget (~4064 slots) is calibrated to XS's `fxOverflow`
-/// point; reached by native re-entry it implies hundreds of nested frames of
-/// the (very large) `dispatch_at` activation, which overflows the real thread
-/// stack — and thus the libFuzzer/ASan `bytecode_decoder` process — long before
-/// the value-slot guard can fire (endojs/endo-but-for-bots#1046:
-/// `[193, 193, 37, 253, 45, 93]` = nested `START_ASYNC`). This ceiling bounds
-/// the native re-entry depth well below any real thread-stack limit while
-/// staying far above any real program's callback/async/generator nesting,
-/// degrading a degenerate nest to a host-abort [`Halt::StackOverflow`]. It is
-/// deliberately conservative: the `dispatch_at` activation is tens of KiB, so
-/// even a few hundred levels can exhaust a main-thread stack.
-pub const DISPATCH_REENTRY_LIMIT: usize = 64;
+/// The engine's **native-recursion budget**, in light-frame units (see
+/// [`LIGHT_FRAME_COST`] / [`HEAVY_FRAME_COST`]).
+///
+/// An ordinary bytecode CALL loops within a single `dispatch_at` (it rewrites
+/// `pc` and pushes a `CallerState`), so deep JS recursion consumes value-stack
+/// slots, not native Rust stack, and is bounded by the [`STACK_SLOT_COUNT`]
+/// value-stack budget alone. Everything else the engine does on a guest's
+/// behalf recurses on the **host thread's native stack**, whose exhaustion is a
+/// `SIGABRT` no `catch_unwind` can contain: a callback (`forEach`/`map`/…), an
+/// async body (`START_ASYNC`), a generator or async-generator resume, a native
+/// built-in invoking another native (`join` → `toString` → `join` over a
+/// self-containing array), a Proxy forwarding an internal method to a Proxy
+/// target (or to a Proxy in an ordinary object's prototype chain), an exotic
+/// prototype chain walked through the MOP, `JSON.parse` / `JSON.stringify`
+/// over nested data, `Array.prototype.flat`, and the host-boundary renderer
+/// over a nested (or cyclic) completion value.
+///
+/// One counter, [`Interp::native_depth`], is charged by every one of those
+/// re-entry points and checked against this ceiling; past it the engine halts
+/// with [`Halt::StackOverflow`] — the same abort-to-host XS raises from
+/// `fxCheckCStack`, deterministic across hosts because it is a counter rather
+/// than a stack-address margin. A frame is charged by size class rather than
+/// by count, so the budget bounds the *stack bytes* a guest can consume
+/// regardless of which families it mixes: the worst case is the heavier corner,
+/// [`NATIVE_DEPTH_LIMIT`] / [`HEAVY_FRAME_COST`] nested `dispatch_at` or
+/// built-in activations (128 frames; a `forEach` nest costs two per level, so
+/// 63 nested callbacks beneath the top-level program's own dispatch — the
+/// allowance the 64-deep re-entry ceiling of endojs/endo-but-for-bots#1046
+/// gave the nested-`START_ASYNC` fuzz trophy `[193, 193, 37, 253, 45, 93]`),
+/// or [`NATIVE_DEPTH_LIMIT`] light frames (512 nested proxies / JSON levels).
+///
+/// The bound is only a bound relative to a thread stack that can hold the
+/// budget: [`crate::NATIVE_STACK_BYTES`] states the size the engine requires,
+/// per build profile, and `tests/native_recursion_budget.rs` pins each family
+/// at the ceiling on a thread of exactly that size.
+pub const NATIVE_DEPTH_LIMIT: usize = 512;
+
+/// Budget units charged by a **heavy** native frame: a `dispatch_at`
+/// re-entry, or a `call_native` / `call_native_method` activation. Both are
+/// the monolithic match-dispatch functions of this crate, whose activations
+/// measure in the tens to hundreds of KiB (debug) — an order of magnitude
+/// above any other frame the engine recurses through.
+pub const HEAVY_FRAME_COST: usize = 4;
+
+/// Budget units charged by a **light** native frame: a MOP internal method
+/// forwarding through a Proxy or an exotic prototype, a JSON walker level, a
+/// `flat` level, or a renderer level (at most a few KiB each).
+pub const LIGHT_FRAME_COST: usize = 1;
 
 /// The fixed cost, in computrons, of the top-level program invocation
 /// that precedes the captured program bytecode. XS dispatches the
@@ -4343,12 +4372,13 @@ pub struct Interp {
     /// Runtime native functions sit above this boundary; boot functions
     /// below it are re-derived at the same indices on restore.
     boot_slot_count: u32,
-    /// Current **native `dispatch_at` re-entry depth** (callbacks, async
-    /// bodies, async-generator and generator resumes each recurse into
-    /// `dispatch_at`). Bounded by [`DISPATCH_REENTRY_LIMIT`] so a degenerate
-    /// nest aborts with [`Halt::StackOverflow`] instead of overflowing the real
-    /// thread stack.
-    dispatch_depth: usize,
+    /// Native-recursion budget consumed so far, in the units of
+    /// [`NATIVE_DEPTH_LIMIT`]: every engine function that re-enters guest code
+    /// or recurses over guest-controlled structure on the host stack charges
+    /// its frame class here ([`Self::enter_native_frame`]) and releases it on
+    /// return, so a degenerate nest halts with [`Halt::StackOverflow`] instead
+    /// of overflowing the real thread stack. Always `0` at a crank boundary.
+    native_depth: usize,
     /// The host-installed source compiler ([`SourceCompiler`]) the runtime
     /// source-execution bridge (`eval` of a string, the `Function`
     /// constructor) drives to compile a source string to bytecode in this
@@ -5889,7 +5919,7 @@ impl Interp {
             static_str,
             n_dispatched: 0,
             boot_slot_count: 0,
-            dispatch_depth: 0,
+            native_depth: 0,
             source_compiler: None,
             eval_direct: false,
             code_segments: Vec::new(),
@@ -6083,7 +6113,7 @@ impl Interp {
         if slot.kind == Kind::Undefined {
             return None;
         }
-        Some(self.render(&slot))
+        self.render(&slot).ok()
     }
 
     /// Whether any promise settled **rejected** with no reaction ever
@@ -13169,8 +13199,25 @@ impl Interp {
     /// (`String::from_utf16_lossy`), the display/debug boundary the design's
     /// § Value and heap model routes through UTF-16. Non-string kinds defer to
     /// [`slot_to_ecma_string`].
-    fn render(&self, s: &Slot) -> String {
-        match s.value {
+    ///
+    /// The array arm recurses over the elements (the `join` XS's `fxToString`
+    /// runs), so a self-containing or deeply nested array is bounded by the
+    /// native-recursion budget: past [`NATIVE_DEPTH_LIMIT`] the render fails
+    /// with [`Halt::StackOverflow`], the abort XS reaches for the same value
+    /// through its C stack, rather than overflowing the host's. The budget is
+    /// threaded as a parameter because this renderer is `&self`; it starts at
+    /// whatever native depth the caller is at, so a diagnostic render from
+    /// inside a native shares the one ceiling.
+    fn render(&self, s: &Slot) -> Result<String, Halt> {
+        self.render_at(s, self.native_depth)
+    }
+
+    fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Halt> {
+        if depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT {
+            return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+        }
+        let depth = depth + LIGHT_FRAME_COST;
+        Ok(match s.value {
             Payload::String(off) => self.str_text(off),
             // A BigInt completion renders as its decimal magnitude (XS's
             // `String(aBigInt)`), no `n` suffix.
@@ -13204,7 +13251,7 @@ impl Interp {
                         }
                         if let Some(item) = a.items().get(&i) {
                             if item.kind != Kind::Undefined && item.kind != Kind::Null {
-                                out.push_str(&self.render(item));
+                                out.push_str(&self.render_at(item, depth)?);
                             }
                         } else if let Some(id) = self.symbol_ids.get(&i.to_string()).copied() {
                             // A restrictive `defineProperty` descriptor moves
@@ -13221,7 +13268,7 @@ impl Interp {
                                     && item.kind != Kind::Undefined
                                     && item.kind != Kind::Null
                                 {
-                                    out.push_str(&self.render(&item));
+                                    out.push_str(&self.render_at(&item, depth)?);
                                 }
                             }
                         }
@@ -13245,9 +13292,10 @@ impl Interp {
                         let text = if ta.kind <= 1 {
                             self.typed_array_element_bigint_decimal(ta, i)
                         } else {
-                            self.typed_array_element_get(ta, i)
-                                .map(|slot| self.render(&slot))
-                                .unwrap_or_default()
+                            match self.typed_array_element_get(ta, i) {
+                                Some(slot) => self.render_at(&slot, depth)?,
+                                None => String::new(),
+                            }
                         };
                         out.push_str(&text);
                     }
@@ -13296,7 +13344,7 @@ impl Interp {
                 } else if let Some(prim) = self.wrapper_data.get(&r).copied() {
                     // A primitive wrapper (`new Boolean`/`Number`/`String`)
                     // stringifies as its wrapped primitive value.
-                    self.render(&prim)
+                    self.render_at(&prim, depth)?
                 } else if let Some(n) = self.native_of(r) {
                     // A native (intrinsic) function stringifies through
                     // `Function.prototype.toString` as a host function
@@ -13339,7 +13387,7 @@ impl Interp {
                 }
             }
             _ => slot_to_ecma_string(s),
-        }
+        })
     }
 
     /// Render an uncaught thrown value the way the oracle shim's host
@@ -13358,6 +13406,15 @@ impl Interp {
     /// guest `toString` runs here or never (review round 3). The shim's
     /// stringification is post-run, so its metering is discarded too: the
     /// oracle records the run-only count at the throw.
+    ///
+    /// The text is a diagnostic and never decides the crank's outcome: the
+    /// guest coercion running past the native-recursion budget (a thrown
+    /// self-containing array's `join`) is discarded like any other failure,
+    /// and a value the static renderer refuses for the same reason gets the
+    /// reference stub ([`Self::render_or_stub`]). XS's host does abort
+    /// rendering such a value; ironhorse reports the throw with the stub
+    /// text instead — a divergence confined to the text of a throw nothing
+    /// could have caught.
     fn render_uncaught(&mut self, code: &[u8], v: Slot) -> String {
         // Rendering is a host diagnostic boundary, not a second guest throw:
         // if the diagnostic ToPrimitive itself fails, discard that attempt
@@ -13380,7 +13437,7 @@ impl Interp {
                             }
                         }
                         if prim.kind != Kind::Reference {
-                            return self.render(&prim);
+                            return self.render_or_stub(&prim);
                         }
                     }
                     Err(_) => {
@@ -13395,7 +13452,15 @@ impl Interp {
             }
         }
         self.exception = saved_exception;
-        self.render(&v)
+        self.render_or_stub(&v)
+    }
+
+    /// [`Self::render`], or the bounded reference stub when the render
+    /// refuses the value (a self-containing or very deep array runs past the
+    /// native-recursion budget) — for the throw-site and host-boundary
+    /// renders of a thrown value, which must not turn the throw into a halt.
+    fn render_or_stub(&self, s: &Slot) -> String {
+        self.render(s).unwrap_or_else(|_| slot_to_ecma_string(s))
     }
 
     /// The string value of an instance's `Symbol.toStringTag` (own or
@@ -13561,8 +13626,23 @@ impl Interp {
             // the descriptive string `Symbol.prototype.toString` gives.
             String::from_utf8_lossy(&self.symbol_descriptive_bytes(self.result)).into_owned()
         } else {
-            self.render(&self.result)
+            // The host boundary's `String(result)`: a completion value the
+            // renderer cannot bound (a self-containing or very deep array,
+            // past the native-recursion budget) is the stack-exhaustion
+            // abort XS's own `fxToString` reaches in the shim — a machine
+            // abort, unlike the shim's post-run `TypeError` above, which is
+            // why it does rewrite the verdict: the crank halts with
+            // [`Halt::StackOverflow`] rather than answering with a
+            // truncated text.
+            match self.render(&self.result) {
+                Ok(text) => text,
+                Err(render_halt) => {
+                    halt = render_halt;
+                    String::new()
+                }
+            }
         };
+        let completed = halt == Halt::Return;
         // Boundary-register hygiene (wave-6 W6-11): on a COMPLETED
         // crank, the host has its rendered completion above and the
         // next crank's prologue rebuilds locals — but between here and
@@ -13615,23 +13695,58 @@ impl Interp {
     /// control here — the re-entrant substrate the callback-taking
     /// `Array.prototype` methods (`forEach`/`map`/…) need.
     ///
-    /// This thin wrapper tracks the **native re-entry depth** and aborts with
-    /// [`Halt::StackOverflow`] once it exceeds [`DISPATCH_REENTRY_LIMIT`], so a
+    /// This thin wrapper charges the **native-recursion budget** for the
+    /// (very large) `dispatch_at_inner` activation and aborts with
+    /// [`Halt::StackOverflow`] once [`NATIVE_DEPTH_LIMIT`] is exceeded, so a
     /// degenerate callback/async/generator nest cannot overflow the real thread
     /// stack (endojs/endo-but-for-bots#1046). It manages the counter across the
     /// inner loop's many early returns; every re-entry site
     /// (`run_callback`/`step_async`/`step_async_generator`/`resume_generator`)
     /// calls back through here, so their native recursion is counted uniformly.
     fn dispatch_at(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Halt {
-        if self.dispatch_depth >= DISPATCH_REENTRY_LIMIT {
-            // Do not descend; the innermost re-entry that tipped the ceiling
-            // aborts to the host exactly as the value-stack `fxOverflow` guard.
-            return Halt::StackOverflow(self.stack_slots_in_use());
+        // Do not descend; the innermost re-entry that tipped the ceiling
+        // aborts to the host exactly as the value-stack `fxOverflow` guard.
+        if let Err(halt) = self.enter_native_frame(HEAVY_FRAME_COST) {
+            return halt;
         }
-        self.dispatch_depth += 1;
         let halt = self.dispatch_at_inner(code, start_pc, return_depth);
-        self.dispatch_depth -= 1;
+        self.leave_native_frame(HEAVY_FRAME_COST);
         halt
+    }
+
+    /// Charge `cost` budget units for a native activation about to be entered,
+    /// or refuse with [`Halt::StackOverflow`] when the charge would exceed
+    /// [`NATIVE_DEPTH_LIMIT`]. Pair with [`Self::leave_native_frame`] around the
+    /// activation (or use [`Self::with_native_frame`], which cannot forget to).
+    #[inline]
+    fn enter_native_frame(&mut self, cost: usize) -> Result<(), Halt> {
+        if self.native_depth + cost > NATIVE_DEPTH_LIMIT {
+            return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+        }
+        self.native_depth += cost;
+        Ok(())
+    }
+
+    /// Release the budget [`Self::enter_native_frame`] charged.
+    #[inline]
+    fn leave_native_frame(&mut self, cost: usize) {
+        debug_assert!(self.native_depth >= cost, "native-frame budget underflow");
+        self.native_depth -= cost;
+    }
+
+    /// Run `f` as one guarded native activation of `cost` units: the
+    /// budget is charged before `f` runs and released on every return path,
+    /// including a `?` propagation inside `f`.
+    #[inline]
+    fn with_native_frame<T>(
+        &mut self,
+        cost: usize,
+        f: impl FnOnce(&mut Self) -> Result<T, Halt>,
+    ) -> Result<T, Halt> {
+        self.enter_native_frame(cost)?;
+        let result = f(self);
+        self.leave_native_frame(cost);
+        result
     }
 
     fn dispatch_at_inner(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Halt {
@@ -17762,7 +17877,7 @@ impl Interp {
                                 }
                                 None => {
                                     self.meter_host_escape();
-                                    let rendered = self.render(&v);
+                                    let rendered = self.render_or_stub(&v);
                                     return Halt::Throw { value: v, rendered };
                                 }
                             }
@@ -18429,7 +18544,7 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            let rendered = self.render(&v);
+                            let rendered = self.render_or_stub(&v);
                             return Halt::Throw { value: v, rendered };
                         }
                     }
@@ -18452,7 +18567,7 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            let rendered = self.render(&v);
+                            let rendered = self.render_or_stub(&v);
                             return Halt::Throw { value: v, rendered };
                         }
                     }
@@ -19760,76 +19875,120 @@ impl Interp {
         Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
     }
 
+    /// `AsyncGeneratorResumeNext` (XS's `fxAsyncGeneratorResumeNext`): take
+    /// the next queued request and act on it — resume the body, schedule the
+    /// await a `return` needs, or, on a completed generator, settle the
+    /// request immediately. The immediate settlements **loop** here rather
+    /// than recursing through [`Self::finish_async_generator_request`]: a
+    /// guest that queues `g.next()` ten thousand times on a finished generator
+    /// drains ten thousand iterations, where the mutual `kick` ↔ `finish`
+    /// recursion this replaces nested one native frame per request and
+    /// overflowed the host stack at about 1,200 (debug build).
     fn kick_async_generator(
         &mut self,
         code: &[u8],
         gen: crate::value::SlotIndex,
     ) -> Result<(), Halt> {
-        let state = self.async_generators[&gen].state;
-        if matches!(
-            state,
-            AsyncGeneratorState::Executing | AsyncGeneratorState::Awaiting
-        ) || self.async_generators[&gen].active.is_some()
-        {
-            return Ok(());
-        }
-        let request = match self
-            .async_generators
-            .get_mut(&gen)
-            .unwrap()
-            .requests
-            .pop_front()
-        {
-            Some(r) => r,
-            None => return Ok(()),
-        };
-        self.async_generators.get_mut(&gen).unwrap().active = Some(request);
-        match state {
-            AsyncGeneratorState::Completed => match request.status {
-                GenStatus::Next => {
-                    let result = self.new_generator_result(Slot::undefined(), true);
-                    self.finish_async_generator_request(code, gen, result, false)
-                }
-                GenStatus::Return => self.schedule_native_await(
-                    code,
-                    request.value,
-                    ReactionKind::AsyncGeneratorReturn(gen),
-                ),
-                GenStatus::Throw => {
-                    self.finish_async_generator_request(code, gen, request.value, true)
-                }
-            },
-            AsyncGeneratorState::SuspendedStart if request.status != GenStatus::Next => {
-                let data = self.async_generators.get_mut(&gen).unwrap();
-                data.state = AsyncGeneratorState::Completed;
-                data.frame = None;
-                match request.status {
-                    GenStatus::Return => self.schedule_native_await(
-                        code,
-                        request.value,
-                        ReactionKind::AsyncGeneratorReturn(gen),
-                    ),
-                    GenStatus::Throw => {
-                        self.finish_async_generator_request(code, gen, request.value, true)
+        loop {
+            let state = self.async_generators[&gen].state;
+            if matches!(
+                state,
+                AsyncGeneratorState::Executing | AsyncGeneratorState::Awaiting
+            ) || self.async_generators[&gen].active.is_some()
+            {
+                return Ok(());
+            }
+            let request = match self
+                .async_generators
+                .get_mut(&gen)
+                .unwrap()
+                .requests
+                .pop_front()
+            {
+                Some(r) => r,
+                None => return Ok(()),
+            };
+            self.async_generators.get_mut(&gen).unwrap().active = Some(request);
+            match state {
+                AsyncGeneratorState::Completed => match request.status {
+                    GenStatus::Next => {
+                        let result = self.new_generator_result(Slot::undefined(), true);
+                        self.settle_active_async_generator_request(code, gen, result, false)?;
                     }
-                    GenStatus::Next => unreachable!(),
+                    GenStatus::Return => {
+                        return self.schedule_native_await(
+                            code,
+                            request.value,
+                            ReactionKind::AsyncGeneratorReturn(gen),
+                        )
+                    }
+                    GenStatus::Throw => {
+                        self.settle_active_async_generator_request(
+                            code,
+                            gen,
+                            request.value,
+                            true,
+                        )?;
+                    }
+                },
+                AsyncGeneratorState::SuspendedStart if request.status != GenStatus::Next => {
+                    let data = self.async_generators.get_mut(&gen).unwrap();
+                    data.state = AsyncGeneratorState::Completed;
+                    data.frame = None;
+                    match request.status {
+                        GenStatus::Return => {
+                            return self.schedule_native_await(
+                                code,
+                                request.value,
+                                ReactionKind::AsyncGeneratorReturn(gen),
+                            )
+                        }
+                        GenStatus::Throw => {
+                            self.settle_active_async_generator_request(
+                                code,
+                                gen,
+                                request.value,
+                                true,
+                            )?;
+                        }
+                        GenStatus::Next => unreachable!(),
+                    }
+                }
+                _ => {
+                    return self.step_async_generator(
+                        code,
+                        gen,
+                        match request.status {
+                            GenStatus::Next => ResumeStatus::NoStatus,
+                            GenStatus::Return => ResumeStatus::Return,
+                            GenStatus::Throw => ResumeStatus::Throw,
+                        },
+                        request.value,
+                        state == AsyncGeneratorState::SuspendedStart,
+                    )
                 }
             }
-            _ => self.step_async_generator(
-                code,
-                gen,
-                match request.status {
-                    GenStatus::Next => ResumeStatus::NoStatus,
-                    GenStatus::Return => ResumeStatus::Return,
-                    GenStatus::Throw => ResumeStatus::Throw,
-                },
-                request.value,
-                state == AsyncGeneratorState::SuspendedStart,
-            ),
+            // The request settled synchronously; drain the next one.
         }
     }
 
+    /// Settle the active request's promise with `value` (rejecting when
+    /// `reject`), then resume draining the queue.
     fn finish_async_generator_request(
+        &mut self,
+        code: &[u8],
+        gen: crate::value::SlotIndex,
+        value: Slot,
+        reject: bool,
+    ) -> Result<(), Halt> {
+        self.settle_active_async_generator_request(code, gen, value, reject)?;
+        self.kick_async_generator(code, gen)
+    }
+
+    /// Take the active request and settle its promise through the resolving
+    /// function the request carries (`fxAsyncGeneratorResolve` /
+    /// `fxAsyncGeneratorReject`), leaving the generator ready for the next.
+    fn settle_active_async_generator_request(
         &mut self,
         code: &[u8],
         gen: crate::value::SlotIndex,
@@ -19849,8 +20008,7 @@ impl Interp {
                 request.resolve
             },
             value,
-        )?;
-        self.kick_async_generator(code, gen)
+        )
     }
 
     fn step_async_generator(
@@ -20453,6 +20611,25 @@ impl Interp {
     /// [`Halt::Unsupported`] naming the built-in — an honest skip, never a
     /// mis-executed result.
     fn call_native(
+        &mut self,
+        native: Native,
+        base: usize,
+        argc: usize,
+        has_target: bool,
+        code: &[u8],
+    ) -> Result<(), Halt> {
+        // The native-constructor/function dispatch below is one of the two
+        // monolithic activations of this crate (with `call_native_method`):
+        // charge the native-recursion budget's heavy class for it, so a
+        // built-in that re-enters another built-in or guest code (through
+        // `invoke_value`/`construct_value`, never through `dispatch_at`) is
+        // bounded by [`NATIVE_DEPTH_LIMIT`] rather than by the host stack.
+        self.with_native_frame(HEAVY_FRAME_COST, |vm| {
+            vm.call_native_inner(native, base, argc, has_target, code)
+        })
+    }
+
+    fn call_native_inner(
         &mut self,
         native: Native,
         base: usize,
@@ -31201,6 +31378,25 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<(), Halt> {
+        // The central native-method dispatch is the largest activation in the
+        // crate. A method that invokes another native without entering
+        // `dispatch_at` — `Array.prototype.join` stringifying an element that
+        // is itself an array, `Function.prototype.call` trampolining, an
+        // accessor's native setter re-entering itself — nests this frame on
+        // the host stack, so it is charged at the heavy class and bounded by
+        // [`NATIVE_DEPTH_LIMIT`].
+        self.with_native_frame(HEAVY_FRAME_COST, |vm| {
+            vm.call_native_method_inner(m, base, argc, code)
+        })
+    }
+
+    fn call_native_method_inner(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<(), Halt> {
         let _ = code; // used by the callback-taking methods (run_callback)
                       // Cost-calibration builtin histogram: one invocation per dispatched
                       // native prototype method. This is the central native-method
@@ -35200,7 +35396,7 @@ impl Interp {
                         // `name`/`message` are read live off the instance
                         // (`mxGetID`), so a post-construction rename shows.
                         let mut text = match self.name_id.map(|id| self.instance_get(inst, id)) {
-                            Some(v) if v.kind != Kind::Undefined => self.render(&v),
+                            Some(v) if v.kind != Kind::Undefined => self.render(&v)?,
                             _ => info.name.to_string(),
                         };
                         let message = match self.symbol_ids.get("message").copied() {
@@ -35209,7 +35405,7 @@ impl Interp {
                                 if v.kind == Kind::Undefined {
                                     None
                                 } else {
-                                    Some(self.render(&v))
+                                    Some(self.render(&v)?)
                                 }
                             }
                             None => info.message.clone(),
@@ -37064,7 +37260,24 @@ impl Interp {
     /// The complete `SerializeJSONProperty` value phase: invoke an observable
     /// `toJSON`, then the replacer callback, unwrap primitive wrapper objects,
     /// reject BigInt, and finally emit a scalar, array, or ordinary object.
+    /// Each nesting level of the value is one light frame of the
+    /// native-recursion budget (a cycle is already a `TypeError` via
+    /// `state.stack`; this bounds the acyclic-but-deep case).
     fn json_stringify_value(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        name: &JsonPropertyName,
+        holder: Option<Slot>,
+        state: &mut JsonStringifyState,
+        cost: &mut u64,
+    ) -> Result<Option<Vec<u16>>, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.json_stringify_value_inner(code, value, name, holder, state, cost)
+        })
+    }
+
+    fn json_stringify_value_inner(
         &mut self,
         code: &[u8],
         mut value: Slot,
@@ -37350,8 +37563,24 @@ impl Interp {
     /// Parse one JSON value at `pos` (`fxParseJSONValue`), building it in the
     /// heap and accumulating the recursive per-node metering into `cost` (the
     /// caller charges [`JSON_PARSE_SETUP_METERING`] once and `cost` at the end).
-    /// A malformed input throws a catchable `SyntaxError`.
+    /// A malformed input throws a catchable `SyntaxError`. Each nesting level
+    /// of the input is one light frame of the native-recursion budget, so
+    /// `"[".repeat(1e6)` halts with [`Halt::StackOverflow`] instead of
+    /// overflowing the host stack (XS's `fxParseJSONValue` recurses the same
+    /// way, bounded by its C stack).
     fn json_parse_value(
+        &mut self,
+        input: &[u8],
+        pos: &mut usize,
+        cost: &mut u64,
+        track_source: bool,
+    ) -> Result<(Slot, JsonSource), Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.json_parse_value_inner(input, pos, cost, track_source)
+        })
+    }
+
+    fn json_parse_value_inner(
         &mut self,
         input: &[u8],
         pos: &mut usize,
@@ -41925,9 +42154,7 @@ impl Interp {
         self.meter.tick_raw(
             ARRAY_FLAT_FRAME_METERING - ARRAY_CREATE_METERING - mapper_overlap,
         );
-        self.array_generic_flatten_into(
-            code, target, source, source_len, 0, depth, mapper, object, 0,
-        )?;
+        self.array_generic_flatten_into(code, target, source, source_len, 0, depth, mapper, object)?;
         Ok(Slot::of(Kind::Reference, Payload::Reference(target)))
     }
 
@@ -41942,18 +42169,43 @@ impl Interp {
         target: crate::value::SlotIndex,
         source: crate::value::SlotIndex,
         source_len: u64,
+        target_index: u64,
+        depth: f64,
+        mapper: Option<(Slot, Slot)>,
+        source_receiver: Slot,
+    ) -> Result<u64, Halt> {
+        // One light frame of the native-recursion budget per nested array:
+        // a self-containing array under `flat(Infinity)` halts with
+        // `Halt::StackOverflow` (XS recurses `fxFlattenIntoArray` on its C
+        // stack to the same end) instead of overflowing the host stack.
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.array_generic_flatten_into_inner(
+                code,
+                target,
+                source,
+                source_len,
+                target_index,
+                depth,
+                mapper,
+                source_receiver,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn array_generic_flatten_into_inner(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        source: crate::value::SlotIndex,
+        source_len: u64,
         mut target_index: u64,
         depth: f64,
         mapper: Option<(Slot, Slot)>,
         source_receiver: Slot,
-        recursion_depth: u32,
     ) -> Result<u64, Halt> {
         const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
         const GENERIC_FLAT_LINEAR_CAP: u64 = 1 << 24;
-        const GENERIC_FLAT_RECURSION_CAP: u32 = 1024;
-        if recursion_depth >= GENERIC_FLAT_RECURSION_CAP {
-            return Err(Halt::Unsupported("flat:recursion-depth"));
-        }
 
         let mut source_index = 0u64;
         let mut linear_steps = 0u64;
@@ -42014,7 +42266,6 @@ impl Interp {
                         depth - 1.0,
                         None,
                         element,
-                        recursion_depth + 1,
                     )?;
                     source_index += 1;
                     continue;
@@ -43196,20 +43447,15 @@ impl Interp {
         let accepted = if self.mop_get_own_property(code, inst, id)?.is_some() {
             // `SetterThatIgnoresPrototypeProperties` step 5 is an ordinary
             // `Set`, so a receiver carrying its own copy of this very accessor
-            // re-enters this native unboundedly -- and does so without ever
-            // passing through `dispatch_at`, whose `DISPATCH_REENTRY_LIMIT` is
-            // the loop's only re-entry ceiling. Count it on the same counter.
-            // The pinned XS does not complete this program either (it aborts
-            // at ~8180 computrons); the point is to degrade to a
-            // `Halt::StackOverflow` the host can observe rather than
-            // overflowing the real thread stack and taking the process down.
-            if self.dispatch_depth >= DISPATCH_REENTRY_LIMIT {
-                return Err(Halt::StackOverflow(self.stack_slots_in_use()));
-            }
-            self.dispatch_depth += 1;
-            let accepted = self.mop_set(code, inst, id, value, this);
-            self.dispatch_depth -= 1;
-            accepted?
+            // re-enters this native unboundedly -- without ever passing through
+            // `dispatch_at`. The native-recursion budget bounds it all the same:
+            // every level passes through `mop_set` (a light frame) and back into
+            // `call_native_method` (a heavy one). The pinned XS does not
+            // complete this program either (it aborts at ~8180 computrons); the
+            // point is to degrade to a `Halt::StackOverflow` the host can
+            // observe rather than overflowing the real thread stack and taking
+            // the process down.
+            self.mop_set(code, inst, id, value, this)?
         } else {
             self.mop_define_own_property(
                 code,
@@ -45713,7 +45959,7 @@ impl Interp {
                 self.meter_host_escape();
                 Halt::Throw {
                     value,
-                    rendered: self.render(&value),
+                    rendered: self.render_or_stub(&value),
                 }
             }
         }
@@ -47964,25 +48210,53 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        if let Some(descriptor) = self.ordinary_get_own_descriptor(inst, id) {
-            if descriptor.is_accessor() {
-                let getter = descriptor.get.unwrap_or_else(Slot::undefined);
-                if getter.kind == Kind::Undefined {
-                    return Ok(Slot::undefined());
+        let mut current = inst;
+        loop {
+            if let Some(descriptor) = self.ordinary_get_own_descriptor(current, id) {
+                if descriptor.is_accessor() {
+                    let getter = descriptor.get.unwrap_or_else(Slot::undefined);
+                    if getter.kind == Kind::Undefined {
+                        return Ok(Slot::undefined());
+                    }
+                    return self.invoke_getter(code, getter, receiver);
                 }
-                return self.invoke_getter(code, getter, receiver);
+                return Ok(descriptor.value.unwrap_or_else(Slot::undefined));
             }
-            return Ok(descriptor.value.unwrap_or_else(Slot::undefined));
+            // OrdinaryGet step 4 delegates to the parent's full `[[Get]]`, not
+            // to another ordinary slot-chain scan. This matters when the
+            // prototype is a Proxy or carries Array/String/TypedArray exotic
+            // own properties.
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                return Ok(Slot::undefined());
+            }
+            if self.mop_get_is_ordinary(parent) {
+                // A plain parent's `[[Get]]` is this very algorithm, so
+                // continue the walk in place, as XS's `fxGetProperty` loop
+                // does, rather than nesting one native frame per prototype
+                // level: a `for` loop of `Object.create` builds a chain deep
+                // enough to overflow the host stack that way.
+                current = parent;
+                continue;
+            }
+            return self.mop_get(code, parent, id, receiver);
         }
-        // OrdinaryGet step 4 delegates to the parent's full `[[Get]]`, not to
-        // another ordinary slot-chain scan. This matters when the prototype is
-        // a Proxy or carries Array/String/TypedArray exotic own properties.
-        let parent = self.instance_prototype(inst);
-        if parent.is_null() {
-            Ok(Slot::undefined())
-        } else {
-            self.mop_get(code, parent, id, receiver)
-        }
+    }
+
+    /// Whether `O.[[Get]]` on `inst` is exactly [`Self::ordinary_get`]: no
+    /// Proxy, no exotic own surface (`exotic_own_descriptor` /
+    /// TypedArray index), and no Array-Iterator Proxy-Get metering context
+    /// aimed at it — so a prototype walk may step onto it in place.
+    fn mop_get_is_ordinary(&self, inst: crate::value::SlotIndex) -> bool {
+        !self.proxies.contains_key(&inst)
+            && !self.typed_arrays.contains_key(&inst)
+            && !self.arrays.contains_key(&inst)
+            && !self.wrapper_data.contains_key(&inst)
+            && !self.functions.contains_key(&inst)
+            && !self.ctor_prototype.contains_key(&inst)
+            && self
+                .array_iterator_proxy_get_context
+                .is_none_or(|context| context.target != inst)
     }
 
     fn ordinary_set(
@@ -47993,34 +48267,45 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Halt> {
-        // Functions keep their `length`, `name`, and (when constructable)
-        // `prototype` own properties in side tables.  They participate in
-        // OrdinarySet exactly like materialized own descriptors and must be
-        // considered before an inherited non-writable property.
-        let own = self
-            .ordinary_get_own_descriptor(inst, id)
-            .or_else(|| self.exotic_own_descriptor(inst, id));
-        if let Some(descriptor) = own {
-            if descriptor.is_accessor() {
-                let setter = descriptor.set.unwrap_or_else(Slot::undefined);
-                if setter.kind == Kind::Undefined {
+        let mut current = inst;
+        loop {
+            // Functions keep their `length`, `name`, and (when constructable)
+            // `prototype` own properties in side tables.  They participate in
+            // OrdinarySet exactly like materialized own descriptors and must be
+            // considered before an inherited non-writable property.
+            let own = self
+                .ordinary_get_own_descriptor(current, id)
+                .or_else(|| self.exotic_own_descriptor(current, id));
+            if let Some(descriptor) = own {
+                if descriptor.is_accessor() {
+                    let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                    if setter.kind == Kind::Undefined {
+                        return Ok(false);
+                    }
+                    self.invoke_setter(code, setter, receiver, value)?;
+                    return Ok(true);
+                }
+                if descriptor.writable == Some(false) {
                     return Ok(false);
                 }
-                self.invoke_setter(code, setter, receiver, value)?;
-                return Ok(true);
+                break;
             }
-            if descriptor.writable == Some(false) {
-                return Ok(false);
-            }
-        } else {
             // OrdinarySet delegates an own-property miss to the immediate
             // parent's complete `[[Set]]`. Do not flatten this into a
             // descriptor scan: a Proxy or integer-indexed exotic prototype
             // has behavior even when its own descriptor is absent.
-            let parent = self.instance_prototype(inst);
-            if !parent.is_null() {
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                break;
+            }
+            if self.proxies.contains_key(&parent) || self.typed_arrays.contains_key(&parent) {
                 return self.mop_set(code, parent, id, value, receiver);
             }
+            // Any other parent's `[[Set]]` is this very algorithm (`mop_set`
+            // would arrive back here): continue the walk in place rather than
+            // nesting one native frame per prototype level, as `ordinary_get`
+            // does.
+            current = parent;
         }
         let receiver_inst = match receiver.value {
             Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
@@ -48664,9 +48949,27 @@ impl Interp {
     }
 
     // ---- the `mop_*` dispatchers: an object's internal method, proxy-aware ---
+    //
+    // Every internal method is a **light frame** of the native-recursion
+    // budget: a Proxy with an absent trap forwards the same internal method
+    // to its target, an exotic prototype (a Proxy, an array, a function, a
+    // wrapper) is reached through the parent's full `[[Get]]`/`[[Set]]`, and
+    // a trap that runs guest code comes back in through the same entries — so
+    // each of these is where a guest-shaped chain recurses on the host stack.
+    // The `_inner` body is the internal method; the guarded entry charges
+    // [`LIGHT_FRAME_COST`] around it and halts with [`Halt::StackOverflow`]
+    // past [`NATIVE_DEPTH_LIMIT`].
 
     /// `O.[[GetPrototypeOf]]()` as a slot (`Reference(proto)` or `Null`).
     fn mop_get_prototype(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<Slot, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_get_prototype_inner(code, inst))
+    }
+
+    fn mop_get_prototype_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -48712,6 +49015,17 @@ impl Interp {
         inst: crate::value::SlotIndex,
         proto: Slot,
     ) -> Result<bool, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_set_prototype_inner(code, inst, proto)
+        })
+    }
+
+    fn mop_set_prototype_inner(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        proto: Slot,
+    ) -> Result<bool, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_set_prototype(code, inst, proto);
         }
@@ -48748,6 +49062,14 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
     ) -> Result<bool, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_is_extensible_inner(code, inst))
+    }
+
+    fn mop_is_extensible_inner(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_is_extensible(code, inst);
         }
@@ -48756,6 +49078,16 @@ impl Interp {
 
     /// `O.[[PreventExtensions]]()`.
     fn mop_prevent_extensions(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_prevent_extensions_inner(code, inst)
+        })
+    }
+
+    fn mop_prevent_extensions_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -48858,6 +49190,17 @@ impl Interp {
 
     /// `O.[[GetOwnProperty]](P)`.
     fn mop_get_own_property(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_get_own_property_inner(code, inst, id)
+        })
+    }
+
+    fn mop_get_own_property_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -49075,6 +49418,18 @@ impl Interp {
         id: u16,
         desc: OrdinaryDescriptor,
     ) -> Result<bool, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_define_own_property_inner(code, inst, id, desc)
+        })
+    }
+
+    fn mop_define_own_property_inner(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_define_own_property(code, inst, id, desc);
         }
@@ -49116,6 +49471,17 @@ impl Interp {
     /// Proxy target rather than treating either proxy as an ordinary slot
     /// chain. Exotic own properties are likewise checked at every level.
     fn mop_has_with_recursions(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<(bool, u64), Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_has_with_recursions_inner(code, inst, id)
+        })
+    }
+
+    fn mop_has_with_recursions_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -49177,7 +49543,34 @@ impl Interp {
     /// `O.[[Get]](P, Receiver)` with a caller-owned residual for each Proxy
     /// trap actually taken. The wrapper flag charges a terminal primitive
     /// wrapper reached through transparent Proxy forwarding.
+    #[allow(clippy::too_many_arguments)]
     fn mop_get_with_proxy_metering(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+        proxy_trap_metering: u64,
+        meter_terminal_wrapper: bool,
+        meter_forwarded_target: bool,
+        after_active_trap: bool,
+    ) -> Result<Slot, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_get_with_proxy_metering_inner(
+                code,
+                inst,
+                id,
+                receiver,
+                proxy_trap_metering,
+                meter_terminal_wrapper,
+                meter_forwarded_target,
+                after_active_trap,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mop_get_with_proxy_metering_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -49388,6 +49781,19 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_set_inner(code, inst, id, value, receiver)
+        })
+    }
+
+    fn mop_set_inner(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_set(code, inst, id, value, receiver);
         }
@@ -49416,6 +49822,15 @@ impl Interp {
 
     /// `O.[[Delete]](P)`.
     fn mop_delete(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<bool, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_delete_inner(code, inst, id))
+    }
+
+    fn mop_delete_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -49465,6 +49880,14 @@ impl Interp {
     /// `O.[[OwnPropertyKeys]]()` as a list of key slots (string / symbol),
     /// in the spec integer→string→symbol order for an ordinary object.
     fn mop_own_keys(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<Vec<Slot>, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_own_keys_inner(code, inst))
+    }
+
+    fn mop_own_keys_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -50132,8 +50555,22 @@ impl Interp {
         Ok(trap_keys)
     }
 
-    /// `[[Call]]` (ECMA-262 10.5.12).
+    /// `[[Call]]` (ECMA-262 10.5.12). A light frame of the native-recursion
+    /// budget, like the `mop_*` entries: a proxy over a callable proxy
+    /// forwards `[[Call]]` here once per layer.
     fn proxy_call(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.proxy_call_inner(code, proxy, this, args)
+        })
+    }
+
+    fn proxy_call_inner(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
@@ -50177,8 +50614,21 @@ impl Interp {
         self.invoke_value(code, trap, handler_slot, &[target_slot, this, arg_array])
     }
 
-    /// `[[Construct]]` (ECMA-262 10.5.13).
+    /// `[[Construct]]` (ECMA-262 10.5.13). A light frame of the
+    /// native-recursion budget, like [`Self::proxy_call`].
     fn proxy_construct(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        args: &[Slot],
+        new_target: Slot,
+    ) -> Result<Slot, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.proxy_construct_inner(code, proxy, args, new_target)
+        })
+    }
+
+    fn proxy_construct_inner(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,

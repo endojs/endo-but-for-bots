@@ -63,6 +63,29 @@ pub use value::{
     ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot, SlotArena, SlotIndex,
     CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
 };
+pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
+
+/// The native (thread) stack, in bytes, the engine requires for its
+/// native-recursion budget to be a bound rather than a hope.
+///
+/// [`NATIVE_DEPTH_LIMIT`] is a deterministic *counter*; how many bytes of
+/// host stack the frames it admits occupy is a property of the build, not of
+/// the guest. Measured on the budget's worst corner (`HEAVY_FRAME_COST`-class
+/// activations nested to the ceiling, `join` re-entering `toString` over a
+/// self-containing array): under 2 MiB with optimizations, but close to
+/// 13 MiB in an unoptimized build, where the two monolithic dispatch
+/// functions keep every match arm's temporaries live at once. This constant
+/// therefore states
+/// the requirement per profile — the 32 MiB the `rust/endo` worker threads and
+/// the test262 harness already allocate for debug, and the 8 MiB of a
+/// libFuzzer/OS main thread for release — with headroom above the measurement.
+/// Run the engine on a thread of at least this size; the recursion-budget
+/// tests spawn exactly this size and must never abort.
+pub const NATIVE_STACK_BYTES: usize = if cfg!(debug_assertions) {
+    32 * 1024 * 1024
+} else {
+    8 * 1024 * 1024
+};
 
 /// Run a program bytecode buffer (as emitted by the XS compiler) on
 /// a fresh interpreter, returning the completion value and computrons
@@ -153,20 +176,19 @@ mod tests {
         // leading an async body that itself leads with START_ASYNC) drove
         // `dispatch_at → step_async → dispatch_at …` recursion that the
         // dispatch-count step limit does not bound, blowing the native stack.
-        // The native re-entry depth is now capped ([`DISPATCH_REENTRY_LIMIT`]),
-        // so an arbitrary corrupt snapshot degrades to `Halt::StackOverflow`
-        // instead of aborting the process.
+        // The native re-entry depth is now capped by the native-recursion
+        // budget ([`NATIVE_DEPTH_LIMIT`]), so an arbitrary corrupt snapshot
+        // degrades to `Halt::StackOverflow` instead of aborting the process.
         //
-        // Run on an 8 MiB stack — the size of the main thread libFuzzer drives
-        // the fuzz target on (and of a normal OS main thread), the environment
-        // the crash and this fix are about. The default Rust *test* harness
-        // gives worker threads only 2 MiB, and the `dispatch_at` activation is
-        // tens of KiB, so even the bounded (< 64-frame) recursion this fix
-        // permits would still be near that artificially small ceiling; pinning
-        // the stack keeps the regression faithful and deterministic rather than
-        // hostage to the harness default.
+        // Run on the stack the budget is calibrated for
+        // ([`NATIVE_STACK_BYTES`]): the default Rust *test* harness gives
+        // worker threads only 2 MiB, and the `dispatch_at` activation is tens
+        // of KiB (debug), so the bounded recursion this fix permits would
+        // overflow that artificially small ceiling; pinning the stack keeps the
+        // regression faithful and deterministic rather than hostage to the
+        // harness default.
         let handle = std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
+            .stack_size(NATIVE_STACK_BYTES)
             .spawn(|| {
                 let crash = [193u8, 193, 37, 253, 45, 93];
                 run_program_bounded(&crash, 2_000_000).halt

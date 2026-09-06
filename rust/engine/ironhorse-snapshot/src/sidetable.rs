@@ -729,10 +729,10 @@ mod tests {
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
             "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
             "eval_direct", "active_segment", "top_level_code", "result", "strict",
-            // Native dispatch recursion is bracketed by `dispatch_at`;
-            // every return decrements it before control can reach a
-            // persistence boundary.
-            "dispatch_depth",
+            // The native-recursion budget consumed by the activations in
+            // flight; every guarded entry releases its charge on return,
+            // so it is `0` before control can reach a persistence boundary.
+            "native_depth",
             // Array Iterator Proxy-Get context is installed only around one
             // synchronous trap call and restored on both success and throw.
             // `is_quiescent` additionally refuses a leaked context.
@@ -939,6 +939,9 @@ mod tests {
             "array_iterator_proxy_get_context",
             // The in-flight thrown value.
             "exception",
+            // The native-recursion budget in flight: every guarded entry
+            // releases its charge on return, so it is `0` at a boundary.
+            "native_depth",
             // The property-key id-space poison latch.
             "id_space_exhausted",
         ];
