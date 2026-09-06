@@ -337,9 +337,10 @@
   opacity: 0.55;
 }
 
-/* A skip-forward edge arcs over the node band and a backward edge under it, so
-   neither is drawn through a state it has nothing to do with. Dimmed so the
-   column-to-column flow stays the thing you read first. */
+/* A forward edge that skips a column is routed through a lane of its own in
+   each column it crosses, rather than drawn as a chord over whatever sits in
+   between. Dashed and dimmed so the column-to-column flow stays the thing you
+   read first. */
 .wf-edge-routed {
   opacity: 0.6;
   stroke-dasharray: 4 3;
