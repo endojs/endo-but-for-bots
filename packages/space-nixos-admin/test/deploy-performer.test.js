@@ -50,10 +50,21 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
  *   that must actually reach the cap do so in milliseconds rather than
  *   seconds. `pollMs` lets a test measure how many poll intervals a decision
  *   costs, which at the default 10ms is below timer noise.
+ *
+ *   The default cap is deliberately large. In production it is a day, so the
+ *   bounded id-less grace (`NO_ID_GRACE_POLLS` polls) always expires far
+ *   inside it; a test dials the cap down only so the "actually reach the cap"
+ *   cases finish quickly. But the grace is counted in POLLS while the cap is
+ *   wall-clock, so on a saturated CI runner (the cold, oversized affected set
+ *   a grouped lockfile bump produces) a poll can dilate from 10ms to hundreds,
+ *   pushing 30 grace polls — or a test's own sampling loop — past a tight
+ *   5s cap and turning the grace/liveness message into a spurious timeout.
+ *   60s restores prod-like separation with room to spare; the cap-reaching
+ *   tests pass their own small `watchLimitMs` and are unaffected.
  */
 const makeHarness = async (
   t,
-  { shell = '/bin/sh', watchLimitMs = 5000, pollMs = 10 } = {},
+  { shell = '/bin/sh', watchLimitMs = 60_000, pollMs = 10 } = {},
 ) => {
   const dir = await mkdtemp(join(tmpdir(), 'nixos-deploy-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
@@ -1296,7 +1307,7 @@ test('a watch inherits the wait deadline instead of restarting it', async t => {
   // a 2x bound on a queue that is held for the whole time, delaying every
   // later verb including `rollback`.
   t.timeout(20_000);
-  const watchLimitMs = 1000;
+  const watchLimitMs = 2000;
   const { admin, statusPath, spoolDir } = await makeHarness(t, {
     watchLimitMs,
   });
@@ -1309,13 +1320,10 @@ test('a watch inherits the wait deadline instead of restarting it', async t => {
     'utf8',
   );
 
-  const started = Date.now();
   const attempt = admin.build('inherits the deadline', 'k-deadline-1');
   // Free the slot late in the window, so most of the one permitted limit is
-  // already spent; the caplet then submits and watches for an outcome that
-  // never comes. Inheriting, it must give up at ~1x. Restarting, it would run
-  // to ~1.8x, which is what the 1.3x bound below separates — the margin is
-  // ~300ms on either side, so this does not turn into a timing flake.
+  // already spent waiting; the caplet then submits and watches for an outcome
+  // that never comes.
   //
   // The replacement status keeps a foreign `id` on purpose. Dropping the id
   // would free the slot just as well, but `awaitOutcome` would then hit the
@@ -1328,11 +1336,24 @@ test('a watch inherits the wait deadline instead of restarting it', async t => {
     JSON.stringify({ id: 'other', phase: 'ok' }),
     'utf8',
   );
+  // Measure the watch from the moment the slot is FREED, not from the start.
+  // The regression is a *fresh* full window granted at submission: inheriting,
+  // the deadline is absolute (`started + watchLimitMs`), so once ~0.8x of it
+  // is already spent the post-free watch can only run out the remaining ~0.2x
+  // — and none at all if load already carried real time past the deadline.
+  // Restarting, `awaitOutcome` would recompute `Date.now() + watchLimitMs` at
+  // submission and watch a whole further ~1x from here. The 0.5x bound below
+  // separates those two, and — unlike a bound on total elapsed — it excludes
+  // the pre-free wait entirely, so a saturated runner that dilates that wait
+  // (the cold, oversized affected set of a grouped lockfile bump) cannot push
+  // it over. Only the post-submit detect/poll overhead counts against the
+  // inheriting side, and that stays well under the ~1x margin.
+  const freed = Date.now();
   await t.throwsAsync(() => attempt, { message: /within the watch limit/ });
-  const elapsed = Date.now() - started;
+  const watchedAfterFree = Date.now() - freed;
   t.true(
-    elapsed < watchLimitMs * 1.3,
-    `gave up after ${elapsed}ms; one watch limit is ${watchLimitMs}ms`,
+    watchedAfterFree < watchLimitMs * 0.5,
+    `watched ${watchedAfterFree}ms after the slot freed; a fresh window would be ~${watchLimitMs}ms`,
   );
 });
 
