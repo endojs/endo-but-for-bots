@@ -20,6 +20,16 @@
 
 import harden from '@endo/harden';
 
+// The box a state is drawn as. The layout needs these to put a lane's entry
+// and exit on the left and right edges of the column it crosses, and the view
+// needs them to draw the box itself; they live here, and the view imports
+// them, so the two cannot drift apart into a routed edge that misses its own
+// node border by whatever the difference happens to be.
+export const NODE_WIDTH = 150;
+harden(NODE_WIDTH);
+export const NODE_HEIGHT = 40;
+harden(NODE_HEIGHT);
+
 /**
  * @param {Array<{ from: string, to: string }>} edges
  * @param {string} from
@@ -183,22 +193,22 @@ export const layoutGraph = (graph, initial) => {
    * @returns {number | undefined}
    */
   const barycentre = (id, forward) => {
+    const ownLayer = layers.get(id);
+    if (ownLayer === undefined) return undefined;
     const neighbours = [];
     for (const edge of orderingEdges) {
       const other = forward
         ? edge.to === id && edge.from !== id && edge.from
         : edge.from === id && edge.to !== id && edge.to;
-      const otherLayer = other ? layers.get(other) : undefined;
-      const ownLayer = layers.get(id);
-      // Only a neighbour on the side this sweep reads from contributes:
-      // a forward sweep averages the layer before, a backward one the layer
-      // after. Anything on the same or the wrong side is not a constraint.
-      const contributes =
-        otherLayer !== undefined &&
-        ownLayer !== undefined &&
-        (forward ? otherLayer < ownLayer : otherLayer > ownLayer);
-      if (other && contributes) {
-        const at = slot.get(other);
+      if (other) {
+        const otherLayer = layers.get(other);
+        // Only a neighbour on the side this sweep reads from contributes:
+        // a forward sweep averages the layer before, a backward one the layer
+        // after. Anything on the same or the wrong side is not a constraint.
+        const contributes =
+          otherLayer !== undefined &&
+          (forward ? otherLayer < ownLayer : otherLayer > ownLayer);
+        const at = contributes ? slot.get(other) : undefined;
         if (at !== undefined) neighbours.push(at);
       }
     }
@@ -230,21 +240,25 @@ export const layoutGraph = (graph, initial) => {
     }
   }
 
-  // Room to route around: NODE_WIDTH is 150 and NODE_HEIGHT 40 in the view, so
-  // these leave a 70px channel between columns and 36px between rows for edges
-  // and their labels.
-  const layerWidth = 220;
-  const rowHeight = 76;
-  /** @type {Record<string, { x: number, y: number, layer: number }>} */
-  const positions = {};
+  // Room to route around: these leave a 70px channel between columns and 36px
+  // between rows for edges and their labels.
+  const layerWidth = NODE_WIDTH + 70;
+  const rowHeight = NODE_HEIGHT + 36;
+  // Every slot in every column, lanes included — a lane occupies a row of its
+  // own, so it takes part in the geometry even though it is not a state.
+  /** @type {Map<string, { x: number, y: number, layer: number }>} */
+  const placed = new Map();
   let height = 0;
   for (const [layer, row] of byLayer) {
     row.forEach((id, i) => {
-      positions[id] = harden({
-        x: 20 + layer * layerWidth,
-        y: 20 + i * rowHeight,
-        layer,
-      });
+      placed.set(
+        id,
+        harden({
+          x: 20 + layer * layerWidth,
+          y: 20 + i * rowHeight,
+          layer,
+        }),
+      );
     });
     height = Math.max(height, 20 + row.length * rowHeight);
   }
@@ -254,17 +268,31 @@ export const layoutGraph = (graph, initial) => {
   // A single mid-column point instead lets the approach cut diagonally through
   // the box of whatever sits in that column, which is the crossing this is
   // meant to remove. The view adds the endpoints on the node borders.
-  const nodeWidth = 150;
   /** @type {Record<number, Array<{ x: number, y: number }>>} */
   const routes = {};
   for (const [index, ids] of routeIds) {
     const points = [];
     for (const id of ids) {
-      const at = positions[id];
-      points.push(harden({ x: at.x, y: at.y + 20 }));
-      points.push(harden({ x: at.x + nodeWidth, y: at.y + 20 }));
+      const at = placed.get(id);
+      if (at !== undefined) {
+        points.push(harden({ x: at.x, y: at.y + NODE_HEIGHT / 2 }));
+        points.push(
+          harden({ x: at.x + NODE_WIDTH, y: at.y + NODE_HEIGHT / 2 }),
+        );
+      }
     }
     routes[index] = harden(points);
+  }
+  // Lanes are an implementation detail of routing, so they stay out of what is
+  // returned: the caller asked where its STATES are, and one walking
+  // `positions` to draw a box each must not find a phantom to draw.
+  /** @type {Record<string, { x: number, y: number, layer: number }>} */
+  const positions = {};
+  for (const node of nodes) {
+    const at = placed.get(node.id);
+    if (at !== undefined) {
+      positions[node.id] = at;
+    }
   }
 
   const width = 40 + (Math.max(0, ...byLayer.keys()) + 1) * layerWidth;

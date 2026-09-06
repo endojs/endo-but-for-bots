@@ -3,8 +3,13 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 
-import { newestFirst, relativeAge } from '@endo/space-workflow';
-import { layoutGraph } from '@endo/space-workflow';
+import {
+  layoutGraph,
+  newestFirst,
+  relativeAge,
+  NODE_HEIGHT,
+  NODE_WIDTH,
+} from '@endo/space-workflow';
 
 const NOW = Date.parse('2026-08-26T12:00:00Z');
 const SECOND = 1000;
@@ -25,13 +30,49 @@ test('the age label keeps scaling past a week', t => {
 
 test('a missing or unparseable timestamp renders as nothing', t => {
   t.is(relativeAge(undefined, NOW), '');
+  t.is(relativeAge(null, NOW), '');
   t.is(relativeAge('', NOW), '');
   t.is(relativeAge('not a date', NOW), '');
+  t.is(relativeAge(new Date(NaN), NOW), '');
 });
 
 test('clock skew does not print a negative age', t => {
   // The daemon's clock can sit marginally ahead of the browser's.
   t.is(relativeAge(new Date(NOW + 30 * SECOND).toISOString(), NOW), 'just now');
+});
+
+test('the label never floors to a leading zero', t => {
+  // Under a minute there is no whole unit to show. Flooring seconds to minutes
+  // anywhere below sixty prints "0m ago", which reads as broken rather than as
+  // recent, so the qualitative label has to hold until there is a 1 to show.
+  for (const seconds of [44, 45, 50, 59]) {
+    t.is(relativeAge(ago(seconds * SECOND), NOW), 'just now', `at ${seconds}s`);
+  }
+  t.is(relativeAge(ago(MINUTE), NOW), '1m ago');
+  t.is(relativeAge(ago(HOUR), NOW), '1h ago');
+  t.is(relativeAge(ago(DAY), NOW), '1d ago');
+});
+
+test('a timestamp sorts in whatever form it renders', t => {
+  // `updatedAt` is untyped on the wire. Whichever forms the label accepts the
+  // sort has to accept too: one the sort cannot read is treated as no
+  // timestamp at all and sinks to the bottom of a rail that is happily
+  // displaying its age.
+  const epoch = NOW - 5 * MINUTE;
+  for (const updatedAt of [
+    new Date(epoch).toISOString(),
+    epoch,
+    new Date(epoch),
+  ]) {
+    t.is(relativeAge(updatedAt, NOW), '5m ago');
+    t.deepEqual(
+      newestFirst([{ runId: 'undated' }, { runId: 'dated', updatedAt }]).map(
+        summary => summary.runId,
+      ),
+      ['dated', 'undated'],
+      `${typeof updatedAt} timestamps order`,
+    );
+  }
 });
 
 test('the rail lists newest first', t => {
@@ -122,10 +163,9 @@ test('the same chart always lays out the same way', t => {
   t.deepEqual(layoutGraph(graph, 'a'), layoutGraph(graph, 'a'));
 });
 
-// The view draws a node as a 150x40 box at each position, and a routed edge as
-// a polyline through `routes`. This is the property the routing exists for.
-const NODE_WIDTH = 150;
-const NODE_HEIGHT = 40;
+// A position is the top-left corner of a NODE_WIDTH x NODE_HEIGHT box, and a
+// routed edge is a polyline through `routes`. Keeping an unrelated state out of
+// that polyline is the property the routing exists for.
 
 /**
  * @param {{x: number, y: number}} a
@@ -189,9 +229,12 @@ test('a routed edge never passes through an unrelated state', t => {
       ...routes[index],
       { x: positions[edge.to].x, y: positions[edge.to].y + NODE_HEIGHT / 2 },
     ];
+    // The edge's own endpoints are the two boxes it is allowed to touch.
+    const others = graph.nodes.filter(
+      node => node.id !== edge.from && node.id !== edge.to,
+    );
     for (let i = 1; i < points.length; i += 1) {
-      for (const node of graph.nodes) {
-        if (node.id === edge.from || node.id === edge.to) continue;
+      for (const node of others) {
         t.false(
           segmentEntersBox(points[i - 1], points[i], positions[node.id]),
           `${edge.from} -> ${edge.to} must not cross ${node.id}`,
@@ -199,6 +242,26 @@ test('a routed edge never passes through an unrelated state', t => {
       }
     }
   }
+});
+
+test('routing lanes are not reported as states', t => {
+  // A lane is a slot in the layout, not a state. A caller drawing a box per
+  // entry in `positions` must not find one to draw for a lane.
+  const graph = {
+    nodes: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }],
+    edges: [
+      { from: 'a', to: 'b' },
+      { from: 'b', to: 'c' },
+      { from: 'c', to: 'd' },
+      { from: 'a', to: 'd' },
+    ],
+  };
+  const { positions, routes } = layoutGraph(graph, 'a');
+  t.true(Object.keys(routes).length > 0, 'the skipping edge is routed');
+  t.deepEqual(
+    Object.keys(positions).sort(),
+    graph.nodes.map(node => node.id).sort(),
+  );
 });
 
 test('parallel transitions share one lane', t => {

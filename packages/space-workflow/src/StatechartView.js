@@ -4,12 +4,10 @@ import harden from '@endo/harden';
 import { h } from 'preact';
 import { renderGraph } from '@endo/workflow/src/graph.js';
 
-import { layoutGraph } from './layout.js';
+import { layoutGraph, NODE_HEIGHT, NODE_WIDTH } from './layout.js';
 
 /** @import { VNode } from 'preact' */
 
-const NODE_WIDTH = 150;
-const NODE_HEIGHT = 40;
 // Backward edges arc under the node band. Forward edges that span more than one
 // column are ROUTED by the layout, through a lane of its own in each column
 // they cross, so they never pass over an unrelated state.
@@ -103,20 +101,20 @@ export const StatechartView = ({
   );
 
   const bandHeight = Math.max(height, 120);
-  const drawn = graph.edges.filter(edge => {
+  // A backward edge arcs under the band, so the viewBox has to grow to hold it.
+  const hasUnder = graph.edges.some(edge => {
     const from = positions[edge.from];
     const to = positions[edge.to];
-    return from !== undefined && to !== undefined && !edge.internal;
+    return (
+      from !== undefined &&
+      to !== undefined &&
+      !edge.internal &&
+      to.layer <= from.layer
+    );
   });
-  const hasUnder = drawn.some(edge => {
-    const from = positions[edge.from];
-    const to = positions[edge.to];
-    return to.layer <= from.layer;
-  });
-  const top = 0;
   const viewHeight = bandHeight + (hasUnder ? ARC_MARGIN : 0);
   // Parallel transitions share a routed lane, so their labels would land on the
-  // same point; stagger them down the lane instead.
+  // same point; stagger them along the lane instead.
   /** @type {Map<string, number>} */
   const parallelSeen = new Map();
 
@@ -124,7 +122,7 @@ export const StatechartView = ({
     'svg',
     {
       class: 'wf-statechart',
-      viewBox: `0 ${top} ${width} ${viewHeight}`,
+      viewBox: `0 0 ${width} ${viewHeight}`,
       role: 'img',
       'aria-label': `Statechart for ${chart.name}`,
     },
@@ -141,6 +139,9 @@ export const StatechartView = ({
         const y2 = to.y + NODE_HEIGHT / 2;
         const backward = to.layer <= from.layer;
         const route = routes[edgeIndex];
+        // One condition for both the path and the class: an edge drawn as a
+        // chord must not be styled as though it were following a lane.
+        const routed = !backward && route !== undefined && route.length > 0;
         let d;
         let labelX = (x1 + x2) / 2;
         let labelY;
@@ -148,7 +149,7 @@ export const StatechartView = ({
           const under = bandHeight + ARC_MARGIN / 2;
           d = `M ${x1} ${y1} C ${x1 + 40} ${under}, ${x2 - 40} ${under}, ${x2} ${y2}`;
           labelY = under - 4;
-        } else if (route !== undefined && route.length > 0) {
+        } else if (routed) {
           d = smoothPath([{ x: x1, y: y1 }, ...route, { x: x2, y: y2 }]);
           // Along the lane, staggered so parallel transitions stay readable.
           const pair = `${edge.from}\u0000${edge.to}`;
@@ -156,7 +157,11 @@ export const StatechartView = ({
           parallelSeen.set(pair, nth + 1);
           const at = route[Math.min(nth, route.length - 1)];
           labelX = at.x;
-          labelY = at.y - 6 - (nth >= route.length ? (nth + 1) * 12 : 0);
+          // Once the lane's own points are spoken for there is nowhere new to
+          // sit along it, so each further label steps up by a line instead of
+          // landing on the last one.
+          const overflow = Math.max(0, nth - route.length + 1);
+          labelY = at.y - 6 - overflow * 12;
         } else {
           d = `M ${x1} ${y1} C ${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`;
           labelY = (y1 + y2) / 2 - 4;
@@ -168,7 +173,7 @@ export const StatechartView = ({
             h('path', {
               class: backward
                 ? 'wf-edge wf-edge-back'
-                : `wf-edge${route !== undefined ? ' wf-edge-routed' : ''}`,
+                : `wf-edge${routed ? ' wf-edge-routed' : ''}`,
               d,
             }),
             h(
