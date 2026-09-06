@@ -358,14 +358,30 @@ struct Site {
     preceding: String,
 }
 
+/// The scanned crates' sources, lexed to code-only text once per process:
+/// every test below walks the same tens of thousands of lines.
+fn lexed_sources() -> &'static [(PathBuf, String)] {
+    use std::sync::OnceLock;
+    static SOURCES: OnceLock<Vec<(PathBuf, String)>> = OnceLock::new();
+    SOURCES.get_or_init(|| {
+        source_files()
+            .into_iter()
+            .map(|file| {
+                let code = code_only(&fs::read_to_string(&file).expect("read source"));
+                (file, code)
+            })
+            .collect()
+    })
+}
+
 /// Every construction site of `Halt::<variant>(…)` across the scanned
 /// crates' sources.
 fn sites(variant: &str) -> Vec<Site> {
     let marker = format!("Halt::{variant}(");
     let bare = format!("Halt::{variant}");
     let mut out = Vec::new();
-    for file in source_files() {
-        let src = code_only(&fs::read_to_string(&file).expect("read source"));
+    for (file, src) in lexed_sources() {
+        let src = src.as_str();
         // Every spelling of the variant must be a construction: no `use`,
         // no function value, no alias — so the scan below is complete.
         for at in marker_positions(&src, &bare) {
@@ -416,8 +432,7 @@ fn sites(variant: &str) -> Vec<Site> {
 /// in the scanned sources (code-only text).
 fn fn_body(marker: &str) -> String {
     let mut found = None;
-    for file in source_files() {
-        let src = code_only(&fs::read_to_string(&file).expect("read source"));
+    for (_, src) in lexed_sources() {
         let Some(i) = src.find(marker) else { continue };
         assert!(
             found.is_none(),

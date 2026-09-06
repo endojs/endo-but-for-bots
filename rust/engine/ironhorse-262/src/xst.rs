@@ -817,33 +817,22 @@ pub(crate) fn classify_missing_global(source: &str, thrown: &str) -> Option<Miss
 }
 
 /// The skip owed when the **oracle's** uncaught throw is its unresolved-name
-/// `ReferenceError`, or `None` when that throw is a reference behavior to be
-/// judged as usual. The oracle certified nothing on such a program, so
-/// ironhorse's own throw goes unjudged — but only when the name is one XS
-/// really could not have bound: a host intrinsic the pinned build lacks and
-/// ironhorse has (`Intl`) is the oracle's known host gap; a name neither
-/// engine binds in an empty program **and the program declares** is one XS
-/// still could not resolve (an XS defect on a program-level binding), an
-/// oracle-side surprise. Everything else falls through: a name the oracle
-/// binds in an empty program was made unresolvable by this program (a
-/// `delete globalThis.Array`, a `with` shadow), and a name neither binds nor
-/// the program declares is a feature global both engines lack, reached by XS
-/// after a prefix ironhorse diverged on — in both, ironhorse's different
-/// constructor is exactly the reference behavior the shared-abort comparison
-/// exists to judge.
+/// `ReferenceError` for a host intrinsic the pinned XS build lacks and
+/// ironhorse has (`Intl`): the oracle certified nothing on such a program,
+/// so ironhorse's own throw goes unjudged. `None` for every other name, and
+/// deliberately so: an unresolved-name `ReferenceError` from XS on a name the
+/// program bound is, in the general case, the **correct** reference behavior
+/// (`function f() { var x } f(); x` throws exactly that), so an ironhorse
+/// throw of a different constructor there is a divergence the shared-abort
+/// comparison exists to judge, not an oracle non-result. A known XS defect on
+/// a program-level binding earns its own exact carve-out when it appears (as
+/// `oracle_loses_with_reference` did), never a blanket one.
 fn oracle_unresolved_name_skip(run: &DualRun) -> Option<Verdict> {
     let name = missing_global_binding(&run.oracle_error)?;
     match probe_global(name) {
         Some(binding) if !binding.oracle && binding.ironhorse => Some(Verdict::RunSkip(format!(
             "oracle-host-missing-global:{name}"
         ))),
-        Some(binding)
-            if !binding.oracle && !binding.ironhorse && source_declares(&run.source, name) =>
-        {
-            Some(Verdict::RunSkip(format!(
-                "oracle-unresolved-binding:{name}"
-            )))
-        }
         Some(_) => None,
         None => Some(Verdict::RunSkip("oracle-machine-error".into())),
     }
@@ -854,11 +843,9 @@ fn oracle_unresolved_name_skip(run: &DualRun) -> Option<Verdict> {
 /// `*` of `function*`) or followed by a plain `=` (a sloppy-mode implicit
 /// global) — but not a property access (`o.name = 1`), which binds nothing.
 /// Textual: a parameter, `catch` name, or destructuring target is missed,
-/// and an occurrence inside a string or comment is not. Where it withholds
-/// the missing-global skip a miss leaves the failure visible; where it grants
-/// the oracle-side unresolved-binding skip a false match would launder one,
-/// which is why the property-access shape, the common false match, is
-/// excluded.
+/// and an occurrence inside a string or comment is not. It is consulted only
+/// to **withhold** the missing-global skip, so a miss in either direction
+/// leaves the failure visible rather than laundering it.
 pub(crate) fn source_declares(source: &str, name: &str) -> bool {
     let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
     let mut start = 0;
@@ -3532,22 +3519,16 @@ mod tests {
             ),
             crate::report::Category::Skipped
         );
-        // A name neither engine binds that the program declares is one XS
-        // still could not resolve: an oracle-side surprise on a program-level
-        // binding, not a host gap and not an ironhorse failure.
+        // A name neither engine binds in an empty program is one this program
+        // referenced out of scope, and XS's ReferenceError is the correct
+        // reference behavior: ironhorse's different constructor is the
+        // abort-type divergence it would be for any other native error.
         run.oracle_error = "ReferenceError: get x: undefined variable".into();
-        run.source = "var x = 1; { function x() {} } x;".into();
-        assert_eq!(
+        run.source = "function f() { var x = 1; } f(); x();".into();
+        assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
-            Verdict::RunSkip("oracle-unresolved-binding:x".into())
-        );
-        assert_eq!(
-            crate::report::classify(
-                crate::report::Verdict::RunSkip,
-                "oracle-unresolved-binding:x"
-            ),
-            crate::report::Category::Infrastructure
-        );
+            Verdict::Fail(detail) if detail.starts_with("abort-type divergence")
+        ));
         // A name the oracle binds in an empty program was made unresolvable
         // by this program (`delete globalThis.Array`, a `with` shadow): XS's
         // ReferenceError is the reference behavior, so ironhorse's different
@@ -3599,6 +3580,50 @@ mod tests {
         }
     }
 
+    /// Blank line and block comments, leaving string literals (and their
+    /// contents, `//` included) intact.
+    fn strip_comments(src: &str) -> String {
+        let bytes = src.as_bytes();
+        let mut out = String::with_capacity(src.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let rest = &src[i..];
+            if rest.starts_with("//") {
+                let end = rest.find('\n').unwrap_or(rest.len());
+                out.extend(std::iter::repeat(' ').take(end));
+                i += end;
+            } else if rest.starts_with("/*") {
+                let end = rest.find("*/").map_or(rest.len(), |n| n + 2);
+                out.extend(
+                    rest[..end]
+                        .chars()
+                        .map(|c| if c == '\n' { '\n' } else { ' ' }),
+                );
+                i += end;
+            } else if rest.starts_with('"') {
+                let mut j = 1;
+                loop {
+                    match rest.as_bytes().get(j) {
+                        Some(b'\\') => j += 2,
+                        Some(b'"') => {
+                            j += 1;
+                            break;
+                        }
+                        Some(_) => j += 1,
+                        None => break,
+                    }
+                }
+                out.push_str(&rest[..j]);
+                i += j;
+            } else {
+                let c = rest.chars().next().unwrap();
+                out.push(c);
+                i += c.len_utf8();
+            }
+        }
+        out
+    }
+
     #[test]
     fn harness_declined_labels_are_an_explicit_allowlist() {
         // Every `Halt::Unsupported("…")` the runner constructs outside its
@@ -3623,15 +3648,10 @@ mod tests {
         for path in files {
             let src = std::fs::read_to_string(&path).unwrap();
             // Non-test code only (each file's test module is its tail), with
-            // line comments stripped so a commented-out site does not count.
-            let code: String = src
-                .split("#[cfg(test)]\nmod tests")
-                .next()
-                .unwrap_or("")
-                .lines()
-                .map(|l| l.split("//").next().unwrap_or(""))
-                .collect::<Vec<_>>()
-                .join("\n");
+            // comments blanked — literal-aware, so a `//` inside a string does
+            // not cut the line and a block comment ending mid-line does not
+            // hide what follows it.
+            let code = strip_comments(src.split("#[cfg(test)]\nmod tests").next().unwrap_or(""));
             let marker = "Halt::Unsupported(\"";
             let mut start = 0;
             while let Some(p) = code[start..].find(marker) {

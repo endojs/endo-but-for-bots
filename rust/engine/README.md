@@ -235,13 +235,11 @@ The answer decides whether the oracle gets to judge the run:
   ironhorse threw a different one is a failure (`abort-type divergence`).
   The same constructor with a different message stays the
   `abort-value-differs` skip until engine errors carry messages.
-  An oracle that itself could not resolve a name certified nothing: a name
-  ironhorse binds and the pinned XS build does not (`Intl`) is the oracle's
-  host gap, `oracle-host-missing-global:<Name>`; a name neither binds that
-  the program declares is an XS miss on a program-level binding, the
-  infrastructure skip `oracle-unresolved-binding:<Name>`.
-  A name the oracle does bind, or one nobody binds or declares (a feature
-  global both engines lack), falls through to the abort-type comparison.
+  An oracle that could not resolve a host intrinsic ironhorse has and the
+  pinned XS build lacks (`Intl`) certified nothing: that shape is the oracle's
+  host gap, `oracle-host-missing-global:<Name>`.
+  Any other unresolved name from XS is its correct reference behavior for an
+  out-of-scope reference, so it falls through to the abort-type comparison.
 - Every failure above that rests on the oracle's authority (an uncaught throw
   where the oracle completed, a spurious `ReferenceError`, an abort-type
   divergence) is demoted to an `oracle-gate-off:<shape>` skip under
