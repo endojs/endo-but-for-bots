@@ -309,7 +309,9 @@ test('a never-resolving driver admission cannot hold up disposal', async t => {
 });
 
 test('a never-resolving driver admission still honours the timeout', async t => {
-  t.timeout(2000);
+  // This is only the AVA deadlock guard. The assertion below independently
+  // checks the sandbox's 25 ms timeout, even on a loaded CI runner.
+  t.timeout(10_000);
   const never = new Promise(() => undefined);
   const fixture = makeDriverFixture({ spawnGate: never });
   const handle = await makeHandle(fixture);
