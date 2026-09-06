@@ -3,6 +3,12 @@
 // endo run --UNCONFINED floot-factory-setup.js --powers @agent \
 //   -E ANTHROPIC_API_KEY=sk-...   (optionally -E FLOOT_DIR=floot)
 //
+// Every FLOOT_* knob is also read as ENDO_FLOOT_*, and the key as
+// ENDO_FLOOT_AUTH_TOKEN. A daemon that runs this script from ENDO_EXTRA
+// forwards only ENDO_-, LOCKDOWN_-, and XDG_-prefixed variables to its
+// subprocess (packages/daemon/index.js `allowEnvPass`), so a hosted deployment
+// provisions from a secrets EnvironmentFile under those names.
+//
 // Provisions the Floot factory under a `floot/` inventory directory as the
 // well-known `floot/controller` — a single pinned caplet that owns every chat
 // session (each session is its own guest, hidden behind the factory). The LLM
@@ -14,6 +20,15 @@
 // factory as a `SecretBlob` capability, so the token can be rotated or revoked
 // without re-provisioning anything, every read is audited, and the pet-store
 // value the factory reads carries no credential at all.
+//
+// Re-runnable. A daemon re-runs every ENDO_EXTRA setup on each start, and an
+// operator re-runs it to rotate a key or correct the account profile. On a
+// re-run the factory host, its profile, the provider value, and the secret are
+// reused or replaced in place, and only the factory caplet is re-created: it
+// is a pinned unconfined caplet whose module lives in a release checkout, so
+// once older releases are pruned its formula would name a module that no
+// longer exists. Sessions are untouched — the registry lives in the factory
+// profile's pet store and each session's history in its own guest.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +46,15 @@ const accountOracleSpecifier = new URL('account-oracle.js', import.meta.url)
   .href;
 
 /**
+ * Read a setup knob, accepting the `ENDO_`-prefixed spelling that a hosted
+ * daemon's environment filter lets through.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+const env = name => process.env[name] || process.env[`ENDO_${name}`] || '';
+
+/**
  * Provision the account oracle: a durable formula that answers what plan this
  * deployment is on and how much quota is left, without holding the credential.
  *
@@ -45,7 +69,7 @@ const accountOracleSpecifier = new URL('account-oracle.js', import.meta.url)
  * @param {any} options.factoryHost
  */
 const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
-  const profilePath = process.env.FLOOT_ACCOUNT_PROFILE || '';
+  const profilePath = env('FLOOT_ACCOUNT_PROFILE');
   const handleName = `${dir}-account-oracle-handle`;
   const powersName = `profile-for-${handleName}`;
   const oraclePath = [dir, 'account-oracle'];
@@ -135,8 +159,7 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
 // mount instead of failing per session.
 const resolveCodePath = () => {
   const configured =
-    process.env.FLOOT_CODE_PATH ||
-    fileURLToPath(new URL('../../', import.meta.url));
+    env('FLOOT_CODE_PATH') || fileURLToPath(new URL('../../', import.meta.url));
   if (!existsSync(configured)) {
     console.warn(
       `Floot: code path "${configured}" does not exist; full-control sessions will have no source mount.`,
@@ -156,19 +179,34 @@ export const main = async agent => {
   // Everything lives under a single `floot/` inventory directory rather than
   // polluting the top level. The factory is the well-known `floot/controller`,
   // which the chat space's picker auto-detects.
-  const dir = process.env.FLOOT_DIR || 'floot';
+  const dir = env('FLOOT_DIR') || 'floot';
   const controllerPath = [dir, 'controller'];
+  const controllerHandlePath = [dir, 'controller-handle'];
+  const controllerProfilePath = [dir, 'controller-profile'];
+  const pinPath = ['@pins', `${dir}-controller`];
   // `provideHost` takes a single pet-name (not a path), so the factory host and
   // its profile are created top-level and `move`d under `floot/` afterward.
   const guestName = `${dir}-controller-handle`;
   const agentName = `profile-for-${guestName}`;
 
-  const provider = process.env.FLOOT_PROVIDER || 'anthropic';
-  const model = process.env.FLOOT_MODEL || '';
-  const authToken =
-    process.env.ANTHROPIC_API_KEY || process.env.FLOOT_AUTH_TOKEN || '';
-  const systemPrompt = process.env.FLOOT_SYSTEM_PROMPT || '';
+  const provider = env('FLOOT_PROVIDER') || 'anthropic';
+  const model = env('FLOOT_MODEL');
+  const authToken = process.env.ANTHROPIC_API_KEY || env('FLOOT_AUTH_TOKEN');
+  const systemPrompt = env('FLOOT_SYSTEM_PROMPT');
   const codePath = resolveCodePath();
+  // The factory reads its per-deployment knobs from the caplet env. Optional
+  // ones are forwarded only when set, so the factory's defaults apply
+  // otherwise and a bad value is rejected where the factory parses it.
+  const factoryEnv = harden({
+    FLOOT_SYSTEM_PROMPT: systemPrompt,
+    FLOOT_CODE_PATH: codePath,
+    ...(env('FLOOT_MAX_TOOL_ROUNDS')
+      ? { FLOOT_MAX_TOOL_ROUNDS: env('FLOOT_MAX_TOOL_ROUNDS') }
+      : {}),
+    ...(env('FLOOT_MAX_SUBAGENT_DEPTH')
+      ? { FLOOT_MAX_SUBAGENT_DEPTH: env('FLOOT_MAX_SUBAGENT_DEPTH') }
+      : {}),
+  });
 
   // 0. Ensure the floot/ directory exists (idempotent on re-provision).
   if (!(await E(agent).has(dir))) {
@@ -184,7 +222,7 @@ export const main = async agent => {
   });
   if (provider === 'anthropic' && !authToken && !hasExistingSecret) {
     throw new Error(
-      'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
+      'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN / ENDO_FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
     );
   }
 
@@ -194,9 +232,16 @@ export const main = async agent => {
   // mail-only Handle, which after a daemon restart can no longer provideGuest —
   // breaking session revival.) Sessions remain isolated guests owned by this
   // factory host.
-  const factoryHost = await E(agent).provideHost(guestName, {
-    agentName,
-  });
+  //
+  // On a re-run the host already exists, at the path step 6 moved it to.
+  // `provideHost(guestName)` looks for the top-level name and, not finding it,
+  // would mint a second host that owns none of the sessions. The pet name
+  // `provideHost` is given binds the host's mail handle and `agentName` binds
+  // the host itself, so the profile path is the one to look up.
+  const revived = await E(agent).has(...controllerProfilePath);
+  const factoryHost = revived
+    ? await E(agent).lookup(...controllerProfilePath)
+    : await E(agent).provideHost(guestName, { agentName });
 
   // 2. Put the auth token in the daemon's secret manager and hand the factory
   // the `SecretBlob`. `@secrets` is carried only by the root host, so a setup
@@ -253,25 +298,37 @@ export const main = async agent => {
   // before the factory so the very first session already has `accountStatus`.
   await provideAccountOracle(agent, { dir, provider, factoryHost });
 
-  // 5. Launch the factory caplet straight into floot/controller.
+  // 5. Launch the factory caplet straight into floot/controller. On a re-run,
+  // replace the caplet — the one formula whose module path is tied to a
+  // release checkout — and keep everything it was bound to.
+  if (await E(agent).has(...controllerPath)) {
+    await E(agent).remove(...controllerPath);
+  }
+  if (await E(agent).has(...pinPath)) {
+    await E(agent).remove(...pinPath);
+  }
   await E(agent).makeUnconfined('@main', flootFactorySpecifier, {
-    powersName: agentName,
+    powersName: revived ? controllerProfilePath : agentName,
     resultName: controllerPath,
-    env: harden({
-      FLOOT_SYSTEM_PROMPT: systemPrompt,
-      FLOOT_CODE_PATH: codePath,
-    }),
+    env: factoryEnv,
   });
 
   // 6. Tuck the factory host + its profile under floot/ so the top level stays
   // clean. (The factory already resolved its powers in step 5; renaming the
-  // pet-names afterward is cosmetic — formulas reference by identity.)
-  await E(agent).move([guestName], [dir, 'controller-handle']);
-  await E(agent).move([agentName], [dir, 'controller-profile']);
+  // pet-names afterward is cosmetic — formulas reference by identity.) A re-run
+  // found them there already.
+  if (!revived) {
+    await E(agent).move([guestName], controllerHandlePath);
+    await E(agent).move([agentName], controllerProfilePath);
+  }
 
   // 7. Single pin: the factory revives all its sessions on daemon restart.
-  await E(agent).copy(controllerPath, ['@pins', `${dir}-controller`]);
-  console.log(`Floot factory created at "${dir}/controller" and pinned.`);
+  await E(agent).copy(controllerPath, pinPath);
+  console.log(
+    revived
+      ? `Floot factory re-bound to the current release at "${dir}/controller" and pinned (sessions preserved).`
+      : `Floot factory created at "${dir}/controller" and pinned.`,
+  );
 
   // 8. Seed a default session if this is a fresh factory.
   const factory = await E(agent).lookup(controllerPath);
