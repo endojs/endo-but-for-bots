@@ -526,7 +526,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     }
                 } else if let Some(skip) = oracle_unresolved_name_skip(run) {
                     skip
-                } else if cfg.oracle && oracle_missing_intl(run) {
+                } else if cfg.oracle && oracle_missing_intl_assertion(run) {
                     // The same missing `Intl`, wrapped by an assertion-based
                     // case into its Test262Error.
                     Verdict::RunSkip("oracle-host-missing-intl".into())
@@ -784,24 +784,28 @@ pub(crate) struct GlobalBinding {
 pub(crate) fn probe_global(name: &str) -> Result<GlobalBinding, ProbeFailure> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<String, GlobalBinding>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<String, Result<GlobalBinding, ProbeFailure>>>> =
+        OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(&binding) = cache.lock().unwrap().get(name) {
-        return Ok(binding);
+    if let Some(&answer) = cache.lock().unwrap().get(name) {
+        return answer;
     }
-    let run = crate::dual_run(&format!("typeof {name}")).ok_or(ProbeFailure::MachineError)?;
-    // `typeof` never throws on an unresolvable reference, so a probe an engine
-    // did not complete says nothing about the binding — it is not "unbound",
-    // and no caller may treat it as such.
-    if run.agreement != Agreement::BothComplete {
-        return Err(ProbeFailure::Unanswered);
-    }
-    let binding = GlobalBinding {
-        oracle: run.oracle_result != "undefined",
-        ironhorse: run.ironhorse_result != "undefined",
+    // Failures are cached alongside answers: a probe costs a full XS machine
+    // and an ironhorse run, it is charged to the per-case wall-clock budget,
+    // and re-running it cannot change its outcome within this process.
+    let answer = match crate::dual_run(&format!("typeof {name}")) {
+        // `typeof` never throws on an unresolvable reference, so a probe an
+        // engine did not complete says nothing about the binding — it is not
+        // "unbound", and no caller may treat it as such.
+        Some(run) if run.agreement != Agreement::BothComplete => Err(ProbeFailure::Unanswered),
+        Some(run) => Ok(GlobalBinding {
+            oracle: run.oracle_result != "undefined",
+            ironhorse: run.ironhorse_result != "undefined",
+        }),
+        None => Err(ProbeFailure::MachineError),
     };
-    cache.lock().unwrap().insert(name.to_string(), binding);
-    Ok(binding)
+    cache.lock().unwrap().insert(name.to_string(), answer);
+    answer
 }
 
 /// Why [`probe_global`] could not answer.
@@ -896,7 +900,14 @@ pub(crate) fn source_declares(source: &str, name: &str) -> bool {
             || before.ends_with("function*")
             || before.ends_with("function *");
         let after = source[end..].trim_start();
-        let property = before.ends_with('.');
+        // A property assignment binds nothing — except on the global object,
+        // where `globalThis.foo = 1` (or `this.foo = 1` at program level) is
+        // exactly how a program creates a global.
+        let receiver = before.strip_suffix('.').map(|r| {
+            let r = r.trim_end();
+            r.strip_suffix('?').map_or(r, str::trim_end)
+        });
+        let property = receiver.is_some_and(|r| !r.ends_with("globalThis") && !r.ends_with("this"));
         let assigned = !property
             && after.starts_with('=')
             && !after.starts_with("==")
@@ -987,6 +998,21 @@ fn oracle_missing_intl(run: &DualRun) -> bool {
         && (run.oracle_error == "ReferenceError: get Intl: undefined variable"
             || (run.oracle_error.starts_with("Test262Error:")
                 && run.oracle_error.ends_with("but got a ReferenceError")))
+}
+
+/// The **assertion-wrapped** form of the pinned oracle's missing `Intl`: a
+/// case that observed the ReferenceError instead of its expected ECMA-402
+/// error and reported it through `Test262Error`. Unlike [`oracle_missing_intl`]
+/// — whose direct form names the intrinsic and is already handled by
+/// [`oracle_unresolved_name_skip`]'s probe — the wrapped text names no
+/// intrinsic at all, so it is scoped to a source that mentions `Intl`, exactly
+/// as the Temporal twin is. Without that conjunct any XS host gap reported
+/// through the same phrasing would be filed as this one.
+fn oracle_missing_intl_assertion(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.source.contains("Intl")
+        && run.oracle_error.starts_with("Test262Error:")
+        && run.oracle_error.ends_with("but got a ReferenceError")
 }
 
 fn oracle_missing_temporal(run: &DualRun) -> bool {
@@ -3503,6 +3529,11 @@ mod tests {
         assert!(!source_declares("myvar foo", "foo"));
         assert!(!source_declares("var o = {}; o.foo = 1;", "foo"));
         assert!(!source_declares("o?.foo = 1", "foo"));
+        // A property assignment on the global object *is* a declaration.
+        assert!(source_declares("globalThis.foo = 1;", "foo"));
+        assert!(source_declares("globalThis .foo = 1;", "foo"));
+        assert!(source_declares("globalThis?.foo = 1;", "foo"));
+        assert!(source_declares("this.foo = 1;", "foo"));
     }
 
     #[test]
@@ -3582,9 +3613,19 @@ mod tests {
         // The assertion-wrapped form of the same missing `Intl` keeps its
         // existing host skip too.
         run.oracle_error = "Test262Error: Expected a RangeError but got a ReferenceError".into();
+        run.source = "new Intl.NumberFormat('en', { style: 'nope' });".into();
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::RunSkip("oracle-host-missing-intl".into())
+        );
+        // The same phrasing on a case that names no Intl surface is some
+        // other XS host gap: it keeps the honest `abort-value-differs` skip
+        // (an oracle `Test262Error` is not a reference behavior ironhorse
+        // must reproduce) rather than being filed under this intrinsic.
+        run.source = "var d = new Date(); d.toLocaleString();".into();
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("abort-value-differs".into())
         );
     }
 
