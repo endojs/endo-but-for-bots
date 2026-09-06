@@ -79,6 +79,51 @@ impl From<LexError> for ParseError {
 
 type PResult<T> = Result<T, ParseError>;
 
+/// The parser's native-recursion budget, in the units [`Parser::nested`]
+/// charges.
+///
+/// XS's recursive-descent parser guards its C stack with
+/// `fxCheckParserStack`, a stack-address margin that varies with the host,
+/// the thread and the build profile — so the same source is accepted on one
+/// thread and rejected on another, and a source this port accepted with
+/// optimizations aborted the whole process without them (4,000 nested
+/// parentheses, about 8 KB of text). This parser instead charges every
+/// recursion point a fixed cost by frame class and refuses past this ceiling
+/// with XS's own `SyntaxError` wording (`"stack overflow"`), so the depth at
+/// which a program is rejected is a property of the program alone and part of
+/// the release-versioned contract.
+///
+/// The classes, and what the budget admits of each on its own:
+///
+/// - a full expression-cascade re-entry — a parenthesized or bracketed
+///   operand, an array or object literal element, a call's arguments, a
+///   template substitution, an arrow body — costs [`CASCADE_COST`] plus the
+///   operand charges the cascade passes on the way down: the whole
+///   precedence cascade is re-entered, about 35 KiB of frames per level
+///   unoptimized, so about 100 levels (101 nested parentheses compile, 102
+///   do not);
+/// - a nested statement, a `new` operand or a destructuring-pattern level
+///   costs [`STATEMENT_COST`]: 512 levels (about 10 KiB each);
+/// - an assignment, unary or conditional operand — the cheap right-recursive
+///   chains such as `a ? b : c ? d : …` or `!!!!x` — costs [`OPERAND_COST`]:
+///   about 1,000 levels (about 2 KiB each).
+///
+/// Every corner stays under 6 MiB of host stack unoptimized and under 2 MiB
+/// optimized. A flat sequence the grammar folds into a left-nested tree
+/// (`a + a + … + a`) never recurses here; its depth is bounded by the
+/// scoper's [`crate::scoper::TREE_DEPTH_LIMIT`]. `tests/recursion_bounds.rs`
+/// pins every boundary.
+pub const PARSER_STACK_BUDGET: u32 = 1024;
+/// Budget units for one expression-cascade re-entry (see
+/// [`PARSER_STACK_BUDGET`]).
+pub const CASCADE_COST: u32 = 8;
+/// Budget units for one nested statement, `new` operand or binding-pattern
+/// level (see [`PARSER_STACK_BUDGET`]).
+pub const STATEMENT_COST: u32 = 2;
+/// Budget units for one assignment, unary or conditional operand level (see
+/// [`PARSER_STACK_BUDGET`]).
+pub const OPERAND_COST: u32 = 1;
+
 /// Return the line of the second `__proto__:` setter in an object literal.
 /// Converted assignment/parameter covers are `ObjectBinding` nodes, so only
 /// nodes that remain `Object` are subject to Annex B.3.1.
@@ -132,6 +177,9 @@ pub struct Parser {
     /// `async` method key), read by the object/class member loops after a
     /// [`Self::property_name`] call.
     property_name_async_flag: u32,
+    /// Budget units in use by the recursion points currently on the native
+    /// stack (see [`PARSER_STACK_BUDGET`] and [`Self::nested`]).
+    depth: u32,
 }
 
 impl Parser {
@@ -162,6 +210,7 @@ impl Parser {
             flags,
             stack: Vec::new(),
             property_name_async_flag: 0,
+            depth: 0,
         })
     }
 
@@ -207,6 +256,24 @@ impl Parser {
             kind: ParseErrorKind::Unsupported,
             message: format!("unsupported: {message}"),
         }
+    }
+
+    /// Run `f` as one recursion point of `cost` budget units, refusing with
+    /// `fxCheckParserStack`'s `"stack overflow"` when the charge would exceed
+    /// [`PARSER_STACK_BUDGET`]. The charge is released on every return path,
+    /// including a `?` propagation inside `f`.
+    pub(crate) fn nested<T>(
+        &mut self,
+        cost: u32,
+        f: impl FnOnce(&mut Self) -> PResult<T>,
+    ) -> PResult<T> {
+        if self.depth + cost > PARSER_STACK_BUDGET {
+            return Err(self.error("stack overflow"));
+        }
+        self.depth += cost;
+        let result = f(self);
+        self.depth -= cost;
+        result
     }
 
     // --- token window (fxGetNextToken / fxLookAheadOnce / fxMatchToken) ---
@@ -622,8 +689,14 @@ impl Parser {
         Ok(())
     }
 
-    /// `fxAssignmentExpression`.
+    /// `fxAssignmentExpression`. One [`OPERAND_COST`] recursion point: the
+    /// right-recursive chains (`a = b = c`, `a ? b : c ? d : e`, the
+    /// element/argument/substitution positions) all pass through here.
     fn assignment_expression(&mut self) -> PResult<()> {
+        self.nested(OPERAND_COST, |p| p.assignment_expression_inner())
+    }
+
+    fn assignment_expression_inner(&mut self) -> PResult<()> {
         if self.cur.token == Token::Yield {
             return self.yield_expression();
         }
@@ -838,8 +911,13 @@ impl Parser {
         }
     }
 
-    /// `fxUnaryExpression` — `+ - ! ~ typeof void delete await`.
+    /// `fxUnaryExpression` — `+ - ! ~ typeof void delete await`. One
+    /// [`OPERAND_COST`] recursion point (`!!!!x` recurses here per operator).
     fn unary_expression(&mut self) -> PResult<()> {
+        self.nested(OPERAND_COST, |p| p.unary_expression_inner())
+    }
+
+    fn unary_expression_inner(&mut self) -> PResult<()> {
         if has_flag(self.cur.token, UNARY_EXPRESSION) {
             let token = self.cur.token;
             let line = self.cur.line;
@@ -870,8 +948,12 @@ impl Parser {
         }
     }
 
-    /// `fxPrefixExpression` — `++ --`.
+    /// `fxPrefixExpression` — `++ --`. One [`OPERAND_COST`] recursion point.
     fn prefix_expression(&mut self) -> PResult<()> {
+        self.nested(OPERAND_COST, |p| p.prefix_expression_inner())
+    }
+
+    fn prefix_expression_inner(&mut self) -> PResult<()> {
         if has_flag(self.cur.token, PREFIX_EXPRESSION) {
             let token = self.cur.token;
             let line = self.cur.line;
@@ -906,8 +988,17 @@ impl Parser {
     }
 
     /// `fxCallExpression` — the member / call / optional-chaining /
-    /// tagged-template postfix loop.
+    /// tagged-template postfix loop. The [`CASCADE_COST`] recursion point:
+    /// every descent of the precedence cascade reaches here exactly once
+    /// before a primary expression re-enters the cascade (a parenthesized
+    /// operand, a literal element, an argument, a template substitution, an
+    /// arrow body), so this is where a nesting level's full cascade of frames
+    /// is charged.
     fn call_expression(&mut self) -> PResult<()> {
+        self.nested(CASCADE_COST, |p| p.call_expression_inner())
+    }
+
+    fn call_expression_inner(&mut self) -> PResult<()> {
         let chain_line = self.cur.line;
         self.literal_expression(false)?;
         if has_flag(self.cur.token, CALL_EXPRESSION) {
@@ -1705,8 +1796,13 @@ impl Parser {
     }
 
     /// `fxNewExpression` — `new X(...)`, member chains after `new`, and
-    /// `new.target`.
+    /// `new.target`. One [`STATEMENT_COST`] recursion point: `new new new f`
+    /// recurses here per operand without passing through the cascade.
     fn new_expression(&mut self) -> PResult<()> {
+        self.nested(STATEMENT_COST, |p| p.new_expression_inner())
+    }
+
+    fn new_expression_inner(&mut self) -> PResult<()> {
         let line = self.cur.line;
         self.match_token(Token::New)?;
         if self.cur.token == Token::Dot {

@@ -440,6 +440,9 @@ pub struct Coder<'a> {
     /// binding (coded through the reference/assign path, never
     /// `code_declare`) is correctly exempt.
     error: Option<crate::parser::ParseError>,
+    /// Tree levels currently on the native stack (see
+    /// [`crate::scoper::TREE_DEPTH_LIMIT`] and [`Self::code_node`]).
+    depth: u32,
 }
 
 impl<'a> Coder<'a> {
@@ -470,6 +473,7 @@ impl<'a> Coder<'a> {
             tail: false,
             tag: 0,
             error: None,
+            depth: 0,
         }
     }
 
@@ -1010,6 +1014,22 @@ impl Coder<'_> {
     }
 
     fn code_node(&mut self, node: &Node) {
+        // The scoper has already refused any tree deeper than
+        // [`crate::scoper::TREE_DEPTH_LIMIT`] before coding starts; this
+        // backstop keeps the coder's own recursion bounded regardless of how
+        // it is driven. `report` records the first error and the node is
+        // skipped — the output is discarded once an error is recorded, as
+        // for every other code-time `fxReportParserError`.
+        if self.depth >= crate::scoper::TREE_DEPTH_LIMIT {
+            self.report(node.line, "stack overflow");
+            return;
+        }
+        self.depth += 1;
+        self.code_node_inner(node);
+        self.depth -= 1;
+    }
+
+    fn code_node_inner(&mut self, node: &Node) {
         use Token::*;
         // XS's `mxExpressionNoValue` is staged for exactly this (the
         // statement/for-iteration) expression; capture and clear it so it
