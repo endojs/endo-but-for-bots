@@ -61,6 +61,20 @@ pub mod engine {
         /// ledger's KEYS row lands, and malformed bytecode cannot be
         /// walked.
         SymbolMismatch(String),
+        /// The crank spent more than its [`MeterBounds`] allow and the
+        /// meter halted it (`Halt::MeterAbort`), distinct from every
+        /// other halt because it is the one a supervisor budgets for:
+        /// the program was refused, not wrong. Carries the computrons
+        /// the crank had spent when the host refused (at least the
+        /// limit; the check cadence rounds up to the next interval) and
+        /// the limit itself. On the persistent path the machine has
+        /// already been rewound to its last checkpoint.
+        MeterAbort {
+            /// Computrons spent by this crank when it was refused.
+            computrons: u64,
+            /// The per-crank limit in force.
+            limit: u64,
+        },
     }
 
     impl std::fmt::Display for MachineError {
@@ -68,6 +82,11 @@ pub mod engine {
             match self {
                 MachineError::Compile(e) => write!(f, "compile error: {e}"),
                 MachineError::Halt(h) => write!(f, "{}", describe_halt(h)),
+                MachineError::MeterAbort { computrons, limit } => write!(
+                    f,
+                    "metering aborted the crank: {computrons} computrons spent against \
+                     a limit of {limit}"
+                ),
                 MachineError::Unavailable(what) => {
                     write!(f, "not built yet on the Ironhorse engine: {what}")
                 }
@@ -133,6 +152,123 @@ pub mod engine {
         }
     }
 
+    /// Computrons between two consultations of the metering host: the
+    /// default check cadence, matching the XS embedder's
+    /// `DEFAULT_METERING_INTERVAL`. The cadence decides how far past its
+    /// limit a crank can run before the refusal lands (at most one
+    /// interval), and how often the host callback costs anything; it is
+    /// never part of what a crank is charged.
+    pub const DEFAULT_METER_CHECK_INTERVAL: u64 = 10_000;
+
+    /// The default per-crank computron limit: `1e8`, the crank metering
+    /// limit the SwingSet kernel applies to an XS vat by default. A
+    /// crank that spends more is refused with
+    /// [`MachineError::MeterAbort`] and, on the persistent path, rewound.
+    /// Sized so no realistic crank meets it while a runaway loop, a
+    /// catastrophic regexp, or an allocation storm is cut off in
+    /// seconds rather than never.
+    pub const DEFAULT_CRANK_COMPUTRON_LIMIT: u64 = 100_000_000;
+
+    /// How the embedder bounds a crank's computation (architecture
+    /// review finding 2, F014/F020: the engine's whole resource-
+    /// exhaustion story is delegated to a meter the embedder never
+    /// armed).
+    ///
+    /// The DEFAULT is armed: every crank runs under a finite computron
+    /// limit and the host is consulted on a fixed cadence. Running
+    /// un-metered is an explicit opt-in ([`MeterBounds::Unbounded`]),
+    /// never something a caller gets by forgetting. Both fields are
+    /// REPLICA-VISIBLE: two replicas configured alike consult their
+    /// hosts at identical computron counts and refuse identical cranks,
+    /// so the policy is part of what makes replicas byte-identical, and
+    /// a change to it belongs in the same release as any other
+    /// consensus-relevant configuration.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum MeterBounds {
+        /// Armed. `crank_limit` computrons per crank, checked every
+        /// `check_interval` computrons. The limit is enforced against
+        /// the machine's absolute meter (which a persistent machine
+        /// carries across cranks and suspends), as `crank start +
+        /// crank_limit`, so it is exactly a per-crank budget however the
+        /// machine's lifetime count reads.
+        PerCrank {
+            /// Computrons between host consultations (non-zero).
+            check_interval: u64,
+            /// Computrons a single crank may spend.
+            crank_limit: u64,
+        },
+        /// Explicit opt-out: no limit is enforced. A machine resumed
+        /// from a store written under an armed policy still carries the
+        /// armed meter state, and the engine fails closed on an armed
+        /// meter with no host, so this policy attaches a host that
+        /// always continues rather than leaving the machine to abort —
+        /// un-bounded means "this embedder refuses nothing", not "this
+        /// embedder is misconfigured".
+        Unbounded,
+    }
+
+    impl Default for MeterBounds {
+        fn default() -> MeterBounds {
+            MeterBounds::PerCrank {
+                check_interval: DEFAULT_METER_CHECK_INTERVAL,
+                crank_limit: DEFAULT_CRANK_COMPUTRON_LIMIT,
+            }
+        }
+    }
+
+    impl MeterBounds {
+        /// Armed under the default cadence with an explicit limit.
+        pub fn per_crank(crank_limit: u64) -> MeterBounds {
+            MeterBounds::PerCrank {
+                check_interval: DEFAULT_METER_CHECK_INTERVAL,
+                crank_limit,
+            }
+        }
+
+        /// The check cadence, `None` when un-bounded.
+        fn check_interval(&self) -> Option<u64> {
+            match self {
+                // A zero interval would read as "un-armed" to the meter;
+                // the smallest armed cadence is 1.
+                MeterBounds::PerCrank { check_interval, .. } => Some((*check_interval).max(1)),
+                MeterBounds::Unbounded => None,
+            }
+        }
+
+        /// The per-crank limit, `None` when un-bounded.
+        fn crank_limit(&self) -> Option<u64> {
+            match self {
+                MeterBounds::PerCrank { crank_limit, .. } => Some(*crank_limit),
+                MeterBounds::Unbounded => None,
+            }
+        }
+    }
+
+    /// The host callback a [`MeterBounds`] installs: the meter shows it
+    /// the machine's absolute computron count; it continues while that
+    /// count is within the ceiling the current crank was granted. The
+    /// ceiling is shared with the embedder, which re-points it at every
+    /// crank start, so one installed callback serves every crank and
+    /// every resume. A pure function of meter state and configuration,
+    /// so it introduces no nondeterminism.
+    fn meter_host(ceiling: &std::rc::Rc<std::cell::Cell<u64>>) -> Box<dyn FnMut(u64) -> bool> {
+        let ceiling = ceiling.clone();
+        Box::new(move |computrons| computrons <= ceiling.get())
+    }
+
+    /// Map a halt to its error, naming a meter refusal under a limit
+    /// distinctly ([`MachineError::MeterAbort`]); `spent` is what the
+    /// crank had spent when it halted.
+    fn refuse(halt: Halt, spent: u64, limit: Option<u64>) -> MachineError {
+        match (halt, limit) {
+            (Halt::MeterAbort, Some(limit)) => MachineError::MeterAbort {
+                computrons: spent,
+                limit,
+            },
+            (halt, _) => MachineError::Halt(halt),
+        }
+    }
+
     /// A machine backed by the Rust engine.
     ///
     /// Mirrors the slice of the `xsnap::Machine` surface the daemon's
@@ -140,6 +276,7 @@ pub mod engine {
     /// rather than a fork of the call sites.
     pub struct Machine {
         inner: VmMachine,
+        bounds: MeterBounds,
     }
 
     impl Default for Machine {
@@ -149,11 +286,23 @@ pub mod engine {
     }
 
     impl Machine {
-        /// Create a fresh machine over shared intrinsics.
+        /// Create a fresh machine over shared intrinsics, metered under
+        /// [`MeterBounds::default`].
         pub fn new() -> Machine {
+            Machine::with_bounds(MeterBounds::default())
+        }
+
+        /// Create a fresh machine under an explicit metering policy.
+        pub fn with_bounds(bounds: MeterBounds) -> Machine {
             Machine {
                 inner: VmMachine::new(),
+                bounds,
             }
+        }
+
+        /// The metering policy every evaluation runs under.
+        pub fn bounds(&self) -> &MeterBounds {
+            &self.bounds
         }
 
         /// Compile and evaluate `source` in a fresh compartment.
@@ -161,12 +310,28 @@ pub mod engine {
         /// Compiles to bytecode **and its symbols atom**, then evaluates
         /// through `evaluate_with_symbols` so the intrinsics are linked —
         /// without the symbols atom the program's intrinsic references
-        /// would not resolve.
+        /// would not resolve. Each evaluation is a fresh interpreter, so
+        /// its meter starts at zero and the crank limit is the ceiling
+        /// itself. A refused program comes back with `completed: false`
+        /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to
+        /// [`MachineError::MeterAbort`].
         pub fn evaluate(&self, source: &str, strict: bool) -> Result<EvalOutcome, MachineError> {
             let (bytecode, symbols) = compile_atoms_with(source, strict)
                 .map_err(|e| MachineError::Compile(e.to_string()))?;
             let comp = self.inner.new_compartment();
-            Ok(comp.evaluate_with_symbols(&bytecode, &symbols).into())
+            let outcome = match (self.bounds.check_interval(), self.bounds.crank_limit()) {
+                (Some(interval), Some(limit)) => {
+                    let ceiling = std::rc::Rc::new(std::cell::Cell::new(limit));
+                    comp.evaluate_with_symbols_metered(
+                        &bytecode,
+                        &symbols,
+                        interval,
+                        meter_host(&ceiling),
+                    )
+                }
+                _ => comp.evaluate_with_symbols(&bytecode, &symbols),
+            };
+            Ok(outcome.into())
         }
 
         /// Evaluate and return only the completion value, failing when
@@ -176,7 +341,11 @@ pub mod engine {
             if outcome.completed {
                 Ok(outcome.result)
             } else {
-                Err(MachineError::Halt(outcome.halt))
+                Err(refuse(
+                    outcome.halt,
+                    outcome.computrons,
+                    self.bounds.crank_limit(),
+                ))
             }
         }
 
@@ -186,7 +355,11 @@ pub mod engine {
             if outcome.completed {
                 Ok(outcome.result)
             } else {
-                Err(MachineError::Halt(outcome.halt))
+                Err(refuse(
+                    outcome.halt,
+                    outcome.computrons,
+                    self.bounds.crank_limit(),
+                ))
             }
         }
 
@@ -251,6 +424,11 @@ pub mod engine {
         /// richer is an explicit supervisor opt-in with its trade
         /// documented on the field.
         pub cadence: CadencePolicy,
+        /// The per-crank computation bound (architecture review F014/
+        /// F020). Armed by default; [`MeterBounds::Unbounded`] is the
+        /// explicit opt-out. Replica-visible like `cadence`: replicas
+        /// must agree on it to refuse the same cranks.
+        pub meter: MeterBounds,
     }
 
     /// The checkpoint/collect cadence a [`PersistentMachine`] runs
@@ -382,6 +560,20 @@ pub mod engine {
         /// any later point still sees it.
         collect_failures: u32,
         last_collect_error: Option<String>,
+        /// The metering policy (architecture review F014/F020): a
+        /// fresh boot machine is ARMED under it before its first crank,
+        /// and every resumed machine — `open` on a populated store, and
+        /// every rewind — has its host reattached, because the callback
+        /// cannot travel in the snapshot and the engine fails closed on
+        /// an armed meter with none. There is no path through this type
+        /// that runs a crank without the policy in force.
+        meter: MeterBounds,
+        /// The absolute computron ceiling the CURRENT crank runs under,
+        /// shared with the installed host callback and re-pointed at
+        /// every crank start to `meter index at start + crank_limit`.
+        /// Absolute because the persistent meter never resets: its
+        /// index is the machine-lifetime count the snapshot carries.
+        crank_ceiling: std::rc::Rc<std::cell::Cell<u64>>,
     }
 
     fn store_err(e: ironhorse_snapshot::store::StoreError) -> MachineError {
@@ -408,11 +600,21 @@ pub mod engine {
             // one-way restamping it out from under its rightful owner. A
             // fresh or already-current store is a no-op.
             ironhorse_snapshot::store::migrate_store(&mut store, &signature).map_err(store_err)?;
+            // No crank has run yet, so the ceiling's initial value is
+            // irrelevant; `eval` re-points it before every crank.
+            let crank_ceiling = std::rc::Rc::new(std::cell::Cell::new(u64::MAX));
             match store.manifest() {
                 Err(StoreError::Empty) => {
-                    let session =
-                        begin_store_session(ironhorse_vm::Interp::new(), &signature, &mut store)
-                            .map_err(|(_, e)| store_err(e))?;
+                    // A fresh boot machine is armed BEFORE it is bound
+                    // to the store, so the very first crank runs
+                    // bounded and epoch 1 already carries the armed
+                    // meter state.
+                    let mut boot = ironhorse_vm::Interp::new();
+                    if let Some(interval) = options.meter.check_interval() {
+                        boot.arm_meter(interval, meter_host(&crank_ceiling));
+                    }
+                    let session = begin_store_session(boot, &signature, &mut store)
+                        .map_err(|(_, e)| store_err(e))?;
                     let durable_cranks = session.cranks();
                     Ok(PersistentMachine {
                         store: std::rc::Rc::new(std::cell::RefCell::new(store)),
@@ -426,12 +628,15 @@ pub mod engine {
                         checkpoint_after_rewind: false,
                         collect_failures: 0,
                         last_collect_error: None,
+                        meter: options.meter.clone(),
+                        crank_ceiling,
                     })
                 }
                 Ok(_) => {
                     let store = std::rc::Rc::new(std::cell::RefCell::new(store));
-                    let session =
+                    let mut session =
                         resume_from_store_lazy(store.clone(), &signature).map_err(store_err)?;
+                    Self::attach_meter(&options.meter, &crank_ceiling, session.machine_mut());
                     // A resumed machine carries its program symbol
                     // names in the small state; an empty table means
                     // no crank ever linked (e.g. the first crank
@@ -453,10 +658,46 @@ pub mod engine {
                         checkpoint_after_rewind: false,
                         collect_failures: 0,
                         last_collect_error: None,
+                        meter: options.meter.clone(),
+                        crank_ceiling,
                     })
                 }
                 Err(e) => Err(store_err(e)),
             }
+        }
+
+        /// Put a RESUMED machine under `meter`. The host callback does
+        /// not ride the snapshot, so every resume (open on a populated
+        /// store, every rewind) passes through here, and the engine's
+        /// fail-closed rule for an armed meter with no host never
+        /// fires on a machine this type hands out.
+        ///
+        /// Armed policy: `attach_meter_host` reattaches when the store
+        /// was suspended under this exact interval (the window
+        /// continues untouched) and re-arms from the preserved index
+        /// otherwise — a store written un-metered, or under an older
+        /// cadence, is bounded from its next crank on. Un-bounded
+        /// policy: a store that carries an armed meter gets a host that
+        /// always continues, so the explicit opt-out means "refuse
+        /// nothing" instead of "abort everything"; a never-armed store
+        /// stays un-armed.
+        fn attach_meter(
+            meter: &MeterBounds,
+            crank_ceiling: &std::rc::Rc<std::cell::Cell<u64>>,
+            machine: &mut ironhorse_vm::Interp,
+        ) {
+            match meter.check_interval() {
+                Some(interval) => machine.attach_meter_host(interval, meter_host(crank_ceiling)),
+                None if machine.meter_is_armed() => {
+                    machine.reattach_meter_host(Box::new(|_| true));
+                }
+                None => {}
+            }
+        }
+
+        /// The metering policy this machine's cranks run under.
+        pub fn meter_bounds(&self) -> &MeterBounds {
+            &self.meter
         }
 
         /// Discard the in-memory machine and resume from the store's
@@ -478,8 +719,12 @@ pub mod engine {
             // from the same absolute total a replica that never halted
             // would be at.
             self.pending_cranks = 0;
-            let fresh = resume_from_store_lazy(self.store.clone(), &self.signature)
+            let mut fresh = resume_from_store_lazy(self.store.clone(), &self.signature)
                 .map_err(store_err)?;
+            // The rewound machine is a resume like any other: its host
+            // callback must be reattached or its next crank fails
+            // closed.
+            Self::attach_meter(&self.meter, &self.crank_ceiling, fresh.machine_mut());
             self.linked = !fresh.machine().program_symbol_names().is_empty();
             self.session = Some(fresh);
             Ok(())
@@ -520,7 +765,7 @@ pub mod engine {
             let checkpoint_due = pending_after >= self.cadence.checkpoint_every.max(1)
                 || collect_due
                 || self.checkpoint_after_rewind;
-            let (outcome, checkpointed) = {
+            let (outcome, checkpointed, crank_start) = {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
@@ -575,6 +820,17 @@ pub mod engine {
                 } else {
                     bytecode
                 };
+                // Grant this crank its budget: the persistent meter is
+                // the machine-lifetime count, so the ceiling is absolute
+                // — where the meter stands now plus the per-crank limit.
+                // Re-pointed every crank, so a crank that was refused
+                // does not shrink the next one's budget, and a resume
+                // mid-history grants exactly what a never-suspended
+                // replica would.
+                let crank_start = session.machine().meter_index() >> 16;
+                if let Some(limit) = self.meter.crank_limit() {
+                    self.crank_ceiling.set(crank_start.saturating_add(limit));
+                }
                 let outcome = session.machine_mut().run(&bytecode);
                 if outcome.completed && checkpoint_due {
                     let r = checkpoint_to_store(
@@ -582,9 +838,9 @@ pub mod engine {
                         &self.signature,
                         &mut *self.store.borrow_mut(),
                     );
-                    (outcome, Some(r))
+                    (outcome, Some(r), crank_start)
                 } else {
-                    (outcome, None)
+                    (outcome, None, crank_start)
                 }
             };
             if !outcome.completed {
@@ -613,7 +869,10 @@ pub mod engine {
                         describe_halt(&halt)
                     )));
                 }
-                return Err(MachineError::Halt(halt));
+                // `computrons` is the machine-lifetime count; report
+                // what THIS crank spent.
+                let spent = outcome.computrons.saturating_sub(crank_start);
+                return Err(refuse(halt, spent, self.meter.crank_limit()));
             }
             match checkpointed {
                 Some(Ok(_epoch)) => {

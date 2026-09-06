@@ -9,7 +9,9 @@
 
 #![cfg(feature = "ironhorse-engine")]
 
-use endo::ironhorse_engine::engine::{CadencePolicy, HeapStoreOptions, MachineError, PersistentMachine};
+use endo::ironhorse_engine::engine::{
+    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine,
+};
 use endo::supervisor::Supervisor;
 
 #[test]
@@ -19,6 +21,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         path: dir.path().join("worker-heap.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
     };
 
     // --- Fresh open: epoch 1 is the boot machine. -------------------
@@ -118,6 +121,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         path: heap_store,
         signature: options.signature.clone(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
     })
     .expect("resume open");
     assert_eq!(machine.epoch().expect("epoch"), 8, "the epoch chain continues");
@@ -138,6 +142,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         path: dir.path().join("worker-heap.sqlite"),
         signature: "some-other-host-surface".to_string(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
     }) {
         Err(MachineError::Store(e)) => {
             assert!(e.contains("Signature"), "refused by the signature gate: {e}");
@@ -161,6 +166,7 @@ fn an_empty_first_crank_does_not_link_the_table() {
         path: dir.path().join("worker-heap.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
+        meter: MeterBounds::default(),
     };
     let mut machine = PersistentMachine::open(&options).expect("fresh open");
     let outcome = machine.eval("1 + 2").expect("literal crank");
@@ -201,6 +207,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             checkpoint_every: 3,
             collect_every: 0,
         },
+        meter: MeterBounds::default(),
     };
 
     // --- Deferred flushes. ------------------------------------------
@@ -267,6 +274,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
         path: dir.path().join("cadence-collect-base.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy { checkpoint_every: 1, collect_every: 0 },
+        meter: MeterBounds::default(),
     };
     let mut base = PersistentMachine::open(&base_opts).expect("open base");
     base.eval(build).expect("baseline garbage crank");
@@ -285,6 +293,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
         path: dir.path().join("cadence-collect-sched.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy { checkpoint_every: 1, collect_every: 2 },
+        meter: MeterBounds::default(),
     };
     let mut sched = PersistentMachine::open(&sched_opts).expect("open sched");
     sched.eval(build).expect("garbage crank");
@@ -311,6 +320,7 @@ fn collect_every_is_not_starved_by_throwing_cranks() {
         path: dir.path().join("starve-heap.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy { checkpoint_every: 1, collect_every: 2 },
+        meter: MeterBounds::default(),
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     // Crank 1 (completed): builds reclaimable garbage. epoch 1 -> 2.
@@ -361,6 +371,7 @@ fn checkpoint_every_is_not_starved_by_throwing_cranks() {
         path: dir.path().join("starve-checkpoint.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy { checkpoint_every: 3, collect_every: 0 },
+        meter: MeterBounds::default(),
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     let start = machine.epoch().expect("epoch");
@@ -405,6 +416,7 @@ fn a_healthy_machine_reports_no_failed_collections() {
         path: dir.path().join("collect-signal.sqlite"),
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy { checkpoint_every: 1, collect_every: 2 },
+        meter: MeterBounds::default(),
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     for i in 0..4 {
@@ -460,6 +472,7 @@ fn the_collect_schedule_survives_a_suspend() {
         path: path_a.clone(),
         signature: "ironhorse-worker-v1".to_string(),
         cadence: policy(),
+        meter: MeterBounds::default(),
     })
     .expect("open A");
     for i in 0..CRANKS {
@@ -476,6 +489,7 @@ fn the_collect_schedule_survives_a_suspend() {
             path: path_b.clone(),
             signature: "ironhorse-worker-v1".to_string(),
             cadence: policy(),
+            meter: MeterBounds::default(),
         })
         .expect("open B");
         b.eval(&prog(i)).expect("B crank");
