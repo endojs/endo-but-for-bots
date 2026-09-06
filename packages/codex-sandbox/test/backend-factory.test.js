@@ -413,6 +413,81 @@ test('run and admin facets separate turn authority from teardown', async t => {
   t.is(disposed, 1);
 });
 
+test('create() for a session the factory still runs stops the old instance first', async t => {
+  let provisions = 0;
+  let disposed = 0;
+  const events = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    destroy: async () => undefined,
+    listModels: async () => [],
+    provision: async () => {
+      provisions += 1;
+      return {
+        start: async () => {
+          throw Error('not started by this lifecycle test');
+        },
+        dispose: async () => {
+          disposed += 1;
+        },
+        policy: validPolicy(),
+        auditWriter: harden({
+          append: async (kind, payload) => {
+            events.push({ kind, payload });
+          },
+        }),
+      };
+    },
+  });
+  // A Floot factory rebuilt without a daemon restart revives the session by
+  // creating it again; the instance the old factory owned must not run on
+  // beside it over the same workspace and journal.
+  const first = await factory.create({ sessionId: 'session-1' }, makeToolSet());
+  const second = await factory.create(
+    { sessionId: 'session-1' },
+    makeToolSet(),
+  );
+  t.is(provisions, 2);
+  t.is(disposed, 1, 'the first instance was torn down before the second');
+  t.true(events.some(event => event.kind === 'session-closed'));
+  // The superseded admin facet has nothing left to do; the new one owns the
+  // session.
+  await first.admin.terminate();
+  t.is(disposed, 1);
+  await second.admin.terminate();
+  t.is(disposed, 2);
+});
+
+test('destroy() stops a live instance before removing durable state', async t => {
+  let disposed = 0;
+  const destroyed = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    destroy: async spec => {
+      destroyed.push({ sessionId: spec.sessionId, stoppedFirst: disposed });
+    },
+    listModels: async () => [],
+    provision: async () => ({
+      start: async () => {
+        throw Error('not started by this lifecycle test');
+      },
+      dispose: async () => {
+        disposed += 1;
+      },
+      policy: validPolicy(),
+      auditWriter: harden({ append: async () => undefined }),
+    }),
+  });
+  await factory.create({ sessionId: 'session-1' }, makeToolSet());
+  await factory.destroy({ sessionId: 'session-1' });
+  t.is(disposed, 1);
+  t.deepEqual(destroyed, [{ sessionId: 'session-1', stoppedFirst: 1 }]);
+  // Lifecycle replay with nothing live is an idempotent destroy.
+  await factory.destroy({ sessionId: 'session-1' });
+  t.is(disposed, 1);
+  t.is(destroyed.length, 2);
+});
+
 test('resource provisioner unwinds every completed stage in reverse order', async t => {
   const cleanup = [];
   const provision = makeCodexResourceProvisioner({
@@ -457,7 +532,10 @@ test('resource provisioner unwinds every completed stage in reverse order', asyn
   await t.throwsAsync(() => provision({ sessionId: 'session-1' }), {
     message: /field.*network.*not enforced/,
   });
-  t.deepEqual(cleanup, ['slice', 'broker', 'mount', 'workspace']);
+  // The workspace is durable: a session revived after a restart reopens the
+  // one it had, so a failure past that point must not remove it. Its removal
+  // belongs to the factory's destroy.
+  t.deepEqual(cleanup, ['slice', 'broker', 'mount']);
 });
 
 test('resource provisioner journals rollback failures', async t => {
@@ -556,7 +634,7 @@ test('resource disposal retries only unfinished cleanup stages', async t => {
     message: /did not fully dispose/,
   });
   await resources.dispose();
-  t.deepEqual(calls, { slice: 1, broker: 2, mount: 1, workspace: 1 });
+  t.deepEqual(calls, { slice: 1, broker: 2, mount: 1, workspace: 0 });
 });
 
 test('an unsettled tool call blocks teardown without destroying the session', async t => {

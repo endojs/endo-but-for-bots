@@ -299,14 +299,20 @@ harden(assertHostedAgentPolicyV1);
 
 /**
  * Compose the concrete, per-session resource lifecycle from narrow platform
- * adapters. Every successfully created stage registers its inverse before the
- * next stage begins, so a partial failure unwinds in strict reverse order.
+ * adapters. Every successfully created ephemeral stage registers its inverse
+ * before the next stage begins, so a partial failure unwinds in strict reverse
+ * order. The durable workspace is the exception, see `makeWorkspace`.
  *
  * @param {object} powers
  * @param {(spec: any) => Promise<{ writer: any }>} powers.makeAuditJournal
  *   Operator-constructed factory that already closes over independently held
  *   entry-store and anchor capabilities. Session specs cannot select either.
- * @param {(spec: any) => Promise<{ remove: () => Promise<void> }>} powers.makeWorkspace
+ * @param {(spec: any) => Promise<any>} powers.makeWorkspace
+ *   Create or reopen the session's durable workspace, which `mountWorkspace`
+ *   attaches to the slice. Rollback and disposal never remove it: a session
+ *   revived after a restart reopens the workspace it had, and a broker or
+ *   slice failure on the way must not cost the user its contents. Only the
+ *   factory's `destroy` removes durable state.
  * @param {(workspace: any, spec: any) => Promise<{ unmount: () => Promise<void> }>} powers.mountWorkspace
  * @param {(spec: any) => Promise<{ revoke: () => Promise<void>, attestation: () => Promise<any> }>} powers.issueBrokerLease
  * @param {(options: any) => Promise<{ policy: () => Promise<any>, dispose: () => Promise<void> }>} powers.makeSlice
@@ -393,8 +399,9 @@ export const makeCodexResourceProvisioner = powers => {
         sessionId: spec.sessionId,
         imageDigest: powers.imageDigest,
       });
+      // Durable, so deliberately not registered for rollback: see the
+      // `makeWorkspace` contract above.
       const workspace = await powers.makeWorkspace(spec);
-      undo.push({ run: () => E(workspace).remove(), done: false });
       const workspaceMount = await powers.mountWorkspace(workspace, spec);
       undo.push({ run: () => E(workspaceMount).unmount(), done: false });
       const brokerLease = await powers.issueBrokerLease(
@@ -551,9 +558,11 @@ harden(normalizeCodexModelDescriptor);
  * @param {() => Promise<readonly any[]>} options.listModels
  * @param {string} options.imageDigest
  * @param {(spec: Record<string, any>) => Promise<void>} options.destroy
- *   Idempotently destroys any durable resources for a session that is not
- *   represented by a live admin facet. It must tolerate lifecycle replay after
- *   a process crash or a lost successful response.
+ *   Idempotently destroys a session's durable resources: its workspace, Codex
+ *   state, thread state, and journal. The factory stops any instance of the
+ *   session it still runs before calling it, so it never runs underneath a
+ *   live app-server; it must tolerate lifecycle replay after a process crash
+ *   or a lost successful response.
  */
 export const makeCodexBackendFactory = ({
   provision,
@@ -568,16 +577,57 @@ export const makeCodexBackendFactory = ({
     Array.isArray(models) || Fail`Codex model catalog must be an array`;
     return harden(models.map(normalizeCodexModelDescriptor));
   };
+
+  // One live instance per session. `create` and `destroy` for one session id
+  // run in order, and either stops an instance this factory still runs before
+  // acting. A second `create` for a live session is the session's new owner —
+  // a Floot factory rebuilt without a daemon restart revives every session it
+  // records, while the old instance's admin facet died with the old factory —
+  // not a request for a duplicate that would share the workspace, the Codex
+  // state, and the audit journal with the first and leak its slice and lease.
+  /** @type {Map<string, { terminate: () => Promise<void> }>} */
+  const live = new Map();
+  /** @type {Map<string, Promise<void>>} */
+  const sessionChains = new Map();
+  /**
+   * @template T
+   * @param {string} sessionId
+   * @param {() => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  const inSessionOrder = (sessionId, operation) => {
+    const previous = sessionChains.get(sessionId) || Promise.resolve();
+    const result = previous.then(operation);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    sessionChains.set(sessionId, settled);
+    void settled.then(() => {
+      if (sessionChains.get(sessionId) === settled) {
+        sessionChains.delete(sessionId);
+      }
+    });
+    return result;
+  };
+  /** @param {string} sessionId */
+  const stopLive = async sessionId => {
+    const current = live.get(sessionId);
+    if (current) await current.terminate();
+  };
+
   /**
    * @param {Record<string, any>} spec
    * @param {any} toolSet
    */
-  const create = async (spec, toolSet) => {
-    assertSessionId(spec?.sessionId);
+  const createSession = async (spec, toolSet) => {
     spec.cwd === undefined ||
       spec.cwd === '/workspace' ||
       Fail`Codex session cwd must be /workspace`;
     const tools = await E(toolSet).describe();
+    // A predecessor that cannot stop — an unsettled Endo tool call — refuses
+    // the successor rather than running beside it.
+    await stopLive(spec.sessionId);
     const resources = await provision(spec);
     let client;
     let terminated = false;
@@ -699,6 +749,9 @@ export const makeCodexBackendFactory = ({
         }
         await auditEvent('session-closed', { sessionId: spec.sessionId });
         terminated = true;
+        if (live.get(spec.sessionId)?.terminate === terminate) {
+          live.delete(spec.sessionId);
+        }
       })().finally(() => {
         if (!terminated) cleanupInFlight = undefined;
       });
@@ -727,12 +780,26 @@ export const makeCodexBackendFactory = ({
         help: () => 'Factory-only Codex lifecycle administration: terminate.',
       },
     );
+    live.set(spec.sessionId, harden({ terminate }));
     return harden({ run, admin });
+  };
+
+  /**
+   * @param {Record<string, any>} spec
+   * @param {any} toolSet
+   */
+  const create = async (spec, toolSet) => {
+    assertSessionId(spec?.sessionId);
+    return inSessionOrder(spec.sessionId, () => createSession(spec, toolSet));
   };
 
   const destroySession = async spec => {
     assertSessionId(spec?.sessionId);
-    return destroy(spec);
+    return inSessionOrder(spec.sessionId, async () => {
+      // Never underneath a running app-server.
+      await stopLive(spec.sessionId);
+      await destroy(spec);
+    });
   };
 
   return makeExo('CodexBackendFactory', HostedBackendFactoryInterface, {

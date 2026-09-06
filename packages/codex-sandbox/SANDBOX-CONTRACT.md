@@ -135,13 +135,23 @@ The session ID is a nonempty portable name and the process working directory is
 exactly `/workspace`.
 Creation is `creating -> ready` only after mounts, broker, policy attestation,
 thread state, and audit are durable.
-Any partial failure unwinds in reverse order.
+Any partial failure unwinds the ephemeral stages in reverse order: the slice,
+the broker lease, and the workspace mount.
+The workspace and the Codex-state volume are durable and are never removed by
+an unwind or by disposal: a session revived after a restart reopens the ones it
+had, and a broker or slice failure on the way must not cost the user their
+contents.
+A factory holds at most one live instance per session; a `create` or
+`destroy` for a session it still runs stops that instance first, so a Floot
+factory rebuilt without a daemon restart supersedes the old instance rather
+than starting a second app-server over the same workspace and journal.
 
 Deletion is `ready/error -> deleting -> deleted`.
 It interrupts and awaits the active turn, closes app-server, disposes the slice,
 kills and reaps all descendants including setsid/double-fork/background
-processes, unmounts the workspace, removes exact mount names, revokes the broker
-lease, and durably records closure.
+processes, unmounts the workspace, revokes the broker lease, and durably records
+closure; the factory's idempotent `destroy` then removes the workspace, the
+Codex-state volume, and the thread state by their exact names.
 Cleanup is idempotent; failures are aggregated and leave a retriable lifecycle
 record rather than falsely reporting deletion.
 
