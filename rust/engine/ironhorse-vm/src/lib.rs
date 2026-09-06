@@ -25,6 +25,7 @@ pub mod compartment;
 pub mod cost;
 pub mod default_keys;
 pub mod gc;
+pub mod halt_labels;
 pub mod interp;
 pub mod intl_number;
 pub mod meter;

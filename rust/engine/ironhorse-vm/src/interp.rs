@@ -3908,13 +3908,15 @@ pub enum Halt {
     /// the harness can report exactly what to implement next, rather than
     /// papering over it.
     ///
-    /// This is the only halt the differential instruments treat as
+    /// This is the one halt the differential instruments may treat as
     /// **skip-eligible**: a program that reaches it is uncovered ground, not
-    /// a divergence. That makes the label set an oracle exemption the engine
-    /// grants itself, so it is pinned: every literal label is enumerated in
-    /// `tests/halt_label_registry.rs`, and a new one fails that test until it
-    /// is classified there as a declined surface rather than an
-    /// [`Halt::EngineInvariant`].
+    /// a divergence. The exemption is not granted by the halt itself but by
+    /// the explicit allowlist in [`crate::halt_labels`], which the instruments
+    /// consult: an `Unsupported` whose label is not registered there is a
+    /// failure, so a new label cannot widen the exemption. The registry test
+    /// `tests/halt_label_registry.rs` keeps that list in step with the
+    /// construction sites, and a new label fails it until classified as a
+    /// declined surface rather than an [`Halt::EngineInvariant`].
     Unsupported(&'static str),
     /// The engine's **own state is wrong**: a guard on the interpreter's
     /// invariants fired (value-stack or frame underflow, a suspended
@@ -14362,7 +14364,7 @@ impl Interp {
                     let idx = self.stack.len().checked_sub(1 + depth);
                     let key = match idx.map(|i| self.stack[i]) {
                         Some(k) => k,
-                        None => return Halt::Unsupported(op.name()),
+                        None => return Halt::EngineInvariant("at:stack-underflow"),
                     };
                     // XS coerces the BASE first (`mxToInstance(mxStack + 1)`,
                     // below the key): `null[k]` throws before `k`'s
@@ -17253,7 +17255,7 @@ impl Interp {
                 XS_CODE_EXPONENTIATION => {
                     let n = self.stack.len();
                     if n < 2 {
-                        return Halt::Unsupported(op.name());
+                        return Halt::EngineInvariant("exponentiation:stack-underflow");
                     }
                     let left = self.stack[n - 2];
                     let right = self.stack[n - 1];
@@ -23522,8 +23524,8 @@ impl Interp {
                 // `fxCompileRegExp` failing makes `new RegExp(...)` throw.
                 return Err(self.catchable_syntax_error());
             }
-            Err(ironhorse_regexp::CompileError::Unsupported(name)) => {
-                return Err(Halt::Unsupported(name))
+            Err(ironhorse_regexp::CompileError::Unsupported(regexp_feature)) => {
+                return Err(Halt::Unsupported(regexp_feature))
             }
         };
         // `fxNewRegExpInstance`: four `fxNewSlot`s — the instance, the
