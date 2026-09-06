@@ -3176,7 +3176,13 @@ and threw `Test262Error`, Ironhorse completed, and the compiler itself
 (`ironhorse_compile::script_goal_deviates`) says the source is a strict program
 with a top-level `var`/function declaration. It classifies as infrastructure,
 like the other pinned-oracle defects. Neither case was in the ratchet's
-`covered.txt`, so the ratchet floor is untouched. The remaining shift is advisory
+`covered.txt`, so the ratchet floor is untouched. One dual-run regression gate
+had pinned the bug itself: the strict `writable:false` entry of
+`ironhorse-262/tests/errors_coercions_strict.rs`
+(`global_descriptors_are_live_environment_bindings`) asserted agreement with
+the eval-framed oracle's `false`; it now pins both sides — Ironhorse's Script
+goal `true` (TypeError thrown, `x` kept) and the oracle's `false` — so the
+divergence is recorded rather than hidden. The remaining shift is advisory
 computron telemetry for strict variants (`computron-gap` 157 → 185 across the two
 directories: the hoisted access path costs differently from the oracle's
 frame-local path); the exact-metering corpus (`ironhorse-meter-exact`,
