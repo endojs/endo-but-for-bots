@@ -2045,7 +2045,7 @@ mod tests {
         }
         for halt in [
             Halt::Return,
-            Halt::Throw("TypeError".into()),
+            Halt::synthetic_throw("TypeError"),
             Halt::MeterAbort,
             Halt::StepLimit(1),
             Halt::StackOverflow(1),

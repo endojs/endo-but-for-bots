@@ -641,14 +641,14 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         // ran to completion is the dominant wrong-answer shape of a
         // conformance run, not a limitation.
         Agreement::OracleOnlyComplete => match &run.ironhorse_halt {
-            Halt::Throw(thrown) if constructor_name(thrown) == "Test262Error" => {
+            Halt::Throw { rendered: thrown, .. } if constructor_name(thrown) == "Test262Error" => {
                 // ironhorse computed a value the harness's own assertion
                 // rejected, on a case XS passes: the assertion is the report.
                 Verdict::Fail(format!(
                     "ironhorse failed a harness assertion the oracle passed: {thrown}"
                 ))
             }
-            Halt::Throw(thrown) => match missing_global_binding(&run.source, thrown) {
+            Halt::Throw { rendered: thrown, .. } => match missing_global_binding(&run.source, thrown) {
                 // The one honest shape: the reference engine bound a name the
                 // program never declares, so the binding is a host intrinsic
                 // the port has not landed — an unlanded global, named.
@@ -3068,7 +3068,7 @@ mod tests {
         // The oracle threw a native error constructor the port implements;
         // ironhorse threw a different constructor. That is the error model
         // diverging — a wrong answer — not a built-in gap to skip.
-        let mut run = synthetic_abort(Halt::Throw("RangeError".into()), "RangeError");
+        let mut run = synthetic_abort(Halt::synthetic_throw("RangeError"), "RangeError");
         run.oracle_error = "TypeError: not a function".into();
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
@@ -3078,7 +3078,7 @@ mod tests {
         // too: ironhorse failed an assertion on a path where XS threw the
         // real error.
         let mut run = synthetic_abort(
-            Halt::Throw("Test262Error: Expected a TypeError".into()),
+            Halt::synthetic_throw("Test262Error: Expected a TypeError"),
             "Test262Error: Expected a TypeError",
         );
         run.oracle_error = "TypeError: not a function".into();
@@ -3093,7 +3093,7 @@ mod tests {
         // Engine errors carry no message yet (the messaged builders are a
         // separate stream), so a shared constructor with divergent text is
         // still the honest `abort-value-differs` skip, not a failure.
-        let mut run = synthetic_abort(Halt::Throw("TypeError".into()), "TypeError");
+        let mut run = synthetic_abort(Halt::synthetic_throw("TypeError"), "TypeError");
         run.oracle_error = "TypeError: not a function".into();
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
@@ -3116,8 +3116,8 @@ mod tests {
         // the oracle passed the case, so this is ironhorse computing a value
         // the assertion rejected — the dominant wrong-answer shape, which the
         // unconditional `ironhorse-aborted` skip used to absorb.
-        let run = synthetic_oracle_only(Halt::Throw(
-            "Test262Error: Expected SameValue(«1», «2») to be true".into(),
+        let run = synthetic_oracle_only(Halt::synthetic_throw(
+            "Test262Error: Expected SameValue(«1», «2») to be true",
         ));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
@@ -3127,7 +3127,7 @@ mod tests {
 
     #[test]
     fn an_uncaught_engine_error_where_the_oracle_completes_is_a_failure() {
-        let run = synthetic_oracle_only(Halt::Throw("TypeError".into()));
+        let run = synthetic_oracle_only(Halt::synthetic_throw("TypeError"));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(detail) if detail.starts_with("ironhorse threw where the oracle completed")
@@ -3139,8 +3139,8 @@ mod tests {
         // The program declares `x`; ironhorse failed to resolve it where the
         // oracle completed. That is the engine's scope resolution lying, not
         // a missing intrinsic — never the named global skip.
-        let mut run = synthetic_oracle_only(Halt::Throw(
-            "ReferenceError: get x: undefined variable".into(),
+        let mut run = synthetic_oracle_only(Halt::synthetic_throw(
+            "ReferenceError: get x: undefined variable",
         ));
         run.source = "var x = 1; function f() { return x; } f();".into();
         assert!(matches!(
@@ -3154,8 +3154,8 @@ mod tests {
         // The reference engine bound `Compartment`; the program never
         // declares it. The binding is a host intrinsic the port lacks: an
         // honest coverage gap that names the intrinsic to land.
-        let mut run = synthetic_oracle_only(Halt::Throw(
-            "ReferenceError: get Compartment: undefined variable".into(),
+        let mut run = synthetic_oracle_only(Halt::synthetic_throw(
+            "ReferenceError: get Compartment: undefined variable",
         ));
         run.source = "var c = new Compartment(); c.evaluate('1');".into();
         assert_eq!(
