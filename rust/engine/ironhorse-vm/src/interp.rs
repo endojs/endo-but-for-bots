@@ -7261,7 +7261,12 @@ impl Interp {
         self.create_intl();
         self.create_temporal();
         self.create_hardened_globals();
-        self.create_test262_host();
+        // The test262 `$262` host object is NOT part of the boot: a hardened
+        // realm's global surface must be auditable, and a host object
+        // carrying an ArrayBuffer-detach primitive is exactly what lockdown
+        // exists to keep out of a production machine (architecture review
+        // F143). The conformance harness installs it explicitly through
+        // [`Self::install_test262_host`] before linking.
 
         // Every native function instance (constructor and
         // alloc_method product alike) chains to %Function.prototype%
@@ -7782,10 +7787,24 @@ impl Interp {
         }
     }
 
-    /// Build the minimal test262 host object needed by binary-data tests.
-    /// The oracle shim installs the same `$262.detachArrayBuffer` hook, so
-    /// assembled tests exercise detached-buffer semantics on both engines.
-    fn create_test262_host(&mut self) {
+    /// Install the minimal test262 host object (`$262` with
+    /// `detachArrayBuffer`) the binary-data conformance tests need. The XS
+    /// oracle shim installs the same hook, so assembled tests exercise
+    /// detached-buffer semantics on both engines.
+    ///
+    /// **Harness only.** A default machine has no `$262`: the host object
+    /// carries a memory-detach primitive that a hardened realm must not
+    /// expose, so `Interp::new` does not build it (architecture review
+    /// F143) and only the conformance harness calls this. Call it BEFORE
+    /// [`Self::link_intrinsics`] so the link pass binds the `$262` global
+    /// and the `detachArrayBuffer` method under the program's ids; a later
+    /// relink still picks them up for a crank that first names them.
+    /// Minted above `boot_slot_count`, so it is a runtime native that no
+    /// snapshot carries — the harness never checkpoints. Idempotent.
+    pub fn install_test262_host(&mut self) {
+        if self.intrinsics.contains_key("$262") {
+            return;
+        }
         let host = self.slots.alloc(Slot::instance(self.object_proto));
         let detach = self.alloc_named_method(
             NativeMethod::Test262DetachArrayBuffer,

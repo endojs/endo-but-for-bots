@@ -84,9 +84,13 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
 /// runtime source compiler, so a program that calls `eval` on a string (or the
 /// `Function` constructor) executes it in-realm rather than reaching the honest
 /// `eval:no-compiler` gap. This is the single wiring point that turns the
-/// compiler/VM bridge on for the conformance harness.
+/// compiler/VM bridge on for the conformance harness, and the single point
+/// that installs the test262 `$262` host object (the oracle shim exposes the
+/// same `$262.detachArrayBuffer`): a default `Interp` carries no `$262`, so a
+/// production machine never exposes the detach primitive.
 fn interp_with_source_bridge(names: &[String]) -> ironhorse_vm::Interp {
     let mut interp = ironhorse_vm::Interp::new();
+    interp.install_test262_host();
     interp.link_intrinsics(names);
     interp.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
     interp
