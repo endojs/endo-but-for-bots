@@ -438,6 +438,33 @@ required to coincide with XS's abort point. A metering-limit abort
 is therefore an ironhorse-meter outcome, not an oracle-checked parity
 fact.
 
+Two release-defined check points sit outside the dispatch loop
+(architecture review finding 2, F012 and F014).
+The regexp matcher consults the host every `MATCH_CHECK_STRIDE`
+steps of a match, charging what the match has accumulated so far, so
+an armed crank limit can halt a catastrophic backtracking match
+instead of waiting for it to finish; the charge is the same
+`match_meter_raw` armed or un-armed, so the stride changes when the
+meter is consulted and never what is counted.
+And the check point is fail-closed: a meter that is armed (the
+snapshot carries `interval != 0`) but has no host attached aborts at
+its first check rather than running unbounded, because the host
+callback cannot travel in a snapshot and a restored machine that
+skipped every arm form used to report itself metered while
+consulting nobody.
+
+**The shipped embedder arms the meter.** The `rust/endo` seam runs
+every crank under a `MeterBounds` policy: armed by default with a
+per-crank computron limit, consulted on a fixed cadence, enforced
+against the machine's absolute meter as `crank start + limit`, and
+reattached on every resume and rewind through the persistent path.
+Un-metered execution is an explicit `MeterBounds::Unbounded` opt-in.
+The policy is replica-visible, like the checkpoint cadence: replicas
+must agree on it to refuse the same cranks.
+The meter is the crank's time bound; the heap ceiling and
+allocation-pressure collection the design requires above remain
+unlanded, so it is not yet a memory bound.
+
 **The oracle is result-only; computrons are advisory telemetry.**
 The differential harness compares **results** (completion kind,
 value, error identity) between Ironhorse and XS, and a result
