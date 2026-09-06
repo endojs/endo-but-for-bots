@@ -1062,17 +1062,75 @@ fn oracle_fails_const_assignment_test(run: &DualRun) -> bool {
 /// which XS keeps a *strict* program's top-level `var`/function
 /// declarations as frame locals, where ECMA-262 GlobalDeclarationInstantiation
 /// (and `xst`'s `mxProgramFlag`-only Script goal, which Ironhorse's Script
-/// goal follows) makes them global-object properties. Narrow on all three
-/// ingredients: the oracle ran the case to its official assertion and lost
-/// it (`Test262Error`), and the compiler itself says this source is a strict
-/// program with a top-level `var`/function declaration
-/// (`ironhorse_compile::script_goal_deviates`) — the exact class whose
-/// Script-goal bytes differ from the eval goal's. Any other oracle
-/// `Test262Error` stays a gating over-acceptance.
+/// goal follows) makes them global-object properties.
+///
+/// The exclusion **demonstrates** the attribution instead of pattern-matching
+/// the failure, which matters in both directions. Inferring it from the
+/// source's shape alone would be far too broad — "a strict program with a
+/// top-level `var`" describes a large share of test262's strict variants, so a
+/// shape test would mask real over-acceptances across all of them. Inferring
+/// it from the oracle's error would be too narrow *and* unsound: the gap
+/// surfaces as a failed official assertion (`Test262Error`, as in
+/// `statements/variable/S12.2_A9`) when the case asserts on the global
+/// property directly, but as a plain `ReferenceError` (as in
+/// `eval-code/indirect/global-env-rec`) when an **indirect eval** — which
+/// evaluates in the global scope — cannot see a binding the oracle's framing
+/// kept eval-local. Both are one mechanism.
+///
+/// The framing also decides the `D` argument
+/// `CreateGlobalVarBinding` receives, so the gap is not confined to strict
+/// programs: a **sloppy** Script's top-level `var` is a *non-configurable*
+/// global property (`D = false`), where the eval-framed shim makes it
+/// configurable, and an official case asserting `verifyNotConfigurable`
+/// (`global-code/decl-var`, `statements/variable/S12.2_A2`) passes on
+/// Ironhorse and fails on the oracle. That is why conjunct 1 asks only
+/// whether the program *declares* a top-level `var`/function, not whether it
+/// is strict.
+///
+/// So the two conjuncts are:
+///
+/// 1. the compiler says the program declares a top-level `var`/function, the
+///    class whose behavior can differ between the goals
+///    ([`ironhorse_compile::declares_top_level_var_or_function`]);
+/// 2. ironhorse re-framed under the **oracle's own** framing — eval goal at
+///    compile time, eval declaration instantiation at run time — reproduces
+///    the oracle's abort ([`crate::ironhorse_eval_goal_error`], compared by
+///    [`reframed_abort_matches`]).
+///
+/// (2) is load-bearing: compiling the source the way the shim compiles it
+/// turns ironhorse's pass into the oracle's identical failure, so the goal
+/// framing is demonstrably the whole difference. If ironhorse still passes
+/// under the eval goal, or fails differently, something other than framing is
+/// in play and the case stays a gating over-acceptance. Note this establishes
+/// *attribution*, not that ironhorse's Script-goal answer is right; that is
+/// established independently by the spec, the node cross-check, and the pins
+/// in `ironhorse-vm/tests/hardened_js_boundary.rs`.
 fn oracle_eval_frames_strict_script(run: &DualRun) -> bool {
     run.oracle_parsed
-        && constructor_name(&run.oracle_error) == "Test262Error"
-        && ironhorse_compile::script_goal_deviates(&run.source)
+        && !run.oracle_error.is_empty()
+        && ironhorse_compile::declares_top_level_var_or_function(&run.source)
+        && crate::ironhorse_eval_goal_error(&run.source)
+            .is_some_and(|thrown| reframed_abort_matches(&run.oracle_error, &thrown))
+}
+
+/// Does ironhorse's re-framed abort (`thrown`) match the oracle's
+/// (`oracle_error`) closely enough to attribute the divergence to the goal
+/// framing? Exact string equality is the bar, because the whole claim is
+/// "same program, same framing, same outcome".
+///
+/// The one relaxation: ironhorse's thrown-*message* fidelity is not yet at XS
+/// parity, so it can raise the right constructor with **no detail message**
+/// where XS attaches one (`TypeError` vs. XS's `TypeError: call: not a
+/// function`, seen on `eval-code/indirect/var-env-func-init-multi`). Accept a
+/// bare constructor that matches the oracle's constructor; never accept a
+/// *different* constructor, and never accept a differing detail message, since
+/// either would mean the re-framed run failed for another reason.
+fn reframed_abort_matches(oracle_error: &str, thrown: &str) -> bool {
+    if thrown == oracle_error {
+        return true;
+    }
+    let ctor = constructor_name(thrown);
+    thrown.trim() == ctor && ctor == constructor_name(oracle_error)
 }
 
 /// The pinned XS `with`-environment PutValue defect exercised by the ES5
@@ -2768,6 +2826,26 @@ mod tests {
         assert!(!oracle_eval_frames_strict_script(&sloppy));
         assert_eq!(evaluate_positive(&Config::default(), &sloppy, false), Verdict::Covered);
 
+        // The same mechanism surfacing as a plain ReferenceError rather than a
+        // failed assertion: an **indirect** eval evaluates in the global scope,
+        // so it sees a top-level `var` only when that `var` is a global-object
+        // property. This is the `language/eval-code/indirect/global-env-rec*`
+        // shape, and an exclusion keyed on `Test262Error` would miss it.
+        let indirect = dual_run("\"use strict\";\nvar seen = 'global'; (0,eval)('seen')")
+            .expect("oracle machine");
+        assert_eq!(indirect.agreement, Agreement::IronhorseOnlyComplete);
+        assert_eq!(indirect.ironhorse_result, "global");
+        assert!(
+            indirect.oracle_error.starts_with("ReferenceError:"),
+            "expected the eval-framed oracle to lose the binding, got {:?}",
+            indirect.oracle_error
+        );
+        assert!(oracle_eval_frames_strict_script(&indirect));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &indirect, false),
+            Verdict::RunSkip("oracle-xs-strict-script-eval-framing".into())
+        );
+
         // A strict program with no top-level `var`/function declaration is not
         // this class, whatever the oracle's Test262Error says.
         let mut other = synthetic_ironhorse_only_complete(true, "Test262Error: #1");
@@ -2775,6 +2853,43 @@ mod tests {
         assert!(!oracle_eval_frames_strict_script(&other));
         assert!(matches!(
             evaluate_positive(&Config::default(), &other, false),
+            Verdict::Fail(_)
+        ));
+
+        // The load-bearing condition: a source in the deviating class whose
+        // failure the oracle's framing does NOT reproduce on ironhorse is a
+        // real over-acceptance, not a framing gap. Without this conjunct the
+        // exclusion would swallow every strict test262 variant that declares a
+        // top-level `var` — a large share of the corpus.
+        let mut unreproduced = synthetic_ironhorse_only_complete(true, "Test262Error: #1");
+        unreproduced.source = format!("\"use strict\";\n{harness}var v = 1;");
+        assert!(ironhorse_compile::script_goal_deviates(&unreproduced.source));
+        assert_eq!(constructor_name(&unreproduced.oracle_error), "Test262Error");
+        assert_eq!(crate::ironhorse_eval_goal_error(&unreproduced.source), None);
+        assert!(!oracle_eval_frames_strict_script(&unreproduced));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &unreproduced, false),
+            Verdict::Fail(_)
+        ));
+
+        // The bare-constructor relaxation, and its limits.
+        assert!(reframed_abort_matches("TypeError: call: not a function", "TypeError"));
+        assert!(reframed_abort_matches("TypeError: x", "TypeError: x"));
+        assert!(!reframed_abort_matches("TypeError: call: not a function", "RangeError"));
+        assert!(!reframed_abort_matches("TypeError: a", "TypeError: b"));
+        assert!(!reframed_abort_matches("TypeError", "Test262Error"));
+
+        // And a source in the class that reproduces a *different* thrown value
+        // under the oracle's framing also stays gating.
+        let mut mismatched = synthetic_ironhorse_only_complete(true, "Test262Error: expected-#9");
+        mismatched.source = format!("\"use strict\";\n{harness}var v = 1; throw new Test262Error('#2');");
+        assert_eq!(
+            crate::ironhorse_eval_goal_error(&mismatched.source).as_deref(),
+            Some("Test262Error: #2")
+        );
+        assert!(!oracle_eval_frames_strict_script(&mismatched));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &mismatched, false),
             Verdict::Fail(_)
         ));
         // And a non-assertion oracle error on the deviating class stays gating.

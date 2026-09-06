@@ -4334,6 +4334,27 @@ pub struct Interp {
     /// which an indirect eval — running in a fresh global variable scope that
     /// does not see the caller's lexical environment — does not raise.
     direct_eval_hoist: bool,
+    /// Whether the running unit is an **eval program** (direct *or* indirect;
+    /// [`Self::eval_source`] sets it around the unit's run), as opposed to a
+    /// top-level Script.
+    ///
+    /// This is the ECMA-262 `D` ("deletable") argument that declaration
+    /// instantiation passes to `CreateGlobalVarBinding` /
+    /// `CreateGlobalFunctionBinding`, and it decides the created global
+    /// property's **configurable** attribute:
+    ///
+    /// * GlobalDeclarationInstantiation (a Script) passes `D = false`, so a
+    ///   top-level `var`/function declaration becomes a non-configurable
+    ///   global property — `delete globalThis.g` answers `false`.
+    /// * EvalDeclarationInstantiation passes `D = true` for **both** direct and
+    ///   indirect eval, so an eval-created global var stays configurable and
+    ///   deletable.
+    ///
+    /// Distinct from [`Self::direct_eval_hoist`], which is true only for a
+    /// *direct* eval: that flag carries the caller-lexical conflict rule, and
+    /// using it here would wrongly make an indirect eval's `var`
+    /// non-configurable.
+    eval_program_hoist: bool,
     result: Slot,
     /// Whether the frame runs in strict mode (`BEGIN_STRICT*`). Recorded
     /// for the exception/`this` semantics that observe it; the covered
@@ -5932,6 +5953,7 @@ impl Interp {
             global_obj,
             global_props: std::collections::HashMap::new(),
             direct_eval_hoist: false,
+            eval_program_hoist: false,
             result: Slot::undefined(),
             strict: false,
             callback_return_depth: None,
@@ -9417,6 +9439,28 @@ impl Interp {
         }
     }
 
+    /// Run the next top-level program with **eval-program** declaration-
+    /// instantiation semantics: `CreateGlobalVarBinding` /
+    /// `CreateGlobalFunctionBinding` receive `D = true`, so a top-level
+    /// `var`/function declaration becomes a *configurable* global property, as
+    /// it does inside `eval`. A top-level Script otherwise gets `D = false`
+    /// (non-configurable), which is the default and the correct behavior.
+    ///
+    /// This exists for **one** caller: the differential harness, which needs to
+    /// reproduce the pinned `xs-oracle` shim's framing. That shim compiles and
+    /// runs every source with the `eval` builtin's flags, so it answers as an
+    /// eval program would; re-running a source this way demonstrates that a
+    /// divergence from the oracle is the goal framing rather than a defect (see
+    /// `rust/engine/README.md` § "Script goal vs. the oracle's eval framing").
+    /// Production embeddings must leave it off.
+    ///
+    /// It applies to the top-level program only. A nested `eval` unit sets the
+    /// same framing for itself and restores the caller's on exit, so this
+    /// neither leaks into nor is clobbered by an `eval`.
+    pub fn set_eval_program_framing(&mut self, on: bool) {
+        self.eval_program_hoist = on;
+    }
+
     /// Install the source compiler the runtime source-execution bridge drives
     /// ([`SourceCompiler`]). Called once by the host after [`Self::new`] /
     /// [`Self::link_intrinsics`]; a string `eval` or the `Function`
@@ -9657,6 +9701,7 @@ impl Interp {
         let saved_frame_slots = self.frame_slots;
         let saved_eval_direct = self.eval_direct;
         let saved_direct_eval_hoist = self.direct_eval_hoist;
+        let saved_eval_program_hoist = self.eval_program_hoist;
         let saved_active_segment = self.active_segment;
         let saved_stack_len = self.stack.len();
 
@@ -9678,12 +9723,17 @@ impl Interp {
         // The unit's declaration-instantiation hoist observes the direct/indirect
         // distinction (only a direct eval sees the caller's global lexicals).
         self.direct_eval_hoist = is_direct;
+        // EvalDeclarationInstantiation passes `D = true` for a direct *and* an
+        // indirect eval, so a global `var` this unit creates is configurable
+        // (deletable) — unlike a Script's, which is not.
+        self.eval_program_hoist = true;
         self.active_segment = Some(segment);
 
         let halt = self.dispatch_at(&buf[..], 0, 0);
         let completion = self.result;
         self.active_segment = saved_active_segment;
         self.direct_eval_hoist = saved_direct_eval_hoist;
+        self.eval_program_hoist = saved_eval_program_hoist;
 
         // Restore the caller's activation. Drop any residue the nested unit
         // left on the shared value stack (a well-formed program is balanced;
@@ -13065,7 +13115,20 @@ impl Interp {
                 if !self.instance_extensible(self.global_obj) {
                     return Err(self.build_error("TypeError", 0, 0));
                 }
-                self.materialize_global_property(id);
+                // `CreateGlobalVarBinding` / `CreateGlobalFunctionBinding` take
+                // the `D` argument as the new property's **configurable**
+                // attribute. GlobalDeclarationInstantiation (a Script) passes
+                // `D = false`, so a top-level declaration is non-configurable
+                // and `delete globalThis.g` answers `false`;
+                // EvalDeclarationInstantiation passes `D = true`, so an eval's
+                // global `var` stays deletable. The sloppy implicit global from
+                // an unqualified assignment (`x = 1`) is not a declaration at
+                // all and is created configurable on the `SET_VARIABLE` path,
+                // which does not come through here.
+                let property = self.materialize_global_property(id);
+                if !self.eval_program_hoist {
+                    self.slots.get_mut(property).flag |= XS_DONT_DELETE_FLAG;
+                }
             }
         }
         Ok(())

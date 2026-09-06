@@ -176,6 +176,36 @@ fn a_frozen_global_blocks_a_strict_scripts_own_top_level_assignment() {
     assert_eq!(eval("var g = 1; Object.freeze(globalThis); g = 2; g"), "1");
 }
 
+/// `CreateGlobalVarBinding` takes `D` as the new property's `configurable`
+/// attribute, and the three ways a name reaches the global disagree on it: a
+/// Script's declaration is `D = false`, an eval's is `D = true`, and an
+/// unqualified assignment is not a declaration at all.
+#[test]
+fn a_script_declared_global_is_non_configurable() {
+    for src in ["'use strict'; var g = 1;", "var g = 1;"] {
+        assert_eq!(
+            eval(&format!("{src} Object.getOwnPropertyDescriptor(globalThis,'g').configurable")),
+            "false",
+            "{src}",
+        );
+    }
+    // Writable and enumerable are untouched by `D`.
+    assert_eq!(
+        eval(
+            "'use strict'; var g = 1; var d = Object.getOwnPropertyDescriptor(globalThis,'g');              [d.writable, d.enumerable].join()",
+        ),
+        "true,true",
+    );
+    // Sloppy `delete` of the non-configurable binding answers false; an
+    // implicit global from an assignment stays deletable.
+    assert_eq!(eval("var g = 1; delete globalThis.g"), "false");
+    assert_eq!(eval("function f() {} delete globalThis.f"), "false");
+    assert_eq!(eval("x = 1; delete globalThis.x"), "true");
+    // Declaration instantiation runs before any statement, so `var y` creates
+    // the non-configurable binding first and the assignment merely writes it.
+    assert_eq!(eval("y = 1; var y; delete globalThis.y"), "false");
+}
+
 /// `let`/`const`/`class` are not global properties, and a frozen global does
 /// not block writing one.
 #[test]
