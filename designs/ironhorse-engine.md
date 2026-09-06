@@ -645,9 +645,19 @@ requirement rather than delete the surface:
 
 The same review's integrity findings (F015 `harden` stale marks,
 F057 frozen globals writable by bare name, F058 exotic objects
-unfreezable, F061 `with` and descriptor paths bypassing the
+unfreezable, F061 the `with` and descriptor paths bypassing the
 `mop_*` seam) are pinned by
-`rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
+`rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`, and the
+`with` seam additionally by
+`rust/engine/ironhorse-262/tests/with_statement_mop.rs`, which gates
+it against the pinned XS oracle.
+Two of the five were already fixed on the mainline when this work
+began — F015 by the `harden` mark-clearing loop, and F058 whole —
+so their entries here are pins, not repairs.
+The review's descriptor-path evidence for F061 did not reproduce:
+`descriptor_from_object` already routes through `mop_get`, and
+`Reflect.ownKeys` agrees between a function and a trapless proxy
+over it.
 The test262 `$262` host object, whose `detachArrayBuffer` is a
 memory-detach primitive no hardened realm should carry (F143), is
 no longer part of the boot: a default machine has no `$262`, and the

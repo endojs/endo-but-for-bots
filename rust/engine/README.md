@@ -1093,7 +1093,7 @@ note carries forward untouched and Miri is not implicated here.
 | 4a-4 async/promise keystone | promise native-handler double-settle + thenable adoption | `built-ins/Promise covered=9 divergent=0`; `stage4-async-promises.js` bit-exact |
 | 4a-5 modules (static half) | `ironhorse_vm::module` records/map/resolve/link/evaluate, TDZ, ModuleSource | 14 cargo-locked unit tests; `language/module-code` dual-run structurally skipped (oracle shim compiles the script goal only) — certified by the ironhorse-side corpus + manual-`xst` method |
 | 4b-2 async-function surface | `ASYNC_FUNCTION`/`START_ASYNC`/`AWAIT` opcodes | `language/{statements,expressions}/await covered=6/6 divergent=0`; `stage4-async-await.js` bit-exact |
-| 4b-3 Compartment | native `Compartment::evaluate_with_symbols` over shared intrinsics | `stage4-compartment.js` differential across two compartments, result+computron agreement |
+| 4b-3 Compartment | native `Compartment::evaluate_with_symbols` (per-machine intrinsics marker, not yet a shared frozen graph) | `stage4-compartment.js` differential across two compartments, result+computron agreement |
 | 4b-4 lockdown/harden | native `harden(x)`/`petrify(x)` over the slot arena | `stage4-harden.js` (30 programs) result-gated agreement; 3 Miri-clean freeze unit tests; `built-ins/Object` unchanged at `covered=176 divergent=0` |
 | 4b-5 closure (this child) | boot-bundle identical-run verdict + ses-xs-parity tally | below |
 

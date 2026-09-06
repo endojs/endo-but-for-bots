@@ -14258,8 +14258,17 @@ impl Interp {
                     // a chain-only `instance_has`/`ordinary_set` would write
                     // through the membrane to the target. A sloppy failed set
                     // (frozen / non-writable) silently keeps the RHS as the
-                    // result; a strict callee — unreachable, `with` is a
-                    // strict-mode SyntaxError — would throw.
+                    // result; a strict one throws.
+                    //
+                    // A strict store against an object environment IS reachable,
+                    // though `with` is itself a strict-mode SyntaxError: `S` on
+                    // the Reference is the strictness of the code containing the
+                    // ASSIGNMENT, not of the `with` statement. Both routes are
+                    // live here — a strict function written in a sloppy `with`
+                    // body closes over the object environment (`enter_call`
+                    // installs the closure env), and a strict direct `eval`
+                    // inside one keeps the caller's `self.env`. XS throws a
+                    // TypeError on the rejected store in both; so do we.
                     if envref.kind == Kind::Reference {
                         if let Payload::Reference(inst) = envref.value {
                             if self.is_environment_instance(inst) {
@@ -14280,19 +14289,38 @@ impl Interp {
                                     EnvironmentSet::Missing => {}
                                 }
                             }
-                            let (_present, recursions) = dispatch_result!(
+                            // The `HasProperty` half of `SetMutableBinding`.
+                            // Its result is deliberately NOT consulted: step 3's
+                            // `stillExists` ReferenceError (the binding vanished
+                            // between `HasBinding` and the store) is a pinned
+                            // ORACLE-DEFECT EXCLUSION in this repo — see
+                            // `ironhorse-262/src/xst.rs` `oracle_loses_with_reference`,
+                            // which records XS's `ReferenceError: set x: undefined
+                            // property` as the divergence to exclude rather than
+                            // to reproduce. Implementing step 3 here would break
+                            // that pin deliberately, so the call is kept for its
+                            // observable trap and its metered chain walk only.
+                            let (_still_exists, recursions) = dispatch_result!(
                                 self.mop_has_with_recursions(code, inst, name),
                                 pc,
                                 self,
                                 return_depth
                             );
                             self.meter.tick_code_n(recursions);
-                            let _accepted = dispatch_result!(
+                            let accepted = dispatch_result!(
                                 self.mop_set(code, inst, name, value, envref),
                                 pc,
                                 self,
                                 return_depth
                             );
+                            if !accepted && self.strict {
+                                // A rejected store (frozen or non-writable
+                                // property, getter-only accessor, a `set` trap
+                                // answering false) is a TypeError in strict code,
+                                // exactly as the global arm below raises one.
+                                let error = self.build_error("TypeError", 0, 0);
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            }
                             self.meter.tick_builtin();
                             self.push(value);
                             pc += ilen;
@@ -14321,7 +14349,25 @@ impl Interp {
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     } else {
-                        if !self.global_props.contains_key(&name) && self.strict {
+                        // `global_props` is the OWN-property index of the global
+                        // object, but a bare name resolves through
+                        // `HasProperty`, which walks the prototype chain: every
+                        // `%Object.prototype%` member (`toString`, `valueOf`,
+                        // `hasOwnProperty`, …) is a resolvable global name, so a
+                        // strict assignment to one must NOT throw — XS answers
+                        // `toString = 1` with no error. ironhorse's global object
+                        // carries a NULL prototype (a separate, pre-existing
+                        // divergence: `Object.getPrototypeOf(globalThis)` is
+                        // `null` here and `%Object.prototype%` in XS), so the
+                        // inherited half of the question is asked of
+                        // `%Object.prototype%` directly. Read-only and
+                        // unmetered: XS's own chain walk is already folded into
+                        // this arm's measured cost, and both forms stay
+                        // bit-exact against the pin.
+                        let own_global = self.global_props.contains_key(&name);
+                        let resolvable =
+                            own_global || self.instance_has(self.object_proto, name).0;
+                        if !resolvable && self.strict {
                             // XS's `SET_VARIABLE` strict arm:
                             // `mxRunDebug(XS_REFERENCE_ERROR, "set %s: undefined
                             // variable", ...)`, the write-side twin of the
@@ -14332,10 +14378,15 @@ impl Interp {
                             );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
-                        if !self.global_props.contains_key(&name)
-                            && self.instance_extensible(self.global_obj)
-                        {
-                            self.materialize_global_property(name);
+                        if !own_global {
+                            // The create is refused on a non-extensible global —
+                            // `Set(globalThis, name, value, false)` fails and no
+                            // binding appears — but XS charges the
+                            // `mxBehaviorSetProperty` code unit either way, so
+                            // the tick sits OUTSIDE the extensibility guard.
+                            if self.instance_extensible(self.global_obj) {
+                                self.materialize_global_property(name);
+                            }
                             // Creating a sloppy global through `SET_VARIABLE`
                             // dispatches XS's setter machinery
                             // (`mxBehaviorSetProperty` → the missing-property
@@ -50913,9 +50964,17 @@ impl Interp {
         }
     }
 
-    /// Resolve a name for writing: a frame local when declared, else the
-    /// global object's property slot (which must already exist — the
-    /// caller materializes it and meters the creation first).
+    /// Resolve a **declared frame local** for writing. A name that is not a
+    /// frame local is not this function's business: `SET_VARIABLE` handles the
+    /// global arm itself, through the global object's full `[[Set]]`, so that
+    /// an accessor or a non-writable descriptor installed reflectively stays
+    /// binding-correct. This used to carry a global arm that wrote the property
+    /// slot's kind and value directly, with no `XS_DONT_SET_FLAG` check — the
+    /// bare-name bypass of a frozen `globalThis` the architecture review
+    /// recorded as F057. It was already unreachable (the sole caller gates on
+    /// `id_map`), and is deleted rather than left as a working bypass for the
+    /// next caller to find.
+    ///
     /// Returns `false` when the binding is an initialized `const` and the write
     /// must raise a TypeError instead. `CONST_LOCAL`/`CONST_CLOSURE` stamp
     /// `XS_DONT_SET_FLAG` on the local slot and on the shared closure cell, and
@@ -50945,10 +51004,6 @@ impl Interp {
             }
             self.locals[i].kind = value.kind;
             self.locals[i].value = value.value;
-        } else if let Some(&idx) = self.global_props.get(&name) {
-            let p = self.slots.get_mut(idx);
-            p.kind = value.kind;
-            p.value = value.value;
         }
         true
     }

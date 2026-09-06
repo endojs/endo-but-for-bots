@@ -37,12 +37,21 @@
 //!   `&mut Interp`, `Intrinsics` holding the frozen graph with
 //!   `locked_down` written by a real `lockdown`) is the recorded path;
 //!   until it lands this module must not be read as delivering it.
-//! - **Endowments are arena-free primitives.** Because each evaluation
-//!   runs in a fresh arena, an endowment whose payload is a slot or chunk
-//!   index — an object, a string, a BigInt, a symbol — would point into
-//!   no arena at all. Such an endowment is refused as the named skip
-//!   `compartment:heap-endowment` rather than seeded as a dangling slot;
-//!   only `undefined`, `null`, booleans and numbers are seeded.
+//! - **Only ID-KEYED endowments are seeded, and only arena-free
+//!   primitives.** Two endowment maps exist and they are not equivalent:
+//!   [`Compartment::define_global_id`] (and `endowments_by_id`) seeds the
+//!   evaluator, while the name-keyed [`Compartment::define_global`] (and
+//!   `endowments`) is an INERT lookup surface that no evaluation reads —
+//!   resolving a display name to the interned id the bytecode addresses
+//!   needs the symbol table, which arrives with the program. Do not read
+//!   `define_global` as "binding a global"; it is not, and was not before
+//!   this was written down.
+//!   Of the seeded half, an endowment whose payload is a slot or chunk
+//!   index — an object, a string, a BigInt, a symbol — would point into no
+//!   arena at all, because each evaluation runs in a fresh one. Such an
+//!   endowment is refused as the named skip `compartment:heap-endowment`
+//!   rather than seeded as a dangling slot; only `undefined`, `null`,
+//!   booleans and numbers are seeded.
 //!
 //! The surface this module does provide:
 //!
@@ -182,8 +191,10 @@ pub struct CompartmentOptions {
     pub has_import_hook: bool,
 }
 
-/// A compartment: a fresh `globalThis` over shared frozen intrinsics,
-/// with its own globals, module map, and evaluator.
+/// A compartment: its own globals, module map, and evaluator, over a
+/// per-machine intrinsics MARKER rather than a shared frozen primordial
+/// graph — see the module documentation's realm decision for what that
+/// does and does not deliver.
 pub struct Compartment {
     /// This compartment's (its globalThis's) identity within the machine.
     id: CompartmentId,
@@ -246,7 +257,17 @@ impl Compartment {
         self.name.as_deref()
     }
 
-    /// Bind a name in this compartment's global scope only.
+    /// Record a name-keyed endowment on this compartment.
+    ///
+    /// **This does not bind anything an evaluation can see.** The
+    /// evaluators seed only the id-keyed map
+    /// ([`Compartment::define_global_id`]), because the bytecode addresses
+    /// a global by its interned symbol id and the display-name→id table
+    /// arrives with the program, not with the compartment. A program
+    /// evaluated here reads `undefined` for `name`. The map is a lookup
+    /// and listing surface ([`Compartment::global`],
+    /// [`Compartment::global_this_keys`]) until the realm split gives
+    /// names somewhere real to land.
     pub fn define_global(&mut self, name: &str, value: Slot) {
         self.globals.insert(name.to_string(), value);
     }
