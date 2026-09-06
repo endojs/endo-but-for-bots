@@ -314,7 +314,9 @@ impl Compartment {
     /// globals. This is the load-bearing per-compartment evaluator: two
     /// compartments over one machine's intrinsics running the same
     /// intrinsic-referencing program agree on the intrinsic surface but
-    /// diverge exactly and only in their own globals.
+    /// diverge exactly and only in their own globals. Reports the engine's
+    /// raw completion, like [`Interp::run`]: unlike the top-level
+    /// differential wrappers, no oracle-harness coercion is applied.
     pub fn evaluate_with_symbols(&self, bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
         self.evaluate_with_symbols_on(Interp::new(), bytecode, symbols)
     }

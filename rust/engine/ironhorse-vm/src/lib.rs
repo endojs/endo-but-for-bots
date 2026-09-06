@@ -62,9 +62,14 @@ pub use value::{
 };
 
 /// Run a program bytecode buffer (as emitted by the XS compiler) on
-/// a fresh interpreter, returning the completion value and computrons.
+/// a fresh interpreter, returning the completion value and computrons
+/// in the ORACLE HARNESS's shape ([`RunOutcome::host_coerced`]): these
+/// three entries exist for the differential harnesses, so a completion
+/// value the xsnap shim's post-run `String(result)` cannot coerce is
+/// reported as the abort the oracle reports. An embedder that wants the
+/// engine's raw completion runs [`Interp::run`] directly.
 pub fn run_program(bytecode: &[u8]) -> RunOutcome {
-    Interp::new().run(bytecode)
+    Interp::new().run(bytecode).host_coerced()
 }
 
 /// Run a program bytecode buffer under a **dispatch-count ceiling**, halting
@@ -77,7 +82,7 @@ pub fn run_program(bytecode: &[u8]) -> RunOutcome {
 /// becomes a bounded [`Halt::StepLimit`] in milliseconds instead of wedging
 /// the whole test binary.
 pub fn run_program_bounded(bytecode: &[u8], step_limit: u64) -> RunOutcome {
-    Interp::new().run_bounded(bytecode, step_limit)
+    Interp::new().run_bounded(bytecode, step_limit).host_coerced()
 }
 
 /// Run a program bytecode buffer with its XS `symbols` atom, so the
@@ -90,7 +95,7 @@ pub fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
     let names = parse_symbols(symbols);
     let mut interp = Interp::new();
     interp.link_intrinsics(&names);
-    interp.run(bytecode)
+    interp.run(bytecode).host_coerced()
 }
 
 /// Whether a persisted RegExp `(source, flags)` pair recompiles under this

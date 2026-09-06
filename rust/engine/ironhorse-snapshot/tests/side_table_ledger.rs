@@ -206,7 +206,7 @@ fn side_tables_round_trip_the_container_and_stay_canonical() {
     let mut m = Interp::new();
     m.link_intrinsics(&symbols);
     assert!(m.run(&bytecode).completed);
-    let image = m.snapshot_image(&sig());
+    let image = m.snapshot_image(&sig()).expect("gated image");
     assert!(!image.arrays.is_empty(), "fixture carries arrays");
     assert!(!image.collections.is_empty(), "fixture carries a Map");
     assert!(!image.registry.is_empty(), "fixture carries a registration");
@@ -215,7 +215,7 @@ fn side_tables_round_trip_the_container_and_stay_canonical() {
     assert_eq!(reread, image, "side tables round-trip the container");
     assert_eq!(write_machine(&reread), bytes, "canonical bytes");
 
-    let empty = Interp::new().snapshot_image(&sig());
+    let empty = Interp::new().snapshot_image(&sig()).expect("gated image");
     assert!(empty.arrays.is_empty() && empty.collections.is_empty() && empty.registry.is_empty());
     let empty_bytes = write_machine(&empty);
     for tag in [b"ARRY".as_slice(), b"COLL".as_slice(), b"REGY".as_slice()] {
@@ -479,7 +479,7 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     let mut m = Interp::new();
     m.link_intrinsics(&n0);
     assert!(m.run(&b0).completed);
-    let clean: MachineImage = m.snapshot_image(&sig());
+    let clean: MachineImage = m.snapshot_image(&sig()).expect("gated image");
     assert_eq!(clean.stored_unregistered_key_id(), None, "the fixture is clean");
 
     // Poison one LIVE slot's key id past the program table — the shape

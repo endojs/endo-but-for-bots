@@ -72,11 +72,12 @@ fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline
     for (i, (bytecode, _)) in compiled.iter().enumerate() {
         let o = m.run(bytecode);
         // The suite's real precondition is a QUIESCENT boundary after
-        // every crank, not a completed one: a crank whose completion
-        // value the harness cannot coerce (a Symbol, a null-prototype
-        // object) is reported as a throw yet leaves the engine at a
-        // clean boundary, and the seven ways must agree on it too. A
-        // crank that genuinely halts fails here, loudly.
+        // every crank, which `completed` now agrees with by
+        // construction; asserting the predicate itself keeps the two
+        // reconciled (a crank whose completion value the oracle
+        // harness cannot coerce completes with `coercion_error` set,
+        // and the seven ways must agree on it too). A crank that
+        // genuinely halts fails here, loudly.
         assert!(
             m.is_quiescent(),
             "{scenario} baseline crank {} must leave a quiescent machine (halt: {:?})",
@@ -515,19 +516,21 @@ pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
             "var i; var s; last.v + 1",
         ],
     );
-    // The halted-but-quiescent class (architecture review F030/F022):
+    // The uncoercible-completion class (architecture review F030/F022):
     // a crank whose completion value the oracle harness's
-    // `String(result)` cannot coerce is REPORTED as a synthetic
-    // `TypeError` throw, but the engine's own crank completed and its
-    // boundary registers cleared, so the machine persists and every
-    // way must agree on the verdict, the computrons, and the bytes.
-    // Until this scenario the suite asserted every crank completed and
-    // was blind to the class; before the register-clear fix the twins
-    // agreed here and forked at their next collection
-    // (`boundary_collection_twins` is the instrument for that half).
+    // `String(result)` cannot coerce. The engine reports it COMPLETED
+    // with its own rendering and the harness's `TypeError` beside it
+    // (`coercion_error`); the boundary registers clear, the machine
+    // persists, and every way must agree on the verdict, the
+    // computrons, and the bytes. Before the register-clear fix the
+    // twins agreed here and forked at their next collection
+    // (`boundary_collection_twins` is the instrument for that half),
+    // and before the raw-completion surface the engine rewrote the
+    // halt itself, so the suite's every-crank-completes assertion
+    // could not even run this scenario.
     carry(
         &mut fresh,
-        "synthetic-host-throw",
+        "uncoercible-completion",
         "Symbol('k'); Object.create(null); o.p;",
         &[
             "o = { p: 20 }; s = Symbol('k'); s",
@@ -561,8 +564,8 @@ pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut()
     let observe = format!("{pre} t = g.q * 21; t");
     for (name, completion) in [
         ("a rendered completion", "let s = 7; s"),
-        // The two synthetic host-boundary throws: the engine completed,
-        // the harness could not coerce the value.
+        // The two uncoercible completions: the engine completed, the
+        // oracle harness's `String(result)` could not coerce the value.
         ("a Symbol completion", "let s = Symbol('k'); s"),
         ("a null-prototype completion", "let s = Object.create(null); s"),
     ] {
@@ -672,7 +675,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     assert_eq!(session.epoch(), 1);
     assert_eq!(
         store_to_image(store).unwrap(),
-        session.machine().snapshot_image(&sig())
+        session.machine().snapshot_image(&sig()).expect("gated image")
     );
     assert_eq!(
         export_to_container(store).unwrap(),
@@ -685,7 +688,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     assert_eq!(epoch, 2);
     assert_eq!(
         store_to_image(store).unwrap(),
-        session.machine().snapshot_image(&sig())
+        session.machine().snapshot_image(&sig()).expect("gated image")
     );
     assert_eq!(
         export_to_container(store).unwrap(),

@@ -1368,7 +1368,7 @@ static MODULE_ORACLE_RUN: AtomicU64 = AtomicU64::new(0);
 fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
     let names = ironhorse_vm::parse_symbols(symbols);
     let mut machine = crate::interp_with_source_bridge(&names);
-    let mut outcome = machine.run(bytecode);
+    let mut outcome = machine.run(bytecode).host_coerced();
     if !outcome.completed {
         return outcome;
     }
@@ -1390,7 +1390,7 @@ fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
             return outcome;
         }
     };
-    let observed = machine.run(&reader);
+    let observed = machine.run(&reader).host_coerced();
     if observed.completed {
         outcome.result = observed.result;
     } else {

@@ -95,10 +95,14 @@ fn interp_with_source_bridge(names: &[String]) -> ironhorse_vm::Interp {
 /// Run a program bytecode buffer with its symbols atom on a realm armed with
 /// the runtime source bridge (so an in-program `eval` of a string executes).
 /// Mirrors [`ironhorse_vm::run_program_with_symbols`] but installs the
-/// compiler, and is the entry the differential run path uses.
+/// compiler, and is the entry the differential run path uses. Like every
+/// ironhorse run this crate compares against the oracle, the outcome is in
+/// the harness's shape ([`RunOutcome::host_coerced`]): the xsnap shim
+/// coerces the completion with `String(result)` after the run, so a Symbol
+/// or null-prototype completion is the abort the oracle reports.
 fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
     let names = ironhorse_vm::parse_symbols(symbols);
-    interp_with_source_bridge(&names).run(bytecode)
+    interp_with_source_bridge(&names).run(bytecode).host_coerced()
 }
 
 pub mod compile_diff;
@@ -395,6 +399,7 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
         IronhorseCompile::Rejected(_) => RunOutcome {
             completed: false,
             result: String::new(),
+            coercion_error: None,
             computrons: 0,
             dispatched: 0,
             meter_raw: 0,
@@ -442,6 +447,7 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
             RunOutcome {
                 completed: false,
                 result: String::new(),
+                coercion_error: None,
                 computrons: 0,
                 dispatched: 0,
                 meter_raw: 0,
@@ -451,15 +457,16 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
             match interp.as_mut() {
                 None => {
                     let mut m = interp_with_source_bridge(&names);
-                    let o = m.run(&bytecode);
+                    let o = m.run(&bytecode).host_coerced();
                     interp = Some(m);
                     o
                 }
                 Some(m) => match m.relink_crank(&bytecode, &names) {
-                    Ok(relinked) => m.run(&relinked),
+                    Ok(relinked) => m.run(&relinked).host_coerced(),
                     Err(e) => RunOutcome {
                         completed: false,
                         result: String::new(),
+                        coercion_error: None,
                         computrons: 0,
                         dispatched: 0,
                         meter_raw: 0,
@@ -588,7 +595,7 @@ pub fn dual_run_async(source: &str, signal_name: &str) -> Option<AsyncDualRun> {
     // async completion latch can be read after the job drain.
     let names = ironhorse_vm::parse_symbols(&symbols);
     let mut interp = interp_with_source_bridge(&names);
-    let ironhorse: RunOutcome = interp.run(&bytecode);
+    let ironhorse: RunOutcome = interp.run(&bytecode).host_coerced();
 
     let ironhorse_signal = interp.global_string(signal_name);
     let ironhorse_unhandled_rejection = interp.has_unhandled_rejection();
@@ -625,7 +632,7 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
         _ => return Halt::Decode("ironhorse-only: compile produced no bytecode".into()),
     };
     let names = ironhorse_vm::parse_symbols(&symbols);
-    interp_with_source_bridge(&names).run(&bytecode).halt
+    interp_with_source_bridge(&names).run(&bytecode).host_coerced().halt
 }
 
 /// Parse a corpus file: one program per non-empty, non-`//` line. Keeping

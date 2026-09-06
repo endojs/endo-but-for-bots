@@ -94,7 +94,7 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         .expect("begin session");
     assert_eq!(
         store_to_image(&store).unwrap(),
-        session.machine().snapshot_image(&sig()),
+        session.machine().snapshot_image(&sig()).expect("gated image"),
         "[{name}] store equals live machine after the full write"
     );
 
@@ -134,7 +134,7 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         assert_eq!(epoch as usize, i + 1, "[{name}] one epoch per crank");
         assert_eq!(
             store_to_image(&store).unwrap(),
-            session.machine().snapshot_image(&sig()),
+            session.machine().snapshot_image(&sig()).expect("gated image"),
             "[{name}] store equals live machine after checkpoint {}",
             i + 1
         );

@@ -737,6 +737,45 @@ fn assert_every_persist_verb_refuses_non_quiescent(m: Interp, shape: &str) {
     assert!(store.manifest().is_err(), "{shape}: a refused begin writes nothing");
 }
 
+/// Architecture review F047: the gate is on the DATA PATH, not on three
+/// convenience verbs. `snapshot_image` — the only way to obtain an image
+/// of a live machine outside the crate — refuses by the same name the
+/// verbs do, so `image_to_batch(&image) + commit` and `write_machine(&image)`
+/// cannot persist a machine no gate has seen: they never see a machine.
+#[test]
+fn the_image_of_a_halted_machine_is_unobtainable() {
+    let m = halted_machine();
+    match m.snapshot_image(&sig()) {
+        Err(MachineSnapshotError::NotQuiescent) => {}
+        Ok(_) => panic!("an ungated image of a halted machine must not exist"),
+        Err(other) => panic!("refused by the wrong gate: {other:?}"),
+    }
+    // And the pending-row arm refuses the image by name too.
+    let (b, n) = compile(
+        "var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t",
+    );
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    assert!(m.run(&b).completed);
+    match m.snapshot_image(&sig()) {
+        Err(MachineSnapshotError::PendingStateUnsupported { row }) => {
+            assert_eq!(row, "an async generator whose state does not yet persist")
+        }
+        other => panic!("the image must refuse by the pending row's name: {other:?}"),
+    }
+    // A quiescent machine's image is exactly what the blob verb encodes.
+    let (b, n) = compile("var x = 0; x = 41; x");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    assert!(m.run(&b).completed);
+    let image = m.snapshot_image(&sig()).expect("gated image");
+    assert_eq!(
+        ironhorse_snapshot::image::write_machine(&image),
+        m.write_snapshot(&sig()).expect("blob verb"),
+        "the gated image is the blob verb's input"
+    );
+}
+
 /// A metered crank the host refuses at a TOP-LEVEL loop-closing check:
 /// the call stack, catch chain, and value stack are all empty at that
 /// check, so only the lifecycle conjunct can see the halt.
@@ -891,8 +930,11 @@ fn a_synthetic_host_throw_leaves_a_quiescent_machine_whose_twins_agree() {
         let mut cont = Interp::new();
         cont.link_intrinsics(&n1);
         let o = cont.run(&b1);
-        assert!(!o.completed, "{name}: the host-boundary coercion is reported as a throw");
-        assert!(matches!(o.halt, ironhorse_vm::Halt::Throw { .. }), "{name}: {:?}", o.halt);
+        assert!(o.completed, "{name}: the engine's verdict is a completion ({:?})", o.halt);
+        assert!(
+            o.coercion_error.is_some(),
+            "{name}: the harness's post-run coercion travels beside it"
+        );
         assert!(
             cont.is_quiescent(),
             "{name}: the engine's crank completed, so the machine is at a boundary"
