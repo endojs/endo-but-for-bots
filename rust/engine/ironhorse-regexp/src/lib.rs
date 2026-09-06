@@ -53,7 +53,7 @@ pub mod compile;
 pub mod matcher;
 pub mod unicode;
 
-pub use compile::{compile, CompileError, Program};
+pub use compile::{compile, CompileError, Program, MAX_NESTING_DEPTH};
 pub use flags::{
     XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_N, XS_REGEXP_S, XS_REGEXP_U,
     XS_REGEXP_V, XS_REGEXP_Y,

@@ -148,6 +148,23 @@ enum Kind {
 /// The XS `0x7FFFFFFF` open-max sentinel (`*`, `+`, `{n,}`).
 const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 
+/// The deepest nesting of groups (`(`, `(?:`, `(?=`, `(?<name>`, …) and
+/// `v`-mode nested classes (`[[…]]`) a pattern may have.
+///
+/// The recursive-descent parse, the measure pass and the code pass each
+/// recurse once per nesting level on the host's native stack, and XS bounds
+/// that recursion by nothing but its C stack — a 10,000-deep group literal
+/// of 20 KB aborted the process. This crate refuses deeper patterns with a
+/// [`CompileError::Syntax`] instead, so the bound is a counter (deterministic
+/// across hosts and build profiles) rather than a stack-address margin. The
+/// limit is orders of magnitude above real patterns and, with the per-level
+/// frames measured at under 7 KiB unoptimized, keeps the compiler's worst
+/// case under 4 MiB of host stack. Pattern *length* is not
+/// nesting: an alternation or sequence of any length is linear in this
+/// crate (see [`Compiler::disjunction_parse`], [`Compiler::measure`] and
+/// [`Compiler::emit`]).
+pub const MAX_NESTING_DEPTH: u32 = 512;
+
 struct Compiler {
     pattern: Vec<u8>, // NUL-terminated
     offset: usize,
@@ -194,6 +211,9 @@ struct Compiler {
     /// after the whole pattern is parsed (a forward reference is legal, so the
     /// slot is not known at the point the reference is read).
     pending_named_refs: Vec<(NodeId, String)>,
+    /// The current group / nested-class nesting depth of the parse, bounded
+    /// by [`MAX_NESTING_DEPTH`] (see [`Compiler::nested`]).
+    depth: u32,
 }
 
 type PResult<T> = Result<T, CompileError>;
@@ -243,6 +263,7 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         saw_named_group: false,
         named_groups: Vec::new(),
         pending_named_refs: Vec::new(),
+        depth: 0,
     };
     // Core u/v scalar execution and character-valued Unicode properties run
     // for real. Only syntax that actually uses v's string/set-expression
@@ -385,6 +406,20 @@ impl Compiler {
 
     fn error(&self, msg: &str) -> CompileError {
         CompileError::Syntax(msg.to_string())
+    }
+
+    /// Parse one nesting level (a group or a `v`-mode nested class) with
+    /// `f`, refusing to descend past [`MAX_NESTING_DEPTH`]. The depth is
+    /// released on every return path, so a syntax error deep in a group
+    /// leaves the counter balanced for the named-capture re-parse.
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(self.error("too much nesting"));
+        }
+        self.depth += 1;
+        let result = f(self);
+        self.depth -= 1;
+        result
     }
 
     /// Reset the parse cursor and per-parse tables for `fxCompileRegExp`'s
@@ -1252,6 +1287,10 @@ impl Compiler {
     /// subtraction, intersection, ordinary union/ranges, reserved doubled
     /// punctuators, and the no-mixing rule for set operators.
     fn charset_expression(&mut self) -> PResult<NodeId> {
+        self.nested(|c| c.charset_expression_inner())
+    }
+
+    fn charset_expression_inner(&mut self) -> PResult<NodeId> {
         let mut not = false;
         if self.character == b'^' as i64 {
             self.next()?;
@@ -1518,16 +1557,33 @@ impl Compiler {
         // across mutually-exclusive alternatives), then reattach both — the
         // outer scope sees the left alternative's names, matching XS's pointer
         // surgery exactly (the right's are dropped from the walkable head).
-        let left_addr = self.participate_last;
-        let mut result = self.sequence_parse(character)?;
-        if self.character == b'|' as i64 {
+        //
+        // C recurses once per `|`, so an alternation's length was native
+        // recursion depth (a 10,000-alternative keyword list overflowed the
+        // host stack in a debug build). The alternatives are parsed in a loop
+        // instead, each `|` pushing the frame the C recursion would have kept
+        // live; unwinding that stack innermost-first then performs exactly
+        // the node construction and pointer surgery the returns performed, in
+        // the same order, so the tree and the name tables are identical.
+        let mut pending: Vec<(i32, i32, i32, NodeId)> = Vec::new();
+        let mut result;
+        loop {
+            let left_addr = self.participate_last;
+            result = self.sequence_parse(character)?;
+            if self.character != b'|' as i64 {
+                break;
+            }
             let right_addr = self.participate_last;
             let left_named = self.participate_read(left_addr);
             self.participate_write(left_addr, -1);
             self.next()?;
-            let left = result;
-            let right = self.disjunction_parse(character)?;
-            result = self.add_node(Kind::Disjunction { left, right });
+            pending.push((left_addr, right_addr, left_named, result));
+        }
+        while let Some((left_addr, right_addr, left_named, left)) = pending.pop() {
+            result = self.add_node(Kind::Disjunction {
+                left,
+                right: result,
+            });
             let after_left = self.participate_read(left_addr);
             self.participate_write(right_addr, after_left);
             self.participate_write(left_addr, left_named);
@@ -1587,7 +1643,7 @@ impl Compiler {
         } else if ch == b'*' as i64 || ch == b'+' as i64 || ch == b'?' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'(' as i64 {
-            self.group_atom(current_index)
+            self.nested(|c| c.group_atom(current_index))
         } else if ch == b')' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'[' as i64 {
@@ -1870,6 +1926,13 @@ impl Compiler {
     fn measure(&mut self, id: NodeId, direction: i32) {
         // Split-borrow: read the kind's child ids first, mutate offsets
         // after. We recurse by id, so the arena stays coherent.
+        //
+        // The `Disjunction` and `Sequence` arms walk their right-nested spine
+        // in a loop where C tail-recurses on `right`: a pattern's length is
+        // its spine's length, and recursing per atom made a flat 1,067-atom
+        // literal overflow a 2 MiB debug stack. The order of every visit and
+        // of every `size` increment is the C order, so the offsets are
+        // byte-identical.
         match self.child_shape(id) {
             Shape::Term => {
                 self.nodes[id].step = self.size as i32;
@@ -1879,23 +1942,55 @@ impl Compiler {
                 self.nodes[id].step = self.size as i32;
                 self.size += 8 + ((1 + count) as i64) * 4;
             }
-            Shape::Disjunction(left, right) => {
-                self.nodes[id].step = self.size as i32;
-                self.size += 12; // mxDisjunctionStepSize
-                self.measure(left, direction);
-                self.measure(right, direction);
+            Shape::Disjunction(..) => {
+                let mut id = id;
+                loop {
+                    let Shape::Disjunction(left, right) = self.child_shape(id) else {
+                        self.measure(id, direction);
+                        break;
+                    };
+                    self.nodes[id].step = self.size as i32;
+                    self.size += 12; // mxDisjunctionStepSize
+                    self.measure(left, direction);
+                    id = right;
+                }
             }
-            Shape::Sequence(left, right) => {
+            Shape::Sequence(..) => {
                 if direction == 1 {
-                    self.measure(left, direction);
-                    let s = self.nodes[left].step;
-                    self.nodes[id].step = s;
-                    self.measure(right, direction);
+                    // Forward: each level measures its left atom, takes that
+                    // atom's step as its own, then continues into `right`.
+                    let mut id = id;
+                    loop {
+                        let Shape::Sequence(left, right) = self.child_shape(id) else {
+                            self.measure(id, direction);
+                            break;
+                        };
+                        self.measure(left, direction);
+                        let s = self.nodes[left].step;
+                        self.nodes[id].step = s;
+                        id = right;
+                    }
                 } else {
-                    self.measure(right, direction);
-                    let s = self.nodes[right].step;
-                    self.nodes[id].step = s;
-                    self.measure(left, direction);
+                    // Backward (inside a lookbehind): the rightmost atom is
+                    // measured first, then each level, innermost outward,
+                    // takes its right side's step and measures its left atom.
+                    let mut spine: Vec<(NodeId, NodeId)> = Vec::new();
+                    let mut id = id;
+                    loop {
+                        let Shape::Sequence(left, right) = self.child_shape(id) else {
+                            break;
+                        };
+                        spine.push((id, left));
+                        id = right;
+                    }
+                    self.measure(id, direction);
+                    let mut right = id;
+                    while let Some((sequence, left)) = spine.pop() {
+                        let s = self.nodes[right].step;
+                        self.nodes[sequence].step = s;
+                        self.measure(left, direction);
+                        right = sequence;
+                    }
                 }
             }
             Shape::Capture(term) => {
@@ -1975,23 +2070,62 @@ impl Compiler {
                     self.code[at + 3 + i] = chars[1 + i];
                 }
             }
-            Shape::Disjunction(left, right) => {
-                let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = CX_DISJUNCTION_STEP;
-                self.code[at + 1] = self.nodes[left].step;
-                self.code[at + 2] = self.nodes[right].step;
-                self.emit(left, direction, sequel);
-                self.emit(right, direction, sequel);
-            }
-            Shape::Sequence(left, right) => {
-                if direction == 1 {
-                    let right_step = self.nodes[right].step;
-                    self.emit(left, direction, right_step);
-                    self.emit(right, direction, sequel);
-                } else {
-                    let left_step = self.nodes[left].step;
-                    self.emit(right, direction, left_step);
+            // The `Disjunction` and `Sequence` arms walk their right-nested
+            // spine in a loop, as `measure` does, emitting every step in the
+            // C order.
+            Shape::Disjunction(..) => {
+                let mut id = id;
+                loop {
+                    let Shape::Disjunction(left, right) = self.child_shape(id) else {
+                        self.emit(id, direction, sequel);
+                        break;
+                    };
+                    let at = (self.nodes[id].step / 4) as usize;
+                    self.code[at] = CX_DISJUNCTION_STEP;
+                    self.code[at + 1] = self.nodes[left].step;
+                    self.code[at + 2] = self.nodes[right].step;
                     self.emit(left, direction, sequel);
+                    id = right;
+                }
+            }
+            Shape::Sequence(..) => {
+                if direction == 1 {
+                    // Forward: each atom's sequel is the next atom's step; the
+                    // last atom's sequel is the outer sequel.
+                    let mut id = id;
+                    loop {
+                        let Shape::Sequence(left, right) = self.child_shape(id) else {
+                            self.emit(id, direction, sequel);
+                            break;
+                        };
+                        let right_step = self.nodes[right].step;
+                        self.emit(left, direction, right_step);
+                        id = right;
+                    }
+                } else {
+                    // Backward: the rightmost atom is emitted first with the
+                    // innermost left atom's step as its sequel, then each left
+                    // atom, innermost outward, sequels to the one before it;
+                    // the first atom sequels to the outer sequel.
+                    let mut lefts: Vec<NodeId> = Vec::new();
+                    let mut id = id;
+                    loop {
+                        let Shape::Sequence(left, right) = self.child_shape(id) else {
+                            break;
+                        };
+                        lefts.push(left);
+                        id = right;
+                    }
+                    let innermost_left = *lefts.last().expect("a sequence has a left atom");
+                    let first_sequel = self.nodes[innermost_left].step;
+                    self.emit(id, direction, first_sequel);
+                    while let Some(left) = lefts.pop() {
+                        let next_sequel = match lefts.last() {
+                            Some(&previous) => self.nodes[previous].step,
+                            None => sequel,
+                        };
+                        self.emit(left, direction, next_sequel);
+                    }
                 }
             }
             Shape::Capture(term) => {
@@ -2300,4 +2434,111 @@ fn is_v_reserved_punctuator(c: i64) -> bool {
             c as u8 as char,
             '(' | ')' | '[' | ']' | '{' | '}' | '/' | '-' | '\\' | '|'
         )
+}
+
+/// The recursion bounds: nesting is refused past [`MAX_NESTING_DEPTH`] with
+/// a structured error, and pattern *length* — a sequence or alternation of
+/// any size — never becomes native recursion depth.
+#[cfg(test)]
+mod recursion_bounds {
+    use super::*;
+    use crate::matcher::match_regexp;
+
+    /// The at-limit patterns need a few MiB of stack unoptimized (about
+    /// 7 KiB per nesting level across parse, measure and emit), more than
+    /// the 2 MiB default test thread; run them on a thread sized like the
+    /// engine's own contract (`ironhorse_vm::NATIVE_STACK_BYTES`).
+    fn on_engine_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn")
+            .join()
+            .expect("the compiler must return, never overflow")
+    }
+
+    fn nested(open: &str, close: &str, depth: usize) -> String {
+        format!("{}a{}", open.repeat(depth), close.repeat(depth))
+    }
+
+    #[test]
+    fn group_nesting_at_the_limit_compiles_and_one_deeper_is_a_syntax_error() {
+        on_engine_stack(|| {
+            let limit = MAX_NESTING_DEPTH as usize;
+            for (open, close, flags) in [
+                ("(", ")", ""),
+                ("(?:", ")", ""),
+                ("(?=", ")", ""),
+                ("(?<!", ")", ""),
+                ("(?:", ")*", ""),
+                ("[", "]", "v"),
+            ] {
+                let program = compile(&nested(open, close, limit), flags)
+                    .unwrap_or_else(|e| panic!("{open}…{close} at the limit must compile: {e:?}"));
+                assert!(
+                    match_regexp(&program, b"a", 0).matched,
+                    "{open}…{close} at the limit must still match"
+                );
+                let past = compile(&nested(open, close, limit + 1), flags).map(|_| ());
+                assert!(
+                    matches!(&past, Err(CompileError::Syntax(m)) if m == "too much nesting"),
+                    "{open}…{close} one past the limit must be refused: {past:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_syntax_error_deep_in_a_group_leaves_the_depth_balanced_for_the_reparse() {
+        // The non-`u` named-capture path re-parses the whole pattern; the
+        // second pass must start from depth zero even though the first pass
+        // returned through `nested` frames by `?`.
+        on_engine_stack(|| {
+            let deep = format!("(?<n>{}a{})\\k<n>", "(".repeat(300), ")".repeat(300));
+            let program = compile(&deep, "").expect("a deep named group re-parses");
+            assert!(match_regexp(&program, b"aa", 0).matched);
+        });
+    }
+
+    #[test]
+    fn sequence_length_is_not_recursion_depth() {
+        // A flat 1,067-atom literal overflowed a 2 MiB debug stack in the
+        // measure pass; the spine is walked iteratively now, so length is
+        // linear time and constant stack. Runs on the default test thread
+        // deliberately.
+        let long = "a".repeat(200_000);
+        let program = compile(&long, "").expect("a long sequence compiles");
+        assert!(match_regexp(&program, long.as_bytes(), 0).matched);
+        // Inside a lookbehind the spine is walked backward.
+        let behind = format!("(?<={})b", "a".repeat(50_000));
+        let program = compile(&behind, "").expect("a long lookbehind sequence compiles");
+        let subject = format!("{}b", "a".repeat(50_000));
+        let outcome = match_regexp(&program, subject.as_bytes(), 0);
+        assert!(outcome.matched);
+        assert_eq!(outcome.captures[0], (50_000, 50_001));
+    }
+
+    #[test]
+    fn alternation_length_is_not_recursion_depth() {
+        // `fxDisjunctionParse` recurses once per `|`; a 10,000-alternative
+        // keyword list overflowed the debug stack. Parsed in a loop now.
+        // Each keyword ends in `_` so no earlier alternative is a prefix of
+        // the subject: only the last one can match.
+        let alternatives: Vec<String> = (0..50_000).map(|i| format!("k{i}_")).collect();
+        let pattern = alternatives.join("|");
+        let program = compile(&pattern, "").expect("a long alternation compiles");
+        let outcome = match_regexp(&program, b"k49999_", 0);
+        assert!(outcome.matched);
+        assert_eq!(outcome.captures[0], (0, 7));
+        // Duplicate names across alternatives are still legal (the
+        // participate-list surgery is replayed innermost-first, as the
+        // recursion's returns performed it) …
+        let program = compile("(?<x>a)|(?<x>b)|(?<x>c)", "").expect("duplicate names across alternatives");
+        assert!(match_regexp(&program, b"c", 0).matched);
+        // … and a duplicate within one scope is still refused.
+        assert!(matches!(
+            compile("(?<x>a)(?<x>b)", "").map(|_| ()),
+            Err(CompileError::Syntax(_))
+        ));
+    }
 }
