@@ -310,22 +310,110 @@ test('a late reply is consumed rather than answered', async t => {
   });
   t.deepEqual(delegations.claim(late), { claimed: true });
 
-  // Only once. A second message naming the same reply — an edit, or a replay
-  // after a restart — is ordinary mail again.
-  t.deepEqual(delegations.claim(late), { claimed: false });
+  // The id is forgotten once used, but the sender is a subagent this registry
+  // has asked, so an edit of the same reply is consumed as unsolicited mail
+  // rather than answered. Only a fresh registry — after a restart — would let
+  // it through as ordinary mail.
+  t.deepEqual(delegations.claim(late), { claimed: true });
 });
 
-test('the set of abandoned asks is bounded', async t => {
+test('a second reply to an answered ask is consumed, not answered', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagents/helper': locatorFor(CHILD) },
+  });
+  const { timers } = makeManualTimers();
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+  });
+  const answerP = delegations.ask({
+    name: 'helper',
+    task: 'go',
+    timeoutSeconds: 60,
+  });
+  await mailbox.whenSent();
+  delegations.claim(mailbox.stream[0]);
+  const answer = mailbox.deliverReply({
+    from: locatorFor(CHILD),
+    replyTo: 'out-1',
+    text: 'done',
+  });
+  t.deepEqual(delegations.claim(answer), { claimed: true });
+  t.is((await answerP).text, 'done');
+
+  // A progress note the subagent followed with its answer, or an answer it
+  // sent twice: nobody is waiting, and answering it would start an exchange
+  // between two models.
+  const encore = mailbox.deliverReply({
+    from: locatorFor(CHILD),
+    replyTo: 'out-1',
+    text: 'and one more thing',
+  });
+  t.deepEqual(delegations.claim(encore), { claimed: true });
+});
+
+test('unsolicited mail from a subagent the parent has asked is consumed', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagents/helper': locatorFor(CHILD) },
+  });
+  const { timers } = makeManualTimers();
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+  });
+  const answerP = delegations.ask({
+    name: 'helper',
+    task: 'go',
+    timeoutSeconds: 60,
+  });
+  await mailbox.whenSent();
+  delegations.claim(mailbox.stream[0]);
+  delegations.claim(
+    mailbox.deliverReply({
+      from: locatorFor(CHILD),
+      replyTo: 'out-1',
+      text: 'done',
+    }),
+  );
+  await answerP;
+
+  // A subagent speaks by answering asks. A fresh message from one — sent
+  // with `send` rather than `reply` — would otherwise be answered by the
+  // parent, and the subagent would answer that.
+  const unsolicited = harden({
+    type: 'package',
+    from: locatorFor(CHILD),
+    to: locatorFor(PARENT),
+    strings: harden(['are you still there?']),
+    names: harden([]),
+    messageId: 'in-99',
+    number: 99n,
+  });
+  t.deepEqual(delegations.claim(unsolicited), { claimed: true });
+  // Mail from anyone else still reaches the model.
+  const stranger = harden({
+    ...unsolicited,
+    from: locatorFor(OTHER),
+    messageId: 'in-100',
+    number: 100n,
+  });
+  t.deepEqual(delegations.claim(stranger), { claimed: false });
+});
+
+test('the sets of closed asks and known subagents are bounded', async t => {
   const mailbox = makeMailbox({ names: {} });
   const { timers, fireAll } = makeManualTimers();
   const delegations = makeSubagentDelegations({
     powers: mailbox.powers,
     timers,
   });
-  // 33 asks, one more than the bound, each timed out with its reply still
-  // outstanding.
+  /** @param {number} index */
+  const childFor = index =>
+    locatorFor(`${'c'.repeat(62)}${index.toString(16).padStart(2, '0')}`);
+  // 33 asks to 33 distinct subagents, one more than either bound, each timed
+  // out with its reply still outstanding.
   for (let index = 0; index < 33; index += 1) {
-    mailbox.names[`subagents/helper${index}`] = locatorFor(CHILD);
+    mailbox.names[`subagents/helper${index}`] = childFor(index);
     const answerP = delegations.ask({
       name: `helper${index}`,
       task: `task ${index}`,
@@ -339,13 +427,13 @@ test('the set of abandoned asks is bounded', async t => {
     await t.throwsAsync(answerP, { message: /did not reply within/ });
   }
   const first = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: childFor(0),
     replyTo: 'out-1',
     text: 'the oldest, long forgotten',
   });
   t.deepEqual(delegations.claim(first), { claimed: false });
   const last = mailbox.deliverReply({
-    from: locatorFor(CHILD),
+    from: childFor(32),
     replyTo: 'out-33',
     text: 'the newest',
   });
