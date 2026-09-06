@@ -13944,10 +13944,12 @@ impl Interp {
                                 pc += ilen;
                                 continue;
                             }
-                            let v = match self.ordinary_get(code, inst, name, envref) {
-                                Ok(value) => value,
-                                Err(halt) => return halt,
-                            };
+                            let v = dispatch_result!(
+                                self.ordinary_get(code, inst, name, envref),
+                                pc,
+                                self,
+                                return_depth
+                            );
                             self.push(v);
                             pc += ilen;
                             continue;
@@ -14144,10 +14146,12 @@ impl Interp {
                             }
                             let (_present, recursions) = self.instance_has(inst, name);
                             self.meter.tick_code_n(recursions);
-                            match self.ordinary_set(code, inst, name, value, envref) {
-                                Ok(_accepted) => {}
-                                Err(halt) => return halt,
-                            }
+                            let _accepted = dispatch_result!(
+                                self.ordinary_set(code, inst, name, value, envref),
+                                pc,
+                                self,
+                                return_depth
+                            );
                             self.meter.tick_builtin();
                             self.push(value);
                             pc += ilen;
@@ -14448,34 +14452,38 @@ impl Interp {
                             if symbol_id == crate::value::XS_NO_ID {
                                 None
                             } else {
-                                match self.ordinary_get(code, instance, symbol_id, iterable) {
-                                    Ok(method) if method.kind != Kind::Undefined => Some(method),
-                                    Ok(_) => None,
-                                    Err(halt) => return halt,
-                                }
+                                let method = dispatch_result!(
+                                    self.ordinary_get(code, instance, symbol_id, iterable),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                                (method.kind != Kind::Undefined).then_some(method)
                             }
                         }
                         _ => None,
                     };
                     if let Some(method) = custom_iterator {
                         self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
-                        let iterator = match self.call_primitive_method(code, method, iterable, &[])
-                        {
-                            Ok(iterator) if iterator.kind == Kind::Reference => iterator,
-                            Ok(_) => {
-                                // GetIterator step 3 (`fxGetIterator`'s
-                                // "iterator: not an object"), raised in-frame
-                                // so a `try` in the SAME activation — a
-                                // generator body around `yield*` — observes it
-                                // (a returned halt would skip that handler).
-                                let error = self.internal_error(
-                                    "TypeError",
-                                    "iterator: not an object".into(),
-                                );
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
-                            }
-                            Err(halt) => return halt,
-                        };
+                        let iterator = dispatch_result!(
+                            self.call_primitive_method(code, method, iterable, &[]),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        if iterator.kind != Kind::Reference {
+                            // GetIterator step 3 (`fxGetIterator`'s
+                            // "iterator: not an object"), raised in-frame
+                            // so a `try` in the SAME activation — a
+                            // generator body around `yield*` — observes it
+                            // (a returned halt would skip that handler).
+                            dispatch_halt!(
+                                self.catchable_type_error_msg("iterator: not an object".into()),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                        }
                         self.push(iterator);
                         pc += size as usize;
                         continue;
@@ -15932,15 +15940,7 @@ impl Interp {
                                     }
                                     pc = body_start;
                                 }
-                                Err(Halt::Resume(target))
-                                    if self.call_stack.len() < return_depth =>
-                                {
-                                    return Halt::Resume(target);
-                                }
-                                Err(Halt::Resume(target)) => {
-                                    pc = target;
-                                }
-                                Err(h) => return h,
+                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
                             },
                         }
                     } else if let Some((NativeMethod::FunctionApply, base)) = method {
@@ -15976,15 +15976,7 @@ impl Interp {
                                 // TypeError: resume a caller's handler (or escape
                                 // to the host if uncaught) rather than propagate
                                 // the raw `Resume`.
-                                Err(Halt::Resume(target))
-                                    if self.call_stack.len() < return_depth =>
-                                {
-                                    return Halt::Resume(target);
-                                }
-                                Err(Halt::Resume(target)) => {
-                                    pc = target;
-                                }
-                                Err(h) => return h,
+                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
                             },
                         }
                     } else if let Some((m, base)) = method {
@@ -16029,7 +16021,7 @@ impl Interp {
                                     pc = body_start;
                                     continue;
                                 }
-                                Err(h) => return h,
+                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
                             }
                         }
                         // BoundFunction.[[Call]] is ordinary abstract Call
@@ -16114,16 +16106,7 @@ impl Interp {
                             // outward. Without this, a throw from an
                             // eval-/`Function`-defined callee returned straight
                             // out of the caller, bypassing its `try`/`catch`.
-                            Err(Halt::Resume(target))
-                                if self.call_stack.len() < return_depth =>
-                            {
-                                return Halt::Resume(target);
-                            }
-                            Err(Halt::Resume(target)) => {
-                                pc = target;
-                                continue;
-                            }
-                            Err(h) => return h,
+                            Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
                         }
                     } else {
                         match self.enter_call(argc, ret_pc, has_target) {
@@ -16139,16 +16122,7 @@ impl Interp {
                             // is entered. Resume the catch/finally in this loop,
                             // or propagate to the dispatch loop that owns a
                             // handler below this one.
-                            Err(Halt::Resume(target))
-                                if self.call_stack.len() < return_depth =>
-                            {
-                                return Halt::Resume(target);
-                            }
-                            Err(Halt::Resume(target)) => {
-                                pc = target;
-                                continue;
-                            }
-                            Err(h) => return h,
+                            Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
                         }
                     }
                 }
@@ -17036,10 +17010,12 @@ impl Interp {
                             }
                         }
                         Kind::String | Kind::Reference => {
-                            let numeric = match self.to_number_value(code, top) {
-                                Ok(value) => value,
-                                Err(halt) => return halt,
-                            };
+                            let numeric = dispatch_result!(
+                                self.to_number_value(code, top),
+                                pc,
+                                self,
+                                return_depth
+                            );
                             if let Some(s) = self.stack.last_mut() {
                                 *s = numeric;
                             }
@@ -17052,10 +17028,8 @@ impl Interp {
                 // substitutions and other compiler-emitted string contexts.
                 XS_CODE_TO_STRING => {
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
-                    let primitive = match self.to_primitive(code, top, true) {
-                        Ok(value) => value,
-                        Err(halt) => return halt,
-                    };
+                    let primitive =
+                        dispatch_result!(self.to_primitive(code, top, true), pc, self, return_depth);
                     if primitive.kind == Kind::Symbol {
                         return Halt::Unsupported("to_string:symbol");
                     }

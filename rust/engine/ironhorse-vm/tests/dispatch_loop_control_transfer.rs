@@ -147,6 +147,28 @@ fn every_raise_in_the_dispatch_loop_goes_through_dispatch_halt() {
 }
 
 #[test]
+fn no_native_result_is_propagated_out_of_the_loop_by_hand() {
+    // `Err(halt) => return halt` on a native's result is the F006 shape: a
+    // `Halt::Resume` produced by a throwing setter / `toString` / `valueOf`
+    // under a live guest `try` leaves the loop as the crank's outcome, and
+    // the guest handler is silently skipped. Every fallible native call in
+    // the loop goes through `dispatch_result!` / `dispatch_halt!`.
+    let body = dispatch_loop();
+    let mut bad = Vec::new();
+    for needle in ["=> return halt", "=> return h,", "=> return h\n", "Err(Halt::Resume("] {
+        for at in occurrences(&body, needle) {
+            bad.push(format!("  loop line {}: `{}`", line_of(&body, at), needle.trim()));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "hand-propagated native results in dispatch_at_inner (an internal \
+         `Resume` can escape as the host's result):\n{}",
+        bad.join("\n")
+    );
+}
+
+#[test]
 fn a_resume_leaves_the_dispatch_loop_only_after_the_depth_test() {
     // The `THROW`/`RETHROW`/rejected-`await` arms unwind inline; the only
     // legitimate `return Halt::Resume(..)` in the loop is theirs, guarded by
