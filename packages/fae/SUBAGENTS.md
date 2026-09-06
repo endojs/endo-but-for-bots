@@ -47,6 +47,13 @@ placeholder would hand the model "Thinking…" as the subagent's answer.
 The daemon re-emits the settled revision under the same number, and that is what
 claims the delegation.
 
+`claim` consumes two more kinds of message, for the same reason:
+a further reply to an ask that is already over — answered, or timed out — and
+any mail from a subagent the registry has asked that answers no ask at all.
+Either one, left to fall through, would be answered by the parent, and the
+subagent would answer that: a subagent speaks to its parent by answering asks,
+and nothing else it sends starts a turn.
+
 ### Locator identity
 
 `locate()` decorates a locator with the transport hints `@nets` publishes at the
@@ -114,8 +121,11 @@ It is still *consumed* rather than delivered to the model: left to fall through,
 it would be ordinary inbound mail, the parent would answer its subagent, the
 subagent would answer that, and two models would bill an unbounded exchange
 nobody asked for.
-The registry remembers the last 32 abandoned asks for that purpose; past the
-bound, a very late reply does land in the inbox.
+An answered ask is closed the same way, so a subagent that replies twice — a
+progress note and then its answer — does not start that exchange either.
+The registry remembers the last 32 closed asks for that purpose, and the last
+32 subagents it has asked, whose unsolicited mail it consumes as well; past
+either bound a very late message does land in the inbox.
 Teardown is depth-first, so raising the depth bound does not strand a subtree.
 
 ### Attachments

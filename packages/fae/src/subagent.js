@@ -116,13 +116,21 @@ const MAX_TASK_LENGTH = 32_768;
 const MAX_ANSWER_LENGTH = 262_144;
 
 /**
- * Timed-out asks whose reply is still worth intercepting if it turns up.
+ * Closed asks — answered, or timed out — whose further replies are still worth
+ * intercepting if they turn up.
  *
  * Bounded because nothing prunes the set otherwise; past the bound the oldest
- * abandoned ask is forgotten and a very late reply to it lands in the inbox as
+ * closed ask is forgotten and a very late reply to it lands in the inbox as
  * ordinary mail.
  */
-const MAX_ABANDONED_ASKS = 32;
+const MAX_CLOSED_ASKS = 32;
+
+/**
+ * Subagents this registry has put a question to, whose unsolicited mail it
+ * consumes. Bounded the same way; a parent may hold at most
+ * `DEFAULT_MAX_SUBAGENTS` at once, so eviction is a formality.
+ */
+const MAX_KNOWN_SUBAGENTS = 32;
 
 /**
  * @param {unknown} name
@@ -237,7 +245,7 @@ harden(SubagentSpawnerInterface);
  *   waiting out its timer, used when the mailbox that would answer it closes.
  * @property {boolean} settled - Whether this delegation has been resolved one
  *   way or the other — answered, or failed by `close` — so the ask's `finally`
- *   knows not to record its id as an abandoned one.
+ *   knows whether it still has to close the ask itself.
  */
 
 /**
@@ -268,18 +276,30 @@ export const makeSubagentDelegations = ({
   /** @type {Map<string, PendingDelegation>} */
   const pendingByOutboundId = new Map();
   /**
-   * Delegations whose ask gave up waiting.
+   * Delegations that are over: answered, or given up on.
    *
-   * A reply that arrives after the timeout has nobody to hand it to, and left
-   * to fall through it becomes an ordinary inbound message: the parent answers
-   * its subagent, the subagent answers back, and two models bill an unbounded
-   * exchange nobody asked for. Claiming it consumes it instead — the harness
-   * declines to make a turn of it, exactly as for an answered ask.
+   * A further reply to one — a late answer after the timeout, or a second
+   * message from a subagent that sent a progress note before its answer — has
+   * nobody to hand it to, and left to fall through it becomes an ordinary
+   * inbound message: the parent answers its subagent, the subagent answers
+   * back, and two models bill an unbounded exchange nobody asked for.
+   * Claiming it consumes it instead — the harness declines to make a turn of
+   * it, exactly as for the reply that did answer the ask.
    *
    * Bounded and oldest-first, because nothing else prunes it.
    * @type {Set<string>}
    */
-  const abandonedOutboundIds = new Set();
+  const closedOutboundIds = new Set();
+
+  /**
+   * Handles of the subagents this registry has asked, so that mail from one
+   * of them that answers no ask can be told from mail a user sent. The same
+   * exchange starts from an unsolicited message as from a stray reply, and a
+   * subagent talks to its parent by answering asks.
+   *
+   * @type {Set<string>}
+   */
+  const knownSubagents = new Set();
 
   /**
    * Set once the mailbox stream that feeds `claim` has ended.
@@ -292,11 +312,21 @@ export const makeSubagentDelegations = ({
   let closedReason;
 
   /** @param {string} outboundId */
-  const abandon = outboundId => {
-    abandonedOutboundIds.add(outboundId);
-    while (abandonedOutboundIds.size > MAX_ABANDONED_ASKS) {
-      const [oldest] = abandonedOutboundIds;
-      abandonedOutboundIds.delete(oldest);
+  const closeAsk = outboundId => {
+    closedOutboundIds.add(outboundId);
+    while (closedOutboundIds.size > MAX_CLOSED_ASKS) {
+      const [oldest] = closedOutboundIds;
+      closedOutboundIds.delete(oldest);
+    }
+  };
+
+  /** @param {string} recipient */
+  const remember = recipient => {
+    knownSubagents.delete(recipient);
+    knownSubagents.add(recipient);
+    while (knownSubagents.size > MAX_KNOWN_SUBAGENTS) {
+      const [oldest] = knownSubagents;
+      knownSubagents.delete(oldest);
     }
   };
 
@@ -343,33 +373,48 @@ export const makeSubagentDelegations = ({
       }
     }
 
-    if (typeof replyTo !== 'string') return unclaimed;
-    if (abandonedOutboundIds.has(replyTo)) {
-      abandonedOutboundIds.delete(replyTo);
-      console.error(
-        `[subagent] discarding a reply to an ask that had already given up`,
-      );
-      return harden({ claimed: true });
+    if (typeof replyTo === 'string') {
+      if (closedOutboundIds.has(replyTo)) {
+        closedOutboundIds.delete(replyTo);
+        console.error(
+          `[subagent] discarding a reply to an ask that was already answered or had given up`,
+        );
+        return harden({ claimed: true });
+      }
+      const delegation = pendingByOutboundId.get(replyTo);
+      // `replyTo` can only name a message its sender took part in, but
+      // matching the sender as well keeps the guarantee local to this module.
+      if (delegation && isSameFormula(from, delegation.recipient)) {
+        const edgeNames = /** @type {string[]} */ (
+          (Array.isArray(names) ? names : []).filter(
+            edgeName => typeof edgeName === 'string',
+          )
+        );
+        forget(delegation);
+        delegation.settled = true;
+        // Answered. Whatever else arrives in reply to this ask is consumed.
+        closeAsk(replyTo);
+        delegation.settle({
+          text: messageText(message),
+          number,
+          edgeNames: harden(edgeNames),
+        });
+        return harden({ claimed: true });
+      }
     }
-    const delegation = pendingByOutboundId.get(replyTo);
-    // `replyTo` can only name a message its sender took part in, but matching
-    // the sender as well keeps the guarantee local to this module.
-    if (!delegation || !isSameFormula(from, delegation.recipient)) {
-      return unclaimed;
+    // Mail from a subagent that answers no ask. Answering it would start the
+    // exchange this registry exists to prevent — the parent's reply lands in
+    // the subagent's inbox, the subagent answers that, and so on, a model
+    // call per hop with nothing to end it — so it is consumed instead.
+    for (const recipient of knownSubagents) {
+      if (isSameFormula(from, recipient)) {
+        console.error(
+          `[subagent] discarding unsolicited mail from a subagent; a subagent speaks by answering asks`,
+        );
+        return harden({ claimed: true });
+      }
     }
-    const edgeNames = /** @type {string[]} */ (
-      (Array.isArray(names) ? names : []).filter(
-        edgeName => typeof edgeName === 'string',
-      )
-    );
-    forget(delegation);
-    delegation.settled = true;
-    delegation.settle({
-      text: messageText(message),
-      number,
-      edgeNames: harden(edgeNames),
-    });
-    return harden({ claimed: true });
+    return unclaimed;
   };
 
   /**
@@ -435,6 +480,7 @@ export const makeSubagentDelegations = ({
       throw error;
     }
     delegation.recipient = /** @type {string} */ (recipient);
+    remember(delegation.recipient);
     // Re-checked after the await: closing during `locate` must not go on to
     // send, or the subagent bills a model turn for a reply the closed registry
     // can never observe.
@@ -467,10 +513,10 @@ export const makeSubagentDelegations = ({
     } finally {
       timers.clearTimeout(timer);
       // A reply that arrives after this point has nobody waiting for it. It is
-      // still consumed rather than delivered — see `abandonedOutboundIds` —
+      // still consumed rather than delivered — see `closedOutboundIds` —
       // because answering it would start an exchange between two models.
       if (!delegation.settled && delegation.outboundId !== undefined) {
-        abandon(delegation.outboundId);
+        closeAsk(delegation.outboundId);
       }
       forget(delegation);
     }
@@ -495,7 +541,8 @@ export const makeSubagentDelegations = ({
       delegation.settled = true;
       delegation.fail(reason);
     }
-    abandonedOutboundIds.clear();
+    closedOutboundIds.clear();
+    knownSubagents.clear();
   };
 
   return harden({ claim, ask, close });
