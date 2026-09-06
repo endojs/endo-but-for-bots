@@ -46,6 +46,7 @@ export const makeCjsAnalyzer = () => {
       const ast = parseBabel(moduleSource, {
         sourceType: 'commonjs',
         tokens: true,
+        createImportExpressions: false,
         createParenthesizedExpressions: true,
       });
 

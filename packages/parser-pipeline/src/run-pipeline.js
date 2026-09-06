@@ -73,6 +73,7 @@ export const runPipeline = ({
     errorRecovery: true,
     sourceType: langDef.sourceType,
     tokens: true,
+    createImportExpressions: false,
     createParenthesizedExpressions: true,
   });
 

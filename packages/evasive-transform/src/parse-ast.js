@@ -36,6 +36,7 @@ const { parse: parseBabel } = babelParser;
 export function parseAst(source, opts = {}) {
   return parseBabel(source, {
     tokens: true,
+    createImportExpressions: false,
     createParenthesizedExpressions: true,
     allowReturnOutsideFunction:
       opts.sourceType === 'script' || opts.sourceType === 'commonjs',

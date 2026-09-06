@@ -88,6 +88,7 @@ export const makeModuleSourceAnalyzer = () =>
       const ast = parseBabel(moduleSource, {
         sourceType: 'module',
         tokens: true,
+        createImportExpressions: false,
         createParenthesizedExpressions: true,
       });
 
@@ -163,6 +164,7 @@ export const makeModuleTransformer = (_babel, importer) => {
     const ast = parseBabel(source, {
       sourceType: 'script',
       tokens: true,
+      createImportExpressions: false,
       createParenthesizedExpressions: true,
     });
     // Only run the transform pass (rewrites import() calls)
