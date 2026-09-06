@@ -290,7 +290,9 @@ impl Compartment {
     /// linking — for programs that reference only operators and the
     /// compartment's own globals (the stage-1 seam). Programs that name
     /// intrinsics (`Boolean`, `Object`, …) must use
-    /// [`Compartment::evaluate_with_symbols`].
+    /// [`Compartment::evaluate_with_symbols`]. Reports the engine's raw
+    /// completion, like [`Interp::run`]: a differential caller applies
+    /// [`RunOutcome::host_coerced`] itself.
     pub fn evaluate(&self, bytecode: &[u8]) -> RunOutcome {
         let mut interp = Interp::new();
         // Seed in ID ORDER (wave-6 W6-8): iterating the HashMap seeds

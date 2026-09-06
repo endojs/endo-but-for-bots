@@ -16,10 +16,13 @@
 //! - Quiescence is a LIFECYCLE property (architecture review F011,
 //!   F030/F022): a crank halted at a top-level meter check, the
 //!   dispatch ceiling, or a decode fault leaves every table empty and
-//!   must still be refused by every verb, while the synthetic
-//!   host-boundary throw for an uncoercible completion value must
-//!   leave a quiescent machine whose continuous and resumed twins
-//!   agree after a boundary collection.
+//!   must still be refused by every verb, while a completion value the
+//!   oracle harness cannot coerce (a Symbol, a null-prototype object)
+//!   is a completion that leaves a quiescent machine whose continuous
+//!   and resumed twins agree after a boundary collection.
+//! - The gate is on the DATA PATH (F047): the only route from a live
+//!   machine to its image runs the whole persist predicate set, the
+//!   stored-key-id audit included.
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
@@ -779,6 +782,60 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
     );
 }
 
+/// The third predicate of the gate, the one the store verb ran and the
+/// blob verbs did not: a stored property id outside the name and
+/// symbol-key tables. A live machine cannot mint one, so the fixture
+/// poisons a live property slot's id directly, past the end of the
+/// name table and far below the top-down symbol-key range. The gated
+/// image, the blob verb and the store verb must all refuse it by the
+/// same name and write nothing; the control before the poison admits
+/// the same machine, so the refusal is the audit's and not the gate's
+/// other arms'.
+#[test]
+fn a_stored_unregistered_key_id_refuses_the_gated_image_and_every_verb() {
+    use ironhorse_snapshot::SnapshotError;
+    use ironhorse_vm::SlotIndex;
+
+    let (b, n) = compile("var x = 0; x = 41; x");
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    assert!(m.run(&b).completed);
+    m.snapshot_image(&sig()).expect("the control: the clean machine is admitted");
+
+    // The global `x`'s property slot carries `x`'s program id.
+    let names = m.program_symbol_names().to_vec();
+    let x_id = names.iter().position(|name| name == "x").expect("x is a program symbol") as u16 + 1;
+    let holder = (0..m.slots.capacity())
+        .map(SlotIndex)
+        .find(|&i| m.slots.get(i).id == x_id)
+        .expect("a live slot keyed by x");
+    let unregistered = names.len() as u16 + 1;
+    m.slots.get_mut(holder).id = unregistered;
+
+    const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
+    match m.snapshot_image(&sig()) {
+        Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(msg))) => {
+            assert_eq!(msg, REFUSAL, "the gated image refuses by the audit's name")
+        }
+        other => panic!("the gated image must refuse the poisoned id: {other:?}"),
+    }
+    match m.write_snapshot(&sig()) {
+        Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(msg))) => {
+            assert_eq!(msg, REFUSAL, "the blob verb refuses by the same name")
+        }
+        other => panic!("the blob verb must refuse the poisoned id: {other:?}"),
+    }
+    let mut store = MemoryStore::new();
+    match begin_store_session(m, &sig(), &mut store) {
+        Err((_, StoreError::Snapshot(SnapshotError::Corrupt(msg)))) => {
+            assert_eq!(msg, REFUSAL, "the store verb refuses by the same name")
+        }
+        Err((_, other)) => panic!("the store verb refused by the wrong gate: {other:?}"),
+        Ok(_) => panic!("the store verb must refuse the poisoned id"),
+    }
+    assert!(store.manifest().is_err(), "a refused begin writes nothing");
+}
+
 /// A metered crank the host refuses at a TOP-LEVEL loop-closing check:
 /// the call stack, catch chain, and value stack are all empty at that
 /// check, so only the lifecycle conjunct can see the halt.
@@ -898,18 +955,19 @@ fn a_completed_crank_after_a_halt_restores_quiescence() {
     m.write_snapshot(&sig()).expect("and the blob verb admits it");
 }
 
-/// The two synthetic HOST-BOUNDARY throws -- a completion value the
-/// oracle harness's `String(result)` cannot coerce (a Symbol, a
-/// null-prototype object) -- are minted AFTER the engine's own crank
-/// completed and its job queue drained. The machine IS at a clean
-/// boundary, so the boundary registers must clear exactly as for a
-/// rendered completion; before this fix the rewrite happened first and
-/// the clear was skipped, so `result`/`locals`/`id_map` stayed rooted
-/// and the continuous and resumed twins forked at the next collection
-/// while agreeing on every result and computron (F030/F022, reproduced
-/// end to end in the review).
+/// The two UNCOERCIBLE completions -- a completion value the oracle
+/// harness's `String(result)` cannot coerce (a Symbol, a null-prototype
+/// object) -- complete on the engine's side, with the harness's
+/// `TypeError` beside them in `coercion_error`. The machine IS at a
+/// clean boundary, so the boundary registers must clear exactly as for
+/// a rendered completion; before the fix the engine rewrote the halt
+/// into a synthetic throw first and the clear was skipped, so
+/// `result`/`locals`/`id_map` stayed rooted and the continuous and
+/// resumed twins forked at the next collection while agreeing on every
+/// result and computron (F030/F022, reproduced end to end in the
+/// review).
 #[test]
-fn a_synthetic_host_throw_leaves_a_quiescent_machine_whose_twins_agree() {
+fn an_uncoercible_completion_leaves_a_quiescent_machine_whose_twins_agree() {
     for (name, completion) in [
         ("a Symbol completion", "let s = Symbol('k'); s"),
         ("a null-prototype completion", "let s = Object.create(null); s"),

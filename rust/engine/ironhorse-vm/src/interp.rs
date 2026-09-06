@@ -4069,17 +4069,30 @@ pub struct RunOutcome {
     /// null-prototype object.
     pub result: String,
     /// The `TypeError` the oracle shim's post-run `String(result)`
-    /// throws for this completion value, when it throws: a Symbol
-    /// (`cannot coerce symbol to string`) or a null-prototype ordinary
-    /// object with neither `toString` nor `valueOf` (`cannot convert
-    /// object to primitive value`). `None` for every other completion
-    /// and for every halt. The guest never threw this: it is a HOST
-    /// coercion the 262 runner and the fuzz harness emulate through
-    /// [`Self::host_coerced`], while an embedder that wants the raw
-    /// completion reads `completed`/`result` as they are (architecture
-    /// review F030: the engine used to rewrite the halt itself, so a
-    /// legal program was reported to the operator as an uncaught
-    /// `TypeError` and the managed lifecycle rewound it).
+    /// throws for this completion value, as the differential harness
+    /// models it: a Symbol (`cannot coerce symbol to string`), or an
+    /// ordinary object whose prototype is `null` (`cannot convert
+    /// object to primitive value`, the bare `Object.create(null)` whose
+    /// `ToPrimitive` finds neither `toString` nor `valueOf`). `None`
+    /// for every other completion and for every halt.
+    ///
+    /// The object arm is the harness's APPROXIMATION, not a `ToPrimitive`
+    /// evaluation: it tests the prototype link only, so a null-prototype
+    /// object carrying its own `toString` is flagged although `String()`
+    /// would succeed, and an object whose null-prototype ancestor is one
+    /// hop up is not flagged although `String()` would throw. It has
+    /// always been this predicate (it was the halt rewrite before), and
+    /// it exists for oracle agreement on the shapes the corpus produces;
+    /// an embedder should read it as "the harness would report an abort
+    /// here", not as a verdict on the guest value.
+    ///
+    /// The guest never threw this: it is a HOST coercion the 262 runner
+    /// and the fuzz harness emulate through [`Self::host_coerced`], while
+    /// an embedder that wants the raw completion reads
+    /// `completed`/`result` as they are (architecture review F030: the
+    /// engine used to rewrite the halt itself, so a legal program was
+    /// reported to the operator as an uncaught `TypeError` and the
+    /// managed lifecycle rewound it).
     pub coercion_error: Option<String>,
     /// Computrons, comparable bit-for-bit with the oracle's run-only
     /// count: dispatched opcodes plus the invocation baseline.

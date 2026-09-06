@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-31 |
+| **Updated** | 2026-09-06 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -2634,7 +2634,23 @@ bite-checked by reverting the fix under the lock). Statuses:
   boundary, so uninterrupted and resumed twins root the same set);
   W6-12 (`MachineSnapshot::write_snapshot` now returns `Result`
   through a `persist_gate` carrying the quiescence AND segments
-  checks — the blob verbs refuse what the store verbs refuse);
+  checks — the blob verbs refuse what the store verbs refuse; since
+  2026-09-06 the gate lives on `snapshot_image` itself, the only
+  route from a live machine to its image, running the whole persist
+  predicate set including the stored-key-id audit, so the image data
+  path — `write_machine`, `image_to_batch`, `commit` — never sees a
+  machine the gate refused, and the trait's permissive default is
+  gone (architecture review F047; the incremental
+  `checkpoint_to_store` keeps its inline gate in the same order).
+  The same pass made `is_quiescent` a lifecycle predicate — a
+  `last_crank_completed` latch as its first conjunct, so a
+  table-empty halt at a top-level meter check, the dispatch ceiling
+  or a decode fault is refused too (F011) — and moved the oracle
+  harness's `String(result)` coercion out of `Interp::run`: a Symbol
+  or null-prototype completion is a completion with
+  `RunOutcome::coercion_error` beside it, folded into the oracle's
+  abort shape only by `RunOutcome::host_coerced` in the differential
+  runners (F030/F022));
   W6-13 (`Meter::rearm`/`Interp::rearm_meter` re-arm without zeroing
   the restored index; the lock runs the resumed machine armed to a
   real `MeterAbort`); W6-14 (eager `store_to_image` runs the

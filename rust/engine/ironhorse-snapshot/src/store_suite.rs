@@ -44,15 +44,23 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
 }
 
 /// One crank's host-visible verdict: the completion flag, the rendered
-/// result, and the halt itself (rendered with `Debug`). All three must
-/// agree across the seven ways — every non-completion renders an empty
-/// result, so without the halt a crank reported as one synthetic
-/// host-boundary throw in one variant and as a different throw in
-/// another would be a divergence the flag and the string could hide.
-type CrankResult = (bool, String, String);
+/// result, the halt itself (rendered with `Debug`), and the harness's
+/// coercion error. All four must agree across the seven ways. Every
+/// non-completion renders an empty result, so without the halt two
+/// different halts would agree on the flag and the string; and a
+/// null-prototype completion renders the same `[object Object]` as a
+/// plain object with the same `Return` halt, so without the coercion
+/// error a resumed twin that lost the null prototype link would agree
+/// on everything the other three fields see.
+type CrankResult = (bool, String, String, Option<String>);
 
 fn crank_result(o: &ironhorse_vm::RunOutcome) -> CrankResult {
-    (o.completed, o.result.clone(), format!("{:?}", o.halt))
+    (
+        o.completed,
+        o.result.clone(),
+        format!("{:?}", o.halt),
+        o.coercion_error.clone(),
+    )
 }
 
 struct Baseline {

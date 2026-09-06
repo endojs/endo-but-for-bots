@@ -931,13 +931,28 @@ pub fn suspend_resume_is_transparent(
     };
     let b2 = m2.run(&b.bytecode);
 
-    if b2.completed != ub.completed || b2.result != ub.result || b2.computrons != ub.computrons {
+    // `coercion_error` joins the compare: a null-prototype completion
+    // renders the same `[object Object]` as a plain object, so a resumed
+    // twin that lost the null prototype link would agree on everything
+    // else.
+    if b2.completed != ub.completed
+        || b2.result != ub.result
+        || b2.computrons != ub.computrons
+        || b2.coercion_error != ub.coercion_error
+    {
         return Err(RoundtripDivergence {
             detail: format!(
                 "suspend/resume diverged from uninterrupted: resumed(completed={}, result={:?}, \
-                 computrons={}) vs uninterrupted(completed={}, result={:?}, computrons={}) \
-                 [A={source_a:?} B={source_b:?}]",
-                b2.completed, b2.result, b2.computrons, ub.completed, ub.result, ub.computrons
+                 computrons={}, coercion={:?}) vs uninterrupted(completed={}, result={:?}, \
+                 computrons={}, coercion={:?}) [A={source_a:?} B={source_b:?}]",
+                b2.completed,
+                b2.result,
+                b2.computrons,
+                b2.coercion_error,
+                ub.completed,
+                ub.result,
+                ub.computrons,
+                ub.coercion_error
             ),
         });
     }

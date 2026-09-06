@@ -135,10 +135,12 @@ pub mod engine {
         /// reported beside the completion, never as a halt.
         pub completed: bool,
         /// The `TypeError` the oracle harness's post-run `String(result)`
-        /// would throw for this completion value (a Symbol, a
-        /// null-prototype object), carried through from the engine so a
-        /// host that wants the harness's verdict can apply it. The
-        /// managed lifecycle does not: the crank completed.
+        /// would throw for this completion value as the differential
+        /// harness models it (a Symbol, or an object whose prototype is
+        /// `null` — a prototype-link test, not a `ToPrimitive`
+        /// evaluation; see `RunOutcome::coercion_error`), carried through
+        /// from the engine so a host that wants the harness's verdict can
+        /// apply it. The managed lifecycle does not: the crank completed.
         pub coercion_error: Option<String>,
         /// Computrons, the meter's release-versioned count.
         pub computrons: u64,
