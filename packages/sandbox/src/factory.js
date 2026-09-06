@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 
 import {
   MountHandleInterface,
@@ -17,12 +17,6 @@ import {
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
 import { resolveLimits } from './limits.js';
-
-const AsyncWriterInterface = M.interface('SandboxWriter', {
-  next: M.call().optional(M.any()).returns(M.promise()),
-  return: M.call().optional(M.any()).returns(M.promise()),
-  throw: M.call().optional(M.any()).returns(M.promise()),
-});
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 
@@ -232,25 +226,31 @@ const raceDelay = async (work, ms, makeDelay = delay) => {
 harden(raceDelay);
 
 /**
- * Wrap driver-side stdin write closures as a `WriterRef`-shaped exo.
+ * Wrap driver-side stdin write closures as the `PassableBytesWriter` that
+ * `ProcessHandle.stdin()` hands out: the same exo-stream plumbing as the
+ * stdout and stderr readers, driven by `iterateBytesWriter` with the bytes
+ * crossing CapTP base64-encoded. A writer that took chunks directly could not
+ * be used at all: a mutable `Uint8Array` is not passable, so its own guard
+ * refused every write.
+ *
  * The driver exposes `writeStdin(chunk)` / `closeStdin()` instead of
  * the raw Node stream so the DriverProcess surface remains hardenable
- * (Node streams cannot be deep-frozen).
+ * (Node streams cannot be deep-frozen). A process spawned without a
+ * writable stdin rejects every write: the pump acknowledges a chunk its sink
+ * accepted whatever the sink answers, so reporting `done` there would let
+ * the bytes vanish while the caller believes they were delivered.
  *
  * @param {(chunk: Uint8Array) => Promise<void>} [write]
  * @param {() => Promise<void>} [close]
- * @returns {object}
  */
-const makeWriterExoFromClosures = (write, close) => {
-  return makeExo(
-    'SandboxWriter',
-    AsyncWriterInterface,
-    /** @type {any} */ ({
-      /** @param {Uint8Array} [chunk] */
+const makeWriterExoFromClosures = (write, close) =>
+  bytesWriterFromIterator(
+    harden({
+      /** @param {Uint8Array} chunk */
       async next(chunk) {
         await null;
-        if (write === undefined || chunk === undefined) {
-          return harden({ done: true, value: undefined });
+        if (write === undefined) {
+          throw makeError(X`sandbox process stdin is not writable`);
         }
         await write(chunk);
         return harden({ done: false, value: undefined });
@@ -260,13 +260,8 @@ const makeWriterExoFromClosures = (write, close) => {
         if (close !== undefined) await close();
         return harden({ done: true, value: undefined });
       },
-      async throw(error) {
-        await null;
-        throw error;
-      },
     }),
   );
-};
 harden(makeWriterExoFromClosures);
 
 /**

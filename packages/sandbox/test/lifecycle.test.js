@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { makeCancelKit } from '@endo/cancel';
 import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeSandboxFactory } from '../src/factory.js';
@@ -75,7 +76,7 @@ const makeByteSource = () => {
 
 /**
  * @typedef {(ms: number) => { promise: Promise<void>, cancel: () => void }} MakeDelay
- * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any, makeDelay?: MakeDelay }} [options]
+ * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any, makeDelay?: MakeDelay, stdin?: { write: (chunk: Uint8Array) => Promise<void>, close: () => Promise<void> } }} [options]
  */
 const makeDriverFixture = (options = {}) => {
   const stdout = makeByteSource();
@@ -118,6 +119,11 @@ const makeDriverFixture = (options = {}) => {
       return harden({
         pid: 1234,
         stdin: null,
+        // The real drivers expose stdin as closures rather than a stream,
+        // and only when the spawn kept it open.
+        ...(options.stdin
+          ? { writeStdin: options.stdin.write, closeStdin: options.stdin.close }
+          : {}),
         stdout: stdout.source,
         stderr: stderr.source,
         wait: () => exit.promise,
@@ -211,6 +217,57 @@ test('dispose cancels a pending admission and reaps a late arrival', async t => 
   const status = await fixture.exitStatus();
   t.deepEqual(status, { code: null, signal: 'SIGKILL' });
   t.deepEqual(fixture.signals(), ['SIGKILL']);
+});
+
+test('stdin is an exo-stream writer driven with iterateBytesWriter', async t => {
+  t.timeout(2000);
+  /** @type {string[]} */
+  const written = [];
+  let closes = 0;
+  const fixture = makeDriverFixture({
+    stdin: {
+      write: async chunk => {
+        written.push(new TextDecoder().decode(chunk));
+      },
+      close: async () => {
+        closes += 1;
+      },
+    },
+  });
+  const handle = await makeHandle(fixture);
+  const proc = await E(handle).spawn(harden(['/bin/cat']));
+  // The bytes cross as base64 over the exo-stream protocol, so a caller in
+  // another vat can feed the process; a raw Uint8Array is not passable.
+  const writer = iterateBytesWriter(E(proc).stdin(), { buffer: 0 });
+  t.deepEqual(await writer.next(new TextEncoder().encode('ping-')), {
+    done: false,
+    value: undefined,
+  });
+  await writer.next(new TextEncoder().encode('pong'));
+  await writer.return();
+  t.deepEqual(written, ['ping-', 'pong']);
+  t.is(closes, 1);
+  fixture.stdout.end();
+  fixture.stderr.end();
+  fixture.finish();
+  t.deepEqual(await E(proc).wait(), { code: 0, signal: null });
+});
+
+test('a process spawned without a writable stdin rejects every write', async t => {
+  t.timeout(2000);
+  const fixture = makeDriverFixture();
+  const handle = await makeHandle(fixture);
+  const proc = await E(handle).spawn(harden(['/bin/true']));
+  const writer = iterateBytesWriter(E(proc).stdin(), { buffer: 0 });
+  // Rejected, not silently dropped: the caller must learn its bytes went
+  // nowhere.
+  await t.throwsAsync(() => writer.next(new TextEncoder().encode('x')), {
+    message: /stdin is not writable/,
+  });
+  fixture.stdout.end();
+  fixture.stderr.end();
+  fixture.finish();
+  t.deepEqual(await E(proc).wait(), { code: 0, signal: null });
 });
 
 test('termination after admission resolves still rejects unsettled spawn', async t => {

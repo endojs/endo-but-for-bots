@@ -8,7 +8,10 @@
  */
 
 import type { ERef, FarRef } from '@endo/eventual-send';
-import type { PassableBytesReader } from '@endo/exo-stream';
+import type {
+  PassableBytesReader,
+  PassableBytesWriter,
+} from '@endo/exo-stream';
 
 // ---------------------------------------------------------------------------
 // Network policy
@@ -253,7 +256,7 @@ export type SliceSpec = {
 
 /** Reader / writer references — Endo's existing stdio plumbing. */
 export type ReaderRef = ERef<PassableBytesReader>;
-export type WriterRef = ERef<unknown>;
+export type WriterRef = ERef<PassableBytesWriter>;
 
 /**
  * Per-spawn options passed to `SandboxHandle.spawn()`.
