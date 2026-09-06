@@ -15,6 +15,7 @@ import { parseLocator } from '@endo/daemon/locator.js';
 
 /** The parent's pet-store directory holding one entry per live subagent. */
 export const SUBAGENT_DIRECTORY = 'subagents';
+harden(SUBAGENT_DIRECTORY);
 
 /**
  * Infix that makes a subagent's names in the factory host derivable from its
@@ -32,11 +33,15 @@ export const SUBAGENT_DIRECTORY = 'subagents';
  * and the names `.` and `..`), and `agentNamePattern` bars it from a name.
  */
 export const SUBAGENT_INFIX = '.sub.';
+harden(SUBAGENT_INFIX);
 
 /** Suffixes appended to an agent's name for the formulas it owns. */
 export const DRIVER_SUFFIX = '-driver';
+harden(DRIVER_SUFFIX);
 export const SPAWNER_SUFFIX = '-spawner';
+harden(SPAWNER_SUFFIX);
 export const HANDLE_SUFFIX = '-handle';
+harden(HANDLE_SUFFIX);
 
 /**
  * Endings a subagent name may not have.
@@ -75,6 +80,7 @@ export const reservedSubagentSuffixes = harden([
  * a name mid-build.
  */
 export const agentNamePattern = /^[a-z][a-z0-9-]{0,62}$/;
+harden(agentNamePattern);
 
 /**
  * Assert the shape shared by every agent name, root or subagent.
