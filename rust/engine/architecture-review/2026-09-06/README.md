@@ -12,6 +12,19 @@ Every line number and quotation in this directory refers to that commit.
 Read a citation against `git show 97d8de25:<path>` rather than against the
 current tree, which has moved on.
 
+**Revised 2026-09-06 against
+[`f109e8f4`](https://github.com/endojs/endo-but-for-bots/commit/f109e8f4).**
+All 191 findings were re-verified against that commit: 10 are fixed, 11 are
+partially fixed, and 170 still stand; 117 had their line numbers move.
+The summary's [Revision history](ARCHITECTURE-REVIEW.md#revision-history)
+records the outcome, each affected finding carries a Status line, and
+Appendix A carries both the original and the refreshed location for every
+finding.
+The lens reports and region maps in this directory were **not** revised: they
+are the reviewers' original artifacts and describe `97d8de25` only, so treat a
+claim in them as current only if the summary's entry for that finding still
+stands.
+
 The review ran in three stages.
 Region readers each mapped one part of the engine (the 44,942-line
 `interp.rs` was split into sixteen regions) and recorded candidate findings.
