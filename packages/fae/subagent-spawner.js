@@ -55,6 +55,9 @@ export const make = async (powers, _context, { env } = {}) => {
     env?.SUBAGENT_MAX_COUNT,
     DEFAULT_MAX_SUBAGENTS,
   );
+  // The operator's standing prompt for the parent, inherited by every agent
+  // this spawner creates.
+  const systemPrompt = env?.SUBAGENT_SYSTEM_PROMPT || undefined;
 
   const driverSpecifier = new URL('driver.js', import.meta.url).href;
   const spawnerSpecifier = new URL('subagent-spawner.js', import.meta.url).href;
@@ -99,6 +102,7 @@ export const make = async (powers, _context, { env } = {}) => {
     depth,
     maxDepth,
     maxSubagents,
+    ...(systemPrompt ? { systemPrompt } : {}),
   });
 };
 harden(make);

@@ -89,6 +89,16 @@ Delegation is available to provider-backed sessions and to Fae agents.
 Closing the gap means building the session's tool set once, where the
 delegation registry lives, and handing the same set to both paths.
 
+### Prompts
+
+A subagent's standing prompt is its parent's: the operator prompt the root
+agent was created with (Floot's preset prompt, Fae's `createAgent`
+`systemPrompt`) reaches every level of the tree — a Fae spawner caplet carries
+it as `SUBAGENT_SYSTEM_PROMPT` — and the parent model's `systemPrompt` for the
+child is *appended* beneath it by `composeSubagentSystemPrompt`.
+A delegation is therefore extra context under the deployment's instructions,
+never a way out of them.
+
 ### Bounds
 
 | Bound | Default | Where |
