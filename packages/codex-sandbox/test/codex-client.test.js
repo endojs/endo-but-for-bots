@@ -14,6 +14,14 @@ const INITIALIZE_RESULT = harden({
   userAgent: 'codex-test',
 });
 
+// What app-server 0.152.0 answers to `account/read` with an API key
+// configured. `account` is null when signed out; `requiresOpenaiAuth` is false
+// only for a provider configured to bring its own credentials.
+const ACCOUNT_RESULT = harden({
+  account: { type: 'apiKey' },
+  requiresOpenaiAuth: true,
+});
+
 const makeQueue = () => {
   const values = [];
   const waiters = [];
@@ -52,6 +60,7 @@ const makeQueue = () => {
  *   turnIdValue?: any,
  *   turnStatus?: any,
  *   modelListResult?: any,
+ *   accountReadResult?: any,
  *   existingTurnIds?: string[],
  * }} [options]
  */
@@ -65,6 +74,7 @@ const makeFixture = ({
   turnIdValue,
   turnStatus = 'inProgress',
   modelListResult,
+  accountReadResult,
   existingTurnIds = [],
 } = {}) => {
   const queue = makeQueue();
@@ -87,6 +97,15 @@ const makeFixture = ({
     switch (message.method) {
       case 'initialize':
         push({ id: message.id, result: INITIALIZE_RESULT });
+        break;
+      case 'account/read':
+        push({
+          id: message.id,
+          result:
+            accountReadResult === undefined
+              ? ACCOUNT_RESULT
+              : accountReadResult,
+        });
         break;
       case 'thread/start':
         push({
@@ -275,8 +294,8 @@ test('initializes, persists a new thread, and streams normalized events', async 
   const events = await drain(reader);
   t.is(persisted, 'thread-new');
   t.deepEqual(
-    fixture.sent.slice(0, 3).map(message => message.method),
-    ['initialize', 'initialized', 'thread/start'],
+    fixture.sent.slice(0, 4).map(message => message.method),
+    ['initialize', 'initialized', 'account/read', 'thread/start'],
   );
   const turnStart = fixture.sent.find(
     message => message.method === 'turn/start',
@@ -294,6 +313,73 @@ test('initializes, persists a new thread, and streams normalized events', async 
   t.true(events.some(event => event.type === 'tool-result'));
   t.true(events.some(event => event.type === 'text-delta'));
   t.deepEqual(events.at(-1), { type: 'end', checkpoint: 'turn-1' });
+});
+
+test('a signed-out app-server fails the session before any thread exists', async t => {
+  // Verified against codex-cli 0.152.0: signed out, `initialize` and
+  // `thread/start` both succeed and the first turn dies on a 401 opening the
+  // model connection. `account/read` answers `{ account: null,
+  // requiresOpenaiAuth: true }` up front.
+  const fixture = makeFixture({
+    accountReadResult: { account: null, requiresOpenaiAuth: true },
+  });
+  await t.throwsAsync(() => fixture.client.send('hello'), {
+    message: /Codex is not authenticated/,
+  });
+  t.true(fixture.isClosed());
+  t.falsy(fixture.sent.find(message => message.method === 'thread/start'));
+  // Fail-closed: the credential lives in the sandbox image, so retrying the
+  // same session into the same absence would not help.
+  await t.throwsAsync(() => fixture.client.send('again'), {
+    message: /terminated/,
+  });
+});
+
+test('a provider that needs no OpenAI account is not mistaken for signed out', async t => {
+  const audit = [];
+  const fixture = makeFixture({
+    accountReadResult: { account: null, requiresOpenaiAuth: false },
+    clientOptions: {
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('hello');
+  t.truthy(fixture.sent.find(message => message.method === 'thread/start'));
+  t.is(
+    audit.find(entry => entry.kind === 'session-open')?.payload.account,
+    'none',
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('the session journal records the credential kind, never the credential', async t => {
+  const audit = [];
+  const fixture = makeFixture({
+    accountReadResult: {
+      account: { type: 'chatgpt', email: 'dev@example.com', planType: 'pro' },
+      requiresOpenaiAuth: true,
+    },
+    clientOptions: {
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('hello');
+  const opened = audit.find(entry => entry.kind === 'session-open');
+  t.is(opened?.payload.account, 'chatgpt');
+  t.false(JSON.stringify(opened?.payload).includes('dev@example.com'));
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('a malformed account status fails the session closed', async t => {
+  const fixture = makeFixture({
+    accountReadResult: { account: 'yes' },
+  });
+  await t.throwsAsync(() => fixture.client.send('hello'), {
+    message: /malformed account status/,
+  });
+  t.true(fixture.isClosed());
 });
 
 test('notifications arriving before turn/start response are replayed', async t => {
@@ -1437,6 +1523,8 @@ test('terminate surfaces transport teardown failure', async t => {
       send: async (/** @type {any} */ message) => {
         if (message.method === 'initialize') {
           queue.push({ id: message.id, result: INITIALIZE_RESULT });
+        } else if (message.method === 'account/read') {
+          queue.push({ id: message.id, result: ACCOUNT_RESULT });
         } else if (message.method === 'model/list') {
           queue.push({
             id: message.id,
@@ -1584,6 +1672,8 @@ test('ambiguous turn-start write failure poisons the session', async t => {
       send: async (/** @type {any} */ message) => {
         if (message.method === 'initialize') {
           queue.push({ id: message.id, result: INITIALIZE_RESULT });
+        } else if (message.method === 'account/read') {
+          queue.push({ id: message.id, result: ACCOUNT_RESULT });
         } else if (message.method === 'thread/resume') {
           queue.push({
             id: message.id,
@@ -1627,6 +1717,8 @@ test('interrupt during deferred turn start closes the ambiguous session', async 
         sent.push(message);
         if (message.method === 'initialize') {
           queue.push({ id: message.id, result: INITIALIZE_RESULT });
+        } else if (message.method === 'account/read') {
+          queue.push({ id: message.id, result: ACCOUNT_RESULT });
         } else if (message.method === 'thread/resume') {
           queue.push({
             id: message.id,
@@ -1674,6 +1766,8 @@ test('interrupt during thread startup is a terminating barrier', async t => {
         sent.push(message);
         if (message.method === 'initialize') {
           queue.push({ id: message.id, result: INITIALIZE_RESULT });
+        } else if (message.method === 'account/read') {
+          queue.push({ id: message.id, result: ACCOUNT_RESULT });
         }
       },
       close: async () => {

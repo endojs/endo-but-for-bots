@@ -1206,11 +1206,42 @@ export const makeCodexClient = ({
           }
           await sendMessage({ method: 'initialized' });
           initialized = true;
+          // A signed-out app-server accepts `initialize` and `thread/start`
+          // alike and fails only when the first turn opens its model
+          // connection: an opaque 401 in the middle of a turn Floot has
+          // already committed to. Ask first. `account/read` is answered
+          // locally, needs no experimental capability, and reports
+          // `requiresOpenaiAuth: false` only for a provider configured to
+          // bring its own credentials.
+          const accountResult = await request('account/read', {});
+          const account = accountResult?.account ?? null;
+          if (
+            typeof accountResult?.requiresOpenaiAuth !== 'boolean' ||
+            (account !== null &&
+              (typeof account !== 'object' || typeof account.type !== 'string'))
+          ) {
+            const failure = Error(
+              'Codex app-server returned a malformed account status',
+            );
+            failSession(failure);
+            throw failure;
+          }
+          if (account === null && accountResult.requiresOpenaiAuth) {
+            const failure = Error(
+              'Codex is not authenticated: the hosted runtime holds neither a ChatGPT login nor an API key. Provision credentials in the sandbox before starting a Codex session.',
+            );
+            failSession(failure);
+            throw failure;
+          }
           await audit('session-open', {
             approvalPolicy,
             sandbox: CODEX_SANDBOX_MODE,
             toolNetworkAccess: false,
             toolSetId: toolSetId || '',
+            // The kind of credential, never the credential: `apiKey`,
+            // `chatgpt`, `amazonBedrock`, or `none` for a provider that needs
+            // no OpenAI account.
+            account: account === null ? 'none' : `${account.type}`,
           });
         } catch (error) {
           failSession(error);
