@@ -87,6 +87,22 @@ export const startAppServerTransport = async ({
     )
   );
 
+  // The sandbox answers a process it was asked to kill by rejecting `wait`
+  // ("sandbox process cancelled") once its own reap has completed, so after a
+  // kill a rejection is the expected way to learn the process is gone, not a
+  // failure to reap it. Only a `wait` that never settles is. The reason is
+  // kept for diagnostics rather than dropped.
+  let reapNote = '';
+  const reaped = () =>
+    E(proc)
+      .wait()
+      .then(
+        () => undefined,
+        error => {
+          reapNote = error instanceof Error ? error.message : `${error}`;
+        },
+      );
+
   /** @type {Promise<void>} */
   let stderrDone = Promise.resolve();
   try {
@@ -158,11 +174,7 @@ export const startAppServerTransport = async ({
           if (killResult.status === 'rejected')
             failures.push(killResult.reason);
           try {
-            await withDeadline(
-              E(proc).wait(),
-              'process reap',
-              teardownTimeoutMs,
-            );
+            await withDeadline(reaped(), 'process reap', teardownTimeoutMs);
           } catch (error) {
             failures.push(error);
           }
@@ -188,13 +200,14 @@ export const startAppServerTransport = async ({
       send,
       close,
       wait: () => E(proc).wait(),
-      diagnostics: () => stderrTail,
+      diagnostics: () =>
+        reapNote === '' ? stderrTail : `${stderrTail}\n[process: ${reapNote}]`,
     });
   } catch (error) {
     const failures = [error];
     const cleanup = await Promise.allSettled([
       withDeadline(E(proc).kill(), 'kill', teardownTimeoutMs),
-      withDeadline(E(proc).wait(), 'process reap', teardownTimeoutMs),
+      withDeadline(reaped(), 'process reap', teardownTimeoutMs),
       withDeadline(stderrDone, 'stderr drain', teardownTimeoutMs),
     ]);
     for (const result of cleanup) {

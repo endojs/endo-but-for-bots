@@ -3,8 +3,10 @@ import '@endo/init';
 
 import test from 'ava';
 
+import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
+import { makeSandboxFactory } from '@endo/sandbox/factory.js';
 
 import { startAppServerTransport } from '../src/app-server-transport.js';
 
@@ -151,6 +153,80 @@ test('transport binds app-server stdio and owns process cleanup', async t => {
   await t.throwsAsync(transport.send({ id: 8 }), { message: /closed/ });
 });
 
+test('the transport speaks the stdin a real sandbox process hands out', async t => {
+  // The fixtures above imitate a process handle; this drives `@endo/sandbox`
+  // itself over a fake driver, so a change to the shape of its stdin writer
+  // — it was once an exo that no caller could pass bytes to — fails here.
+  /** @type {Uint8Array[]} */
+  const written = [];
+  let stdinClosed = 0;
+  /** @type {(status: any) => void} */
+  let resolveExit = () => {};
+  const exited = new Promise(resolve => {
+    resolveExit = resolve;
+  });
+  const driver = harden({
+    name: /** @type {const} */ ('bwrap'),
+    probe: async () =>
+      harden({
+        available: true,
+        details: harden({ lifecycle: harden({ available: true }) }),
+      }),
+    prepareSlice: async () => harden({}),
+    spawn: async () =>
+      harden({
+        pid: 4242,
+        stdin: null,
+        writeStdin: async chunk => {
+          written.push(chunk);
+        },
+        closeStdin: async () => {
+          stdinClosed += 1;
+        },
+        stdout: (async function* stdout() {
+          yield new TextEncoder().encode('{"id":1,"result":{}}\n');
+        })(),
+        stderr: (async function* stderr() {
+          yield* [];
+        })(),
+        wait: () => exited,
+        kill: async signal => {
+          resolveExit(
+            harden({ code: null, signal: String(signal ?? 'SIGTERM') }),
+          );
+        },
+      }),
+    teardown: async () => undefined,
+  });
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: harden({
+      provideScratchMount: async () => {
+        throw Error('no scratch in this test');
+      },
+      provideHostPath: async () => {
+        throw Error('no host paths in this test');
+      },
+    }),
+  });
+  const slice = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (slice),
+  });
+  await transport.send({ id: 1, method: 'initialize' });
+  t.deepEqual(
+    written.map(chunk => new TextDecoder().decode(chunk)),
+    ['{"id":1,"method":"initialize"}\n'],
+  );
+  const messages = [];
+  for await (const message of transport.messages) messages.push(message);
+  t.deepEqual(messages, [{ id: 1, result: {} }]);
+  await transport.close();
+  t.is(stdinClosed, 1);
+});
+
 test('transport denies all caller-supplied environment entries', async t => {
   for (const env of /** @type {Array<Record<string, string>>} */ ([
     { OPENAI_API_KEY: 'secret' },
@@ -231,13 +307,25 @@ test('concurrent close callers share the kill and reap barrier', async t => {
 });
 
 test('close attempts all teardown steps and preserves failure', async t => {
-  const fixture = makeFixture({ waitError: 'reap failed' });
+  const fixture = makeFixture({ killError: 'kill failed' });
   const transport = await startAppServerTransport({
     slice: /** @type {any} */ (fixture.slice),
   });
   await t.throwsAsync(transport.close(), { message: /teardown failed/ });
   await t.throwsAsync(transport.close(), { message: /teardown failed/ });
   t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
+});
+
+test('a killed process whose wait rejects has been reaped, not lost', async t => {
+  // `@endo/sandbox` reports a cancelled process by rejecting `wait` after its
+  // own reap; the reason is kept for diagnostics.
+  const fixture = makeFixture({ waitError: 'sandbox process cancelled' });
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+  });
+  await transport.close();
+  t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
+  t.regex(transport.diagnostics(), /sandbox process cancelled/);
 });
 
 test('close bounds a supervisor that never reports process reap', async t => {
@@ -271,16 +359,17 @@ test('partial construction reports cleanup failures with setup failure', async t
   const fixture = makeFixture({
     stdinError: 'no stdin',
     killError: 'kill failed',
-    waitError: 'reap failed',
+    waitError: 'sandbox process cancelled',
   });
   const error = await t.throwsAsync(
     startAppServerTransport({ slice: /** @type {any} */ (fixture.slice) }),
     { instanceOf: AggregateError, message: /setup and cleanup failed/ },
   );
   t.truthy(error);
+  // The rejected wait is the process being gone, not a cleanup failure.
   t.deepEqual(
     /** @type {AggregateError} */ (error).errors.map(reason => reason.message),
-    ['no stdin', 'kill failed', 'reap failed'],
+    ['no stdin', 'kill failed'],
   );
   t.deepEqual(fixture.counts(), { stdinReturns: 0, kills: 1, waits: 1 });
 });
