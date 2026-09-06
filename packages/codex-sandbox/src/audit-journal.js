@@ -298,9 +298,28 @@ export const makeAuditJournal = ({
     return recovering;
   };
 
+  // Every append, and every read, takes its turn on one chain. A reader that
+  // merely waited for the appends already queued could still interleave with
+  // one issued a moment later, and between that append's anchor write and its
+  // entry write the store shows a head one ahead of the entries: a legitimate
+  // append reported as a corrupt journal to an operator's health check.
+  /**
+   * @template T
+   * @param {() => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  const inChainOrder = operation => {
+    const result = writeChain.then(operation);
+    writeChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
   const writer = makeExo('AgentAuditWriter', AuditWriterInterface, {
     async append(kind, payload = {}) {
-      const operation = writeChain.then(async () => {
+      return inChainOrder(async () => {
         await recover();
         const lifecycle = RESERVED_LIFECYCLE_KINDS.includes(kind);
         if (!lifecycle && reservedLifecycleEntries > 0) {
@@ -348,11 +367,6 @@ export const makeAuditJournal = ({
         totalBytes += byteLength;
         return harden({ sequence: entry.sequence, hash: tail });
       });
-      writeChain = operation.then(
-        () => undefined,
-        () => undefined,
-      );
-      return operation;
     },
     help() {
       return 'Append capability-free security events to the durable audit journal.';
@@ -361,51 +375,53 @@ export const makeAuditJournal = ({
 
   const reader = makeExo('AgentAuditReader', AuditReaderInterface, {
     async entries(start = 0, limit = 1000) {
-      await writeChain;
-      await recover();
       (Number.isInteger(start) && start >= 0) || Fail`invalid audit page start`;
       (Number.isInteger(limit) && limit > 0 && limit <= 1000) ||
         Fail`invalid audit page limit`;
-      const loaded = [...(await readEntries())];
-      const verification = verifyAuditEntries(loaded, {
-        journalId,
-        sessionId,
-        maxEntries,
-        maxTotalBytes,
-        maxEntryBytes,
-      });
-      verification.ok || Fail`audit journal failed verification`;
-      const head = await readHead();
-      if (verification.sequence !== 0n || head !== undefined) {
-        assertHead(head, verification, loaded.at(-1));
-      }
-      return harden(loaded.slice(start, start + limit));
-    },
-    async verify() {
-      await writeChain;
-      await recover();
-      const loaded = [...(await readEntries())];
-      const verification = verifyAuditEntries(loaded, {
-        journalId,
-        sessionId,
-        maxEntries,
-        maxTotalBytes,
-        maxEntryBytes,
-      });
-      if (!verification.ok) return verification;
-      try {
+      return inChainOrder(async () => {
+        await recover();
+        const loaded = [...(await readEntries())];
+        const verification = verifyAuditEntries(loaded, {
+          journalId,
+          sessionId,
+          maxEntries,
+          maxTotalBytes,
+          maxEntryBytes,
+        });
+        verification.ok || Fail`audit journal failed verification`;
         const head = await readHead();
         if (verification.sequence !== 0n || head !== undefined) {
           assertHead(head, verification, loaded.at(-1));
         }
-        return verification;
-      } catch {
-        return harden({
-          ok: false,
-          sequence: verification.sequence,
-          previousHash: verification.previousHash,
+        return harden(loaded.slice(start, start + limit));
+      });
+    },
+    async verify() {
+      return inChainOrder(async () => {
+        await recover();
+        const loaded = [...(await readEntries())];
+        const verification = verifyAuditEntries(loaded, {
+          journalId,
+          sessionId,
+          maxEntries,
+          maxTotalBytes,
+          maxEntryBytes,
         });
-      }
+        if (!verification.ok) return verification;
+        try {
+          const head = await readHead();
+          if (verification.sequence !== 0n || head !== undefined) {
+            assertHead(head, verification, loaded.at(-1));
+          }
+          return verification;
+        } catch {
+          return harden({
+            ok: false,
+            sequence: verification.sequence,
+            previousHash: verification.previousHash,
+          });
+        }
+      });
     },
     help() {
       return 'Read and verify the durable, hash-chained agent audit journal.';

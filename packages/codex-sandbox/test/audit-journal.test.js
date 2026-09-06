@@ -60,6 +60,44 @@ test('audit journal serializes concurrent appends into a durable hash chain', as
   t.true((await reader.verify()).ok);
 });
 
+test('a reader queued ahead of an append never sees the append half-written', async t => {
+  const durable = [];
+  const heads = makeHeadStore();
+  let releaseEntry = () => {};
+  const entryGate = new Promise(resolve => {
+    releaseEntry = () => resolve(undefined);
+  });
+  let gated = false;
+  const { writer, reader } = makeAuditJournal({
+    ...heads,
+    journalId: 'journal-race',
+    sessionId: 'session-race',
+    readEntries: async () => durable,
+    appendEntry: async entry => {
+      // Hold the entry write after the anchor has landed: the window in which
+      // the store shows a head one ahead of the entries.
+      if (gated) await entryGate;
+      durable.push(entry);
+    },
+  });
+  await writer.append('session-open');
+  gated = true;
+  const verifying = reader.verify();
+  const listing = reader.entries();
+  const appending = writer.append('turn-requested');
+  await null;
+  await null;
+  releaseEntry();
+  await appending;
+  t.true(
+    (await verifying).ok,
+    'a legitimate append is not reported as corruption',
+  );
+  t.is((await listing).length, 1);
+  t.true((await reader.verify()).ok);
+  t.is((await reader.entries()).length, 2);
+});
+
 test('audit recovery detects interior mutation before another append', async t => {
   const durable = [];
   const heads = makeHeadStore();
