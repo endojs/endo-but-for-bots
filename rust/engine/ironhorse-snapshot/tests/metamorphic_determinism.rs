@@ -278,7 +278,14 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for ArrayBuffer transfer methods and fixed-buffer
         // accessors, with boot-layout signature generation 17. Boot-heap
         // content only; format unchanged.
-        "b822f2d6c69c21e6db96f7e97b0fe10f6187b1b2b155f65486bb6d6dcbf4747a",
+        // Re-pinned 2026-09-06 for a boot-heap CONTENT move in the other
+        // direction: the test262 `$262` host object and its
+        // `detachArrayBuffer` native are no longer boot-minted (a hardened
+        // realm must not expose a memory-detach primitive; architecture
+        // review F143) — the conformance harness installs them explicitly
+        // above `boot_slot_count`. Boot-layout signature generation 18;
+        // format unchanged.
+        "b7e4bdc3da463e5151fffd2d32e91da58c12077045e708aae3b67662a3eb4f95",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -467,7 +474,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for ArrayBuffer transfer methods and
         // fixed-buffer accessors, with boot generation 17. Schema and format
         // remain unchanged.
-        "75a40e1654433c36b66a8d4d5dffd5a425ed10df4d0b8d152c6cd445c353eb08",
+        // Re-pinned with the blob on 2026-09-06 for the removal of the
+        // test262 `$262` host object from the boot heap (harness-only now),
+        // with boot generation 18. Schema and format remain unchanged.
+        "a2fb5b877c8ac1487af3ebe77105657bc64d2974265c13ce8e6281c44fbddc82",
         "epoch-3 seal chain"
     );
 }

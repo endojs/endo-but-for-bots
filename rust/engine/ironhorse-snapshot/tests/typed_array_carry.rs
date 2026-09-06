@@ -151,10 +151,13 @@ fn resumed_data_view_reads_and_writes_like_uninterrupted() {
 fn resumed_detached_buffer_stays_detached() {
     // The detached brand (a satellite set) rides the buffer row's
     // flags: a resumed read through a view of a detached buffer throws
-    // exactly as the uninterrupted machine's does.
+    // exactly as the uninterrupted machine's does. The buffer is detached
+    // through `ArrayBuffer.prototype.transfer`, the production-reachable
+    // detach: the test262 `$262.detachArrayBuffer` host hook is no longer
+    // part of a default machine (architecture review F143).
     let crank1 = "var ta = 0; var t = 0; \
          ta = new Uint8Array(4); ta[0] = 9; \
-         $262.detachArrayBuffer(ta.buffer); t = 7; t";
+         ta.buffer.transfer(); t = 7; t";
     let obs = "var ta; var t; try { t = ta.subarray(0); t = 'no-throw'; } catch (e) { t = 'threw'; } t";
     assert_twin("ih-tarr-twin-detached", crank1, &[obs], &["threw"]);
 }

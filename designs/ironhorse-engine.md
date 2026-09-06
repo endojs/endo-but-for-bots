@@ -648,6 +648,13 @@ F057 frozen globals writable by bare name, F058 exotic objects
 unfreezable, F061 `with` and descriptor paths bypassing the
 `mop_*` seam) are pinned by
 `rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
+The test262 `$262` host object, whose `detachArrayBuffer` is a
+memory-detach primitive no hardened realm should carry (F143), is
+no longer part of the boot: a default machine has no `$262`, and the
+conformance harness installs it explicitly through
+`Interp::install_test262_host` (pinned by
+`rust/engine/ironhorse-vm/tests/test262_host_gate.rs`; the snapshot
+boot-layout generation was bumped for the boot-metadata change).
 One divergence stays open there: `ironhorse-compile` scopes a
 strict-mode *program's* top-level `var` as a frame local rather than
 a global-object property, so `'use strict'; var g = 1;` leaves
