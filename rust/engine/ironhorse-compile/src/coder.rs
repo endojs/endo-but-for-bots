@@ -906,12 +906,62 @@ impl<'a> Coder<'a> {
     }
 }
 
-/// The public entry: compile `source` as a Script to XS bytecode, or
-/// return the first parser/scoper early error. The returned bytes are
-/// the `codeBuffer` half of XS's `txScript` — exactly what
-/// `xs_oracle::run(source).bytecode` returns.
+/// Which ECMAScript goal a program source is compiled as. Both goals ride
+/// XS's eval-program frame shape (`mxProgramFlag | mxEvalFlag`: an `Eval`
+/// top scope whose lexicals are plain locals, the `EVAL_ENVIRONMENT`
+/// header); they differ in exactly one place, a **strict** program's
+/// top-level `var`/function declarations:
+///
+/// * [`Goal::Script`] — a top-level program. ECMA-262
+///   GlobalDeclarationInstantiation creates a global-object property for
+///   every top-level `var`/function declaration, strict or not (`xst`
+///   parses a script with `mxProgramFlag` alone and reaches the same
+///   result through `PROGRAM_ENVIRONMENT`), so a strict Script hoists them
+///   through `EVAL_ENVIRONMENT` exactly as a sloppy one does. A frozen
+///   `globalThis` then protects them: a strict `g = 2` is a `TypeError`.
+/// * [`Goal::Eval`] — the `eval` builtin's program (XS's own flags for it,
+///   `xsGlobal.c` `fx_eval`; also what the oracle shim runs every source
+///   as). A strict eval owns a fresh variable environment, so its `var`s
+///   are frame locals — the shape XS emits, byte for byte.
+///
+/// A sloppy program compiles identically under both goals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Goal {
+    /// A top-level Script (the default program entry, [`compile`]).
+    Script,
+    /// An `eval` program (the runtime source bridge, [`compile_with`]).
+    Eval,
+}
+
+/// Whether `source` is a program whose [`Goal::Script`] bytecode deviates
+/// from its [`Goal::Eval`] bytecode: a **strict** program declaring a
+/// top-level `var` or function. Decided by the scoper (the program scope's
+/// strict flag and declare tokens), so it is exact rather than a textual
+/// heuristic. `false` for a source that does not parse. The byte-identity
+/// harnesses use it to tell the one sanctioned Script/eval split from a
+/// genuine finding, and the differential runner to name the oracle's
+/// eval-goal framing when it fails an official strict-mode assertion that
+/// the Script goal satisfies.
+pub fn script_goal_deviates(source: &str) -> bool {
+    let tree = match crate::scoper::scope_program(source, false) {
+        Ok(tree) => tree,
+        Err(_) => return false,
+    };
+    let root = &tree.scopes[tree.root];
+    root.flags & crate::ast::flags::STRICT != 0
+        && root.declares.iter().any(|d| matches!(d.token, Token::Var | Token::Define))
+}
+
+/// The public entry: compile `source` as a top-level **Script**
+/// ([`Goal::Script`]) to XS bytecode, or return the first parser/scoper
+/// early error. The returned bytes are the `codeBuffer` half of XS's
+/// `txScript`. For a sloppy program — and for any strict program without
+/// top-level `var`/function declarations — this is exactly what
+/// `xs_oracle::run(source).bytecode` returns; the byte-identity harnesses
+/// compare the oracle against [`compile_with`], the eval-goal entry that
+/// matches the shim's framing on every accepted source.
 pub fn compile(source: &str) -> Result<Vec<u8>, crate::parser::ParseError> {
-    compile_with(source, false)
+    Ok(compile_atoms_goal(source, Goal::Script, false)?.0)
 }
 
 /// [`compile`], additionally returning the XS **symbols atom**
@@ -920,19 +970,36 @@ pub fn compile(source: &str) -> Result<Vec<u8>, crate::parser::ParseError> {
 /// stage-5 id contract). This is the entry the dual-run seam's `Ironhorse` arm
 /// calls so it no longer has to borrow the oracle's SYMB payload.
 pub fn compile_atoms(source: &str) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
-    compile_atoms_with(source, false)
+    compile_atoms_goal(source, Goal::Script, false)
 }
 
-/// `compile`, choosing the Script strictness (a bare `"use strict"`
-/// program is strict).
+/// Compile `source` as an **eval program** ([`Goal::Eval`]), choosing the
+/// caller's strictness (`strict` seeds the parser, as a direct eval inside
+/// strict code does; a bare `"use strict"` prologue makes the program
+/// strict either way). This is the entry the runtime `eval`/`Function`
+/// source bridge drives, and the one byte-identical to
+/// `xs_oracle::run(source).bytecode` on every accepted source — the oracle
+/// shim parses with the `eval` builtin's flags.
 pub fn compile_with(source: &str, strict: bool) -> Result<Vec<u8>, crate::parser::ParseError> {
-    Ok(compile_atoms_with(source, strict)?.0)
+    Ok(compile_atoms_goal(source, Goal::Eval, strict)?.0)
 }
 
 /// [`compile_with`], additionally returning the symbols atom (the
-/// atom-bearing counterpart of [`compile_atoms`]).
+/// atom-bearing, eval-goal counterpart of [`compile_atoms`]).
 pub fn compile_atoms_with(
     source: &str,
+    strict: bool,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    compile_atoms_goal(source, Goal::Eval, strict)
+}
+
+/// The goal-explicit program compile behind [`compile_atoms`] (Script) and
+/// [`compile_atoms_with`] (eval): parse `source` with the caller
+/// strictness `strict`, scope it for `goal`, and code it, returning
+/// `(bytecode, symbols)`.
+pub fn compile_atoms_goal(
+    source: &str,
+    goal: Goal,
     strict: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
     let mut parser = crate::parser::Parser::new(source, strict, false)?;
@@ -941,11 +1008,14 @@ pub fn compile_atoms_with(
     // mxEvalFlag`, so the program node carries `mxEvalFlag`. The scoper
     // reads it to build an `Eval` (not `Program`) top scope — an eval
     // program's lexicals are plain locals, whereas `fxScopeBound` marks
-    // every *program*-scope declaration `closure|useClosure`.
+    // every *program*-scope declaration `closure|useClosure`. Both goals
+    // share this frame shape; `Goal::Script` additionally tells the scoper
+    // and coder to hoist a *strict* program's `var`/function declarations
+    // through `EVAL_ENVIRONMENT` (see [`Goal`]).
     if let Item::Node(n) = &mut root {
         n.flags |= crate::ast::flags::EVAL;
     }
-    let tree = crate::scoper::run(&root)?;
+    let tree = crate::scoper::run_goal(&root, goal == Goal::Script)?;
     let mut coder = Coder::new(&tree);
     // Intern the program's symbols in lex order before coding so the atom
     // table's bucket lists match XS's.
@@ -1200,20 +1270,37 @@ impl Coder<'_> {
     /// `fxScopeCodingEval` for the program scope — the eval program
     /// header. Strict and sloppy differ sharply:
     ///
-    /// * **strict**: reserve `scopeCount` slots up front, then
+    /// * **strict eval**: reserve `scopeCount` slots up front, then
     ///   `fxScopeCodingBlock` gives every declaration its slot (`Private`
     ///   eval-closures are the function/class slice).
-    /// * **sloppy**: `var`/`Define` hoist first (each a `NEW_LOCAL` +
-    ///   `undefined`/`null` `VAR_LOCAL`), then `EVAL_ENVIRONMENT` resets
-    ///   the frame; the lexical (`let`/`const`) declarations then get
+    /// * **sloppy** (either goal) and **strict Script**: `var`/`Define`
+    ///   hoist first (each a `NEW_LOCAL` + `undefined`/`null` `VAR_LOCAL`),
+    ///   then `EVAL_ENVIRONMENT` moves them onto the global object and
+    ///   resets the frame; the lexical (`let`/`const`) declarations then get
     ///   their slots (and, in a direct `eval`, a `with` publish).
+    ///
+    /// XS takes the first branch for every strict program because the shape
+    /// it codes here is the `eval` builtin's. A strict top-level **Script**
+    /// (`ScopeTree::script_goal`) that declares a top-level `var`/function
+    /// takes the hoist branch instead: ECMA-262
+    /// GlobalDeclarationInstantiation makes those declarations
+    /// global-object properties, which is what `xst`'s `mxProgramFlag`-only
+    /// parse reaches through `PROGRAM_ENVIRONMENT`. The scoper has already
+    /// left them unresolved for the Script goal, so the body addresses them
+    /// on the symbol path (`GET_VARIABLE`/`SET_VARIABLE`). A strict Script
+    /// with nothing to hoist keeps XS's strict shape byte for byte, so the
+    /// deviation from the oracle's eval-goal bytes is confined to the one
+    /// case whose semantics differ.
     fn code_scope_eval(&mut self, node: &Node) {
         let scope = self.scope_of(node);
         let strict = self.tree.scopes[scope].flags & crate::ast::flags::STRICT != 0;
         let is_eval = self.tree.scopes[scope].flags & crate::scoper::SCOPE_EVAL != 0;
         let scope_count = *self.tree.scope_counts.get(&scope).unwrap_or(&0);
         let declares = self.declares_of(scope);
-        if strict {
+        let hoists_declarations =
+            declares.iter().any(|(_, t, _, _)| matches!(t, Token::Var | Token::Define));
+        let strict_eval = strict && !(self.tree.script_goal && hoists_declarations);
+        if strict_eval {
             if scope_count != 0 {
                 self.add_index(0, XS_CODE_RESERVE_1, scope_count);
                 self.scope_coding_block(scope);

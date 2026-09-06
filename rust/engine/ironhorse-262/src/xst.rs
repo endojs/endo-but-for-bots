@@ -637,6 +637,18 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     Verdict::RunSkip(
                         "oracle-xs-typedarray-sort-post-coercion-detach".into(),
                     )
+                } else if oracle_eval_frames_strict_script(run) {
+                    // The oracle shim compiles every source with the `eval`
+                    // builtin's flags, so a *strict* Script's top-level
+                    // `var`/function declarations are eval-local there rather
+                    // than the global-object properties ECMA-262
+                    // GlobalDeclarationInstantiation (and `xst`'s Script goal)
+                    // creates. An official strict-mode assertion observing that
+                    // property fails on the shim and passes on Ironhorse's
+                    // Script goal. Keep that exact framing gap from becoming a
+                    // false over-acceptance (README § "Script goal vs. the
+                    // oracle's eval framing").
+                    Verdict::RunSkip("oracle-xs-strict-script-eval-framing".into())
                 } else if let Some(skip) = oracle_unresolved_name_skip(run) {
                     // The oracle rejected the source only because it could not
                     // resolve a host intrinsic ironhorse has: the same
@@ -1043,6 +1055,24 @@ fn oracle_fails_const_assignment_test(run: &DualRun) -> bool {
         && run
             .source
             .contains("assignment target should obey `const` semantics.")
+}
+
+/// The oracle shim's eval-goal framing of a strict Script: the shim parses
+/// with `mxProgramFlag | mxEvalFlag` (the `eval` builtin's flags), under
+/// which XS keeps a *strict* program's top-level `var`/function
+/// declarations as frame locals, where ECMA-262 GlobalDeclarationInstantiation
+/// (and `xst`'s `mxProgramFlag`-only Script goal, which Ironhorse's Script
+/// goal follows) makes them global-object properties. Narrow on all three
+/// ingredients: the oracle ran the case to its official assertion and lost
+/// it (`Test262Error`), and the compiler itself says this source is a strict
+/// program with a top-level `var`/function declaration
+/// (`ironhorse_compile::script_goal_deviates`) — the exact class whose
+/// Script-goal bytes differ from the eval goal's. Any other oracle
+/// `Test262Error` stays a gating over-acceptance.
+fn oracle_eval_frames_strict_script(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && constructor_name(&run.oracle_error) == "Test262Error"
+        && ironhorse_compile::script_goal_deviates(&run.source)
 }
 
 /// The pinned XS `with`-environment PutValue defect exercised by the ES5
@@ -2702,6 +2732,57 @@ mod tests {
         assert!(!oracle_fails_const_assignment_test(&run));
         assert!(matches!(
             evaluate_positive(&cfg, &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_strict_script_eval_framing_is_a_precise_exclusion() {
+        // The strict variant of `language/statements/variable/S12.2_A11.js`
+        // in miniature: a strict Script's `var` must be a global-object
+        // property. The shim frames the source as a strict eval (a frame
+        // local), fails the assertion, and Ironhorse's Script goal passes it.
+        // (`dual_run` loads no harness, so the assertion error is inlined the
+        // way `harness/sta.js` defines it.)
+        let harness = "function Test262Error(m) { this.message = m; } \
+            Test262Error.prototype.toString = function () { return 'Test262Error: ' + this.message; }; ";
+        let body = "this['v'] = 'x'; if (v !== 'x') { throw new Test262Error('#2'); } var v;";
+        let source = format!("\"use strict\";\n{harness}{body}");
+        let run = dual_run(&source).expect("oracle machine");
+        assert_eq!(run.agreement, Agreement::IronhorseOnlyComplete, "{:?}", run.oracle_error);
+        assert!(oracle_eval_frames_strict_script(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-strict-script-eval-framing".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-xs-strict-script-eval-framing"
+            ),
+            crate::report::Category::Infrastructure
+        );
+
+        // The sloppy twin agrees on both engines: nothing to exclude.
+        let sloppy = dual_run(&format!("{harness}{body}")).expect("oracle machine");
+        assert!(!oracle_eval_frames_strict_script(&sloppy));
+        assert_eq!(evaluate_positive(&Config::default(), &sloppy, false), Verdict::Covered);
+
+        // A strict program with no top-level `var`/function declaration is not
+        // this class, whatever the oracle's Test262Error says.
+        let mut other = synthetic_ironhorse_only_complete(true, "Test262Error: #1");
+        other.source = "\"use strict\";\nlet v = 1; if (v !== 2) { throw new Test262Error('#1'); }".to_string();
+        assert!(!oracle_eval_frames_strict_script(&other));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &other, false),
+            Verdict::Fail(_)
+        ));
+        // And a non-assertion oracle error on the deviating class stays gating.
+        let mut wrong = synthetic_ironhorse_only_complete(true, "TypeError: boom");
+        wrong.source = "\"use strict\";\nvar v = 1;".to_string();
+        assert!(!oracle_eval_frames_strict_script(&wrong));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &wrong, false),
             Verdict::Fail(_)
         ));
     }

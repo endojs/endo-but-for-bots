@@ -276,6 +276,12 @@ pub struct AccessRecord {
 /// root scope index.
 #[derive(Clone, Debug)]
 pub struct ScopeTree {
+    /// Whether the program root was scoped as a top-level **Script** (see
+    /// [`run_goal`]). The coder reads it to pick the program header shape:
+    /// a strict Script hoists its `var`/function declarations through
+    /// `EVAL_ENVIRONMENT` like a sloppy program; a strict eval program
+    /// keeps them as frame locals.
+    pub script_goal: bool,
     pub scopes: Vec<Scope>,
     pub root: usize,
     pub accesses: Vec<AccessRecord>,
@@ -379,19 +385,40 @@ pub fn scope_module(source: &str) -> Result<ScopeTree, ParseError> {
     run(&root)
 }
 
-/// Run the two scoper passes over an already-parsed root node.
+/// Run the two scoper passes over an already-parsed root node, scoping a
+/// program root as XS's **eval goal** does (`fxParseScript(...,
+/// mxProgramFlag | mxEvalFlag)`, the `eval` builtin's flags): a strict
+/// program's top-level `var`/function declarations are frame locals. This
+/// is the shape the runtime `eval` bridge needs and the shape the oracle
+/// shim emits. For a top-level **Script**, use [`run_goal`] with
+/// `script_goal = true`.
 pub fn run(root: &Item) -> Result<ScopeTree, ParseError> {
+    run_goal(root, false)
+}
+
+/// [`run`], choosing how a strict program root scopes its `var`/function
+/// declarations. With `script_goal` set, the root is a **Script**
+/// (`xst`'s `fxParseScript(..., mxProgramFlag)`; ECMA-262
+/// GlobalDeclarationInstantiation): every top-level `var`/function
+/// declaration is a global-object property whether or not the program is
+/// strict, so the scoper leaves them unresolved (the symbol path) exactly
+/// as it does for a sloppy program, and the coder hoists them through
+/// `EVAL_ENVIRONMENT`. `let`/`const`/`class` stay lexical either way. Only
+/// the strict-program `var`/function case differs between the two goals;
+/// a sloppy program scopes identically under both.
+pub fn run_goal(root: &Item, script_goal: bool) -> Result<ScopeTree, ParseError> {
     let root_node = match root {
         Item::Node(n) => n.as_ref(),
         _ => return Err(err(1, "invalid root")),
     };
-    let mut s = Scoper::default();
+    let mut s = Scoper { script_goal, ..Scoper::default() };
     // fxParserHoist
     s.hoist_dispatch(root_node)?;
     // fxParserBind
     s.bind_dispatch(root_node)?;
     let root_scope = *s.node_scope.get(&node_ptr(root_node)).ok_or_else(|| err(root_node.line, "no root scope"))?;
     Ok(ScopeTree {
+        script_goal: s.script_goal,
         scopes: s.scopes,
         root: root_scope.0,
         accesses: s.accesses,
@@ -418,6 +445,10 @@ struct Scoper {
     /// Tree levels currently on the native stack (see [`TREE_DEPTH_LIMIT`]
     /// and [`Self::descend`]).
     depth: u32,
+    /// The program root is a top-level Script (see [`run_goal`]): its
+    /// `var`/function declarations hoist to the global object even when
+    /// the program is strict.
+    script_goal: bool,
     scopes: Vec<Scope>,
     /// `hoister->scope` / `binder->scope` — the current scope.
     scope: Option<usize>,
@@ -739,6 +770,19 @@ impl Scoper {
         self.scopes[si].declares.iter().find(|d| d.id == id).expect("declare id present")
     }
 
+    /// Whether the eval-token program scope `si` hoists its `var`/function
+    /// declarations out of the frame (to the global object, or a direct
+    /// eval's caller variable environment) rather than binding them as
+    /// frame locals. XS (`fxScopeHoisted` / `fxScopeLookup`, `XS_TOKEN_EVAL`)
+    /// hoists only when the program is sloppy — right for the eval goal,
+    /// whose strict form owns a fresh variable environment. A top-level
+    /// **Script** hoists regardless of strictness (ECMA-262
+    /// GlobalDeclarationInstantiation; `xst`'s `mxProgramFlag`-only parse),
+    /// so the Script goal takes the hoist path for strict programs too.
+    fn eval_scope_hoists_vars(&self, si: usize) -> bool {
+        self.scopes[si].flags & SCOPE_STRICT == 0 || self.script_goal
+    }
+
     /// `fxScopeEval` — poison a scope and every ancestor with `mxEvalFlag`.
     fn scope_eval(&mut self, mut si: Option<usize>) {
         while let Some(i) = si {
@@ -800,8 +844,11 @@ impl Scoper {
                 }
             }
         } else if tok == Token::Eval {
+            // XS subtracts the hoisted `var`/`Define` declares only for a
+            // sloppy eval program; a strict Script hoists them too.
+            let hoists = self.eval_scope_hoists_vars(si);
             let sc = &mut self.scopes[si];
-            if sc.flags & SCOPE_STRICT == 0 {
+            if hoists {
                 for d in &sc.declares {
                     if d.token == Token::Define || d.token == Token::Var {
                         sc.declare_count -= 1;
@@ -832,9 +879,12 @@ impl Scoper {
             Token::Eval => {
                 let mut found = self.scope_get_declare(si, symbol);
                 if let Some(id) = found {
-                    let strict = self.scopes[si].flags & SCOPE_STRICT != 0;
+                    // A hoisted `var`/`Define` (sloppy eval, or any Script)
+                    // is unresolved: the access takes the symbol path to
+                    // the global-object property `EVAL_ENVIRONMENT` creates.
+                    let hoists = self.eval_scope_hoists_vars(si);
                     let dtok = self.declare_ref(si, id).token;
-                    if !strict && (dtok == Token::Var || dtok == Token::Define) {
+                    if hoists && (dtok == Token::Var || dtok == Token::Define) {
                         found = None;
                     } else if closure_flag {
                         self.declare_mut(si, id).flags |= dflags::CLOSURE;

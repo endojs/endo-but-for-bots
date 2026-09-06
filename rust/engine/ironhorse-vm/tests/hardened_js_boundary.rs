@@ -135,6 +135,60 @@ fn an_undeclared_sloppy_assignment_does_not_mint_a_binding_on_a_sealed_global() 
     assert_eq!(r, "undefined:false");
 }
 
+// ---- F057, the *program* half: a strict Script's own declarations ------
+//
+// The tests above exercise a strict **function** writing a frozen global,
+// which the interpreter's assignment arm already handled. A strict top-level
+// **Script** was the gap: its `var`/function declarations were frame locals,
+// so `globalThis.g` did not see them and a frozen global could not protect
+// them. ECMA-262 GlobalDeclarationInstantiation makes them global-object
+// properties whether or not the Script is strict.
+//
+// The pinned XS oracle cannot certify this half: the `xs-oracle` shim compiles
+// every source with the `eval` builtin's flags, under which a strict program's
+// `var`s legitimately stay eval-local. These are therefore oracle-free, and
+// cross-checked against node driven through `vm.runInThisContext` (a faithful
+// Script goal; `runInNewContext` is not — its contextified global is a proxy
+// that reports `configurable: true` and throws on `Object.freeze(globalThis)`).
+
+/// A strict Script's top-level `var`/function is a property of the global.
+#[test]
+fn a_strict_scripts_top_level_declarations_are_global_properties() {
+    assert_eq!(eval("'use strict'; var g = 1; globalThis.g"), "1");
+    assert_eq!(eval("var g = 1; globalThis.g"), "1", "the sloppy twin agrees");
+    assert_eq!(eval("'use strict'; function f() {} typeof globalThis.f"), "function");
+    // One binding, not two: the bare name and the property are the same cell.
+    assert_eq!(eval("'use strict'; var g = 1; g = 2; globalThis.g"), "2");
+    assert_eq!(eval("'use strict'; var g = 1; globalThis.g = 3; g"), "3");
+}
+
+/// A frozen global protects them, at the top level of a strict Script too.
+#[test]
+fn a_frozen_global_blocks_a_strict_scripts_own_top_level_assignment() {
+    // `r` is lexical, so the report itself is not blocked by the freeze.
+    assert_eq!(
+        eval(
+            "'use strict'; var g = 1; let r; Object.freeze(globalThis);              try { g = 2; r = 'assigned'; }              catch (e) { r = e.name + ':' + g + ':' + globalThis.g; } r",
+        ),
+        "TypeError:1:1",
+    );
+    // The sloppy control: the write fails silently and the value holds.
+    assert_eq!(eval("var g = 1; Object.freeze(globalThis); g = 2; g"), "1");
+}
+
+/// `let`/`const`/`class` are not global properties, and a frozen global does
+/// not block writing one.
+#[test]
+fn a_strict_scripts_top_level_lexicals_stay_lexical() {
+    assert_eq!(
+        eval(
+            "'use strict'; let a = 1; const b = 2; class C {}              [typeof globalThis.a, typeof globalThis.b, typeof globalThis.C, a + b].join()",
+        ),
+        "undefined,undefined,undefined,3",
+    );
+    assert_eq!(eval("'use strict'; let a = 1; Object.freeze(globalThis); a = 2; a"), "2");
+}
+
 // ---- F058: exotic objects freeze and stay frozen -----------------------
 
 #[test]
