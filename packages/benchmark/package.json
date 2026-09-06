@@ -42,7 +42,7 @@
     "c8": "catalog:dev",
     "eshost-cli": "^9.0.0",
     "eslint": "catalog:dev",
-    "rollup": "^4.62.5",
+    "rollup": "^4.63.1",
     "typescript": "catalog:dev"
   },
   "files": [
