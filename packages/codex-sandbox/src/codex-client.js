@@ -8,7 +8,7 @@ import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
-import { toolFromItem } from './codex-protocol.js';
+import { renderToolResult, toolFromItem } from './codex-protocol.js';
 
 const CodexClientInterface = M.interface('CodexClient', {
   send: M.call(M.string())
@@ -956,7 +956,9 @@ export const makeCodexClient = ({
             type: 'tool-result',
             id: tool.id,
             name: tool.name,
-            result: brief(tool.result, maxToolResultChars),
+            // The journal above keeps the provider's envelope; the transcript
+            // gets the text the model saw.
+            result: brief(renderToolResult(tool.result), maxToolResultChars),
           });
         } else if (
           item?.type === 'agentMessage' &&

@@ -4,7 +4,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { Far } from '@endo/pass-style';
 
-import { runHostedTurn } from '../src/hosted-turn.js';
+import { UNREPORTED_TOOL_RESULT, runHostedTurn } from '../src/hosted-turn.js';
 
 test('hosted turns translate normalized lifecycle events', async t => {
   const output = [];
@@ -249,4 +249,37 @@ test('hosted turn abort is a failed turn', async t => {
   await t.throwsAsync(() => runHostedTurn({ client, text: 'go', writer }), {
     message: 'denied',
   });
+});
+
+test('a tool the backend never reported on is settled at turn end', async t => {
+  const output = [];
+  const client = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* events() {
+          yield { type: 'tool-call', id: '1', name: 'shell', args: '{}' };
+          yield { type: 'tool-call', id: '2', name: 'lookup', args: '{}' };
+          yield { type: 'tool-result', id: '2', name: 'lookup', result: 'ok' };
+          yield { type: 'text-delta', text: 'Done' };
+          yield { type: 'end' };
+        })(),
+      ),
+  });
+  const writer = harden({
+    setPhase: () => {},
+    delta: () => {},
+    toolCall: () => {},
+    toolResult: value => output.push(value),
+  });
+  const result = await runHostedTurn({ client, text: 'go', writer });
+  // The persisted record says what happened instead of carrying an empty
+  // result, and the live view receives the settlement it was waiting for.
+  t.deepEqual(result.toolCalls, [
+    { id: '1', name: 'shell', args: '{}', result: UNREPORTED_TOOL_RESULT },
+    { id: '2', name: 'lookup', args: '{}', result: 'ok' },
+  ]);
+  t.deepEqual(output, [
+    { id: '2', name: 'lookup', result: 'ok' },
+    { id: '1', name: 'shell', result: UNREPORTED_TOOL_RESULT },
+  ]);
 });
