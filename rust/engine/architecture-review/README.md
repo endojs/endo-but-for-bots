@@ -1,78 +1,42 @@
-# IronHorse architecture review: companion documents
+# IronHorse architecture reviews
 
-Supporting material for [ARCHITECTURE-REVIEW.md](../ARCHITECTURE-REVIEW.md),
-the architecture review of the IronHorse engine (`rust/engine`) conducted on
-2026-09-02 against commit 97d8de25.
+Point-in-time architecture reviews of the IronHorse engine (`rust/engine`).
 
-The review ran in three stages.
-Region readers each mapped one part of the engine (the 44,942-line
-`interp.rs` was split into sixteen regions) and recorded candidate findings.
-Lens reviewers then read the whole engine along one architectural concern
-each, verifying leads in code.
-Every lens finding was then checked by two independent verifiers (a code-truth
-refuter and a significance judge) with a tiebreaker on disagreement; only the
-survivors appear in the summary.
+Each review lives in its own directory named by the date it was published, and
+is pinned to the commit it was conducted against.
+A review is a **snapshot, not a living document**: it is not updated as the
+engine changes, so its findings and line numbers age.
+Read every citation against the commit named in the table below, not against
+the current tree:
 
-These companion files are the readers' and reviewers' own reports, kept
-verbatim as evidence.
-Line numbers refer to the reviewed commit.
+```sh
+git show 97d8de25:rust/engine/ironhorse-vm/src/interp.rs | sed -n '10938,10960p'
+```
 
-## Lens reports
+## Reviews
 
-- [api-boundaries-crate-layering](lenses/api-boundaries-crate-layering.md)
-- [compiler-pipeline](lenses/compiler-pipeline.md)
-- [design-drift-docs](lenses/design-drift-docs.md)
-- [determinism-consensus](lenses/determinism-consensus.md)
-- [error-model-exceptions](lenses/error-model-exceptions.md)
-- [gc-roots-heap-integrity](lenses/gc-roots-heap-integrity.md)
-- [metering-architecture](lenses/metering-architecture.md)
-- [modularity-maintainability](lenses/modularity-maintainability.md)
-- [performance-architecture](lenses/performance-architecture.md)
-- [reentrancy-control-flow](lenses/reentrancy-control-flow.md)
-- [robustness-untrusted-input](lenses/robustness-untrusted-input.md)
-- [security-sandbox](lenses/security-sandbox.md)
-- [snapshot-persistence-seam](lenses/snapshot-persistence-seam.md)
-- [verification-strategy](lenses/verification-strategy.md)
+| Published | Reviewed commit | Scope | Findings | Review |
+|---|---|---|---|---|
+| 2026-09-06 | [`97d8de25`](https://github.com/endojs/endo-but-for-bots/commit/97d8de25) | `rust/engine`, plus `rust/endo/ironhorse-store-sqlite` and `rust/endo/src/ironhorse_engine.rs` | 191 verified: 6 critical, 57 high, 73 medium, 55 low | [2026-09-06](2026-09-06/ARCHITECTURE-REVIEW.md) |
 
-## Region maps
+## What a review directory contains
 
-- [compile-coder-a](maps/compile-coder-a.md)
-- [compile-coder-b](maps/compile-coder-b.md)
-- [compile-lexer](maps/compile-lexer.md)
-- [compile-parser](maps/compile-parser.md)
-- [compile-scoper](maps/compile-scoper.md)
-- [docs-ci-process](maps/docs-ci-process.md)
-- [fuzz](maps/fuzz.md)
-- [integration-endo](maps/integration-endo.md)
-- [interp-01-constants-natives-halt](maps/interp-01-constants-natives-halt.md)
-- [interp-02-interp-struct-side-tables](maps/interp-02-interp-struct-side-tables.md)
-- [interp-03-boot-intrinsics](maps/interp-03-boot-intrinsics.md)
-- [interp-04-eval-relink-persistence-seam](maps/interp-04-eval-relink-persistence-seam.md)
-- [interp-05-meter-run-render](maps/interp-05-meter-run-render.md)
-- [interp-06-dispatch-loop](maps/interp-06-dispatch-loop.md)
-- [interp-07-functions-generators-async](maps/interp-07-functions-generators-async.md)
-- [interp-08-intl-date-promise-alloc](maps/interp-08-intl-date-promise-alloc.md)
-- [interp-09-regexp-surface-promise-jobs-fromasync](maps/interp-09-regexp-surface-promise-jobs-fromasync.md)
-- [interp-10-temporal](maps/interp-10-temporal.md)
-- [interp-11-reflect-math-json-strings](maps/interp-11-reflect-math-json-strings.md)
-- [interp-12-iterators-collections-typedarrays](maps/interp-12-iterators-collections-typedarrays.md)
-- [interp-13-property-model-mop-proxy](maps/interp-13-property-model-mop-proxy.md)
-- [interp-14-conversions-bigint](maps/interp-14-conversions-bigint.md)
-- [interp-15-inline-tests-bigint-limbs](maps/interp-15-inline-tests-bigint-limbs.md)
-- [interp-16-side-table-ref-pages](maps/interp-16-side-table-ref-pages.md)
-- [regexp-engine](maps/regexp-engine.md)
-- [snapshot-container-machine-ledger](maps/snapshot-container-machine-ledger.md)
-- [snapshot-image-a](maps/snapshot-image-a.md)
-- [snapshot-image-b](maps/snapshot-image-b.md)
-- [snapshot-store-file-suite](maps/snapshot-store-file-suite.md)
-- [snapshot-store](maps/snapshot-store.md)
-- [snapshot-tests](maps/snapshot-tests.md)
-- [store-seam-design-ledger](maps/store-seam-design-ledger.md)
-- [t262-harness-core](maps/t262-harness-core.md)
-- [t262-tooling-report](maps/t262-tooling-report.md)
-- [vm-compartment-module-intl](maps/vm-compartment-module-intl.md)
-- [vm-heap-gc](maps/vm-heap-gc.md)
-- [vm-meter-opcode-tables](maps/vm-meter-opcode-tables.md)
-- [vm-tests](maps/vm-tests.md)
-- [xs-oracle-ffi](maps/xs-oracle-ffi.md)
+| Path | Contents |
+|---|---|
+| `<date>/ARCHITECTURE-REVIEW.md` | The review: architecture as built, findings by theme, and a sequenced program of work. Start here. |
+| `<date>/README.md` | Index of that review's companion documents, and its method. |
+| `<date>/lenses/*.md` | One report per architectural concern, verbatim, with the reviewers' executable probes. |
+| `<date>/maps/*.md` | One map per region of the tree, verbatim, each recording what its reader did not read. |
 
+The summary is self-contained.
+The lens reports and region maps are kept as evidence: they carry the
+mechanism-level detail and the raw candidate findings, including leads that did
+not survive verification.
+
+## Adding a review
+
+Create `rust/engine/architecture-review/<YYYY-MM-DD>/` with the layout above,
+and add a row to the Reviews table naming the commit reviewed and the finding
+counts.
+Do not edit a previous review to reflect later changes to the engine; supersede
+it with a new one, so the record of what was true at each commit stays intact.
