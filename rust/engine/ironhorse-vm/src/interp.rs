@@ -14275,6 +14275,23 @@ impl Interp {
                         Some(k) => k,
                         None => return Halt::Unsupported(op.name()),
                     };
+                    // XS coerces the BASE first (`mxToInstance(mxStack + 1)`,
+                    // below the key): `null[k]` throws before `k`'s
+                    // `toString` ever runs, and `null[k] = rhs` throws after
+                    // the RHS (the compiler's `at_2` follows it) but before
+                    // the key coercion.
+                    let base = idx
+                        .and_then(|i| i.checked_sub(1))
+                        .map(|i| self.stack[i])
+                        .unwrap_or_else(Slot::undefined);
+                    if matches!(base.kind, Kind::Null | Kind::Undefined) {
+                        dispatch_halt!(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(base.kind)),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                    }
                     let key = if key.kind == Kind::Reference {
                         dispatch_result!(
                             self.to_primitive(code, key, true),
@@ -14552,6 +14569,14 @@ impl Interp {
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             self.push(iterable);
                         }
+                        // `for (x of null)` / `[...undefined]`: `fxGetIterator`'s
+                        // `mxToInstance` throws before any method lookup.
+                        _ if matches!(iterable.kind, Kind::Null | Kind::Undefined) => dispatch_halt!(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(iterable.kind)),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                         _ => {
                             // No iterator protocol at all: XS reaches the
                             // call of the absent `Symbol.iterator` method
@@ -17842,11 +17867,12 @@ impl Interp {
                     // Run to the first await/completion. An un-modeled surface in
                     // the body (a named skip) propagates out as the async call's
                     // own skip.
-                    if let Err(h) =
-                        self.step_async(code, inst, ResumeStatus::NoStatus, Slot::undefined(), true)
-                    {
-                        return h;
-                    }
+                    dispatch_result!(
+                        self.step_async(code, inst, ResumeStatus::NoStatus, Slot::undefined(), true),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     let promise = self.async_instances[&inst].result_promise;
                     let promise_slot = Slot::of(Kind::Reference, Payload::Reference(promise));
                     // Return the result promise to the caller, mirroring `END`'s
@@ -18273,15 +18299,19 @@ impl Interp {
                     }
                     self.stack.truncate(start);
                     if initialize_function.is_some() {
-                        if let Err(halt) =
-                            self.run_callback(code, initialize, Slot::undefined(), &[])
-                        {
-                            return halt;
-                        }
+                        let _ = dispatch_result!(
+                            self.run_callback(code, initialize, Slot::undefined(), &[]),
+                            pc,
+                            self,
+                            return_depth
+                        );
                     }
-                    if let Err(halt) = self.run_callback(code, execute, Slot::undefined(), &[]) {
-                        return halt;
-                    }
+                    let _ = dispatch_result!(
+                        self.run_callback(code, execute, Slot::undefined(), &[]),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     // `fxPrepareModule` returns a module instance to the host
                     // loader. The test262 execution boundary observes only the
                     // body completion/throw; an opaque undefined placeholder is
@@ -50020,12 +50050,17 @@ impl Interp {
         if property_key.kind == Kind::Symbol {
             return match property_key.value {
                 Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
-                _ => Err(self.catchable_type_error_msg("invalid symbol".into())),
+                // A `Kind::Symbol` slot always carries its descriptor
+                // reference; anything else is a port invariant break, not
+                // guest behavior.
+                _ => Err(Halt::Unsupported("to_property_id:symbol-without-descriptor")),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
-            _ => return Err(self.catchable_type_error_msg("invalid property key".into())),
+            // `to_property_key` returns a string or a symbol; anything else
+            // is a port invariant break.
+            _ => return Err(Halt::Unsupported("to_property_id:non-string-key")),
         };
         let id = self.intern_key(&name);
         // A runtime-computed key can be the first observation of a standard

@@ -108,27 +108,30 @@ fn raise_js_yields_a_halt_so_no_site_can_hand_expand_the_caught_arm() {
 #[test]
 fn every_raise_in_the_dispatch_loop_goes_through_dispatch_halt() {
     let body = dispatch_loop();
-    let raisers = [
-        "self.raise_js(",
-        "self.catchable_type_error(",
-        "self.catchable_type_error_msg(",
-        "self.catchable_range_error(",
-        "self.catchable_range_error_msg(",
-        "self.catchable_syntax_error(",
-        "self.catchable_syntax_error_msg(",
-    ];
+    // Every raise helper by name fragment, independent of the receiver
+    // spelling (`self.`, a reflowed `self\n    .`, a closure's `machine.`).
+    let raisers = ["raise_js(", "catchable_"];
     let mut bad = Vec::new();
     let mut seen = 0usize;
     for raiser in raisers {
         for at in occurrences(&body, raiser) {
             seen += 1;
-            let before = preceding_text(&body, at, 16);
+            // The text before the call with whitespace and the receiver
+            // removed must be the macro's opening.
+            let before: String = body[..at]
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            let before = before
+                .strip_suffix("self.")
+                .or_else(|| before.strip_suffix("machine."))
+                .unwrap_or(&before);
             if !before.ends_with("dispatch_halt!(") {
                 bad.push(format!(
                     "  loop line {}: `{}` preceded by `{}`",
                     line_of(&body, at),
                     raiser,
-                    before
+                    &before[before.len().saturating_sub(24)..]
                 ));
             }
         }
@@ -155,7 +158,16 @@ fn no_native_result_is_propagated_out_of_the_loop_by_hand() {
     // the loop goes through `dispatch_result!` / `dispatch_halt!`.
     let body = dispatch_loop();
     let mut bad = Vec::new();
-    for needle in ["=> return halt", "=> return h,", "=> return h\n", "Err(Halt::Resume("] {
+    // `Err(halt) => return halt`, `if let Err(h) = … { return h; }`, and a
+    // hand-expanded `Err(Halt::Resume(..))` arm are all the same class.
+    for needle in [
+        "=> return halt",
+        "=> return h,",
+        "=> return h\n",
+        "return halt;",
+        "return h;",
+        "Err(Halt::Resume(",
+    ] {
         for at in occurrences(&body, needle) {
             bad.push(format!("  loop line {}: `{}`", line_of(&body, at), needle.trim()));
         }
