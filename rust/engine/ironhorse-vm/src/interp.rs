@@ -47584,6 +47584,13 @@ impl Interp {
         receiver: Slot,
     ) -> Result<Slot, Halt> {
         if let Payload::Reference(f) = getter.value {
+            // A `.call`/`.apply` or promise-resolving function used as an
+            // accessor takes the abstract dispatcher, exactly as it does at
+            // the `.call`/`.apply` trampolines: `call_native_method` refuses
+            // those markers as "never reaches here".
+            if self.needs_abstract_call(f, self.method_of(f)) {
+                return self.invoke_value(code, getter, receiver, &[]);
+            }
             if let Some(m) = self.method_of(f) {
                 let base = self.stack.len();
                 self.push(receiver);
@@ -47618,6 +47625,11 @@ impl Interp {
         value: Slot,
     ) -> Result<(), Halt> {
         if let Payload::Reference(f) = setter.value {
+            // The getter's rule, for the same reason.
+            if self.needs_abstract_call(f, self.method_of(f)) {
+                self.invoke_value(code, setter, receiver, &[value])?;
+                return Ok(());
+            }
             if let Some(m) = self.method_of(f) {
                 let base = self.stack.len();
                 self.push(receiver);

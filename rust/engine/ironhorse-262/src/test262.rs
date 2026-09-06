@@ -187,7 +187,9 @@ pub fn classify(source: &str) -> Class {
         // landed, which names itself; only the engine's own limits (stack
         // geometry, meter, step ceiling) are the other honest skip.
         Agreement::OracleOnlyComplete => match &r.ironhorse_halt {
-            Halt::Throw { rendered: thrown, .. } => match crate::xst::classify_missing_global(&r.source, thrown) {
+            Halt::Throw {
+                rendered: thrown, ..
+            } => match crate::xst::classify_missing_global(&r.source, thrown) {
                 Some(crate::xst::MissingGlobal::Unlanded(name)) => {
                     Class::Skipped(format!("ironhorse-missing-global:{name}"))
                 }
