@@ -798,9 +798,12 @@ pub(crate) fn probe_global(name: &str) -> Result<GlobalBinding, ProbeFailure> {
     if let Some(&answer) = cache.lock().unwrap().get(name) {
         return answer;
     }
-    // Failures are cached alongside answers: a probe costs a full XS machine
-    // and an ironhorse run, it is charged to the per-case wall-clock budget,
-    // and re-running it cannot change its outcome within this process.
+    // The probe costs a full XS machine and an ironhorse run against the
+    // per-case wall-clock budget, so its outcome is cached — but only when it
+    // is a property of the engines. A machine that failed to start is
+    // transient infrastructure, and caching it would turn one bad start into
+    // an `oracle-machine-error` skip for that name for the rest of the
+    // process, hiding every later spurious ReferenceError on it.
     let answer = match crate::dual_run(&format!("typeof {name}")) {
         // `typeof` never throws on an unresolvable reference, so a probe an
         // engine did not complete says nothing about the binding — it is not
@@ -812,7 +815,9 @@ pub(crate) fn probe_global(name: &str) -> Result<GlobalBinding, ProbeFailure> {
         }),
         None => Err(ProbeFailure::MachineError),
     };
-    cache.lock().unwrap().insert(name.to_string(), answer);
+    if answer != Err(ProbeFailure::MachineError) {
+        cache.lock().unwrap().insert(name.to_string(), answer);
+    }
     answer
 }
 

@@ -75,6 +75,33 @@ fn call_and_apply_redispatch_a_callable_receiver() {
 }
 
 #[test]
+fn the_same_receivers_invoked_through_an_accessor() {
+    // The accessor paths (`invoke_getter`/`invoke_setter`) build the same
+    // native frame the trampolines did, so they need the same route: a
+    // `.call`/`.apply` or a promise resolving function installed as a getter
+    // or setter reached `call_native_method`'s refusals too.
+    // `Function.prototype.call` invoked as a getter receives the property's
+    // receiver as its `this`, which is not callable, so both engines throw a
+    // catchable TypeError — the answer, where the refusal was a halt.
+    agrees(
+        "var o = {}; Object.defineProperty(o, 'x', { get: Function.prototype.call }); \
+         var r; try { o.x } catch (e) { r = e instanceof TypeError } r",
+    );
+    agrees(
+        "var o = {}; Object.defineProperty(o, 'x', { get: Function.prototype.apply }); \
+         var r; try { o.x } catch (e) { r = e instanceof TypeError } r",
+    );
+    agrees(
+        "var o = {}; Object.defineProperty(o, 'x', { set: Function.prototype.call }); \
+         var r; try { o.x = 1 } catch (e) { r = e instanceof TypeError } r",
+    );
+    agrees(
+        "var g; new Promise(function (resolve) { g = resolve }); \
+         var o = {}; Object.defineProperty(o, 'x', { get: g }); typeof o.x",
+    );
+}
+
+#[test]
 fn promise_resolving_functions_and_executors_invoked_reflexively() {
     agrees("var r; new Promise(function (resolve) { r = resolve.call(undefined, 7) }); r");
     agrees("var r; new Promise(function (_, reject) { r = reject.apply(null, [8]) }); r");

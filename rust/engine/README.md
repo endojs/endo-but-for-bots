@@ -244,8 +244,10 @@ The answer decides whether the oracle gets to judge the run:
   where the oracle completed, a spurious `ReferenceError`, an abort-type
   divergence) is demoted to an `oracle-gate-off:<shape>` skip under
   `--no-oracle`, like the existing over-acceptance arm.
-  An engine-invariant halt and an unregistered declined label are not oracle
-  disagreements and fail regardless.
+  Three failures do not rest on it and gate regardless: an engine-invariant
+  halt, an unregistered declined label, and an uncaught `Test262Error`, which
+  is the case's own assertion rejecting ironhorse's value rather than a
+  disagreement with the oracle.
 
 The stage-scoped curated corpora under `ironhorse-262/corpora/` are the
 bootstrap (stage-1 arithmetic/logic/control-flow; stage-2 var/loop/object;
