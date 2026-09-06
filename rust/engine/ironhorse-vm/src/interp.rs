@@ -19031,10 +19031,52 @@ impl Interp {
         }
     }
 
-    /// Run a callback behind a native `mxTry` boundary. Promise executors,
-    /// reactions, and thenable jobs catch a guest throw in native code: the
-    /// callback activation is abandoned, the thrown value is retained, and
-    /// the surrounding promise is rejected instead of the machine halting.
+    /// Run guest code under a native `mxTry`. XS's promise executor call
+    /// (`fx_Promise`), `fxOnThenable`, the reaction jobs and the disposer
+    /// loop each run the guest inside their own `mxTry`/`mxCatch`, whose
+    /// `setjmp` sits BETWEEN the guest and any `try` live around the native
+    /// call: a throw the guest does not catch lands in the native catch and
+    /// never reaches the caller's handler. Model that by FENCING the
+    /// caller's handler chain for the duration of `body` — the chain the
+    /// guest can unwind into holds only the handlers it establishes itself
+    /// — and handing an escaped throw back as `Ok(Err(thrown))`. Without
+    /// the fence, `try { new Promise(function(){ throw 1 }) } catch (e) {}`
+    /// ran the catch (XS: the promise rejects, the catch does not run) and
+    /// left the promise pending forever (review F023).
+    ///
+    /// A real host halt (meter abort, unsupported, …) propagates. A
+    /// `Halt::Resume` cannot escape a fenced body: every handler the guest
+    /// can reach was established inside `body`, at or above the depth of the
+    /// nested dispatch that consumes it.
+    fn native_try<T>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<T, Halt>,
+    ) -> Result<Result<T, Slot>, Halt> {
+        let fenced_jumps = std::mem::take(&mut self.jumps);
+        let stack_base = self.stack.len();
+        let call_depth = self.call_stack.len();
+        let outcome = match body(self) {
+            Ok(value) => Ok(Ok(value)),
+            Err(Halt::Throw { value, .. }) => {
+                self.unwind_native_try(stack_base, call_depth, 0);
+                Ok(Err(value))
+            }
+            Err(Halt::Resume(_)) => Err(Halt::Unsupported("native-try:resume-escaped-fence")),
+            Err(halt) => Err(halt),
+        };
+        debug_assert!(
+            !matches!(outcome, Ok(_)) || self.jumps.is_empty(),
+            "guest code left handlers behind a native try"
+        );
+        self.jumps = fenced_jumps;
+        outcome
+    }
+
+    /// Run a callback behind a native `mxTry` boundary ([`Self::native_try`]).
+    /// Promise executors, thenable jobs and disposers catch a guest throw in
+    /// native code: the callback activation is abandoned, the thrown value is
+    /// returned as `Ok(Err(thrown))`, and the caller rejects with it instead
+    /// of the machine halting or a surrounding guest `try` observing it.
     fn run_callback_catching_throw(
         &mut self,
         code: &[u8],
@@ -19042,17 +19084,7 @@ impl Interp {
         this: Slot,
         args: &[Slot],
     ) -> Result<Result<Slot, Slot>, Halt> {
-        let stack_base = self.stack.len();
-        let call_depth = self.call_stack.len();
-        let jump_depth = self.jumps.len();
-        match self.run_callback(code, func, this, args) {
-            Ok(value) => Ok(Ok(value)),
-            Err(Halt::Throw { value, .. }) => {
-                self.unwind_native_try(stack_base, call_depth, jump_depth);
-                Ok(Err(value))
-            }
-            Err(halt) => Err(halt),
-        }
+        self.native_try(|machine| machine.run_callback(code, func, this, args))
     }
 
     /// Build a generator `{value, done}` result object (`fxNewGeneratorResult`):
@@ -26568,6 +26600,13 @@ impl Interp {
     /// Convert a re-entrant result into a catchable outcome: `Ok(Ok(v))` on
     /// success, `Ok(Err(thrown))` on a JS throw (to reject/close with), and a
     /// propagated `Err(halt)` for a real host halt (Unsupported/MeterAbort/…).
+    ///
+    /// This classifies AFTER the guest ran, so it is only correct under a
+    /// fence already in place: the fromAsync entry (`array_from_async`) and
+    /// the promise combinators take the caller's handler chain before their
+    /// inner steps, and every later step runs at the microtask drain with no
+    /// guest handler live. A site with a live caller handler must use
+    /// [`Self::native_try`], which fences first.
     fn from_async_try<T>(
         &mut self,
         r: Result<T, Halt>,
@@ -26599,8 +26638,8 @@ impl Interp {
         self.invoke_value(code, func, this, args)
     }
 
-    /// [`Self::call_any`] with a JS throw captured as `Ok(Err(thrown))` (a real
-    /// host halt still propagates).
+    /// [`Self::call_any`] under a native `mxTry` ([`Self::native_try`]): a JS
+    /// throw is captured as `Ok(Err(thrown))`, a real host halt propagates.
     fn call_any_catching_throw(
         &mut self,
         code: &[u8],
@@ -26608,11 +26647,7 @@ impl Interp {
         this: Slot,
         args: &[Slot],
     ) -> Result<Result<Slot, Slot>, Halt> {
-        let sb = self.stack.len();
-        let cd = self.call_stack.len();
-        let jd = self.jumps.len();
-        let r = self.call_any(code, func, this, args);
-        self.from_async_try(r, sb, cd, jd)
+        self.native_try(|machine| machine.call_any(code, func, this, args))
     }
 
     /// `GetV(value, key)` followed by the callable check used by the `Invoke`
