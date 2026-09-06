@@ -2060,7 +2060,14 @@ reconciliation is recorded here, with its lock.
   unwind restores the establishing frame's activation (`leave_call`
   per crossed frame, stack/locals/env cuts), and `Halt::Resume`
   propagates the handler's resume point out through the Rust-level
-  dispatch nesting to the loop that owns the handler's frame. The
+  dispatch nesting to the loop that owns the handler's frame. (That
+  "wholesale" claim was recorded here while 29 native sites still built
+  `Halt::Throw` inline, uncatchable and with `self.exception` unset —
+  the architecture review's F004/F005, a known-fixed item found open.
+  It now holds by construction: `Halt::Throw` carries the thrown value,
+  so an inline site has nothing to construct it from, and
+  `ironhorse-vm/tests/throw_construction_sites.rs` locks the three
+  places a `Throw` may be built.) The
   floor would now BLOCK correct cross-frame catches, so it is removed;
   `nested_run_unwind_floor.rs` re-pins the STRONGER property — the
   driver's catch catches and the program completes with the thrown

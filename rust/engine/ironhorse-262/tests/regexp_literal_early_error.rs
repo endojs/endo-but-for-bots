@@ -59,7 +59,7 @@ fn invalid_regexp_literal_does_not_decode_empty_bytecode() {
     // decoded past the end). A `Halt::Throw`, never a `Halt::Decode`.
     let run = dual_run("var r = /(a)\\2/; r").expect("oracle must start");
     match &run.ironhorse_halt {
-        ironhorse_vm::Halt::Throw(message) => assert_eq!(message, "SyntaxError", "{run:?}"),
+        ironhorse_vm::Halt::Throw { rendered, .. } => assert_eq!(rendered, "SyntaxError", "{run:?}"),
         other => panic!("expected a SyntaxError throw, got {other:?}: {run:?}"),
     }
 }

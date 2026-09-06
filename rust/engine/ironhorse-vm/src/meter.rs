@@ -279,10 +279,15 @@ impl Meter {
     /// to undo a speculatively-charged host-escape residual when a throw is
     /// actually caught by a native `mxTry` (a promise reaction handler / a
     /// thenable `then` that throws — XS never leaves the machine, so the
-    /// host-escape adjustment must be unwound).
+    /// host-escape adjustment must be unwound). Every `Halt::Throw` the engine
+    /// produces has paid that residual exactly once (`raise_js` and the loop's
+    /// inline unwinds are the only constructors), so the reversal is always
+    /// covered; the saturation is a floor against a future unpaired reversal
+    /// wrapping the index to `u64::MAX` rather than a case that occurs.
     #[inline]
     pub fn untick_raw(&mut self, n: u64) {
-        self.index -= n;
+        debug_assert!(self.index >= n, "untick_raw({n}) below the index {}", self.index);
+        self.index = self.index.saturating_sub(n);
     }
 
     /// Raw fixed-point index (`the->meterIndex`).

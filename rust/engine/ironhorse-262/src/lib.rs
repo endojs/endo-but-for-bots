@@ -242,7 +242,7 @@ impl DualRun {
             // whose value or computrons diverge is a divergence, not a
             // silent pass.
             Agreement::BothAbort => {
-                matches!(self.ironhorse_halt, Halt::Throw(_))
+                matches!(self.ironhorse_halt, Halt::Throw { .. })
                     && self.error_agrees
                     && self.oracle_computrons == self.ironhorse_computrons
             }
@@ -398,7 +398,7 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
             computrons: 0,
             dispatched: 0,
             meter_raw: 0,
-            halt: ironhorse_vm::Halt::Throw("SyntaxError".to_string()),
+            halt: ironhorse_vm::Halt::synthetic_throw("SyntaxError"),
         },
         _ => run_program_with_symbols(&bytecode, &symbols),
     };
@@ -445,7 +445,7 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
                 computrons: 0,
                 dispatched: 0,
                 meter_raw: 0,
-                halt: ironhorse_vm::Halt::Throw("SyntaxError".to_string()),
+                halt: ironhorse_vm::Halt::synthetic_throw("SyntaxError"),
             }
         } else {
             match interp.as_mut() {
@@ -521,7 +521,7 @@ fn build_dual_run(
     // ironhorse's thrown value string comes from a `Halt::Throw`; any other
     // halt yields no comparable error string.
     let ironhorse_error = match &ironhorse.halt {
-        Halt::Throw(s) => s.clone(),
+        Halt::Throw { rendered, .. } => rendered.clone(),
         _ => String::new(),
     };
     // The thrown value agrees only on a shared abort where ironhorse threw a
@@ -529,7 +529,7 @@ fn build_dual_run(
     // `String(exception)` against ironhorse's throw string.
     let error_agrees = !oracle.completed
         && !ironhorse.completed
-        && matches!(ironhorse.halt, Halt::Throw(_))
+        && matches!(ironhorse.halt, Halt::Throw { .. })
         && oracle.error == ironhorse_error;
 
     DualRun {
@@ -746,7 +746,7 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
 fn boot_gap_key(r: &DualRun) -> String {
     match &r.ironhorse_halt {
         Halt::Unsupported(op) => format!("boot:unsupported:{op}"),
-        Halt::Throw(msg) if msg.contains("undefined variable") => {
+        Halt::Throw { rendered, .. } if rendered.contains("undefined variable") => {
             // Historical stage-4 gap: before stage-7 child 1 the committed
             // bundle's first statement (`globalThis`) had no live global-object
             // binding and every bundle stopped here. That binding has since
@@ -754,7 +754,7 @@ fn boot_gap_key(r: &DualRun) -> String {
             // for that (now-closed) gap; a bundle no longer reaches it.
             "boot:no-globalThis-global-object-binding".to_string()
         }
-        Halt::Throw(msg) => format!("boot:throw:{msg}"),
+        Halt::Throw { rendered, .. } => format!("boot:throw:{rendered}"),
         other => format!("boot:halt:{other:?}"),
     }
 }
@@ -881,7 +881,7 @@ mod tests {
         let rejected = ironhorse_only_run("for (const {");
         assert!(matches!(
             rejected,
-            Halt::Decode(_) | Halt::Return | Halt::Throw(_)
+            Halt::Decode(_) | Halt::Return | Halt::Throw { .. }
         ));
     }
 
@@ -1073,10 +1073,10 @@ mod tests {
     // the halt kind; a non-`Throw` halt never agrees.
     fn abort_run(agreement: Agreement, ironhorse_halt: Halt) -> DualRun {
         let ironhorse_error = match &ironhorse_halt {
-            Halt::Throw(s) => s.clone(),
+            Halt::Throw { rendered, .. } => rendered.clone(),
             _ => String::new(),
         };
-        let error_agrees = matches!(ironhorse_halt, Halt::Throw(_));
+        let error_agrees = matches!(ironhorse_halt, Halt::Throw { .. });
         DualRun {
             source: String::new(),
             agreement,
@@ -1102,7 +1102,7 @@ mod tests {
     #[test]
     fn both_abort_bit_exact_only_when_endor_throws() {
         // A matching JS-level throw is a genuine shared abort.
-        let throwing = abort_run(Agreement::BothAbort, Halt::Throw("boom".into()));
+        let throwing = abort_run(Agreement::BothAbort, Halt::synthetic_throw("boom"));
         assert!(
             throwing.is_bit_exact(),
             "BothAbort with a Throw is bit-exact"
@@ -1130,7 +1130,7 @@ mod tests {
         // Observation 3: a shared `Throw` abort is bit-exact only when the
         // thrown value AND the computrons match, exactly like the
         // `BothComplete` arm — a matching halt kind alone is not enough.
-        let mut r = abort_run(Agreement::BothAbort, Halt::Throw("7".into()));
+        let mut r = abort_run(Agreement::BothAbort, Halt::synthetic_throw("7"));
         r.oracle_computrons = 6;
         r.ironhorse_computrons = 6;
         assert!(r.is_bit_exact(), "matching value + computrons is bit-exact");

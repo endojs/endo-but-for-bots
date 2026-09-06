@@ -114,7 +114,7 @@ pub mod engine {
                 format!("engine invariant violated: `{label}` (an Ironhorse defect, not an unlanded gap)")
             }
             Halt::Decode(e) => format!("bytecode decode error: {e}"),
-            Halt::Throw(e) => format!("uncaught throw: {e}"),
+            Halt::Throw { rendered, .. } => format!("uncaught throw: {rendered}"),
             Halt::StackOverflow(n) => format!("stack overflow ({n} slots over the limit)"),
             other => format!("halted: {other:?}"),
         }
