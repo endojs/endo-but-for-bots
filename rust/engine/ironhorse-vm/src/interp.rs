@@ -14395,7 +14395,7 @@ impl Interp {
                     };
                     let at = match self.resolve_at_key(key) {
                         Some(at) => at,
-                        None => return Halt::Unsupported(op.name()),
+                        None => return Halt::Unsupported("at:unresolved-key"),
                     };
                     if let Some(i) = idx {
                         self.stack[i] = at;
@@ -14698,7 +14698,7 @@ impl Interp {
                         // its zero-key enumerator setup is a later increment;
                         // an object receiver is the covered case.
                         Payload::Reference(i) => i,
-                        _ => return Halt::Unsupported(op.name()),
+                        _ => return Halt::Unsupported("for_in:non-object-receiver"),
                     };
                     let it = self.make_enumerator(inst);
                     self.push(it);
@@ -15516,7 +15516,7 @@ impl Interp {
                     let obj = self.pop();
                     let (id, index) = match key.value {
                         Payload::At(id, index) => (id, index),
-                        _ => return Halt::Unsupported(op.name()),
+                        _ => return Halt::EngineInvariant("delete_property_at:key"),
                     };
                     let numeric_index = (id == crate::value::XS_NO_ID).then_some(index);
                     // The integer-indexed exotic `[[Delete]]` (10.4.5.7): a
@@ -16664,8 +16664,9 @@ impl Interp {
                         Kind::Symbol => self.static_str.symbol,
                         Kind::BigInt => self.static_str.bigint,
                         // Closure/EnvReference/Uninitialized are never live
-                        // stack *values*.
-                        _ => return Halt::Unsupported(op.name()),
+                        // stack *values*: reaching one here is the engine's
+                        // own state being wrong, not an unported shape.
+                        _ => return Halt::EngineInvariant("typeof:non-value-kind"),
                     };
                     if let Some(s) = self.stack.last_mut() {
                         *s = Slot::of(Kind::String, Payload::String(off));
@@ -16982,14 +16983,14 @@ impl Interp {
                         Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
                             receiver
                         }
-                        _ => return Halt::Unsupported("get_super_at:reference"),
+                        _ => return Halt::EngineInvariant("get_super_at:reference"),
                     };
                     let id = match key.value {
                         Payload::At(id, index) if id == crate::value::XS_NO_ID => {
                             self.intern_key(&index.to_string())
                         }
                         Payload::At(id, _) => id,
-                        _ => return Halt::Unsupported("get_super_at:key"),
+                        _ => return Halt::EngineInvariant("get_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
                     // A computed super reference defers the null-base
@@ -17048,14 +17049,14 @@ impl Interp {
                         Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
                             receiver
                         }
-                        _ => return Halt::Unsupported("set_super_at:reference"),
+                        _ => return Halt::EngineInvariant("set_super_at:reference"),
                     };
                     let id = match key.value {
                         Payload::At(id, index) if id == crate::value::XS_NO_ID => {
                             self.intern_key(&index.to_string())
                         }
                         Payload::At(id, _) => id,
-                        _ => return Halt::Unsupported("set_super_at:key"),
+                        _ => return Halt::EngineInvariant("set_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
                     // A computed super reference defers the null-base
@@ -17137,7 +17138,7 @@ impl Interp {
                 // rather than pushing a bogus value.
                 XS_CODE_CURRENT => {
                     if self.cur_func.is_null() {
-                        return Halt::Unsupported(op.name());
+                        return Halt::Unsupported("current:program-level");
                     }
                     let f = self.cur_func;
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
@@ -17170,7 +17171,7 @@ impl Interp {
                                 *s = numeric;
                             }
                         }
-                        _ => return Halt::Unsupported(op.name()),
+                        _ => return Halt::Unsupported("to_numeric:unmodeled-kind"),
                     }
                     pc += size as usize;
                 }
@@ -17221,7 +17222,7 @@ impl Interp {
                     }
                     let top = match self.stack.last_mut() {
                         Some(s) => s,
-                        None => return Halt::Unsupported(op.name()),
+                        None => return Halt::EngineInvariant("increment:stack-underflow"),
                     };
                     match (top.kind, top.value) {
                         (Kind::Integer, Payload::Integer(v)) => {
@@ -17240,7 +17241,10 @@ impl Interp {
                         (Kind::Number, Payload::Number(n)) => {
                             top.value = Payload::Number(if inc { n + 1.0 } else { n - 1.0 });
                         }
-                        _ => return Halt::Unsupported(op.name()),
+                        // `ToNumeric` above yields an Integer, Number, or
+                        // BigInt (handled before); anything else is the
+                        // engine's own coercion result being malformed.
+                        _ => return Halt::EngineInvariant("increment:non-numeric-result"),
                     }
                     pc += size as usize;
                 }
@@ -17355,7 +17359,7 @@ impl Interp {
                     if self.proxies.contains_key(&objref) {
                         let id = match self.property_key_id(key, false) {
                             Some(id) => id,
-                            None => return Halt::Unsupported(op.name()),
+                            None => return Halt::EngineInvariant("in:proxy-key"),
                         };
                         let present =
                             dispatch_result!(self.proxy_has(code, objref, id), pc, self, return_depth);
@@ -17384,12 +17388,12 @@ impl Interp {
                         if !self.symbol_ids.contains_key(&name)
                             && self.default_keys.contains(name.as_str())
                         {
-                            return Halt::Unsupported(op.name());
+                            return Halt::Unsupported("in:unlinked-default-key");
                         }
                     }
                     let id = match self.property_key_id(key, false) {
                         Some(id) => id,
-                        None => return Halt::Unsupported(op.name()),
+                        None => return Halt::EngineInvariant("in:key"),
                     };
                     // Answer with the metered chain walk: XS meters one
                     // `XS_CODE_METERING` per prototype level the
@@ -18312,7 +18316,7 @@ impl Interp {
                 XS_CODE_TRANSFER | XS_CODE_TRANSFER_JSON => {
                     let count = match self.pop().value {
                         Payload::Integer(n) if n >= 3 => n as usize,
-                        _ => return Halt::Unsupported("module:transfer-shape"),
+                        _ => return Halt::EngineInvariant("module:transfer-shape"),
                     };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
@@ -18340,7 +18344,7 @@ impl Interp {
                     }
                     let count = match self.pop().value {
                         Payload::Integer(n) if n >= 2 => n as usize,
-                        _ => return Halt::Unsupported("module:envelope-shape"),
+                        _ => return Halt::EngineInvariant("module:envelope-shape"),
                     };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
@@ -18376,7 +18380,7 @@ impl Interp {
                         .unwrap_or(crate::value::SlotIndex::NULL);
                     for transfer in &transfers {
                         let Payload::At(local_id, _) = transfer.value else {
-                            return Halt::Unsupported("module:transfer-record");
+                            return Halt::EngineInvariant("module:transfer-record");
                         };
                         if local_id == crate::value::XS_NO_ID {
                             continue;
@@ -29201,6 +29205,28 @@ impl Interp {
         self.accessors.insert((inst, id), AccessorData { get, set });
     }
 
+    /// Must a `.call`/`.apply` receiver take the abstract-Call dispatcher
+    /// ([`Self::invoke_value`]) rather than the native-frame fast path? A
+    /// promise resolving function, finally thunk, or capability executor
+    /// (every function in `promise_functions`) carries a native-method marker
+    /// for reflection but its [[Call]] settles a captured promise, and
+    /// `Function.prototype.call`/`apply` themselves redispatch their
+    /// receiver; `call_native_method` refuses all of them as "never reaches
+    /// here", so `Function.prototype.apply.call({}, {}, [])` or
+    /// `resolve.call(undefined, 1)` must not be sent there. `invoke_value`
+    /// handles exactly these shapes.
+    fn needs_abstract_call(
+        &self,
+        target_ref: crate::value::SlotIndex,
+        method: Option<NativeMethod>,
+    ) -> bool {
+        self.promise_functions.contains_key(&target_ref)
+            || matches!(
+                method,
+                Some(NativeMethod::FunctionCall | NativeMethod::FunctionApply)
+            )
+    }
+
     /// Dispatch `native.call(thisArg, ...args)` or a bound receiver without
     /// entering the `.call` bytecode trampoline. Returns `false` for an
     /// ordinary user function, allowing its in-place trampoline to run.
@@ -29244,7 +29270,7 @@ impl Interp {
             self.meter
                 .tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
-        if is_bound || is_proxy {
+        if is_bound || is_proxy || self.needs_abstract_call(target_ref, method) {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
             return match result {
                 Ok(value) => {
@@ -29338,7 +29364,7 @@ impl Interp {
             self.meter
                 .tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
-        if is_bound || is_proxy {
+        if is_bound || is_proxy || self.needs_abstract_call(target_ref, method) {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
             return match result {
                 Ok(value) => {
@@ -35397,7 +35423,7 @@ impl Interp {
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 self.construct_value(code, arg0, &args, new_target)
             }
-            _ => Err(Halt::Unsupported("Reflect:unexpected")),
+            _ => Err(Halt::EngineInvariant("Reflect:unexpected")),
         }
     }
 
@@ -44695,7 +44721,7 @@ impl Interp {
             Kind::String => {
                 let text = match primitive.value {
                     Payload::String(off) => self.str_text(off),
-                    _ => return Err(Halt::Unsupported("to-bigint:string")),
+                    _ => return Err(Halt::EngineInvariant("to-bigint:string")),
                 };
                 // `StringToBigInt`: an integer body (decimal or `0x`/`0o`/`0b`,
                 // empty ⇒ `0n`) reduced to the low 64 bits; a non-integer body
@@ -46217,7 +46243,7 @@ impl Interp {
     fn property_at_get(&mut self, code: &[u8], obj: Slot, key: Slot) -> Result<Slot, Halt> {
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
-            _ => return Err(Halt::Unsupported("get_property_at")),
+            _ => return Err(Halt::EngineInvariant("get_property_at:key")),
         };
         // A primitive string indexed by number yields its one-unit character;
         // a named key boxes to `%String.prototype%` (methods / `.length`).
@@ -46335,7 +46361,7 @@ impl Interp {
         };
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
-            _ => return Err(Halt::Unsupported("set_property_at")),
+            _ => return Err(Halt::EngineInvariant("set_property_at:key")),
         };
         if self.proxies.contains_key(&inst) {
             // `p[k] = v` (or a computed define) routes through the proxy's
@@ -51360,7 +51386,7 @@ impl Interp {
             Kind::Boolean | Kind::Null | Kind::Undefined => Ok(Slot::number(to_number(&primitive))),
             Kind::BigInt => Ok(primitive),
             Kind::Symbol => Err(self.catchable_type_error()),
-            _ => Err(Halt::Unsupported("to_numeric")),
+            _ => Err(Halt::EngineInvariant("to_numeric:non-value-kind")),
         }
     }
 

@@ -23,9 +23,10 @@
 //!    function value — so the scan sees every construction;
 //! 4. no `Halt::Unsupported(` site sits under a value-stack or frame-depth
 //!    scrutinee (`stack.len()`, `checked_sub(`, `call_stack.len()`,
-//!    `return_depth`): an underflow guard is an engine invariant, whatever
-//!    label it carries, and the opcode-mnemonic form used to hide two of
-//!    them;
+//!    `return_depth`): an underflow guard is an engine
+//!    invariant, whatever label it carries, and the opcode-mnemonic form
+//!    used to hide three of them, so that form is now confined to the
+//!    dispatch loop's default arm;
 //! 5. no declined label carries an invariant-guard signature (`underflow`,
 //!    `no-frame`, `non-boundary-return`).
 //!
@@ -42,8 +43,9 @@ use ironhorse_vm::halt_labels::{DECLINED_HELPER_LABELS, DECLINED_LABELS, ENGINE_
 
 /// The non-literal argument forms a `Halt::Unsupported(…)` construction may
 /// take, whitespace-collapsed. Each names a family whose labels are pinned
-/// elsewhere: opcode mnemonics (`op.name()` / `other.name()`, the
-/// `XS_CODE_*` table in `opcode.rs`, accepted by `is_declined_label`), the
+/// elsewhere: opcode mnemonics (`other.name()` at the dispatch loop's default
+/// arm only, the `gxCodeNames` table in `opcode.rs`, accepted by
+/// `is_declined_label`), the
 /// two helpers above, and the regexp crate's own compile-time
 /// `CompileError::Unsupported` labels (`regexp_feature`), which that crate
 /// owns and which today it never constructs. `_` is the wildcard of a `match`
@@ -52,10 +54,15 @@ const DECLINED_DYNAMIC_FORMS: &[&str] = &[
     "_",
     "Self::array_generic_skip_reason(m)",
     "native_unsupported_name(native)",
-    "op.name()",
     "other.name()",
     "regexp_feature",
 ];
+
+/// The one site that may decline with a bare opcode mnemonic: the dispatch
+/// loop's default arm, reached only by an opcode with no handler at all.
+/// Every other refusal names its condition with a literal, so an operand or
+/// stack guard cannot borrow the opcode-mnemonic family to stay unclassified.
+const MNEMONIC_SITES: usize = 1;
 
 /// The non-literal forms a `Halt::EngineInvariant(…)` may take: only the
 /// pattern wildcard. An invariant guard names itself, always.
@@ -475,6 +482,45 @@ fn declined_labels_mirror_the_construction_sites() {
         unknown.is_empty(),
         "Halt::Unsupported constructed from unregistered dynamic forms {unknown:?}; \
          a label family must be enumerated in DECLINED_DYNAMIC_FORMS and pinned"
+    );
+    let mnemonic_sites = sites
+        .iter()
+        .filter(|s| s.dynamic.as_deref() == Some("other.name()"))
+        .count();
+    assert_eq!(
+        mnemonic_sites, MNEMONIC_SITES,
+        "only the dispatch loop's default arm may decline with a bare opcode mnemonic"
+    );
+}
+
+#[test]
+fn the_regexp_crate_constructs_no_declined_labels() {
+    // `build_regexp` passes `ironhorse_regexp::CompileError::Unsupported`'s
+    // label straight through as a declined halt (the `regexp_feature` form).
+    // That crate constructs none today; the day it does, its labels need a
+    // registry of their own (and `is_declined_label` must learn them), so
+    // pin the count at zero rather than let a new family in silently.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ironhorse-regexp/src");
+    let mut constructions = 0;
+    let mut files = Vec::new();
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("read src dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    walk(&src, &mut files);
+    for file in files {
+        let code = code_only(&fs::read_to_string(&file).expect("read source"));
+        constructions += marker_positions(&code, "CompileError::Unsupported(").len();
+    }
+    assert_eq!(
+        constructions, 0,
+        "ironhorse-regexp now constructs CompileError::Unsupported; register its labels"
     );
 }
 
