@@ -996,6 +996,14 @@ mod tests {
                 "is_quiescent no longer tests `{field}`; a documented conjunct was dropped"
             );
         }
+        // Polarity: the latch is asserted TRUE, never negated. A
+        // `!self.last_crank_completed` would satisfy the presence check
+        // above while admitting exactly the halted class; the
+        // behavioral persist-gate locks catch it, and so does this.
+        assert!(
+            !body.contains("!self.last_crank_completed"),
+            "is_quiescent negates the lifecycle latch"
+        );
         // Reverse: every field the predicate names — an emptiness test
         // or otherwise — is accounted for by the classification.
         let empty_rows: Vec<&str> = SideTable::ALL

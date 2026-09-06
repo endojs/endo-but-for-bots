@@ -104,7 +104,11 @@ pub mod engine {
     pub struct EvalOutcome {
         /// Completion value under ECMAScript `String()` semantics.
         pub result: String,
-        /// `true` when the program reached RETURN/END.
+        /// `true` when the program reached RETURN/END and the harness
+        /// could render its completion value. A Symbol or
+        /// null-prototype completion reads `false` with a synthetic
+        /// `TypeError` `Halt::Throw` even though the engine finished
+        /// the crank (see the rewind note in `eval`).
         pub completed: bool,
         /// Computrons, the meter's release-versioned count.
         pub computrons: u64,
@@ -588,6 +592,20 @@ pub mod engine {
                 // `checkpoint_every > 1` that discards the pending
                 // completed cranks too, the documented rewind-window
                 // trade the policy opted into.
+                //
+                // `completed` is the HARNESS verdict, not the engine's:
+                // a crank whose completion value is a Symbol or a
+                // null-prototype object is reported as a synthetic
+                // `TypeError` throw the guest never made (the oracle
+                // shim's post-run `String(result)`), although the engine
+                // finished the crank and `is_quiescent()` holds. This
+                // path rewinds that class too. Deterministic across
+                // replicas (every replica rewinds the same crank), so
+                // not a fork — but a legal program is refused here, the
+                // guest-visible half of architecture review F030, which
+                // stays open until the coercion moves out of the engine
+                // into the 262 runner and `run` reports its raw
+                // completion.
                 let halt = outcome.halt;
                 if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
                     return Err(MachineError::Store(format!(
