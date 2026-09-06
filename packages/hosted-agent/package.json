@@ -28,7 +28,7 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
-    "lint:types": "tsc --build tsconfig.composite.json",
+    "lint:types": "tsc",
     "test": "ava"
   },
   "dependencies": {
