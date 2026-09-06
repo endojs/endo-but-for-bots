@@ -36,6 +36,11 @@ pub struct MatchOutcome {
     pub names: Vec<i32>,
     /// Match meter in raw 16.16 fixed point: `steps * XS_REGEXP_METERING`.
     pub match_meter_raw: u64,
+    /// `true` when the caller's check callback refused further work
+    /// ([`match_regexp_checked`]): the match was abandoned mid-way,
+    /// `matched` is `false`, and `captures`/`names` are meaningless. The
+    /// unchecked [`match_regexp`] never sets it.
+    pub aborted: bool,
 }
 
 impl MatchOutcome {
@@ -88,10 +93,37 @@ fn match_character(chars: &[i32], base_at: usize, count: i32, character: i64) ->
     false
 }
 
+/// How many matcher steps run between two consultations of the check
+/// callback [`match_regexp_checked`] is given. A release constant: it
+/// decides only *where* an armed crank can be interrupted inside a match,
+/// never what the match meters, so it is not part of the cost table.
+pub const MATCH_CHECK_STRIDE: u64 = 1024;
+
 /// Match a compiled `program` against `subject` (the caller's UTF-8 or XS
 /// CESU-8 byte spelling, no trailing NUL needed) starting at byte offset
 /// `start`.
+///
+/// Unchecked: runs to completion however much backtracking the pattern
+/// does. A metered caller uses [`match_regexp_checked`].
 pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutcome {
+    match_regexp_checked(program, subject, start, None)
+}
+
+/// [`match_regexp`] with an interruption seam (architecture review
+/// F012): every [`MATCH_CHECK_STRIDE`] steps the matcher calls `check`
+/// with the raw meter it has accumulated so far, and a `false` return
+/// abandons the match with [`MatchOutcome::aborted`] set. This is what
+/// lets an armed computation meter halt a catastrophic backtracking
+/// match (`/(a+)+b/` over a long run of `a`) instead of waiting for it
+/// to finish. `None` is exactly [`match_regexp`]: the step stream, the
+/// meter, and the outcome are bit-identical, so unmetered differential
+/// runs are unaffected.
+pub fn match_regexp_checked(
+    program: &Program,
+    subject: &[u8],
+    start: i32,
+    mut check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> MatchOutcome {
     let code = &program.code;
     let stop = subject.len() as i32;
     let base_flags = code[0];
@@ -107,6 +139,9 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
     let mut states: Vec<State> = Vec::new();
 
     let mut meter: u64 = 0;
+    // Steps until the next consultation of `check` (unused unchecked).
+    let mut until_check: u64 = MATCH_CHECK_STRIDE;
+    let mut aborted = false;
     let mut result = false;
     let mut start = start;
 
@@ -129,6 +164,16 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                 let which = code[at];
                 let mut p = at + 1; // operand cursor (past the opcode)
                 meter += XS_REGEXP_METERING;
+                if let Some(check) = check.as_mut() {
+                    until_check -= 1;
+                    if until_check == 0 {
+                        until_check = MATCH_CHECK_STRIDE;
+                        if !check(meter) {
+                            aborted = true;
+                            break 'scan;
+                        }
+                    }
+                }
 
                 // Set to true by a step that decides to backtrack.
                 let mut pop = false;
@@ -525,7 +570,13 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
         }
     }
 
-    MatchOutcome { matched: result, captures, names, match_meter_raw: meter }
+    MatchOutcome {
+        matched: result && !aborted,
+        captures,
+        names,
+        match_meter_raw: meter,
+        aborted,
+    }
 }
 
 /// `(offset == boundary) ? 0 : \w-membership of the char before/at
