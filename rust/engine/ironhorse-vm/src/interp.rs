@@ -51114,7 +51114,11 @@ impl Interp {
                 // return an accessor's placeholder value and lose an abrupt
                 // completion from its getter.
                 let exotic = self.mop_get(code, inst, id, value)?;
-                if exotic.kind != Kind::Undefined {
+                // GetMethod: a `null` `@@toPrimitive` is absent exactly like an
+                // `undefined` one and falls through to OrdinaryToPrimitive;
+                // only a present non-nullish non-callable is the TypeError
+                // (`fxToPrimitive` tests both `mxIsUndefined` and `mxIsNull`).
+                if !matches!(exotic.kind, Kind::Undefined | Kind::Null) {
                     let hint = match hint {
                         PrimitiveHint::Default => b"default".as_slice(),
                         PrimitiveHint::Number => b"number".as_slice(),
