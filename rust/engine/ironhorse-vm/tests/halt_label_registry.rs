@@ -1,315 +1,82 @@
-//! The halt-label registry: the engine's oracle exemption is an explicit
-//! allowlist, not a channel the engine widens by adding a string.
+//! The halt-label registry's mirror: the allowlists in
+//! `ironhorse_vm::halt_labels` stay in step with the engine's construction
+//! sites.
 //!
-//! Both differential instruments (the fuzz targets' `differential_check*`
-//! bodies and the test262 runner's verdict arms) treat `Halt::Unsupported`
-//! as skip-eligible: a program that reaches it is uncovered ground, never a
-//! finding. That makes the set of `Unsupported` labels the set of executions
-//! the engine excuses itself from being judged on. Before this registry the
-//! same variant also carried the interpreter's own invariant guards — a
-//! value-stack underflow, a suspended generator with no saved frame, a
-//! resolving function the promise machinery did not recognize — so a guard
-//! misfiring on oracle-produced bytecode was indistinguishable from an honest
-//! coverage gap, and every comparator reported it as a pass.
+//! The exemption from the oracle is granted at the differential instruments'
+//! discard sites by `halt_labels::is_declined_label`, so an `Unsupported`
+//! halt whose label is not registered there is a finding, however it was
+//! constructed. That closes the channel. This test does the complementary
+//! job: it parses the engine-side crates' sources and pins, mechanically,
+//! that
 //!
-//! This test parses the crate's sources and pins, mechanically:
+//! 1. every literal `Halt::Unsupported("…")` label is in
+//!    `DECLINED_LABELS`, and every literal `Halt::EngineInvariant("…")`
+//!    label is in `ENGINE_INVARIANT_LABELS` — so a new label fails the build
+//!    until it is deliberately classified, and a stale registry entry is
+//!    removed rather than left as a silent exemption;
+//! 2. the two label-returning helpers the dynamic `Unsupported(…)` sites
+//!    route through (`native_unsupported_name`, `array_generic_skip_reason`)
+//!    return only the literals in `DECLINED_HELPER_LABELS`, and every other
+//!    non-literal argument is one of the enumerated [`DECLINED_DYNAMIC_FORMS`];
+//! 3. the variants are only ever spelled `Halt::Unsupported(` /
+//!    `Halt::EngineInvariant(` — never imported, aliased, or taken as a
+//!    function value — so the scan sees every construction;
+//! 4. no `Halt::Unsupported(` site sits under a value-stack or frame-depth
+//!    scrutinee (`stack.len()`, `checked_sub(`, `call_stack.len()`,
+//!    `return_depth`): an underflow guard is an engine invariant, whatever
+//!    label it carries, and the opcode-mnemonic form used to hide two of
+//!    them;
+//! 5. no declined label carries an invariant-guard signature (`underflow`,
+//!    `no-frame`, `non-boundary-return`).
 //!
-//! 1. Every literal `Halt::Unsupported("…")` label is in
-//!    [`DECLINED_LABELS`], and every literal `Halt::EngineInvariant("…")`
-//!    label is in [`ENGINE_INVARIANT_LABELS`], with no label in both. A new
-//!    label fails here until it is deliberately classified.
-//! 2. The label-returning helpers the dynamic `Unsupported(…)` sites route
-//!    through (`native_unsupported_name`, `array_generic_skip_reason`) return
-//!    only the literals in [`DECLINED_HELPER_LABELS`], so a declined label
-//!    cannot enter through a helper either; every other non-literal argument
-//!    is one of the enumerated [`DECLINED_DYNAMIC_FORMS`].
-//! 3. No declined label carries an invariant-guard signature (`underflow`,
-//!    `no-frame`, `non-boundary-return`): the mechanical reclassification by
-//!    suffix cannot quietly regress.
-//!
-//! The registry pins the *set*; whether a given guard is placed correctly is
-//! the reviewer's call at the time the entry is added, which is the point —
-//! classification becomes a visible edit to this file rather than a string
-//! in a `return`.
+//! The scan is lexer-aware: line and block comments are blanked, string and
+//! character literals are kept whole, and parentheses inside literals do not
+//! count, so a `//` inside a string or a construction after a block comment
+//! cannot hide a site.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Labels the engine may decline with: an unported opcode, built-in, or
-/// value shape, or a deliberate value-dependent refusal. Skip-eligible in
-/// every differential instrument. Sorted.
-const DECLINED_LABELS: &[&str] = &[
-    "Array.prototype.sort:oversized-array-like",
-    "Array.prototype.toReversed:oversized-array-like",
-    "Array.prototype.toSorted:oversized-array-like",
-    "Array.prototype.toSpliced:oversized-array-like",
-    "Array.prototype.with:oversized-array-like",
-    "BigInt.asN:result-too-large",
-    "Date.toJSON:toISOString-key",
-    "Date:method",
-    "Intl.NumberFormat:formatRange",
-    "Iterator.helper",
-    "Iterator.setter:missing-toStringTag",
-    "Iterator:missing-constructor",
-    "JSON.parse:lone-surrogate",
-    "JSON.parse:lone-surrogate-key",
-    "JSON.stringify:oversized-array",
-    "JSON.stringify:oversized-replacer",
-    "Number.toString:fractional-non-decimal-radix",
-    "Object-static:unexpected-proxy",
-    "Reflect:unexpected",
-    "RegExp.replace:oversized-result",
-    "String.raw:oversized-template",
-    "String.replace:non-string-receiver",
-    "Temporal.Now:method",
-    "Temporal.Plain:difference-calendar",
-    "Temporal.Plain:method",
-    "Temporal.ZonedDateTime.toLocaleString:needs-intl",
-    "Temporal.ZonedDateTime:method",
-    "TypedArray.prototype:readonly-operation",
-    "apply:non-user-function-receiver",
-    "array-buffer-concat:unsupported",
-    "array-buffer-resize:unsupported",
-    "array-species:symbol",
-    "async-generator:new-target",
-    "async:new-target",
-    "atomics:access-index",
-    "atomics:coerce",
-    "atomics:decode",
-    "atomics:encode",
-    "atomics:non-integer-typedarray",
-    "atomics:non-typedarray",
-    "atomics:op",
-    "atomics:wait-notify",
-    "bigint-shift:result-too-large",
-    "bind:new-bound-target",
-    "bind:non-user-function-receiver",
-    "call:non-user-function-receiver",
-    "callback:non-user-function",
-    "collection-constructor:weak-symbol-oracle-version",
-    "concat:isConcatSpreadable-symbol",
-    "concat:oversized-spreadable",
-    "concat:sparse-arg",
-    "copyWithin:oversized-array-like",
-    "data-view-get:bigint",
-    "data-view-set:bigint",
-    "defineProperty:accessor-descriptor",
-    "defineProperty:ambiguous-default-key",
-    "defineProperty:bad-symbol-key",
-    "defineProperty:exotic-object",
-    "defineProperty:index-key",
-    "defineProperty:non-boolean-attribute",
-    "defineProperty:non-object",
-    "defineProperty:non-object-descriptor",
-    "defineProperty:non-string-key",
-    "defineProperty:partial-descriptor",
-    "defineProperty:redefine",
-    "equal",
-    "eval:compiler-unimplemented",
-    "eval:no-compiler",
-    "eval:relink",
-    "eval:shadowed-call",
-    "exponentiation:result-too-large",
-    "fill:oversized-array-like",
-    "flat:oversized-array-like",
-    "flat:recursion-depth",
-    "for_of:weak-collection",
-    "generator:new-target",
-    "get_property_at",
-    "get_super:no-home",
-    "get_super_at:key",
-    "get_super_at:reference",
-    "join:oversized-array-like",
-    "join:oversized-result",
-    "join:reference-element",
-    "json:unmodeled",
-    "module:dynamic-import",
-    "module:envelope-shape",
-    "module:execute-body",
-    "module:execute-function",
-    "module:import-meta",
-    "module:static-linking",
-    "module:top-level-await",
-    "module:transfer-record",
-    "module:transfer-shape",
-    "native-call:Array:bad-length",
-    "native-call:ArrayBuffer:resizable",
-    "native-call:SharedArrayBuffer:growable",
-    "native-call:TypedArray:bad-length",
-    "number:unmodeled",
-    "ordinary-ownKeys:unknown-key",
-    "private:missing-brand",
-    "property-key:id-space-exhausted",
-    "proxy:construct-nonuser-target",
-    "reduce:concurrent-mutation",
-    "reduce:empty-no-initial",
-    "reverse:oversized-array-like",
-    "set_property_at",
-    "set_super:no-home",
-    "set_super_at:key",
-    "set_super_at:reference",
-    "shift:oversized-array-like",
-    "slice:oversized-array-like",
-    "splice:oversized-delete",
-    "splice:oversized-delete-tail",
-    "splice:oversized-move",
-    "string-method:unmodeled",
-    "super_at:key",
-    "super_at:no-home",
-    "super_at:primitive-receiver",
-    "template:raw",
-    "to-bigint:string",
-    "toString:reference-element",
-    "to_instance:primitive-box",
-    "to_numeric",
-    "to_string:symbol",
-    "typed-array-set:bigint",
-    "typed-array-species:symbol",
-    "unshift:oversized-array-like",
-];
-
-/// Labels of the interpreter's own invariant guards: the engine reporting
-/// that its state is wrong. Never skip-eligible. Sorted.
-const ENGINE_INVARIANT_LABELS: &[&str] = &[
-    "add:stack-underflow",
-    "apply:unexpected",
-    "arithmetic:stack-underflow",
-    "async-generator:no-active-request",
-    "async-generator:no-frame",
-    "async-generator:non-boundary-return",
-    "async-generator:not-an-async-generator",
-    "async-generator:yield-reaction-missing",
-    "async:bad-rejecting-fn",
-    "async:bad-resolving-fn",
-    "async:no-frame",
-    "async:non-boundary-return",
-    "async:non-resolver-as-resolver",
-    "await:no-async-instance",
-    "await:stack-underflow",
-    "bind:bound-callback",
-    "bitwise:stack-underflow",
-    "call:stack-underflow",
-    "call:unexpected",
-    "class:invalid-stack",
-    "comparison:stack-underflow",
-    "end:frame-underflow",
-    "eval:frame-underflow",
-    "function:missing-segment",
-    "generator:no-frame",
-    "generator:non-boundary-return",
-    "get_closure:no-cell",
-    "module:envelope-stack",
-    "module:transfer-stack",
-    "native-try:resume-escaped-fence",
-    "promise:resolving-fn-unexpected",
-    "promise:settle-non-promise",
-    "promise:unknown-finally-function",
-    "start_async:frame-underflow",
-    "start_async_generator:frame-underflow",
-    "start_generator:frame-underflow",
-    "store_arrow:frame",
-    "string-iterator:truncated-sequence",
-    "super_at:stack",
-    "template:object",
-    "to_property_id:non-string-key",
-    "to_property_id:symbol-without-descriptor",
-    "yield:no-generator",
-    "yield:stack-underflow",
-];
-
-/// The declined labels produced by the two label-returning helpers that the
-/// dynamic `Halt::Unsupported(…)` sites route through. Sorted.
-const DECLINED_HELPER_LABELS: &[&str] = &[
-    "array:non-dense-array",
-    "at:non-dense-array",
-    "filter:non-dense-array",
-    "find:non-dense-array",
-    "findLast:non-dense-array",
-    "forEach:non-dense-array",
-    "includes:non-dense-array",
-    "indexOf:non-dense-array",
-    "lastIndexOf:non-dense-array",
-    "map:non-dense-array",
-    "native-call:AggregateError",
-    "native-call:Array",
-    "native-call:ArrayBuffer",
-    "native-call:AsyncDisposableStack",
-    "native-call:AsyncFunction",
-    "native-call:AsyncGeneratorFunction",
-    "native-call:BigInt",
-    "native-call:Boolean",
-    "native-call:Collator",
-    "native-call:DataView",
-    "native-call:Date",
-    "native-call:DateTimeFormat",
-    "native-call:DisposableStack",
-    "native-call:Error",
-    "native-call:EvalError",
-    "native-call:Function",
-    "native-call:GeneratorFunction",
-    "native-call:Iterator",
-    "native-call:ListFormat",
-    "native-call:Locale",
-    "native-call:Map",
-    "native-call:Number",
-    "native-call:NumberFormat",
-    "native-call:Object",
-    "native-call:PluralRules",
-    "native-call:Promise",
-    "native-call:Proxy",
-    "native-call:RangeError",
-    "native-call:ReferenceError",
-    "native-call:RegExp",
-    "native-call:Segmenter",
-    "native-call:Set",
-    "native-call:SharedArrayBuffer",
-    "native-call:String",
-    "native-call:SuppressedError",
-    "native-call:Symbol",
-    "native-call:SyntaxError",
-    "native-call:Temporal.Calendar",
-    "native-call:Temporal.Duration",
-    "native-call:Temporal.Instant",
-    "native-call:Temporal.PlainDate",
-    "native-call:Temporal.PlainDateTime",
-    "native-call:Temporal.PlainMonthDay",
-    "native-call:Temporal.PlainTime",
-    "native-call:Temporal.PlainYearMonth",
-    "native-call:Temporal.ZonedDateTime",
-    "native-call:TypeError",
-    "native-call:TypedArray",
-    "native-call:URIError",
-    "native-call:WeakMap",
-    "native-call:WeakSet",
-    "native-call:eval",
-    "reduce:non-dense-array",
-    "some/every:non-dense-array",
-];
+use ironhorse_vm::halt_labels::{DECLINED_HELPER_LABELS, DECLINED_LABELS, ENGINE_INVARIANT_LABELS};
 
 /// The non-literal argument forms a `Halt::Unsupported(…)` construction may
 /// take, whitespace-collapsed. Each names a family whose labels are pinned
 /// elsewhere: opcode mnemonics (`op.name()` / `other.name()`, the
-/// `XS_CODE_*` table in `opcode.rs`), the two helpers above, and the regexp
-/// crate's own compile-time `CompileError::Unsupported(name)` labels, which
-/// that crate owns. `_` is the wildcard of a `match` pattern in this crate's
-/// own tests, not a construction.
+/// `XS_CODE_*` table in `opcode.rs`, accepted by `is_declined_label`), the
+/// two helpers above, and the regexp crate's own compile-time
+/// `CompileError::Unsupported` labels (`regexp_feature`), which that crate
+/// owns and which today it never constructs. `_` is the wildcard of a `match`
+/// pattern in this crate's own tests, not a construction.
 const DECLINED_DYNAMIC_FORMS: &[&str] = &[
     "_",
     "Self::array_generic_skip_reason(m)",
-    "name",
     "native_unsupported_name(native)",
     "op.name()",
     "other.name()",
+    "regexp_feature",
 ];
 
 /// The non-literal forms a `Halt::EngineInvariant(…)` may take: only the
 /// pattern wildcard. An invariant guard names itself, always.
 const ENGINE_INVARIANT_DYNAMIC_FORMS: &[&str] = &["_"];
 
-/// Substrings that mark an invariant guard mechanically: a label carrying one
-/// of these can never be a declined surface.
+/// Substrings that mark an invariant guard: a label carrying one of these
+/// can never be a declined surface.
 const INVARIANT_SIGNATURES: &[&str] = &["underflow", "no-frame", "non-boundary-return"];
+
+/// Scrutinee shapes under which a declined halt is really an invariant guard.
+const UNDERFLOW_SCRUTINEES: &[&str] = &[
+    "stack.len()",
+    "checked_sub(",
+    "call_stack.len()",
+    "return_depth",
+];
+
+/// The engine-side crates whose sources are scanned, relative to this
+/// crate's manifest directory. The harness crates (`ironhorse-262`,
+/// `ironhorse-fuzz`) pin their own constructions in their own tests.
+const SCANNED_CRATES: &[&str] = &[".", "../ironhorse-snapshot", "../ironhorse-compile"];
 
 fn source_files() -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -323,35 +90,220 @@ fn source_files() -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
-    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut out);
+    for krate in SCANNED_CRATES {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(krate)
+            .join("src");
+        assert!(
+            src.is_dir(),
+            "scanned crate source dir missing: {}",
+            src.display()
+        );
+        walk(&src, &mut out);
+    }
     out.sort();
     out
 }
 
-/// Strip `//` line comments so commented-out code never counts.
-fn strip_comments(s: &str) -> String {
-    s.lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// The length of the raw string literal (`r"…"`, `r#"…"#`, `br"…"`) that
+/// starts at byte `i` of `src`, or `None` when no raw string starts there —
+/// in particular not for a raw identifier (`r#type`) or an identifier that
+/// merely ends in `r`.
+fn raw_string_len(src: &str, i: usize) -> Option<usize> {
+    let rest = &src[i..];
+    let prefix = if rest.starts_with("br") {
+        2
+    } else if rest.starts_with('r') {
+        1
+    } else {
+        return None;
+    };
+    let ident_before = i > 0 && {
+        let b = src.as_bytes()[i - 1];
+        b.is_ascii_alphanumeric() || b == b'_'
+    };
+    if ident_before {
+        return None;
+    }
+    let hashes = rest[prefix..].bytes().take_while(|b| *b == b'#').count();
+    if rest.as_bytes().get(prefix + hashes) != Some(&b'"') {
+        return None;
+    }
+    let terminator = format!("\"{}", "#".repeat(hashes));
+    let body = prefix + hashes + 1;
+    Some(
+        rest[body..]
+            .find(&terminator)
+            .map_or(rest.len(), |n| body + n + terminator.len()),
+    )
 }
 
-/// Every `"…"` literal inside `span` (labels contain no escapes).
-fn string_literals(span: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = span;
-    while let Some(open) = rest.find('"') {
-        let after = &rest[open + 1..];
-        let close = after
-            .find('"')
-            .expect("unterminated string literal in span");
-        out.push(after[..close].to_string());
-        rest = &after[close + 1..];
+/// A lexer-aware pass over Rust source: line comments and (nested) block
+/// comments are replaced by spaces (newlines kept, so line arithmetic
+/// survives), string and character literals are kept verbatim, and raw
+/// strings (`r"…"`, `r#"…"#`) are handled. Escapes inside literals are
+/// honoured so a `\"` cannot end a string early.
+fn code_only(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let blank = |out: &mut String, s: &str| {
+        for c in s.chars() {
+            out.push(if c == '\n' { '\n' } else { ' ' });
+        }
+    };
+    while i < bytes.len() {
+        let rest = &src[i..];
+        if rest.starts_with("//") {
+            let end = rest.find('\n').map_or(rest.len(), |n| n);
+            blank(&mut out, &rest[..end]);
+            i += end;
+        } else if rest.starts_with("/*") {
+            let mut depth = 0usize;
+            let mut j = 0;
+            loop {
+                let r = &rest[j..];
+                if r.starts_with("/*") {
+                    depth += 1;
+                    j += 2;
+                } else if r.starts_with("*/") {
+                    depth -= 1;
+                    j += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else if r.is_empty() {
+                    break;
+                } else {
+                    j += r.chars().next().unwrap().len_utf8();
+                }
+            }
+            blank(&mut out, &rest[..j]);
+            i += j;
+        } else if rest.starts_with('"') || rest.starts_with("b\"") {
+            let open = if rest.starts_with('b') { 2 } else { 1 };
+            let mut j = open;
+            loop {
+                match rest.as_bytes().get(j) {
+                    Some(b'\\') => j += 2,
+                    Some(b'"') => {
+                        j += 1;
+                        break;
+                    }
+                    Some(_) => j += 1,
+                    None => break,
+                }
+            }
+            out.push_str(&rest[..j]);
+            i += j;
+        } else if let Some(end) = raw_string_len(src, i) {
+            out.push_str(&rest[..end]);
+            i += end;
+        } else if rest.starts_with('\'') {
+            // A char literal (`'a'`, `'\n'`, `'\u{1F600}'`) or a lifetime /
+            // label (`'a`, `'static`): only the former has a closing quote
+            // within a few bytes.
+            let close = rest[1..].find('\'').map(|n| n + 1);
+            match close {
+                Some(c)
+                    if c <= 12
+                        && !rest[1..c].contains(|ch: char| {
+                            ch.is_whitespace() || ch == ';' || ch == ',' || ch == '>'
+                        }) =>
+                {
+                    out.push_str(&rest[..=c]);
+                    i += c + 1;
+                }
+                _ => {
+                    out.push('\'');
+                    i += 1;
+                }
+            }
+        } else {
+            let c = rest.chars().next().unwrap();
+            out.push(c);
+            i += c.len_utf8();
+        }
     }
     out
 }
 
-/// The text between the `(` that follows `marker` and its balanced `)`.
+/// Every `"…"` string literal inside `span` (already code-only text; escapes
+/// honoured, unescaped verbatim since labels contain none).
+fn string_literals(span: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = span.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            // Skip a char literal so `'"'` is not a string opener.
+            if let Some(c) = span[i + 1..].find('\'') {
+                if c <= 12 {
+                    i += c + 2;
+                    continue;
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'"' {
+            let start = i + 1;
+            let mut j = start;
+            loop {
+                match bytes.get(j) {
+                    Some(b'\\') => j += 2,
+                    Some(b'"') => break,
+                    Some(_) => j += 1,
+                    None => panic!("unterminated string literal in span: {span}"),
+                }
+            }
+            out.push(span[start..j].to_string());
+            i = j + 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Byte offsets of every occurrence of `marker` in code-only text that lies
+/// outside a string or character literal.
+fn marker_positions(code: &str, marker: &str) -> Vec<usize> {
+    let bytes = code.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                loop {
+                    match bytes.get(i) {
+                        Some(b'\\') => i += 2,
+                        Some(b'"') => {
+                            i += 1;
+                            break;
+                        }
+                        Some(_) => i += 1,
+                        None => break,
+                    }
+                }
+            }
+            b'\'' => match code[i + 1..].find('\'') {
+                Some(c) if c <= 12 => i += c + 2,
+                _ => i += 1,
+            },
+            _ if code.is_char_boundary(i) && code[i..].starts_with(marker) => {
+                out.push(i);
+                i += marker.len();
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+/// The text between the `(` that ends `marker` (which must end with `(`) and
+/// its balanced `)`, skipping parentheses inside string and char literals.
 fn balanced_args<'a>(src: &'a str, at: usize, marker: &str) -> &'a str {
     let open = at + marker.len();
     assert_eq!(
@@ -364,6 +316,23 @@ fn balanced_args<'a>(src: &'a str, at: usize, marker: &str) -> &'a str {
     let mut k = open;
     while depth > 0 {
         match bytes[k] {
+            b'"' => {
+                k += 1;
+                loop {
+                    match bytes[k] {
+                        b'\\' => k += 2,
+                        b'"' => break,
+                        _ => k += 1,
+                    }
+                }
+            }
+            b'\'' => {
+                if let Some(c) = src[k + 1..].find('\'') {
+                    if c <= 12 {
+                        k += c + 1;
+                    }
+                }
+            }
             b'(' => depth += 1,
             b')' => depth -= 1,
             _ => {}
@@ -373,37 +342,83 @@ fn balanced_args<'a>(src: &'a str, at: usize, marker: &str) -> &'a str {
     &src[open..k - 1]
 }
 
-/// Every construction site of `Halt::<variant>(…)` in the crate's sources:
-/// the literal labels found, and the whitespace-collapsed non-literal
-/// argument forms.
-fn collect(variant: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+struct Site {
+    file: PathBuf,
+    line: usize,
+    /// The literal labels in the argument, or empty when dynamic.
+    literals: Vec<String>,
+    /// The whitespace-collapsed argument text when no literal is present.
+    dynamic: Option<String>,
+    /// The code-only text of the six lines preceding the site.
+    preceding: String,
+}
+
+/// Every construction site of `Halt::<variant>(…)` across the scanned
+/// crates' sources.
+fn sites(variant: &str) -> Vec<Site> {
     let marker = format!("Halt::{variant}(");
-    let mut literals = BTreeSet::new();
-    let mut dynamic = BTreeSet::new();
+    let bare = format!("Halt::{variant}");
+    let mut out = Vec::new();
     for file in source_files() {
-        let src = strip_comments(&fs::read_to_string(&file).expect("read source"));
-        let mut start = 0;
-        while let Some(p) = src[start..].find(&marker) {
-            let at = start + p;
+        let src = code_only(&fs::read_to_string(&file).expect("read source"));
+        // Every spelling of the variant must be a construction: no `use`,
+        // no function value, no alias — so the scan below is complete.
+        for at in marker_positions(&src, &bare) {
+            let after = &src[at + bare.len()..];
+            assert!(
+                after.starts_with('('),
+                "{}:{}: `{bare}` must be spelled as a construction `{marker}…)`; \
+                 importing, aliasing, or taking the variant as a value would hide a \
+                 site from the registry scan",
+                file.display(),
+                src[..at].matches('\n').count() + 1
+            );
+        }
+        for use_line in src.lines().filter(|l| l.trim_start().starts_with("use ")) {
+            assert!(
+                !(use_line.contains(&bare)
+                    || use_line.contains("Halt::*")
+                    || use_line.contains("Halt::{")),
+                "{}: `{use_line}` imports the variant, which would hide constructions \
+                 from the registry scan",
+                file.display()
+            );
+        }
+        for at in marker_positions(&src, &marker) {
             let args = balanced_args(&src, at, &marker);
-            let found = string_literals(args);
-            if found.is_empty() {
-                dynamic.insert(args.split_whitespace().collect::<Vec<_>>().join(" "));
-            } else {
-                literals.extend(found);
-            }
-            start = at + marker.len();
+            let literals = string_literals(args);
+            let line = src[..at].matches('\n').count() + 1;
+            let preceding: String = src[..at]
+                .lines()
+                .rev()
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("\n");
+            out.push(Site {
+                file: file.clone(),
+                line,
+                dynamic: literals
+                    .is_empty()
+                    .then(|| args.split_whitespace().collect::<Vec<_>>().join(" ")),
+                literals,
+                preceding,
+            });
         }
     }
-    (literals, dynamic)
+    out
 }
 
 /// The body of the function that starts at the first occurrence of `marker`
-/// in the crate's sources.
+/// in the scanned sources (code-only text).
 fn fn_body(marker: &str) -> String {
+    let mut found = None;
     for file in source_files() {
-        let src = strip_comments(&fs::read_to_string(&file).expect("read source"));
+        let src = code_only(&fs::read_to_string(&file).expect("read source"));
         let Some(i) = src.find(marker) else { continue };
+        assert!(
+            found.is_none(),
+            "marker {marker} occurs in more than one scanned file"
+        );
         let j = i + src[i..].find('{').expect("fn body opens");
         let bytes = src.as_bytes();
         let mut depth = 0usize;
@@ -414,7 +429,8 @@ fn fn_body(marker: &str) -> String {
                 b'}' => {
                     depth -= 1;
                     if depth == 0 {
-                        return src[j..=k].to_string();
+                        found = Some(src[j..=k].to_string());
+                        break;
                     }
                 }
                 _ => {}
@@ -422,22 +438,11 @@ fn fn_body(marker: &str) -> String {
             k += 1;
         }
     }
-    panic!("marker not found in any source file: {marker}");
+    found.unwrap_or_else(|| panic!("marker not found in any scanned file: {marker}"))
 }
 
 fn as_set(list: &[&str]) -> BTreeSet<String> {
     list.iter().map(|s| s.to_string()).collect()
-}
-
-fn assert_sorted_and_distinct(name: &str, list: &[&str]) {
-    for w in list.windows(2) {
-        assert!(
-            w[0] < w[1],
-            "{name} must be sorted and free of duplicates; {:?} precedes {:?}",
-            w[0],
-            w[1]
-        );
-    }
 }
 
 fn diff(name: &str, found: &BTreeSet<String>, pinned: &BTreeSet<String>) {
@@ -447,17 +452,25 @@ fn diff(name: &str, found: &BTreeSet<String>, pinned: &BTreeSet<String>) {
         unregistered.is_empty() && stale.is_empty(),
         "{name}: labels in source but not in the registry {unregistered:?}; \
          registry entries no longer in source {stale:?}. A new label must be \
-         classified in tests/halt_label_registry.rs before it can land."
+         classified in src/halt_labels.rs before it can land."
     );
 }
 
 #[test]
-fn declined_labels_are_an_explicit_allowlist() {
-    assert_sorted_and_distinct("DECLINED_LABELS", DECLINED_LABELS);
-    let (literals, dynamic) = collect("Unsupported");
+fn declined_labels_mirror_the_construction_sites() {
+    let sites = sites("Unsupported");
+    let literals: BTreeSet<String> = sites.iter().flat_map(|s| s.literals.clone()).collect();
     diff("Halt::Unsupported", &literals, &as_set(DECLINED_LABELS));
     let allowed = as_set(DECLINED_DYNAMIC_FORMS);
-    let unknown: Vec<_> = dynamic.difference(&allowed).collect();
+    let unknown: Vec<_> = sites
+        .iter()
+        .filter_map(|s| {
+            s.dynamic
+                .as_ref()
+                .filter(|d| !allowed.contains(*d))
+                .map(|d| format!("{}:{}: {d}", s.file.display(), s.line))
+        })
+        .collect();
     assert!(
         unknown.is_empty(),
         "Halt::Unsupported constructed from unregistered dynamic forms {unknown:?}; \
@@ -466,16 +479,24 @@ fn declined_labels_are_an_explicit_allowlist() {
 }
 
 #[test]
-fn engine_invariant_labels_are_an_explicit_allowlist() {
-    assert_sorted_and_distinct("ENGINE_INVARIANT_LABELS", ENGINE_INVARIANT_LABELS);
-    let (literals, dynamic) = collect("EngineInvariant");
+fn engine_invariant_labels_mirror_the_construction_sites() {
+    let sites = sites("EngineInvariant");
+    let literals: BTreeSet<String> = sites.iter().flat_map(|s| s.literals.clone()).collect();
     diff(
         "Halt::EngineInvariant",
         &literals,
         &as_set(ENGINE_INVARIANT_LABELS),
     );
     let allowed = as_set(ENGINE_INVARIANT_DYNAMIC_FORMS);
-    let unknown: Vec<_> = dynamic.difference(&allowed).collect();
+    let unknown: Vec<_> = sites
+        .iter()
+        .filter_map(|s| {
+            s.dynamic
+                .as_ref()
+                .filter(|d| !allowed.contains(*d))
+                .map(|d| format!("{}:{}: {d}", s.file.display(), s.line))
+        })
+        .collect();
     assert!(
         unknown.is_empty(),
         "Halt::EngineInvariant must name its guard with a literal; found {unknown:?}"
@@ -484,7 +505,6 @@ fn engine_invariant_labels_are_an_explicit_allowlist() {
 
 #[test]
 fn declined_helpers_return_only_registered_labels() {
-    assert_sorted_and_distinct("DECLINED_HELPER_LABELS", DECLINED_HELPER_LABELS);
     let mut found = BTreeSet::new();
     for marker in [
         "fn native_unsupported_name(",
@@ -500,15 +520,34 @@ fn declined_helpers_return_only_registered_labels() {
 }
 
 #[test]
-fn no_label_is_both_declined_and_invariant() {
-    let declined = as_set(DECLINED_LABELS);
-    let helpers = as_set(DECLINED_HELPER_LABELS);
-    let invariant = as_set(ENGINE_INVARIANT_LABELS);
-    let both: Vec<_> = declined
-        .union(&helpers)
-        .filter(|l| invariant.contains(*l))
+fn no_declined_site_is_an_underflow_guard() {
+    let offenders: Vec<_> = sites("Unsupported")
+        .iter()
+        .filter(|s| {
+            UNDERFLOW_SCRUTINEES
+                .iter()
+                .any(|needle| s.preceding.contains(needle))
+        })
+        .map(|s| format!("{}:{}", s.file.display(), s.line))
         .collect();
-    assert!(both.is_empty(), "labels classified both ways: {both:?}");
+    assert!(
+        offenders.is_empty(),
+        "Halt::Unsupported under a stack-depth or frame-depth scrutinee at {offenders:?}: \
+         an underflow guard is an engine invariant and belongs on Halt::EngineInvariant"
+    );
+    // And the check is not vacuous: the invariant guards it would catch exist.
+    let guarded = sites("EngineInvariant")
+        .iter()
+        .filter(|s| {
+            UNDERFLOW_SCRUTINEES
+                .iter()
+                .any(|needle| s.preceding.contains(needle))
+        })
+        .count();
+    assert!(
+        guarded >= 10,
+        "expected the underflow guards to sit under a scrutinee; found {guarded}"
+    );
 }
 
 #[test]
@@ -523,11 +562,56 @@ fn no_declined_label_carries_an_invariant_signature() {
         "declined labels with an invariant-guard signature {offenders:?}; \
          these belong in ENGINE_INVARIANT_LABELS"
     );
-    // And the signatures are not vacuous: the invariant set exercises each.
     for sig in INVARIANT_SIGNATURES {
         assert!(
             ENGINE_INVARIANT_LABELS.iter().any(|l| l.contains(sig)),
             "signature {sig:?} matches no invariant label"
         );
     }
+}
+
+#[test]
+fn the_scanner_is_not_fooled_by_comments_or_literals() {
+    // The evasions an adversarial review tried against the previous,
+    // line-comment-only scanner, each of which must now be seen.
+    let src = r###"
+        let url = "http://example"; return Err(Halt::Unsupported("a:after-url"));
+        return Err(/* see https://tc39.es */ Halt::Unsupported("b:after-block"));
+        let q = '"'; return Err(Halt::Unsupported("c:after-char"));
+        /* Halt::Unsupported("d:inside-block-comment") */
+        // Halt::Unsupported("e:inside-line-comment")
+        let s = "Halt::Unsupported(\"f:inside-string\")";
+        return Err(Halt::Unsupported(if x { "g:branch-one" } else { "h:branch-two" }));
+        let r#type = r"raw // not a comment"; return Err(Halt::Unsupported("i:after-raw-ident"));
+        let raw = r##"Halt::Unsupported("j:inside-raw-string")"##; return Err(Halt::Unsupported("k:after-raw-string"));
+        let bytes = b"(\""; return Err(Halt::Unsupported("l:after-byte-string"));
+    "###;
+    let code = code_only(src);
+    let marker = "Halt::Unsupported(";
+    let mut found = Vec::new();
+    for at in marker_positions(&code, marker) {
+        found.extend(string_literals(balanced_args(&code, at, marker)));
+    }
+    assert_eq!(
+        found,
+        [
+            "a:after-url",
+            "b:after-block",
+            "c:after-char",
+            "g:branch-one",
+            "h:branch-two",
+            "i:after-raw-ident",
+            "k:after-raw-string",
+            "l:after-byte-string",
+        ]
+    );
+    assert!(!code.contains("d:inside-block-comment"));
+    assert!(!code.contains("e:inside-line-comment"));
+    // Raw and byte strings are kept whole too, so their contents are neither
+    // comments nor construction sites.
+    assert!(code.contains("raw // not a comment"));
+    assert!(code.contains("j:inside-raw-string"));
+    // The string is kept whole, and a marker inside a string literal is not
+    // a construction site: `marker_positions` skips literals.
+    assert!(code.contains("f:inside-string"));
 }
