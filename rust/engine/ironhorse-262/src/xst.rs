@@ -634,6 +634,14 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     Verdict::RunSkip(
                         "oracle-xs-typedarray-sort-post-coercion-detach".into(),
                     )
+                } else if let Some(skip) = oracle_unresolved_name_skip(run) {
+                    // The oracle rejected the source only because it could not
+                    // resolve a host intrinsic ironhorse has: the same
+                    // host-only exclusion the named carve-outs above make,
+                    // generalized by the probe so a third such intrinsic is
+                    // not read as over-acceptance. It runs after them, so an
+                    // established reason name keeps its report grouping.
+                    skip
                 } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
@@ -655,11 +663,11 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
             Halt::Throw { rendered: thrown, .. } if constructor_name(thrown) == "Test262Error" => {
                 // ironhorse computed a value the harness's own assertion
                 // rejected, on a case XS passes: the assertion is the report.
-                oracle_disagreement(
-                    cfg,
-                    "oracle-only-complete",
-                    format!("ironhorse failed a harness assertion the oracle passed: {thrown}"),
-                )
+                // This is the case's own contract failing, not a disagreement
+                // with the oracle, so it gates even without `--oracle`.
+                Verdict::Fail(format!(
+                    "ironhorse failed a harness assertion the oracle passed: {thrown}"
+                ))
             }
             Halt::Throw {
                 rendered: thrown, ..
@@ -907,7 +915,12 @@ pub(crate) fn source_declares(source: &str, name: &str) -> bool {
             let r = r.trim_end();
             r.strip_suffix('?').map_or(r, str::trim_end)
         });
-        let property = receiver.is_some_and(|r| !r.ends_with("globalThis") && !r.ends_with("this"));
+        let global_receiver = |r: &str| {
+            ["globalThis", "this"]
+                .iter()
+                .any(|g| r.ends_with(g) && !r[..r.len() - g.len()].ends_with(is_word))
+        };
+        let property = receiver.is_some_and(|r| !global_receiver(r));
         let assigned = !property
             && after.starts_with('=')
             && !after.starts_with("==")
@@ -3414,9 +3427,16 @@ mod tests {
         // unregistered labels are not oracle disagreements and still fail.
         let mut cfg = Config::default();
         cfg.oracle = false;
+        // A harness assertion ironhorse failed is the case's own contract,
+        // not an oracle disagreement: it gates either way.
         let assertion = synthetic_oracle_only(Halt::synthetic_throw("Test262Error: nope"));
-        assert_eq!(
+        assert!(matches!(
             evaluate_positive(&cfg, &assertion, false),
+            Verdict::Fail(detail) if detail.starts_with("ironhorse failed a harness assertion")
+        ));
+        let spurious = synthetic_oracle_only(Halt::synthetic_throw("TypeError: nope"));
+        assert_eq!(
+            evaluate_positive(&cfg, &spurious, false),
             Verdict::RunSkip("oracle-gate-off:oracle-only-complete".into())
         );
         let mut mismatch = synthetic_abort(Halt::synthetic_throw("RangeError"), "RangeError");
@@ -3534,6 +3554,12 @@ mod tests {
         assert!(source_declares("globalThis .foo = 1;", "foo"));
         assert!(source_declares("globalThis?.foo = 1;", "foo"));
         assert!(source_declares("this.foo = 1;", "foo"));
+        // …but only the global object itself, not a name ending in `this`.
+        assert!(!source_declares("var _this = {}; _this.foo = 1;", "foo"));
+        assert!(!source_declares(
+            "var notglobalThis = {}; notglobalThis.foo = 1;",
+            "foo"
+        ));
     }
 
     #[test]
@@ -3627,6 +3653,33 @@ mod tests {
             evaluate_positive(&Config::default(), &run, false),
             Verdict::RunSkip("abort-value-differs".into())
         );
+    }
+
+    #[test]
+    fn an_oracle_host_gap_is_not_read_as_over_acceptance() {
+        // ironhorse ran a program the pinned oracle rejected — but only
+        // because that build lacks `Intl`, which ironhorse has. The probe
+        // generalizes the hardcoded Intl and Temporal carve-outs, so a third
+        // such intrinsic is a host-only exclusion, not over-acceptance.
+        let mut run = synthetic_abort(Halt::Return, "");
+        run.agreement = Agreement::IronhorseOnlyComplete;
+        run.oracle_parsed = true;
+        // `Intl` itself keeps its established, named carve-out; the probe
+        // generalizes to any other such intrinsic, here the pinned build's
+        // missing `Temporal` reported without the source naming it.
+        run.oracle_error = "ReferenceError: get Temporal: undefined variable".into();
+        run.ironhorse_result = "ok".into();
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-host-missing-global:Temporal".into())
+        );
+        // A name neither engine binds is not a host gap: the oracle rejected
+        // the source on its own terms and ironhorse ran it anyway.
+        run.oracle_error = "ReferenceError: get zzz: undefined variable".into();
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(detail) if detail.starts_with("over-acceptance")
+        ));
     }
 
     #[test]

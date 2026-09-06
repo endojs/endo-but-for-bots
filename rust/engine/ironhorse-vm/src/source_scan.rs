@@ -152,11 +152,22 @@ pub fn literal_end(code: &str, i: usize) -> Option<usize> {
             }
         }
         b'\'' => {
-            let close = code[i + 1..].find('\'')?;
-            let body = &code[i + 1..i + 1 + close];
-            let is_char = close <= 12
+            // Escapes first: `'\''` and `b'\''` close on their *third* quote,
+            // and reading the escaped one as the close would leave a dangling
+            // quote that opens a bogus literal over whatever follows.
+            let mut j = i + 1;
+            let close = loop {
+                match bytes.get(j) {
+                    Some(b'\\') => j += 2,
+                    Some(b'\'') => break j,
+                    Some(_) => j += 1,
+                    None => return None,
+                }
+            };
+            let body = &code[i + 1..close];
+            let is_char = body.len() <= 12
                 && !body.contains(|c: char| c.is_whitespace() || matches!(c, ';' | ',' | '>'));
-            is_char.then_some(i + close + 2)
+            is_char.then_some(close + 1)
         }
         _ => None,
     }
