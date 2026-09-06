@@ -117,10 +117,12 @@ const assertUniqueEdgeNames = edgeNames => {
  * whose tag lives on `Symbol.toStringTag`. Message formulas are persisted with
  * `JSON.stringify` (`manager-database.js`), and JSON has no representation for
  * a symbol key, so a field stored raw comes back as its payload alone:
- * `M.boolean()` becomes the plain record `{ payload: 'boolean' }`. That is not
- * a slack pattern, it is an unsatisfiable one — `submit` matches the answer
- * against it, and no boolean is a record — so a boolean field was permanently
- * unanswerable from the first restart onwards.
+ * `M.boolean()` becomes the plain record `{ payload: 'boolean' }` and
+ * `M.string()` becomes `{ payload: [] }`. That is not a slack pattern, it is an
+ * unsatisfiable one — `submit` matches the answer against it, and no boolean is
+ * a record — so every field carrying an explicit pattern was permanently
+ * unanswerable from the first restart onwards. Only a field with no pattern
+ * survived, because `submit` builds its `M.string()` fallback fresh.
  *
  * Encode the fields as smallcaps capdata instead, the same JSON-safe
  * representation `MarshalFormula` already uses to keep a passable in storage.
@@ -154,7 +156,11 @@ const encodeFormFields = fields => {
  */
 const decodeFormFields = fields =>
   Array.isArray(fields)
-    ? harden(fields)
+    ? // Backward compatibility: a form written before 56d2c7d5c
+      // ("fix(daemon)!: persist form fields as capdata so patterns survive a
+      // restart"), the commit that introduced the capdata shape below.
+      // Removable once no mailbox predates it.
+      harden(fields)
     : /** @type {FormField[]} */ (fieldsMarshaller.fromCapData(harden(fields)));
 
 const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
