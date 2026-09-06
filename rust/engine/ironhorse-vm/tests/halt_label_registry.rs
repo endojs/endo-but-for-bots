@@ -22,12 +22,14 @@
 //!    `Halt::EngineInvariant(` — never imported, aliased (a `Halt::{…}` or
 //!    `Halt::*` group anywhere), or taken as a function value — so the scan
 //!    sees every construction;
-//! 4. no `Halt::Unsupported(` site sits under a value-stack or frame-depth
-//!    scrutinee (`stack.len()`, `checked_sub(`, `call_stack.len()`,
-//!    `return_depth`): an underflow guard is an engine
-//!    invariant, whatever label it carries, and the opcode-mnemonic form
-//!    used to hide three of them, so that form is now confined to the
-//!    dispatch loop's default arm;
+//! 4. no `Halt::Unsupported(` site sits within eight lines below a value-stack
+//!    or frame-depth scrutinee (`stack.len()`, `checked_sub(`,
+//!    `call_stack.len()`, `return_depth`): an underflow guard is an engine
+//!    invariant, whatever label it carries, and the opcode-mnemonic form used
+//!    to hide three of them, so that form is now confined to the dispatch
+//!    loop's default arm. The window is a textual backstop, not a control-flow
+//!    analysis: it catches the shape every underflow guard in this crate has,
+//!    while the allowlist and its reviewer remain the real classification;
 //! 5. no declined label carries an invariant-guard signature (`underflow`,
 //!    `no-frame`, `non-boundary-return`).
 //!
@@ -153,11 +155,12 @@ fn raw_string_len(src: &str, i: usize) -> Option<usize> {
     )
 }
 
-/// A lexer-aware pass over Rust source: line comments and (nested) block
-/// comments are replaced by spaces (newlines kept, so line arithmetic
-/// survives), string and character literals are kept verbatim, and raw
-/// strings (`r"…"`, `r#"…"#`) are handled. Escapes inside literals are
-/// honoured so a `\"` cannot end a string early.
+/// A lexer-aware pass over Rust source: line comments, (nested) block
+/// comments, and raw strings (`r"…"`, `r#"…"#`) are replaced by spaces
+/// (newlines kept, so line arithmetic survives); string and character
+/// literals are kept verbatim under the same rule `literal_end` applies, so
+/// the passes that follow see exactly the literals this one kept. Escapes
+/// inside literals are honoured so a `\"` cannot end a string early.
 fn code_only(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
@@ -212,7 +215,12 @@ fn code_only(src: &str) -> String {
             out.push_str(&rest[..j]);
             i += j;
         } else if let Some(end) = raw_string_len(src, i) {
-            out.push_str(&rest[..end]);
+            // A raw string is blanked, not kept: a label is never a raw
+            // string (one used as an argument surfaces as an unregistered
+            // dynamic form), and keeping its body verbatim would let an
+            // unescaped quote inside it desynchronize the literal scanner
+            // the later passes share.
+            blank(&mut out, &rest[..end]);
             i += end;
         } else if rest.starts_with('\'') {
             // A char literal (`'a'`, `'\n'`, `'\u{1F600}'`) or a lifetime /
@@ -346,7 +354,7 @@ struct Site {
     literals: Vec<String>,
     /// The whitespace-collapsed argument text when no literal is present.
     dynamic: Option<String>,
-    /// The code-only text of the six lines preceding the site.
+    /// The code-only text of the eight lines preceding the site.
     preceding: String,
 }
 
@@ -371,12 +379,12 @@ fn sites(variant: &str) -> Vec<Site> {
                 src[..at].matches('\n').count() + 1
             );
         }
-        for glob in ["Halt::*", "Halt::{"] {
+        for glob in ["Halt::*", "Halt::{", "Halt as ", "= Halt;"] {
             assert!(
                 marker_positions(&src, glob).is_empty(),
-                "{}: `{glob}` imports or aliases `Halt`'s variants (in a `use` group \
-                 spanning any number of lines), which would hide constructions from \
-                 the registry scan",
+                "{}: `{glob}` imports, aliases, or renames `Halt` or its variants (in a \
+                 `use` group spanning any number of lines, or a type alias), which \
+                 would hide constructions from the registry scan",
                 file.display()
             );
         }
@@ -387,7 +395,7 @@ fn sites(variant: &str) -> Vec<Site> {
             let preceding: String = src[..at]
                 .lines()
                 .rev()
-                .take(6)
+                .take(8)
                 .collect::<Vec<_>>()
                 .join("\n");
             out.push(Site {
@@ -630,10 +638,22 @@ fn the_scanner_is_not_fooled_by_comments_or_literals() {
     );
     assert!(!code.contains("d:inside-block-comment"));
     assert!(!code.contains("e:inside-line-comment"));
-    // Raw and byte strings are kept whole too, so their contents are neither
-    // comments nor construction sites.
-    assert!(code.contains("raw // not a comment"));
-    assert!(code.contains("j:inside-raw-string"));
+    // Raw strings are blanked (never a label, and an unescaped quote inside
+    // one must not desynchronize the literal scanner); byte strings are kept
+    // whole. Neither is a comment or a construction site.
+    assert!(!code.contains("raw // not a comment"));
+    assert!(!code.contains("j:inside-raw-string"));
+    assert!(code.contains(r#"b"(\"""#));
+    // A raw string with an unescaped quote inside it does not desync the
+    // scan of what follows.
+    let tricky = code_only(
+        r####"let a = r"\"; let b = r#"a"b"#; return Err(Halt::Unsupported("m:after-tricky-raw"));"####,
+    );
+    let mut found = Vec::new();
+    for at in marker_positions(&tricky, marker) {
+        found.extend(string_literals(balanced_args(&tricky, at, marker)));
+    }
+    assert_eq!(found, ["m:after-tricky-raw"]);
     // The string is kept whole, and a marker inside a string literal is not
     // a construction site: `marker_positions` skips literals.
     assert!(code.contains("f:inside-string"));
