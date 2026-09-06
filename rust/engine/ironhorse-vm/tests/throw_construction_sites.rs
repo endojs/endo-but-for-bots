@@ -60,16 +60,23 @@ fn line_of(hay: &str, at: usize) -> usize {
     hay[..at].matches('\n').count() + 1
 }
 
-/// Offsets of every `Halt::Throw {` that is a CONSTRUCTION rather than a
-/// pattern. Every pattern in the engine binds a subset of the fields and
-/// carries a `..` rest (`Halt::Throw { value, .. }`, `Halt::Throw { .. }`);
-/// a construction must supply both fields and so never does.
+/// Offsets of every `Halt::Throw {` (or `Self::Throw {` inside `impl Halt`)
+/// that is a CONSTRUCTION rather than a pattern. Every pattern in the
+/// engine binds a subset of the fields and ends with a `..` rest
+/// (`Halt::Throw { value, .. }`, `Halt::Throw { .. }`); a construction must
+/// supply both fields, so its brace body never ends with `..` (a `..` inside
+/// a field's expression, `text[..n]`, does not count).
 fn throw_constructions(hay: &str) -> Vec<usize> {
     let mut out = Vec::new();
     let mut start = 0;
-    while let Some(p) = hay[start..].find("Halt::Throw {") {
+    while let Some(p) = ["Halt::Throw {", "Self::Throw {"]
+        .iter()
+        .filter_map(|n| hay[start..].find(n).map(|q| (q, n.len())))
+        .min()
+    {
+        let (p, name_len) = p;
         let at = start + p;
-        let open = at + "Halt::Throw ".len();
+        let open = at + name_len - 1;
         let bytes = hay.as_bytes();
         let mut depth = 0usize;
         let mut k = open;
@@ -86,7 +93,8 @@ fn throw_constructions(hay: &str) -> Vec<usize> {
             }
             k += 1;
         };
-        if !hay[open..=close].contains("..") {
+        let inner = hay[open + 1..close].trim_end();
+        if !inner.ends_with("..") {
             out.push(at);
         }
         start = close;

@@ -71,6 +71,47 @@ fn the_other_nullish_coercions_carry_the_same_message() {
 }
 
 #[test]
+fn a_nullish_base_throws_before_the_computed_key_is_coerced() {
+    // XS's `AT` coerces the base (`mxToInstance(mxStack + 1)`) before the
+    // key: `k.toString` never runs for `null[k]`. For `null[k] = rhs` the
+    // compiler's `at_2` follows the RHS, so the RHS runs, then the base
+    // throws, and the key is still never coerced (oracle: `rhs,threw`).
+    let out = run(
+        "var s=[]; var k={toString(){s.push('key');return 'x'}}; \
+         try{ null[k] }catch(e){ s.push(e.name+': '+e.message) } s.join('|')",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "TypeError: cannot coerce null to object");
+    let out = run(
+        "var log=[]; var k={toString(){ log.push('key'); return 'x' }}; \
+         try { null[k] = (log.push('rhs'), 1) } catch(e){ log.push('threw') } log.join()",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "rhs,threw");
+    let out = run(
+        "var log=[]; var k={toString(){ log.push('key'); return 'x' }}; \
+         try { null[k] += 1 } catch(e){ log.push('threw') } log.join()",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "threw");
+    // An object base still coerces the key, after the RHS (oracle: `rhs,key`).
+    let out = run(
+        "var log=[]; var k={toString(){ log.push('key'); return 'x' }}; var o={}; \
+         try { o[k] = (log.push('rhs'), 1) } catch(e){ log.push('threw') } log.join()",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "rhs,key");
+}
+
+#[test]
+fn iterating_a_nullish_value_carries_the_coercion_message() {
+    assert_throws_type_error("for (var x of null) {}", "cannot coerce null to object");
+    assert_throws_type_error("[...undefined]", "cannot coerce undefined to object");
+    // A non-nullish non-iterable reaches the absent method's call.
+    assert_throws_type_error("for (var x of 5) {}", "call: not a function");
+}
+
+#[test]
 fn a_nullish_guard_takes_the_throwing_path_not_the_wrong_branch() {
     // The silent form: before the fix `x.y` was `undefined` and the guard
     // fell through to "no".
