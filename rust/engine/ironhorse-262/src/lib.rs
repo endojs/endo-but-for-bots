@@ -721,19 +721,13 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
         Halt::EngineInvariant(label) => {
             return BootVerdict::Divergent(format!(
                 "ironhorse violated an engine invariant: {label} (pin completed={})",
-                matches!(
-                    r.agreement,
-                    Agreement::BothComplete | Agreement::OracleOnlyComplete
-                )
+                xst::oracle_completed(r.agreement)
             ))
         }
         Halt::Unsupported(op) if !xst::is_skip_eligible_label(op) => {
             return BootVerdict::Divergent(format!(
                 "ironhorse declined with an unregistered label: {op} (pin completed={})",
-                matches!(
-                    r.agreement,
-                    Agreement::BothComplete | Agreement::OracleOnlyComplete
-                )
+                xst::oracle_completed(r.agreement)
             ))
         }
         _ => {}

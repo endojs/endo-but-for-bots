@@ -19,8 +19,9 @@
 //!    return only the literals in `DECLINED_HELPER_LABELS`, and every other
 //!    non-literal argument is one of the enumerated [`DECLINED_DYNAMIC_FORMS`];
 //! 3. the variants are only ever spelled `Halt::Unsupported(` /
-//!    `Halt::EngineInvariant(` — never imported, aliased, or taken as a
-//!    function value — so the scan sees every construction;
+//!    `Halt::EngineInvariant(` — never imported, aliased (a `Halt::{…}` or
+//!    `Halt::*` group anywhere), or taken as a function value — so the scan
+//!    sees every construction;
 //! 4. no `Halt::Unsupported(` site sits under a value-stack or frame-depth
 //!    scrutinee (`stack.len()`, `checked_sub(`, `call_stack.len()`,
 //!    `return_depth`): an underflow guard is an engine
@@ -85,7 +86,8 @@ const UNDERFLOW_SCRUTINEES: &[&str] = &[
 /// `ironhorse-fuzz`) pin their own constructions in their own tests.
 const SCANNED_CRATES: &[&str] = &[".", "../ironhorse-snapshot", "../ironhorse-compile"];
 
-fn source_files() -> Vec<PathBuf> {
+/// Every `.rs` file under `dir`, recursively, sorted.
+fn rs_files(dir: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).expect("read src dir") {
             let path = entry.expect("dir entry").path();
@@ -97,6 +99,13 @@ fn source_files() -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
+    walk(dir, &mut out);
+    out.sort();
+    out
+}
+
+fn source_files() -> Vec<PathBuf> {
+    let mut out = Vec::new();
     for krate in SCANNED_CRATES {
         let src = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(krate)
@@ -106,9 +115,8 @@ fn source_files() -> Vec<PathBuf> {
             "scanned crate source dir missing: {}",
             src.display()
         );
-        walk(&src, &mut out);
+        out.extend(rs_files(&src));
     }
-    out.sort();
     out
 }
 
@@ -235,75 +243,69 @@ fn code_only(src: &str) -> String {
     out
 }
 
-/// Every `"…"` string literal inside `span` (already code-only text; escapes
-/// honoured, unescaped verbatim since labels contain none).
+/// Every `"…"` string literal inside `span` (code-only text; labels contain
+/// no escapes, so the raw text between the quotes is the label).
 fn string_literals(span: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let bytes = span.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\'' {
-            // Skip a char literal so `'"'` is not a string opener.
-            if let Some(c) = span[i + 1..].find('\'') {
-                if c <= 12 {
-                    i += c + 2;
-                    continue;
+    while i < span.len() {
+        match literal_end(span, i) {
+            Some(end) => {
+                if span.as_bytes()[i] == b'"' {
+                    out.push(span[i + 1..end - 1].to_string());
                 }
+                i = end;
             }
-            i += 1;
-            continue;
+            None => i += 1,
         }
-        if bytes[i] == b'"' {
-            let start = i + 1;
-            let mut j = start;
+    }
+    out
+}
+
+/// If a string or character literal starts at byte `i` of `code`, the byte
+/// offset just past it; otherwise `None`. The one literal rule every scanner
+/// below shares: a `"` opens a string that runs to the next unescaped `"`,
+/// and a `'` opens a char literal only when a closing `'` follows within
+/// twelve bytes with no whitespace or separator between (a lifetime or
+/// label has none).
+fn literal_end(code: &str, i: usize) -> Option<usize> {
+    let bytes = code.as_bytes();
+    match bytes.get(i)? {
+        b'"' => {
+            let mut j = i + 1;
             loop {
                 match bytes.get(j) {
                     Some(b'\\') => j += 2,
-                    Some(b'"') => break,
+                    Some(b'"') => return Some(j + 1),
                     Some(_) => j += 1,
-                    None => panic!("unterminated string literal in span: {span}"),
+                    None => panic!("unterminated string literal at byte {i}"),
                 }
             }
-            out.push(span[start..j].to_string());
-            i = j + 1;
-            continue;
         }
-        i += 1;
+        b'\'' => {
+            let close = code[i + 1..].find('\'')?;
+            let body = &code[i + 1..i + 1 + close];
+            let is_char = close <= 12
+                && !body.contains(|c: char| c.is_whitespace() || matches!(c, ';' | ',' | '>'));
+            is_char.then_some(i + close + 2)
+        }
+        _ => None,
     }
-    out
 }
 
 /// Byte offsets of every occurrence of `marker` in code-only text that lies
 /// outside a string or character literal.
 fn marker_positions(code: &str, marker: &str) -> Vec<usize> {
-    let bytes = code.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                i += 1;
-                loop {
-                    match bytes.get(i) {
-                        Some(b'\\') => i += 2,
-                        Some(b'"') => {
-                            i += 1;
-                            break;
-                        }
-                        Some(_) => i += 1,
-                        None => break,
-                    }
-                }
-            }
-            b'\'' => match code[i + 1..].find('\'') {
-                Some(c) if c <= 12 => i += c + 2,
-                _ => i += 1,
-            },
-            _ if code.is_char_boundary(i) && code[i..].starts_with(marker) => {
-                out.push(i);
-                i += marker.len();
-            }
-            _ => i += 1,
+    while i < code.len() {
+        if let Some(end) = literal_end(code, i) {
+            i = end;
+        } else if code.is_char_boundary(i) && code[i..].starts_with(marker) {
+            out.push(i);
+            i += marker.len();
+        } else {
+            i += 1;
         }
     }
     out
@@ -322,27 +324,15 @@ fn balanced_args<'a>(src: &'a str, at: usize, marker: &str) -> &'a str {
     let mut depth = 1usize;
     let mut k = open;
     while depth > 0 {
-        match bytes[k] {
-            b'"' => {
-                k += 1;
-                loop {
-                    match bytes[k] {
-                        b'\\' => k += 2,
-                        b'"' => break,
-                        _ => k += 1,
-                    }
-                }
-            }
-            b'\'' => {
-                if let Some(c) = src[k + 1..].find('\'') {
-                    if c <= 12 {
-                        k += c + 1;
-                    }
-                }
-            }
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            _ => {}
+        if let Some(end) = literal_end(src, k) {
+            k = end;
+            continue;
+        }
+        match bytes.get(k) {
+            Some(b'(') => depth += 1,
+            Some(b')') => depth -= 1,
+            Some(_) => {}
+            None => panic!("unbalanced parentheses after byte {at}"),
         }
         k += 1;
     }
@@ -381,13 +371,12 @@ fn sites(variant: &str) -> Vec<Site> {
                 src[..at].matches('\n').count() + 1
             );
         }
-        for use_line in src.lines().filter(|l| l.trim_start().starts_with("use ")) {
+        for glob in ["Halt::*", "Halt::{"] {
             assert!(
-                !(use_line.contains(&bare)
-                    || use_line.contains("Halt::*")
-                    || use_line.contains("Halt::{")),
-                "{}: `{use_line}` imports the variant, which would hide constructions \
-                 from the registry scan",
+                marker_positions(&src, glob).is_empty(),
+                "{}: `{glob}` imports or aliases `Halt`'s variants (in a `use` group \
+                 spanning any number of lines), which would hide constructions from \
+                 the registry scan",
                 file.display()
             );
         }
@@ -502,19 +491,7 @@ fn the_regexp_crate_constructs_no_declined_labels() {
     // pin the count at zero rather than let a new family in silently.
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ironhorse-regexp/src");
     let mut constructions = 0;
-    let mut files = Vec::new();
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in fs::read_dir(dir).expect("read src dir") {
-            let path = entry.expect("dir entry").path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                out.push(path);
-            }
-        }
-    }
-    walk(&src, &mut files);
-    for file in files {
+    for file in rs_files(&src) {
         let code = code_only(&fs::read_to_string(&file).expect("read source"));
         constructions += marker_positions(&code, "CompileError::Unsupported(").len();
     }

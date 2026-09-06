@@ -283,11 +283,24 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "yield:stack-underflow",
 ];
 
-/// Is `label` an opcode mnemonic (`XS_CODE_*`), the family of labels the
-/// dispatch loop declines an unported opcode with (`op.name()`)?
+/// Is `label` an opcode mnemonic (a `gxCodeNames` spelling), the family of
+/// labels the dispatch loop's default arm declines an unported opcode with
+/// (`other.name()`)? The set is static, so it is built once, sorted, and
+/// binary-searched like the other two lists.
 fn is_opcode_mnemonic(label: &str) -> bool {
-    !label.is_empty()
-        && (0..=u8::MAX).any(|byte| Opcode::from_u8(byte).map(Opcode::name) == Some(label))
+    use std::sync::OnceLock;
+    static MNEMONICS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    let mnemonics = MNEMONICS.get_or_init(|| {
+        let mut names: Vec<&'static str> = (0..=u8::MAX)
+            .filter_map(Opcode::from_u8)
+            .map(Opcode::name)
+            .filter(|name| !name.is_empty())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    });
+    mnemonics.binary_search(&label).is_ok()
 }
 
 /// Is `label` a registered declined surface — one the differential

@@ -224,21 +224,24 @@ The answer decides whether the oracle gets to judge the run:
   The one honest shape is the engine's `ReferenceError: get <Name>: undefined
   variable` for a `<Name>` the pinned oracle binds **and ironhorse does not**
   in an **empty** program (both engines probed once per name with
-  `typeof <Name>`): the reference engine has a host intrinsic the port has not
-  landed, reported as the named skip `ironhorse-missing-global:<Name>`.
-  A name neither engine binds that way was bound by the program itself, by
-  whatever declaration form, and a name both bind was there to be found, so in
-  either case ironhorse failing to resolve it is a spurious `ReferenceError`
-  and fails.
+  `typeof <Name>`) **and the assembled source does not declare**: the
+  reference engine has a host intrinsic the port has not landed, reported as
+  the named skip `ironhorse-missing-global:<Name>`.
+  A name neither engine binds that way was bound by the program itself, a name
+  both bind was there to be found, and a name the program declares is the
+  program's own binding whatever the oracle has, so in every such case
+  ironhorse failing to resolve it is a spurious `ReferenceError` and fails.
 - A shared abort where the oracle threw a native error constructor and
   ironhorse threw a different one is a failure (`abort-type divergence`).
   The same constructor with a different message stays the
   `abort-value-differs` skip until engine errors carry messages.
   An oracle that itself could not resolve a name certified nothing: a name
   ironhorse binds and the pinned XS build does not (`Intl`) is the oracle's
-  host gap, `oracle-host-missing-global:<Name>`; a name neither binds is an
-  XS miss on a program-level binding, the infrastructure skip
-  `oracle-unresolved-binding:<Name>`.
+  host gap, `oracle-host-missing-global:<Name>`; a name neither binds that
+  the program declares is an XS miss on a program-level binding, the
+  infrastructure skip `oracle-unresolved-binding:<Name>`.
+  A name the oracle does bind, or one nobody binds or declares (a feature
+  global both engines lack), falls through to the abort-type comparison.
 - Every failure above that rests on the oracle's authority (an uncaught throw
   where the oracle completed, a spurious `ReferenceError`, an abort-type
   divergence) is demoted to an `oracle-gate-off:<shape>` skip under
