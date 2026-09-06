@@ -160,9 +160,14 @@ pub mod engine {
     /// limit the SwingSet kernel applies to an XS vat by default. A
     /// crank that spends more is refused with
     /// [`MachineError::MeterAbort`] and, on the persistent path, rewound.
-    /// Sized so no realistic crank meets it while a runaway loop, a
-    /// catastrophic regexp, or an allocation storm is cut off in
-    /// seconds rather than never.
+    /// Sized so no realistic crank meets it while a runaway loop or a
+    /// catastrophic regexp is cut off within one check interval of it
+    /// rather than never. A single built-in still runs to completion
+    /// before the refusal lands — check points sit at loop-closing
+    /// points and inside regexp matches, not inside `repeat`, `split`,
+    /// or the allocators (architecture review F021/F073) — so an
+    /// allocation storm shaped as one call is charged, allocated, and
+    /// then refused.
     pub const DEFAULT_CRANK_COMPUTRON_LIMIT: u64 = 100_000_000;
 
     /// How the embedder bounds a crank's computation (architecture
@@ -174,11 +179,16 @@ pub mod engine {
     /// limit and the host is consulted on a fixed cadence. Running
     /// un-metered is an explicit opt-in ([`MeterBounds::Unbounded`]),
     /// never something a caller gets by forgetting. Both fields are
-    /// REPLICA-VISIBLE: two replicas configured alike consult their
-    /// hosts at identical computron counts and refuse identical cranks,
-    /// so the policy is part of what makes replicas byte-identical, and
-    /// a change to it belongs in the same release as any other
-    /// consensus-relevant configuration.
+    /// CONSENSUS-RELEVANT: the check window is re-based at every crank
+    /// start, so whether a crank is refused is a pure function of its
+    /// own cost and these two numbers, on every replica whatever its
+    /// suspend, rewind, or migration history — and therefore two
+    /// replicas configured differently fork silently at the first crank
+    /// one refuses. Like [`CadencePolicy`], the policy is NOT recorded
+    /// in the store (only the armed interval rides the `METR` atom), so
+    /// replicas must agree on it out of band, and a change to it belongs
+    /// in the same release as any other consensus-relevant
+    /// configuration.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum MeterBounds {
         /// Armed. `crank_limit` computrons per crank, checked every
@@ -221,12 +231,22 @@ pub mod engine {
             }
         }
 
-        /// The check cadence, `None` when un-bounded.
+        /// The check cadence the meter is armed with, `None` when
+        /// un-bounded. Clamped into `1..=crank_limit`: a zero interval
+        /// would read as "un-armed" to the meter, and a cadence coarser
+        /// than the limit is never useful — the meter scales the
+        /// interval into 16.16 raw units with saturation, so an interval
+        /// of `2^48` computrons or more would be armed but never
+        /// consult the host, enforcing nothing while claiming a bound
+        /// (adversarial review). Clamping to the limit keeps every
+        /// `PerCrank` policy enforceable: the host is consulted at least
+        /// once per limit's worth of computrons.
         fn check_interval(&self) -> Option<u64> {
             match self {
-                // A zero interval would read as "un-armed" to the meter;
-                // the smallest armed cadence is 1.
-                MeterBounds::PerCrank { check_interval, .. } => Some((*check_interval).max(1)),
+                MeterBounds::PerCrank {
+                    check_interval,
+                    crank_limit,
+                } => Some((*check_interval).clamp(1, (*crank_limit).max(1))),
                 MeterBounds::Unbounded => None,
             }
         }
@@ -389,7 +409,11 @@ pub mod engine {
             outcome.computrons, outcome.dispatched, outcome.meter_raw
         );
         if !outcome.completed {
-            return Err(MachineError::Halt(outcome.halt));
+            return Err(refuse(
+                outcome.halt,
+                outcome.computrons,
+                machine.bounds().crank_limit(),
+            ));
         }
         println!("{}", outcome.result);
         Ok(())
@@ -422,8 +446,9 @@ pub mod engine {
         pub cadence: CadencePolicy,
         /// The per-crank computation bound (architecture review F014/
         /// F020). Armed by default; [`MeterBounds::Unbounded`] is the
-        /// explicit opt-out. Replica-visible like `cadence`: replicas
-        /// must agree on it to refuse the same cranks.
+        /// explicit opt-out. Consensus-relevant like `cadence`, and like
+        /// `cadence` not recorded in the store: replicas must agree on
+        /// it out of band to refuse the same cranks.
         pub meter: MeterBounds,
     }
 
@@ -569,6 +594,10 @@ pub mod engine {
         /// every crank start to `meter index at start + crank_limit`.
         /// Absolute because the persistent meter never resets: its
         /// index is the machine-lifetime count the snapshot carries.
+        /// (The meter's own overflow guard would restart the index at
+        /// zero only once it passed `2^48` computrons in one machine's
+        /// lifetime, some `10^14`; a ceiling left stranded above a
+        /// restarted index is not a reachable state.)
         crank_ceiling: std::rc::Rc<std::cell::Cell<u64>>,
     }
 
@@ -672,11 +701,14 @@ pub mod engine {
         /// was suspended under this exact interval (the window
         /// continues untouched) and re-arms from the preserved index
         /// otherwise — a store written un-metered, or under an older
-        /// cadence, is bounded from its next crank on. Un-bounded
-        /// policy: a store that carries an armed meter gets a host that
-        /// always continues, so the explicit opt-out means "refuse
-        /// nothing" instead of "abort everything"; a never-armed store
-        /// stays un-armed.
+        /// cadence, is bounded from its next crank on. Either way
+        /// [`Self::eval`] re-bases the window at the crank start, so
+        /// the distinction only matters for the gap between resume and
+        /// the next crank, where nothing runs. Un-bounded policy: a
+        /// store that carries an armed meter gets a host that always
+        /// continues, so the explicit opt-out means "refuse nothing"
+        /// instead of "abort everything"; a never-armed store stays
+        /// un-armed.
         fn attach_meter(
             meter: &MeterBounds,
             crank_ceiling: &std::rc::Rc<std::cell::Cell<u64>>,
@@ -761,7 +793,7 @@ pub mod engine {
             let checkpoint_due = pending_after >= self.cadence.checkpoint_every.max(1)
                 || collect_due
                 || self.checkpoint_after_rewind;
-            let (outcome, checkpointed, crank_start) = {
+            let (outcome, checkpointed, crank_start_raw) = {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
@@ -823,9 +855,29 @@ pub mod engine {
                 // does not shrink the next one's budget, and a resume
                 // mid-history grants exactly what a never-suspended
                 // replica would.
-                let crank_start = session.machine().meter_index() >> 16;
-                if let Some(limit) = self.meter.crank_limit() {
-                    self.crank_ceiling.set(crank_start.saturating_add(limit));
+                //
+                // The check WINDOW is re-based here too (`rearm_meter`:
+                // the next host consultation falls one interval from
+                // the crank's start), the way xsnap resets its meter at
+                // every crank start. Without it the window's phase is
+                // whatever history left it — a store migrated from an
+                // un-armed policy, or armed under another cadence, sits
+                // on a different phase from a natively armed replica —
+                // and a crank spending inside `(limit, limit + interval]`
+                // would be refused on one machine and admitted on the
+                // other (adversarial review). Re-based per crank, whether
+                // a crank is refused is a pure function of its own cost
+                // and the configuration, on every replica whatever its
+                // suspend, rewind, or migration history.
+                let crank_start_raw = session.machine().meter_index();
+                if let (Some(interval), Some(limit)) =
+                    (self.meter.check_interval(), self.meter.crank_limit())
+                {
+                    self.crank_ceiling
+                        .set((crank_start_raw >> 16).saturating_add(limit));
+                    session
+                        .machine_mut()
+                        .rearm_meter(interval, meter_host(&self.crank_ceiling));
                 }
                 let outcome = session.machine_mut().run(&bytecode);
                 if outcome.completed && checkpoint_due {
@@ -834,9 +886,9 @@ pub mod engine {
                         &self.signature,
                         &mut *self.store.borrow_mut(),
                     );
-                    (outcome, Some(r), crank_start)
+                    (outcome, Some(r), crank_start_raw)
                 } else {
-                    (outcome, None, crank_start)
+                    (outcome, None, crank_start_raw)
                 }
             };
             if !outcome.completed {
@@ -851,9 +903,10 @@ pub mod engine {
                         describe_halt(&halt)
                     )));
                 }
-                // `computrons` is the machine-lifetime count; report
-                // what THIS crank spent.
-                let spent = outcome.computrons.saturating_sub(crank_start);
+                // The meter is the machine-lifetime count; report what
+                // THIS crank spent, from the raw index so the fractional
+                // computron at the crank boundary is not double-counted.
+                let spent = outcome.meter_raw.saturating_sub(crank_start_raw) >> 16;
                 return Err(refuse(halt, spent, self.meter.crank_limit()));
             }
             match checkpointed {

@@ -184,3 +184,132 @@ fn a_store_written_unbounded_is_bounded_from_its_next_crank() {
     assert_eq!(reopened.eval(src).expect("unbounded again").result, "50000");
     reopened.close().expect("close");
 }
+
+/// Adversarial review: whether a crank is refused must be a function of
+/// its own cost and the policy alone. The check window used to keep
+/// whatever phase history left it, so a crank spending inside
+/// `(limit, limit + interval]` was refused on a natively armed machine
+/// and admitted on one migrated from an un-armed store (or the reverse).
+/// Now the window is re-based at every crank start, so the host is
+/// consulted at the same computron offsets into every crank, and three
+/// machines with three histories — fresh, migrated from an un-armed
+/// store, and rewound after a refusal — agree on every side of the
+/// limit: admitted above the cost, admitted inside the slop zone (the
+/// crank ends before the next consultation), refused once a
+/// consultation falls past the limit.
+#[test]
+fn a_refusal_depends_on_the_crank_and_the_policy_not_on_history() {
+    const PRELUDE: &str = "var n = 0; var i = 0; n = 1; n";
+    // Costs about 21,000 computrons: the host is consulted at roughly
+    // 10,000 and 20,000 computrons into the crank and the crank ends
+    // a comfortable margin past the second.
+    const PROBE: &str = "var n; var i; for (i = 0; i < 1200; i++) { i = i; } n";
+    const INTERVAL: u64 = 10_000;
+
+    // Calibrate the probe's cost on an un-bounded persistent machine
+    // (the meter counts identically armed or not), so the test does not
+    // pin a cost-table constant.
+    let calib = tempfile::tempdir().expect("temp dir");
+    let mut m =
+        PersistentMachine::open(&options(calib.path(), MeterBounds::Unbounded)).expect("open");
+    let before = m.eval(PRELUDE).expect("prelude").computrons;
+    let after = m.eval(PROBE).expect("probe").computrons;
+    m.close().expect("close");
+    let cost = after - before;
+    // The second consultation lands within one loop iteration (well
+    // under 500 computrons) past 20,000; the crank must end after it
+    // and before the third, for the slop-zone case below to be exact.
+    assert!(
+        cost > 2 * INTERVAL + 500 && cost < 3 * INTERVAL,
+        "probe cost {cost}"
+    );
+
+    // A history is a closure that hands back a bounded machine ready to
+    // run the probe, with the prelude's state in place.
+    let run_probe = |limit: u64, history: &str| -> Result<String, MachineError> {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let bounded = MeterBounds::PerCrank {
+            check_interval: INTERVAL,
+            crank_limit: limit,
+        };
+        let mut machine = match history {
+            "fresh" => {
+                let mut mm = PersistentMachine::open(&options(dir.path(), bounded)).expect("open");
+                mm.eval(PRELUDE).expect("prelude");
+                mm
+            }
+            "migrated" => {
+                let mut un = PersistentMachine::open(&options(dir.path(), MeterBounds::Unbounded))
+                    .expect("open");
+                un.eval(PRELUDE).expect("prelude");
+                un.close().expect("close");
+                PersistentMachine::open(&options(dir.path(), bounded)).expect("reopen")
+            }
+            "rewound" => {
+                let mut mm = PersistentMachine::open(&options(dir.path(), bounded)).expect("open");
+                mm.eval(PRELUDE).expect("prelude");
+                assert!(matches!(
+                    mm.eval(SPIN),
+                    Err(MachineError::MeterAbort { .. })
+                ));
+                mm
+            }
+            other => unreachable!("{other}"),
+        };
+        let out = machine.eval(PROBE).map(|o| o.result);
+        machine.close().expect("close");
+        out
+    };
+
+    for history in ["fresh", "migrated", "rewound"] {
+        // Just over the cost: admitted everywhere.
+        assert_eq!(
+            run_probe(cost + 50, history).unwrap_or_else(|e| panic!("{history}: {e}")),
+            "1",
+            "{history}: admitted just over the cost"
+        );
+        // Just under the cost, inside the slop zone: the consultation
+        // at ~20,000 sees the meter under the limit and the crank ends
+        // before the next one, so it is admitted — on every history,
+        // which is the point. (A window left on a foreign phase would
+        // have refused it on some machines and not others.)
+        assert_eq!(
+            run_probe(cost - 50, history).unwrap_or_else(|e| panic!("{history}: {e}")),
+            "1",
+            "{history}: admitted inside the slop zone"
+        );
+        // One interval under the cost: the consultation at ~20,000
+        // finds the meter past the limit, so refused everywhere.
+        match run_probe(cost - INTERVAL, history) {
+            Err(MachineError::MeterAbort { computrons, limit }) => {
+                assert_eq!(limit, cost - INTERVAL, "{history}");
+                assert!(computrons > limit, "{history}: {computrons}");
+            }
+            other => {
+                panic!("{history}: expected a refusal an interval under the cost, got {other:?}")
+            }
+        }
+    }
+}
+
+/// Adversarial review: a check interval at or above `2^48` computrons
+/// saturates in the meter and would never consult the host, so an
+/// "armed" policy with a finite limit enforced nothing. The cadence is
+/// clamped to the limit, so every `PerCrank` policy is enforceable.
+#[test]
+fn an_oversized_check_interval_still_enforces_the_limit() {
+    let src = "var i = 0; for (i = 0; i < 50000; i++) { i = i; } i";
+    for check_interval in [u64::MAX, 1 << 48, 1 << 40] {
+        let m = Machine::with_bounds(MeterBounds::PerCrank {
+            check_interval,
+            crank_limit: 1_000,
+        });
+        assert!(
+            matches!(
+                m.eval(src),
+                Err(MachineError::MeterAbort { limit: 1_000, .. })
+            ),
+            "check_interval {check_interval} must still enforce the limit"
+        );
+    }
+}

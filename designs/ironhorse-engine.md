@@ -458,14 +458,22 @@ consulting nobody.
 **The shipped embedder arms the meter.** The `rust/endo` seam runs
 every crank under a `MeterBounds` policy: armed by default with a
 per-crank computron limit, consulted on a fixed cadence, enforced
-against the machine's absolute meter as `crank start + limit`, and
-reattached on every resume and rewind through the persistent path.
+against the machine's absolute meter as `crank start + limit`, with
+the check window re-based at every crank start (as xsnap resets its
+meter per crank) and the host reattached on every resume and rewind
+through the persistent path.
+Re-basing per crank is what makes a refusal a pure function of the
+crank's own cost and the policy, whatever the machine's suspend,
+rewind, or migration history.
 Un-metered execution is an explicit `MeterBounds::Unbounded` opt-in.
-The policy is replica-visible, like the checkpoint cadence: replicas
-must agree on it to refuse the same cranks.
-The meter is the crank's time bound; the heap ceiling and
+The policy is consensus-relevant like the checkpoint cadence, and like
+the cadence it is not recorded in the store: replicas must agree on it
+out of band to refuse the same cranks.
+The meter interrupts loops and regexp matches within one check
+interval of the limit; a single built-in still runs to completion
+before the refusal lands (F021/F073), and the heap ceiling and
 allocation-pressure collection the design requires above remain
-unlanded, so it is not yet a memory bound.
+unlanded, so it is a time bound and not yet a memory bound.
 
 **The oracle is result-only; computrons are advisory telemetry.**
 The differential harness compares **results** (completion kind,
