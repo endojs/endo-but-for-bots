@@ -3901,10 +3901,34 @@ pub enum Halt {
     /// Never produced by the default-unbounded [`Interp::run`], so it does
     /// not perturb the oracle-differential paths.
     StepLimit(u64),
-    /// An opcode outside the stage-1 subset was reached. Carries the
-    /// mnemonic so the harness can report exactly what to implement
-    /// next, rather than papering over it.
+    /// The engine **declined** the program: an opcode, built-in, or value
+    /// shape outside the ported subset (an unlanded feature), or a
+    /// deliberate value-dependent refusal (an oversized array-like, a
+    /// symbol where the port only models strings). Carries the label so
+    /// the harness can report exactly what to implement next, rather than
+    /// papering over it.
+    ///
+    /// This is the only halt the differential instruments treat as
+    /// **skip-eligible**: a program that reaches it is uncovered ground, not
+    /// a divergence. That makes the label set an oracle exemption the engine
+    /// grants itself, so it is pinned: every literal label is enumerated in
+    /// `tests/halt_label_registry.rs`, and a new one fails that test until it
+    /// is classified there as a declined surface rather than an
+    /// [`Halt::EngineInvariant`].
     Unsupported(&'static str),
+    /// The engine's **own state is wrong**: a guard on the interpreter's
+    /// invariants fired (value-stack or frame underflow, a suspended
+    /// generator or async instance with no saved frame, a resolving
+    /// function the promise machinery does not recognize, a dispatch that
+    /// reached a method routed elsewhere). On oracle-produced bytecode this
+    /// is a defect in the port, never an unported feature; on hostile
+    /// bytecode it is the fail-closed refusal the decoder fuzz target pins.
+    ///
+    /// Never skip-eligible: both differential instruments report it as a
+    /// hard failure, which is what separates it from [`Halt::Unsupported`].
+    /// Its label set is pinned alongside the declined set in
+    /// `tests/halt_label_registry.rs`.
+    EngineInvariant(&'static str),
     /// The bytecode was truncated or an opcode byte was invalid.
     Decode(String),
     /// A JS-level throw (only the shapes stage 1 models, e.g. an
@@ -15612,7 +15636,7 @@ impl Interp {
                         {
                             (ctor, proto)
                         }
-                        _ => return Halt::Unsupported("class:invalid-stack"),
+                        _ => return Halt::EngineInvariant("class:invalid-stack"),
                     };
                     let derived = self
                         .functions
@@ -15743,7 +15767,7 @@ impl Interp {
                 XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
                     let argc = self.pop_run_count();
                     let Some(base) = self.stack.len().checked_sub(argc + 4) else {
-                        return Halt::Unsupported("eval:frame-underflow");
+                        return Halt::EngineInvariant("eval:frame-underflow");
                     };
                     let native = match self.stack.get(base + 1).and_then(|slot| match slot.value {
                         Payload::Reference(function) => self.native_of(function),
@@ -16390,7 +16414,7 @@ impl Interp {
                             _ => None,
                         });
                     let (Some(env), Some(arrow)) = (env, arrow) else {
-                        return Halt::Unsupported("store_arrow:frame");
+                        return Halt::EngineInvariant("store_arrow:frame");
                     };
                     let home = self
                         .functions
@@ -16819,7 +16843,7 @@ impl Interp {
                     let receiver_depth = if op == XS_CODE_SUPER_AT_2 { 3 } else { 2 };
                     let receiver_pos = match self.stack.len().checked_sub(receiver_depth) {
                         Some(pos) => pos,
-                        None => return Halt::Unsupported("super_at:stack"),
+                        None => return Halt::EngineInvariant("super_at:stack"),
                     };
                     let key_pos = receiver_pos + 1;
                     let receiver = self.stack[receiver_pos];
@@ -17018,7 +17042,7 @@ impl Interp {
                 XS_CODE_TEMPLATE => {
                     let cooked = match self.stack.last().map(|slot| (slot.kind, slot.value)) {
                         Some((Kind::Reference, Payload::Reference(cooked))) => cooked,
-                        _ => return Halt::Unsupported("template:object"),
+                        _ => return Halt::EngineInvariant("template:object"),
                     };
                     if !self.freeze_template_object(cooked) {
                         return Halt::Unsupported("template:raw");
@@ -17647,7 +17671,7 @@ impl Interp {
                     // as the sibling stack-underflow guards do (`yield:`/
                     // `await:`/`add:stack-underflow`), never `panic!`.
                     if self.call_stack.len() < return_depth {
-                        return Halt::Unsupported("end:frame-underflow");
+                        return Halt::EngineInvariant("end:frame-underflow");
                     }
                     // Construct return (XS's `END` with `mxFrameHasTarget`):
                     // a constructor's completion is its `this` instance unless
@@ -17704,7 +17728,7 @@ impl Interp {
                     // `start_generator` reached below `return_depth` on crafted
                     // bytecode must not pop an outer frame (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Halt::Unsupported("start_generator:frame-underflow");
+                        return Halt::EngineInvariant("start_generator:frame-underflow");
                     }
                     let resume = self.leave_call();
                     self.push(gen_slot);
@@ -17741,7 +17765,7 @@ impl Interp {
                         // below: splitting past the stack end is a panic,
                         // not a frame snapshot.
                         if stack_base > self.stack.len() {
-                            return Halt::Unsupported("yield:stack-underflow");
+                            return Halt::EngineInvariant("yield:stack-underflow");
                         }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
@@ -17783,7 +17807,7 @@ impl Interp {
                     let (gen, stack_base, jumps_base, call_depth_base) =
                         match self.gen_run_stack.last() {
                             Some(g) => (g.gen, g.stack_base, g.jumps_base, g.call_depth_base),
-                            None => return Halt::Unsupported("yield:no-generator"),
+                            None => return Halt::EngineInvariant("yield:no-generator"),
                         };
                     let resume_pc = pc + size as usize;
                     let yielded = self.pop();
@@ -17793,7 +17817,7 @@ impl Interp {
                     // finding, on the `await` twin below). Fail closed like
                     // the other malformed suspend shapes.
                     if stack_base > self.stack.len() {
-                        return Halt::Unsupported("yield:stack-underflow");
+                        return Halt::EngineInvariant("yield:stack-underflow");
                     }
                     let stack_slice = self.stack.split_off(stack_base);
                     let jumps = self
@@ -17860,7 +17884,7 @@ impl Interp {
                     // `start_async_generator` reached below `return_depth` on
                     // crafted bytecode must not pop an outer frame (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Halt::Unsupported("start_async_generator:frame-underflow");
+                        return Halt::EngineInvariant("start_async_generator:frame-underflow");
                     }
                     let resume = self.leave_call();
                     self.push(slot);
@@ -17912,7 +17936,7 @@ impl Interp {
                     // site the `leave_call with empty call stack` fuzz abort
                     // hit (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Halt::Unsupported("start_async:frame-underflow");
+                        return Halt::EngineInvariant("start_async:frame-underflow");
                     }
                     let resume = self.leave_call();
                     self.push(promise_slot);
@@ -17956,7 +17980,7 @@ impl Interp {
                         // Same hostile-bytecode refusal as the plain-async
                         // path below.
                         if stack_base > self.stack.len() {
-                            return Halt::Unsupported("await:stack-underflow");
+                            return Halt::EngineInvariant("await:stack-underflow");
                         }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
@@ -17998,7 +18022,7 @@ impl Interp {
                     let (inst, stack_base, jumps_base, call_depth_base) =
                         match self.async_run_stack.last() {
                             Some(a) => (a.inst, a.stack_base, a.jumps_base, a.call_depth_base),
-                            None => return Halt::Unsupported("await:no-async-instance"),
+                            None => return Halt::EngineInvariant("await:no-async-instance"),
                         };
                     let resume_pc = pc + size as usize;
                     let awaited = self.pop();
@@ -18008,7 +18032,7 @@ impl Interp {
                     // past the stack end panics where a named refusal is
                     // owed.
                     if stack_base > self.stack.len() {
-                        return Halt::Unsupported("await:stack-underflow");
+                        return Halt::EngineInvariant("await:stack-underflow");
                     }
                     let stack_slice = self.stack.split_off(stack_base);
                     let jumps = self
@@ -18248,7 +18272,7 @@ impl Interp {
                     };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
-                        None => return Halt::Unsupported("module:transfer-stack"),
+                        None => return Halt::EngineInvariant("module:transfer-stack"),
                     };
                     let imported = self.stack[start + 1].kind == Kind::String;
                     let local_id = match self.stack[start].value {
@@ -18276,7 +18300,7 @@ impl Interp {
                     };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
-                        None => return Halt::Unsupported("module:envelope-stack"),
+                        None => return Halt::EngineInvariant("module:envelope-stack"),
                     };
                     let initialize = self.stack[start];
                     let execute = self.stack[start + 1];
@@ -18744,7 +18768,7 @@ impl Interp {
         // in-range gates trampoline bound callees before they get here.
         let body_start = match self.functions[&func].body_start {
             Some(bs) => bs,
-            None => return Err(Halt::Unsupported("bind:bound-callback")),
+            None => return Err(Halt::EngineInvariant("bind:bound-callback")),
         };
         let this_val = self.stack[base];
         // Stack-overflow guard (XS's `fxOverflow` on the callee's frame
@@ -19077,7 +19101,7 @@ impl Interp {
     ) -> Result<Slot, Halt> {
         let buf = match self.segment_buffer(callee_segment) {
             Some(buf) => buf,
-            None => return Err(Halt::Unsupported("function:missing-segment")),
+            None => return Err(Halt::EngineInvariant("function:missing-segment")),
         };
         let return_depth = self.call_stack.len();
         let saved_segment = self.active_segment;
@@ -19216,7 +19240,7 @@ impl Interp {
             .generators
             .get_mut(&gen)
             .and_then(|g| g.frame.take())
-            .ok_or(Halt::Unsupported("generator:no-frame"))?;
+            .ok_or(Halt::EngineInvariant("generator:no-frame"))?;
         // The per-resume native-frame residual (`fx_Generator_prototype_aux` +
         // `fxRunID` re-entry) over the `RUN` trampoline already metered.
         self.meter.tick_raw(GENERATOR_RESUME_METERING);
@@ -19341,7 +19365,7 @@ impl Interp {
                         g.state = GeneratorState::Completed;
                         g.frame = None;
                     }
-                    return Err(Halt::Unsupported("generator:non-boundary-return"));
+                    return Err(Halt::EngineInvariant("generator:non-boundary-return"));
                 }
                 let ret = self.pop();
                 self.stack.truncate(stack_base);
@@ -19381,7 +19405,7 @@ impl Interp {
         status: GenStatus,
     ) -> Result<Slot, Halt> {
         if !self.async_generators.contains_key(&gen) {
-            return Err(Halt::Unsupported("async-generator:not-an-async-generator"));
+            return Err(Halt::EngineInvariant("async-generator:not-an-async-generator"));
         }
         let (promise, resolve, reject) = self.new_promise_capability();
         self.async_generators
@@ -19491,7 +19515,7 @@ impl Interp {
             .async_generators
             .get_mut(&gen)
             .and_then(|g| g.active.take())
-            .ok_or(Halt::Unsupported("async-generator:no-active-request"))?;
+            .ok_or(Halt::EngineInvariant("async-generator:no-active-request"))?;
         self.settle_via_function(
             code,
             if reject {
@@ -19516,7 +19540,7 @@ impl Interp {
             .async_generators
             .get_mut(&gen)
             .and_then(|g| g.frame.take())
-            .ok_or(Halt::Unsupported("async-generator:no-frame"))?;
+            .ok_or(Halt::EngineInvariant("async-generator:no-frame"))?;
         if !is_start {
             self.meter.tick_raw(GENERATOR_RESUME_METERING);
         }
@@ -19651,7 +19675,7 @@ impl Interp {
                     let data = self.async_generators.get_mut(&gen).unwrap();
                     data.state = AsyncGeneratorState::Completed;
                     data.frame = None;
-                    return Err(Halt::Unsupported("async-generator:non-boundary-return"));
+                    return Err(Halt::EngineInvariant("async-generator:non-boundary-return"));
                 }
                 let value = self.pop();
                 self.stack.truncate(stack_base);
@@ -19745,7 +19769,7 @@ impl Interp {
             .async_instances
             .get_mut(&inst)
             .and_then(|a| a.frame.take())
-            .ok_or(Halt::Unsupported("async:no-frame"))?;
+            .ok_or(Halt::EngineInvariant("async:no-frame"))?;
         if !is_start {
             // The per-resume native-frame residual (`fxResolveAwait`/
             // `fxRejectAwait` → `fxStepAsync` → `fxRunID` re-entry), the async
@@ -19887,7 +19911,7 @@ impl Interp {
                         a.done = true;
                         a.frame = None;
                     }
-                    return Err(Halt::Unsupported("async:non-boundary-return"));
+                    return Err(Halt::EngineInvariant("async:non-boundary-return"));
                 }
                 let ret = self.pop();
                 self.stack.truncate(stack_base);
@@ -20017,16 +20041,16 @@ impl Interp {
     fn settle_via_function(&mut self, code: &[u8], f: Slot, value: Slot) -> Result<(), Halt> {
         let fref = match f.value {
             Payload::Reference(r) => r,
-            _ => return Err(Halt::Unsupported("async:bad-resolving-fn")),
+            _ => return Err(Halt::EngineInvariant("async:bad-resolving-fn")),
         };
         let data = match self.promise_functions.get(&fref) {
             Some(d) => *d,
-            None => return Err(Halt::Unsupported("async:bad-resolving-fn")),
+            None => return Err(Halt::EngineInvariant("async:bad-resolving-fn")),
         };
         if !is_promise_resolving_guard(data.guard)
             || data.guard >= self.promise_guards.len()
         {
-            return Err(Halt::Unsupported("async:non-resolver-as-resolver"));
+            return Err(Halt::EngineInvariant("async:non-resolver-as-resolver"));
         }
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
@@ -20045,7 +20069,7 @@ impl Interp {
     fn reject_via_function(&mut self, f: Slot, value: Slot) -> Result<(), Halt> {
         let fref = match f.value {
             Payload::Reference(r) => r,
-            _ => return Err(Halt::Unsupported("async:bad-resolving-fn")),
+            _ => return Err(Halt::EngineInvariant("async:bad-resolving-fn")),
         };
         let data = match self.promise_functions.get(&fref) {
             Some(d)
@@ -20055,7 +20079,7 @@ impl Interp {
             {
                 *d
             }
-            _ => return Err(Halt::Unsupported("async:bad-rejecting-fn")),
+            _ => return Err(Halt::EngineInvariant("async:bad-rejecting-fn")),
         };
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
@@ -25652,7 +25676,7 @@ impl Interp {
             return Ok(value);
         }
         if data.guard != PROMISE_FINALLY_HANDLER_GUARD {
-            return Err(Halt::Unsupported("promise:unknown-finally-function"));
+            return Err(Halt::EngineInvariant("promise:unknown-finally-function"));
         }
         let handler_id = self.intern_key("[[PromiseFinallyHandler]]");
         let constructor_id = self.intern_key("[[PromiseFinallyConstructor]]");
@@ -25680,7 +25704,7 @@ impl Interp {
         reject: bool,
     ) -> Result<(), Halt> {
         if !self.promises.contains_key(&promise) {
-            return Err(Halt::Unsupported("promise:settle-non-promise"));
+            return Err(Halt::EngineInvariant("promise:settle-non-promise"));
         }
         // The resolve-with-thenable branch (`fxResolvePromise`, `mxIsReference`):
         // probe `.then`; a callable one adopts the thenable rather than settling.
@@ -25752,7 +25776,7 @@ impl Interp {
         reject: bool,
     ) -> Result<(), Halt> {
         if !self.promises.contains_key(&promise) {
-            return Err(Halt::Unsupported("promise:settle-non-promise"));
+            return Err(Halt::EngineInvariant("promise:settle-non-promise"));
         }
         let state = if reject {
             PromiseState::Rejected
@@ -25962,7 +25986,7 @@ impl Interp {
                 let data = self
                     .async_generators
                     .get_mut(&gen)
-                    .ok_or(Halt::Unsupported("async-generator:yield-reaction-missing"))?;
+                    .ok_or(Halt::EngineInvariant("async-generator:yield-reaction-missing"))?;
                 data.state = AsyncGeneratorState::Completed;
                 data.frame = None;
                 return self.finish_async_generator_request(code, gen, value, true);
@@ -31511,10 +31535,10 @@ impl Interp {
             }
             // `Function.prototype.call` is handled by the `run` trampoline
             // (`enter_call_dot_call`) and never reaches here.
-            NativeMethod::FunctionCall => return Err(Halt::Unsupported("call:unexpected")),
+            NativeMethod::FunctionCall => return Err(Halt::EngineInvariant("call:unexpected")),
             // `Function.prototype.apply` is handled by the `run` trampoline
             // (`enter_call_dot_apply`) and never reaches here.
-            NativeMethod::FunctionApply => return Err(Halt::Unsupported("apply:unexpected")),
+            NativeMethod::FunctionApply => return Err(Halt::EngineInvariant("apply:unexpected")),
             NativeMethod::FunctionPrototype => Slot::undefined(),
             // `Object.prototype.valueOf`: `ToObject(this)`. Object receivers
             // retain their identity, primitive receivers become their realm
@@ -34720,7 +34744,7 @@ impl Interp {
             | NativeMethod::PromiseCapabilityExecutor
             | NativeMethod::PromiseFinallyHandler
             | NativeMethod::PromiseFinallyValue => {
-                return Err(Halt::Unsupported("promise:resolving-fn-unexpected"))
+                return Err(Halt::EngineInvariant("promise:resolving-fn-unexpected"))
             }
             // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
             // surface over child 8's matcher.
@@ -39677,7 +39701,7 @@ impl Interp {
                 // surrogate pair, two (4 bytes) — `for...of` iterates by code point.
                 let i = st.index as usize;
                 if i + 2 > st.str_bytes.len() {
-                    return Err(Halt::Unsupported("string-iterator:truncated-sequence"));
+                    return Err(Halt::EngineInvariant("string-iterator:truncated-sequence"));
                 }
                 let hi = u16::from_be_bytes([st.str_bytes[i], st.str_bytes[i + 1]]);
                 let consumed = if (0xD800..=0xDBFF).contains(&hi) && i + 4 <= st.str_bytes.len() {
@@ -50709,7 +50733,7 @@ impl Interp {
     fn binary_arith(&mut self, code: &[u8], op: ArithOp) -> Result<(), Halt> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::Unsupported("arithmetic:stack-underflow"));
+            return Err(Halt::EngineInvariant("arithmetic:stack-underflow"));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -50736,7 +50760,7 @@ impl Interp {
     fn binary_bit(&mut self, code: &[u8], op: BitOp) -> Result<(), Halt> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::Unsupported("bitwise:stack-underflow"));
+            return Err(Halt::EngineInvariant("bitwise:stack-underflow"));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -50795,7 +50819,7 @@ impl Interp {
     fn relational(&mut self, code: &[u8], op: RelOp) -> Result<(), Halt> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::Unsupported("comparison:stack-underflow"));
+            return Err(Halt::EngineInvariant("comparison:stack-underflow"));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -51235,7 +51259,7 @@ impl Interp {
     fn op_add(&mut self, code: &[u8]) -> Result<(), Halt> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::Unsupported("add:stack-underflow"));
+            return Err(Halt::EngineInvariant("add:stack-underflow"));
         }
         let a = self.to_primitive_default(code, self.stack[n - 2])?;
         let b = self.to_primitive_default(code, self.stack[n - 1])?;
@@ -55468,7 +55492,7 @@ mod tests {
         let out = interp.run_bounded(&[193u8, 169], 2_000_000);
         assert_eq!(
             out.halt,
-            Halt::Unsupported("async:non-boundary-return"),
+            Halt::EngineInvariant("async:non-boundary-return"),
             "malformed async `RETURN` body must degrade to a named skip"
         );
         assert!(
@@ -55664,7 +55688,7 @@ mod tests {
         // the same bounded entry the fuzz harness uses.
         let bytes = [192u8, 193, 10, 193, 35, 193, 139];
         let out = crate::run_program_bounded(&bytes, 100_000);
-        assert_eq!(out.halt, Halt::Unsupported("bitwise:stack-underflow"));
+        assert_eq!(out.halt, Halt::EngineInvariant("bitwise:stack-underflow"));
     }
 
     #[test]
@@ -55717,6 +55741,7 @@ mod tests {
                 | Halt::MeterAbort
                 | Halt::StepLimit(_)
                 | Halt::Unsupported(_)
+                | Halt::EngineInvariant(_)
                 | Halt::StackOverflow(_) => {}
                 Halt::Decode(_) => unreachable!("handled above"),
                 // `Yield` is produced only inside a `resume_generator` nested
