@@ -20,29 +20,17 @@ test('a boolean pattern is recognised without the chart opting in', t => {
   t.is(fieldKind({ name: 'approved', pattern: M.boolean() }), 'boolean');
 });
 
-test('a boolean pattern is still recognised if its tag was stripped', t => {
-  // What a `match:kind` CopyTagged degrades to if it passes through anything
-  // that copies structurally and drops symbol keys. Rendering text there means
-  // the UI offers a control the daemon will refuse on submit.
-  t.is(
-    fieldKind({ name: 'approved', pattern: { payload: 'boolean' } }),
-    'boolean',
-  );
-});
-
-test('an untagged pattern with more than a payload is not swallowed', t => {
-  t.is(
-    fieldKind({ name: 'x', pattern: { payload: 'boolean', extra: 1 } }),
-    'text',
-  );
-});
-
 test('every other field stays text', t => {
   t.is(fieldKind({ name: 'note', pattern: M.string() }), 'text');
   t.is(fieldKind({ name: 'n', pattern: M.number() }), 'text');
   t.is(fieldKind({ name: 'plain' }), 'text');
   t.is(fieldKind({ name: 'odd', pattern: 'not-a-pattern' }), 'text');
   t.is(fieldKind({ name: 'null', pattern: null }), 'text');
+  // The flattened shape a pattern used to degrade to when a form formula was
+  // persisted raw. The daemon now stores fields as capdata, so the tag
+  // survives and nothing produces this; a field that somehow still carries it
+  // is unanswerable whatever control is drawn, so it stays text.
+  t.is(fieldKind({ name: 'stale', pattern: { payload: 'boolean' } }), 'text');
 });
 
 test('a boolean field starts false unless it defaults to true', t => {

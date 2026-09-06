@@ -46,39 +46,14 @@ const tagOf = value => {
  * chart has to be rewritten to opt in. Everything else stays text, which is
  * exactly the previous behaviour.
  *
- * Recognised two ways on purpose. The tagged form is the normal one, and is
- * now what every form carries: the daemon stores a form message's fields as
- * smallcaps capdata, so a CopyTagged's `Symbol.toStringTag` survives the
- * formula's JSON round-trip.
- *
- * The untagged form — a plain record whose only content is `payload:
- * 'boolean'` — is what a `match:kind` pattern was flattened to by that round
- * trip *before* the fix. Reading it structurally as well costs nothing: no
- * other field shape is a record whose sole own property is a `payload` of
- * exactly `'boolean'`.
- *
- * Be clear about what that second reading buys, because it is less than it
- * looks. A form persisted before the daemon fix cannot be repaired — nothing
- * recovers a tag that was never written — and `submit` still checks the answer
- * against the flattened pattern, where `mustMatch(true, { payload: 'boolean'
- * })` fails exactly as `mustMatch('yes', ...)` does. Such a field stays
- * unanswerable either way. All this branch does is render the control the
- * field asked for instead of a text box, and give a migration something to
- * recognise if one is ever written.
- *
  * @param {FormFieldDef} field
  * @returns {'boolean' | 'text'}
  */
 export const fieldKind = field => {
   const pattern = field && field.pattern;
-  if (pattern === null || typeof pattern !== 'object') return 'text';
-  const payload = /** @type {any} */ (pattern).payload;
-  if (payload !== 'boolean') return 'text';
-  const tag = tagOf(pattern);
-  if (tag === 'match:kind') return 'boolean';
-  // Tag stripped: accept it only if `payload` is all there is, so this cannot
-  // swallow some richer pattern that merely happens to carry that field.
-  if (tag === undefined && Object.keys(pattern).length === 1) return 'boolean';
+  if (tagOf(pattern) === 'match:kind') {
+    if (/** @type {any} */ (pattern).payload === 'boolean') return 'boolean';
+  }
   return 'text';
 };
 harden(fieldKind);
