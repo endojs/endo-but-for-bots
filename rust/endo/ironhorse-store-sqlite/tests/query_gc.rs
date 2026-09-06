@@ -56,11 +56,18 @@ fn build_store(store: Rc<RefCell<SqliteHeapStore>>) {
         .expect("begin");
     drop(session);
     let mut session = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
-    let o = session.machine_mut().run(&compiled[1].0);
+    // Crank 2 goes through `relink_crank`, the production boundary: its
+    // symbol atom is not positionally aligned with crank 1's (crank 1
+    // interns `length`, crank 2 does not), so an unrelinked run bound
+    // `arr` to `undefined` — and `arr[3] = …` was a silent no-op that only
+    // looked like the property-graph write this suite describes. That
+    // access now throws, as it should, so the graph is built for real.
+    let (b2, n2) = &compiled[1];
+    let b2 = session.machine_mut().relink_crank(b2, n2).expect("relink");
+    let o = session.machine_mut().run(&b2);
     assert!(o.completed, "halt: {:?}", o.halt);
-    // Pin the positional symbol binding, not just completion: a
-    // misaligned redeclaration in crank 2 would still complete while
-    // silently changing the graph this suite builds (review finding).
+    // Pin the binding, not just completion: a misbound crank 2 would still
+    // complete while silently changing the graph this suite builds.
     assert_eq!(o.result, "8", "crank-2 symbol binding pinned");
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
 }
@@ -307,7 +314,9 @@ fn generational_collect_equivalent_across_backends() {
             .expect("begin");
         let _ = partial_collect(&mut session, store).expect("boundary collect");
         checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint");
-        let o = session.machine_mut().run(&compiled[1].0);
+        let (b2, n2) = &compiled[1];
+        let b2 = session.machine_mut().relink_crank(b2, n2).expect("relink");
+        let o = session.machine_mut().run(&b2);
         assert!(o.completed, "halt: {:?}", o.halt);
         checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint");
         let freed = generational_collect(&mut session, store).expect("generational");
