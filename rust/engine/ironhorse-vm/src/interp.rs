@@ -37784,7 +37784,14 @@ impl Interp {
                 let holder = self.slots.alloc(Slot::instance(self.object_proto));
                 let root_id = self.intern_key("");
                 self.set_own_unmetered(holder, root_id, value);
-                self.json_internalize_property(code, &input, holder, root_id, Some(source), reviver)
+                self.json_internalize_property(
+                    code,
+                    &input,
+                    holder,
+                    ReadKey::Id(root_id),
+                    Some(source),
+                    reviver,
+                )
             }
             _ => Err(Halt::Unsupported("json:unmodeled")),
         }
@@ -38678,7 +38685,7 @@ impl Interp {
         code: &[u8],
         input: &[u8],
         holder: crate::value::SlotIndex,
-        name: u16,
+        name: ReadKey,
         source: Option<JsonSource>,
         reviver: Slot,
     ) -> Result<Slot, Halt> {
@@ -38692,18 +38699,24 @@ impl Interp {
         code: &[u8],
         input: &[u8],
         holder: crate::value::SlotIndex,
-        name: u16,
+        name: ReadKey,
         source: Option<JsonSource>,
         reviver: Slot,
     ) -> Result<Slot, Halt> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
-        let value = self.mop_get(code, holder, name, holder_slot)?;
+        let value = self.mop_get_read(code, holder, name, holder_slot)?;
         if let Payload::Reference(object) = value.value {
             if value.kind == Kind::Reference {
                 if self.array_generic_is_array(object)? {
                     let length = self.array_generic_length(code, object)?;
                     for index in 0..length {
-                        let id = self.array_generic_index_id(index);
+                        // The walk VISITS each element; it creates nothing
+                        // that was not already parsed. Naming every index of
+                        // a 70,000-element array to visit it exhausted the
+                        // `u16` id space, so `JSON.parse(json, function (k,
+                        // v) { return v })` — an identity reviver, the most
+                        // common one there is — poisoned the machine.
+                        let key = self.array_index_read_key(index);
                         let child_source = match source.as_ref() {
                             Some(JsonSource::Array(children)) => {
                                 usize::try_from(index).ok().and_then(|i| children.get(i).cloned())
@@ -38714,14 +38727,17 @@ impl Interp {
                             code,
                             input,
                             object,
-                            id,
+                            key,
                             child_source,
                             reviver,
                         )?;
+                        // The reviver is guest code and can have named this
+                        // index while it ran.
+                        let key = self.refresh_read_key(key);
                         if revived.kind == Kind::Undefined {
-                            let _ = self.mop_delete(code, object, id)?;
+                            let _ = self.mop_delete_read(code, object, key)?;
                         } else {
-                            self.json_create_data_property(code, object, id, revived)?;
+                            self.json_create_data_property_read(code, object, key, revived)?;
                         }
                     }
                 } else {
@@ -38737,7 +38753,7 @@ impl Interp {
                             code,
                             input,
                             object,
-                            id,
+                            ReadKey::Id(id),
                             child_source,
                             reviver,
                         )?;
@@ -38750,7 +38766,7 @@ impl Interp {
                 }
             }
         }
-        let key = self.property_key_slot(name)?;
+        let key = self.read_key_slot(name)?;
         let context = self.json_reviver_context(input, source.as_ref(), value);
         self.run_callback(code, reviver, holder_slot, &[key, value, context])
     }
@@ -38797,6 +38813,27 @@ impl Interp {
             ..OrdinaryDescriptor::default()
         };
         let _ = self.mop_define_own_property(code, object, id, descriptor)?;
+        Ok(())
+    }
+
+    /// [`Self::json_create_data_property`] keyed by index, so revising an
+    /// array element back into place needs no name (an array item is reached
+    /// by index).
+    fn json_create_data_property_read(
+        &mut self,
+        code: &[u8],
+        object: crate::value::SlotIndex,
+        key: ReadKey,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        let descriptor = OrdinaryDescriptor {
+            value: Some(value),
+            writable: Some(true),
+            enumerable: Some(true),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        };
+        let _ = self.mop_define_own_property_read(code, object, key, descriptor)?;
         Ok(())
     }
 
