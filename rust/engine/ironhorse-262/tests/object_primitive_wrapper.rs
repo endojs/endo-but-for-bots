@@ -49,6 +49,47 @@ fn object_call_boxes_boolean_number_and_string() {
     );
 }
 
+// A member access on a primitive boolean boxes to `%Boolean.prototype%`
+// without materializing a wrapper. `error_model_oracle_sweep.rs` pins the
+// completion values of that access; these pins are about WHAT it resolves
+// through — that the box target is the realm's live `%Boolean.prototype%`
+// object and that the receiver reaching the method is the boxed wrapper —
+// which is what distinguishes real boxing from a hard-coded method table.
+#[test]
+fn primitive_boolean_boxing_resolves_through_the_live_prototype() {
+    // The box target is the same object `Object(true)` chains to, so a
+    // guest addition to it is visible through the primitive and a guest
+    // replacement of an intrinsic method wins.
+    assert_result_agrees(
+        "Object.getPrototypeOf(Object(true)) === Boolean.prototype",
+        "true",
+    );
+    assert_result_agrees(
+        "Boolean.prototype.tag = function () { return 'b:' + this }; true.tag()",
+        "b:true",
+    );
+    assert_result_agrees(
+        "Boolean.prototype.toString = function () { return 'X' }; true.toString()",
+        "X",
+    );
+    // A symbol-keyed inherited property resolves through the same chain.
+    assert_result_agrees(
+        "Boolean.prototype[Symbol.iterator] = 1; String(true[Symbol.iterator])",
+        "1",
+    );
+    // `this` inside the inherited method is the boxed receiver in sloppy
+    // code and the bare primitive under strict — the ordinary sloppy-`this`
+    // boxing rule, reached here through a primitive base.
+    assert_result_agrees(
+        "Boolean.prototype.kind = function () { return typeof this }; true.kind()",
+        "object",
+    );
+    assert_result_agrees(
+        "Boolean.prototype.k2 = function () { 'use strict'; return typeof this }; true.k2()",
+        "boolean",
+    );
+}
+
 #[test]
 fn object_value_of_applies_to_object() {
     for source in [
