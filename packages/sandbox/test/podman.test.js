@@ -1641,10 +1641,15 @@ const startSidecar = async (t, name, network) => {
 
 /**
  * Build a policy request pinned to the digest podman actually stored
- * for the test image.
+ * for the test image, beside the reference to use for it.
+ *
+ * A policy requires the *whole* reference to be digest-pinned, not just
+ * the digest field: the reference reaches podman as a positional
+ * argument, so one beginning with `-` would be read as a flag. The tag
+ * form the rest of this suite uses is therefore not admissible here.
  *
  * @param {string} sidecarName
- * @returns {Promise<any>}
+ * @returns {Promise<{ policy: any, ref: string }>}
  */
 const makeLivePolicy = async sidecarName => {
   const digest = await podmanRun([
@@ -1654,10 +1659,12 @@ const makeLivePolicy = async sidecarName => {
     '{{.Digest}}',
     ALPINE_REF,
   ]);
+  const imageDigest = digest.stdout.trim();
+  const ref = `${ALPINE_REF.split(':')[0]}@${imageDigest}`;
   const mib = 1024n * 1024n;
-  return harden({
+  const policy = harden({
     profile: 'hosted-agent-v1',
-    imageDigest: digest.stdout.trim(),
+    imageDigest,
     uid: 1000,
     gid: 1000,
     brokerSidecar: harden({ container: sidecarName }),
@@ -1695,6 +1702,7 @@ const makeLivePolicy = async sidecarName => {
     ]),
     attestationArgv: harden(['/bin/sleep', '600']),
   });
+  return harden({ policy, ref });
 };
 
 /**
@@ -1703,6 +1711,7 @@ const makeLivePolicy = async sidecarName => {
  */
 const skipUnlessPolicyHost = t => {
   if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+    t.log('SKIPPED: podman or the test image is unavailable');
     t.pass(
       `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
     );
@@ -1725,6 +1734,7 @@ test.serial(
       return;
     }
     if (!(probe.details?.cgroup2?.available ?? false)) {
+      t.log('SKIPPED: cgroup v2 delegation');
       // A host that cannot delegate memory/pids/cpu cannot apply the
       // ceilings, and the attestation is right to refuse. Exercising the
       // refusal is the stub suite's job; here it would only prove that
@@ -1735,13 +1745,13 @@ test.serial(
       return;
     }
 
-    const policy = await makeLivePolicy(sidecarName);
+    const { policy, ref } = await makeLivePolicy(sidecarName);
     /** @type {any} */
     let slice;
     try {
       slice = await driver.prepareSlice(
         /** @type {any} */ ({
-          rootfs: { kind: 'oci', ref: ALPINE_REF },
+          rootfs: { kind: 'oci', ref },
           mounts: [],
           scratchHostPath: '',
           network: 'broker-only',
@@ -1830,14 +1840,14 @@ test.serial(
       return;
     }
 
-    const policy = await makeLivePolicy(sidecarName);
+    const { policy, ref } = await makeLivePolicy(sidecarName);
     // This is the failure the contract calls out by name: a namespace
     // that NATs outbound looks identical from the `--network` flag and
     // different only from the interface inventory.
     await t.throwsAsync(
       driver.prepareSlice(
         /** @type {any} */ ({
-          rootfs: { kind: 'oci', ref: ALPINE_REF },
+          rootfs: { kind: 'oci', ref },
           mounts: [],
           scratchHostPath: '',
           network: 'broker-only',
