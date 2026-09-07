@@ -563,6 +563,25 @@ export const makeSandboxFactory = (
       sliceSpec,
     );
 
+    /**
+     * Refuse the mount-granting methods on a policy slice.
+     *
+     * The policy declares the whole mount table and `policy()` attests
+     * that table as exact. Handing back a `MountHandle` afterwards would
+     * consume a host scratch allocation the daemon must later reclaim and
+     * report an `innerPath` the slice does not have — a capability that
+     * contradicts the attestation the same slice hands out.
+     *
+     * @param {string} method
+     */
+    const assertNoPolicy = method => {
+      if (needsPolicy) {
+        throw makeError(
+          X`${q(method)} is not available on a policy slice: the policy declares the whole mount table`,
+        );
+      }
+    };
+
     /** @type {Set<{ killAndReap: (reason: Error, initialSignal?: TerminationSignal) => Promise<void> }>} */
     const liveProcesses = new Set();
     // Cleanup errors for processes whose containment could not be proven.
@@ -998,6 +1017,7 @@ export const makeSandboxFactory = (
      */
     const mountInSlice = async (cap, innerPath, mode = 'ro') => {
       assertRunning();
+      assertNoPolicy('mount');
       // Phase 1 only supports mounts declared at slice construction;
       // dynamic mounts after the fact would require remounting bwrap.
       // We still mint a tracker so dispose() can iterate.
@@ -1009,6 +1029,7 @@ export const makeSandboxFactory = (
      */
     const scratchInSlice = async innerPath => {
       assertRunning();
+      assertNoPolicy('scratch');
       // Lifecycle is bound to the slice; the daemon's scratch GC
       // sweeps the host directory when the cap is unpinned.
       const scratchCap = /** @type {MountCap} */ (

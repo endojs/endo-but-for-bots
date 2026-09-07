@@ -230,7 +230,7 @@ const assertPolicyMount = candidate => {
     kind === 'volume'
       ? ['role', 'kind', 'source', 'destination', 'sizeBytes']
       : ['role', 'kind', 'destination', 'sizeBytes'];
-  assertExactKeys(record, keys, `mount ${q(record.role)}`);
+  assertExactKeys(record, keys, `mount ${record.role}`);
   const role = assertPortableName(record.role, 'mount role');
   const destination = record.destination;
   // `INNER_PATH_PATTERN` requires every segment to begin with an
@@ -321,13 +321,13 @@ export const assertSlicePolicyRequest = request => {
   let brokerSidecar;
   if (Object.hasOwn(sidecar, 'netnsPath')) {
     const netnsPath = sidecar.netnsPath;
-    if (
-      typeof netnsPath !== 'string' ||
-      !netnsPath.startsWith('/') ||
-      netnsPath.includes('\0')
-    ) {
+    // Same bounded shape as an inner mount destination. A looser check
+    // would let a comma through, and a runtime that reads `--network`
+    // as a comma-separated list would then attach the slice to a
+    // network the policy never named.
+    if (typeof netnsPath !== 'string' || !INNER_PATH_PATTERN.test(netnsPath)) {
       throw makeError(
-        X`slice policy brokerSidecar.netnsPath must be an absolute path`,
+        X`slice policy brokerSidecar.netnsPath must be an absolute normal path; got ${q(netnsPath)}`,
       );
     }
     brokerSidecar = harden({ netnsPath });
@@ -349,6 +349,7 @@ export const assertSlicePolicyRequest = request => {
       'openFiles',
       'coreBytes',
       'shmBytes',
+      'maxConcurrentOperations',
       'writableBytes',
     ],
     'resources',
@@ -360,6 +361,10 @@ export const assertSlicePolicyRequest = request => {
     openFiles: assertPositiveCount(resourceRecord.openFiles, 'openFiles'),
     coreBytes: assertByteCount(resourceRecord.coreBytes, 'coreBytes'),
     shmBytes: assertByteCount(resourceRecord.shmBytes, 'shmBytes'),
+    maxConcurrentOperations: assertPositiveCount(
+      resourceRecord.maxConcurrentOperations,
+      'maxConcurrentOperations',
+    ),
     writableBytes: assertByteCount(
       resourceRecord.writableBytes,
       'writableBytes',
@@ -377,12 +382,20 @@ export const assertSlicePolicyRequest = request => {
   const roles = new Set();
   const destinations = new Set();
   const sources = new Set();
-  // The shared-memory tmpfs is a writable path the runtime attaches on
-  // its own, so it counts toward the aggregate whether or not the table
-  // mentions it — and it must not also appear there, because the
-  // runtime takes its size from `--shm-size` and would ignore a second
-  // declaration of the same path.
-  let writable = resources.shmBytes;
+  // Every ceiling in `resources` is applied per container, and the
+  // slice runs the anchor plus up to `maxConcurrentOperations`
+  // operations, each its own container with its own cgroup and its own
+  // tmpfs. So the per-container writable paths — the tmpfs entries and
+  // the shared-memory tmpfs — count once per container, while the
+  // volumes are one piece of durable storage that every container
+  // mounts and are counted once.
+  //
+  // Getting this wrong is not academic: `writableBytes` would then name
+  // a total nothing bounds, which is exactly the shape the sum check
+  // below exists to refuse.
+  const containers = 1n + BigInt(resources.maxConcurrentOperations);
+  let perContainerWritable = resources.shmBytes;
+  let sharedWritable = 0n;
   for (const mount of mounts) {
     if (roles.has(mount.role)) {
       throw makeError(
@@ -408,16 +421,19 @@ export const assertSlicePolicyRequest = request => {
         );
       }
       sources.add(mount.source);
+      sharedWritable += mount.sizeBytes;
+    } else {
+      perContainerWritable += mount.sizeBytes;
     }
-    writable += mount.sizeBytes;
   }
-  // The aggregate ceiling is the sum of the per-path ceilings, not an
+  // The aggregate ceiling is what the parts actually add up to, not an
   // independent number: nothing enforces a total that no single path is
   // bounded by, so a request whose parts do not add up to its whole is
   // asking for a control the host cannot apply.
+  const writable = sharedWritable + perContainerWritable * containers;
   if (writable !== resources.writableBytes) {
     throw makeError(
-      X`slice policy writableBytes ${q(resources.writableBytes)} does not equal the sum of its writable paths ${q(writable)}`,
+      X`slice policy writableBytes ${q(resources.writableBytes)} does not equal what its writable paths add up to across the anchor and ${q(resources.maxConcurrentOperations)} operations: ${q(writable)}`,
     );
   }
 
@@ -738,10 +754,21 @@ const attestMounts = (policy, state) => {
       // The writable ceiling: a tmpfs carries its own `size=`, a volume
       // carries a quota the storage driver recorded against it. Neither
       // is a flag we can take on faith, so both are read back.
-      const ceiling =
-        mount.kind === 'tmpfs'
-          ? effective.sizeBytes
-          : (state.volumeQuotas.get(mount.source) ?? null);
+      let ceiling = effective.sizeBytes;
+      if (mount.kind === 'volume') {
+        const volume = state.volumes.get(mount.source);
+        // A volume created with `--opt device=… --opt o=bind` is a host
+        // directory the runtime still reports as `Type: 'volume'`, so
+        // the bind check above walks straight past it and `hostHome`
+        // would be attested `none` over the operator's home directory.
+        if (volume?.hostPath != null) {
+          return unproved(
+            `mount ${mount.role}`,
+            `volume is backed by the host path ${volume.hostPath}`,
+          );
+        }
+        ceiling = volume?.sizeBytes ?? null;
+      }
       if (ceiling === null) {
         return unproved(`mount ${mount.role} storage ceiling`);
       }
@@ -810,8 +837,9 @@ export const attestSlicePolicy = (policy, state) => {
   // the flag; the kernel's answer is whether the anchor's namespace
   // links differ from the ones this process holds.
   for (const kind of /** @type {const} */ (['user', 'pid', 'ipc', 'mount'])) {
-    if (state.unsharedNamespaces[kind] !== true) {
-      return unproved(`${kind} namespace`);
+    const namespace = state.namespaces[kind];
+    if (namespace.unshared !== true || namespace.id === null) {
+      return unproved(`${kind} namespace`, namespace.id);
     }
   }
   /** @type {SlicePolicyAttestation['namespaces']} */
@@ -994,9 +1022,95 @@ export const attestSlicePolicy = (policy, state) => {
       openFiles: policy.resources.openFiles,
       coreBytes: policy.resources.coreBytes,
       shmBytes: policy.resources.shmBytes,
+      maxConcurrentOperations: policy.resources.maxConcurrentOperations,
       writableBytes: policy.resources.writableBytes,
     }),
     mounts,
   });
 };
 harden(attestSlicePolicy);
+
+/**
+ * Project a container-runtime inspect record down to the fields the
+ * attestation checks, canonically ordered.
+ *
+ * Two containers with the same fingerprint were resolved by the runtime
+ * to the same enforced configuration. The driver compares each
+ * operation's against the anchor's before letting it run, which is what
+ * turns "these containers were asked for the same flags" — an inference
+ * this module otherwise refuses — into "this host resolved those flags
+ * the same way it did when the slice was proved".
+ *
+ * It is deliberately not a proof of the kernel state: that was read of
+ * the anchor. What it catches is the host changing underneath a live
+ * slice — cgroup delegation revoked, an engine upgrade resolving a flag
+ * differently — between the slice being attested and an operation being
+ * admitted.
+ *
+ * @param {unknown} inspect
+ * @returns {string}
+ */
+export const sliceConfigFingerprint = inspect => {
+  const fields = harden([
+    'ImageDigest',
+    'HostConfig.Privileged',
+    'HostConfig.ReadonlyRootfs',
+    'HostConfig.SecurityOpt',
+    'HostConfig.Devices',
+    'HostConfig.Memory',
+    'HostConfig.MemorySwap',
+    'HostConfig.ShmSize',
+    'HostConfig.PidsLimit',
+    'HostConfig.CpuQuota',
+    'HostConfig.CpuPeriod',
+    'HostConfig.NanoCpus',
+    'HostConfig.Ulimits',
+    'HostConfig.Tmpfs',
+    'HostConfig.NetworkMode',
+    'HostConfig.UsernsMode',
+    'HostConfig.PidMode',
+    'HostConfig.IpcMode',
+    'Config.User',
+  ]);
+  /**
+   * Canonical JSON: object key order is an artifact of how the runtime
+   * serialized its answer, not of the configuration, so two orderings
+   * of the same record must not fingerprint differently.
+   *
+   * @param {unknown} value
+   * @returns {string}
+   */
+  const canonical = value => {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+    if (typeof value === 'object' && value !== null) {
+      return `{${Object.keys(value)
+        .sort()
+        .map(
+          key =>
+            `${JSON.stringify(key)}:${canonical(/** @type {any} */ (value)[key])}`,
+        )
+        .join(',')}}`;
+    }
+    return JSON.stringify(value ?? null);
+  };
+  const mounts = observed(inspect, 'Mounts');
+  const mountSummary = (Array.isArray(mounts) ? mounts : [])
+    .map(mount =>
+      canonical({
+        Type: mount?.Type,
+        Name: mount?.Name,
+        Source: mount?.Source,
+        Destination: mount?.Destination,
+        Options: [
+          ...(Array.isArray(mount?.Options) ? mount.Options : []),
+        ].sort(),
+        RW: mount?.RW,
+      }),
+    )
+    .sort()
+    .join(',');
+  return `${fields
+    .map(field => `${field}=${canonical(observed(inspect, field))}`)
+    .join(';')};Mounts=[${mountSummary}]`;
+};
+harden(sliceConfigFingerprint);

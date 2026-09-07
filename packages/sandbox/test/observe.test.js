@@ -12,7 +12,7 @@ import {
   readNetworkNamespace,
   readNetworkNamespaceIdAtPath,
   readProcessStatus,
-  readUnsharedNamespaces,
+  readNamespaceIdentities,
 } from '../src/observe.js';
 
 /**
@@ -134,11 +134,14 @@ test('namespaces the anchor does not share are reported unshared', async t => {
       '/proc/77/ns/mnt': 'mnt:[4026532103]',
     },
   );
-  const observed = await readUnsharedNamespaces(proc, 77);
+  const observed = await readNamespaceIdentities(proc, 77);
   t.deepEqual(
-    { ...observed },
+    Object.fromEntries(
+      Object.entries(observed).map(([kind, ns]) => [kind, ns.unshared]),
+    ),
     { user: true, pid: true, ipc: true, mount: true },
   );
+  t.is(observed.pid.id, 'pid-4026532101');
 });
 
 test('a namespace the anchor shares with the daemon is not unshared', async t => {
@@ -155,11 +158,12 @@ test('a namespace the anchor shares with the daemon is not unshared', async t =>
       '/proc/77/ns/mnt': 'mnt:[4026532103]',
     },
   );
-  const observed = await readUnsharedNamespaces(proc, 77);
-  t.deepEqual(
-    { ...observed },
-    { user: false, pid: true, ipc: true, mount: true },
-  );
+  const observed = await readNamespaceIdentities(proc, 77);
+  t.false(observed.user.unshared);
+  // Still identified, just not private: the id is what a caller needs
+  // to notice two slices holding the same one.
+  t.is(observed.user.id, 'user-4026531837');
+  t.true(observed.pid.unshared);
 });
 
 test('a namespace link nobody can read is not proof of isolation', async t => {
@@ -167,10 +171,15 @@ test('a namespace link nobody can read is not proof of isolation', async t => {
     {},
     { '/proc/self/ns/user': 'user:[4026531837]' },
   );
-  const observed = await readUnsharedNamespaces(proc, 77);
+  const observed = await readNamespaceIdentities(proc, 77);
   t.deepEqual(
-    { ...observed },
-    { user: false, pid: false, ipc: false, mount: false },
+    Object.values(observed).map(ns => [ns.id, ns.unshared]),
+    [
+      [null, false],
+      [null, false],
+      [null, false],
+      [null, false],
+    ],
   );
 });
 

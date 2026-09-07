@@ -263,7 +263,19 @@ export type SlicePolicyResources = {
    * toward `writableBytes` like every other writable path.
    */
   shmBytes: bigint;
-  /** Must equal `shmBytes` plus the sum of the mount table's ceilings. */
+  /**
+   * How many operation containers may be live at once, beside the
+   * anchor. Every ceiling above is applied *per container* — the driver
+   * runs one container per spawn — so this is what makes the slice-wide
+   * aggregate below a finite number rather than a wish.
+   */
+  maxConcurrentOperations: number;
+  /**
+   * The slice-wide writable aggregate. Must equal the volumes' ceilings
+   * (shared: every container mounts the same storage) plus the tmpfs
+   * and shared-memory ceilings times `1 + maxConcurrentOperations`
+   * (per container: each gets its own).
+   */
   writableBytes: bigint;
 };
 
@@ -311,13 +323,16 @@ export type ObservedSliceState = {
   inspect: unknown;
   /** Whether the container engine runs without host root. */
   rootless: boolean;
-  /** Per namespace, whether the anchor's differs from the daemon's. */
-  unsharedNamespaces: {
-    user: boolean;
-    pid: boolean;
-    ipc: boolean;
-    mount: boolean;
-  };
+  /**
+   * Per namespace, which one the anchor holds and whether it differs
+   * from the observer's. The identity is carried, not folded away, so a
+   * caller can also check it against the other slices in play —
+   * "unshared" is not "private" on its own.
+   */
+  namespaces: Record<
+    'user' | 'pid' | 'ipc' | 'mount',
+    { id: string | null; unshared: boolean }
+  >;
   /**
    * The anchor's network namespace as `procfs` describes it, beside the
    * identity of the one the policy named. They must be the same
@@ -346,8 +361,15 @@ export type ObservedSliceState = {
     permittedCapabilities: bigint | null;
     boundingCapabilities: bigint | null;
   };
-  /** Recorded storage ceiling per declared volume; `null` when none is. */
-  volumeQuotas: ReadonlyMap<string, bigint | null>;
+  /**
+   * Per declared volume: the recorded storage ceiling (`null` when
+   * none is), and the host path backing it when it is a bind wearing a
+   * volume's name rather than managed storage.
+   */
+  volumes: ReadonlyMap<
+    string,
+    { sizeBytes: bigint | null; hostPath: string | null }
+  >;
   /** Host controls the ceilings depend on. */
   resources: { cgroupControllers: readonly string[] };
   /** Whether every descendant is inside something the driver removes. */

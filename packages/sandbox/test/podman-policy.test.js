@@ -39,7 +39,8 @@ const POLICY = harden({
     openFiles: 4096,
     coreBytes: 0n,
     shmBytes: 64n * MIB,
-    writableBytes: 16n * GIB + 64n * MIB,
+    maxConcurrentOperations: 1,
+    writableBytes: 12n * GIB + (4n * GIB + 64n * MIB) * 2n,
   }),
   mounts: harden([
     harden({
@@ -599,5 +600,94 @@ test('a rootful engine fails construction even without the probe gate', async t 
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
     message: /rootless backend/,
+  });
+});
+
+test('the orphan sweep runs before the anchor it is evidence about', async t => {
+  // The sweep removes every container carrying this driver's exact
+  // owner label. Run after the anchor is created it would take the
+  // anchor — and any sibling slice's live operations — as orphans, and
+  // then attest a container that no longer exists.
+  const { driver, calls } = makeDriverUnderTest();
+  await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  const sweepAt = calls.findIndex(call => call.args[0] === 'ps');
+  const createAt = calls.findIndex(call => call.args[0] === 'create');
+  t.true(sweepAt >= 0, 'the sweep ran');
+  t.true(createAt >= 0, 'the anchor was created');
+  t.true(sweepAt < createAt, 'the sweep ran first');
+});
+
+test('an operation the engine resolved differently is refused', async t => {
+  let inspectCount = 0;
+  const { driver } = makeDriverUnderTest({
+    responses: {
+      'container-inspect': {
+        get stdout() {
+          inspectCount += 1;
+          // The anchor is inspected twice (before and after the procfs
+          // reads); the operation's inspect is the third, and this host
+          // has quietly stopped applying the pid ceiling by then.
+          const record =
+            inspectCount >= 3
+              ? {
+                  ...ANCHOR_INSPECT,
+                  HostConfig: { ...ANCHOR_INSPECT.HostConfig, PidsLimit: 0 },
+                }
+              : ANCHOR_INSPECT;
+          return `${JSON.stringify([record])}\n`;
+        },
+      },
+    },
+  });
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  await t.throwsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}), {
+    message: /resolved this operation's configuration differently/,
+  });
+});
+
+test('a slice admits only the operations its policy declared', async t => {
+  const { driver } = makeDriverUnderTest();
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  // Every ceiling is applied per container, so the attested slice-wide
+  // aggregate is only true while the live count is the one it was
+  // computed for.
+  await driver.spawn(slice, ['/bin/sleep', '60'], {});
+  await t.throwsAsync(driver.spawn(slice, ['/bin/sleep', '60'], {}), {
+    message: /admits 1 concurrent operations/,
+  });
+});
+
+test('an anchor that stopped while it was read is not attested', async t => {
+  let inspectCount = 0;
+  const { driver } = makeDriverUnderTest({
+    responses: {
+      'container-inspect': {
+        get stdout() {
+          inspectCount += 1;
+          // The second inspect is the re-check after the procfs reads:
+          // an `attestationArgv` that did not in fact block has exited,
+          // and the kernel may have handed that pid to someone else.
+          const record =
+            inspectCount >= 2
+              ? { ...ANCHOR_INSPECT, State: { Running: false, Pid: 0 } }
+              : ANCHOR_INSPECT;
+          return `${JSON.stringify([record])}\n`;
+        },
+      },
+    },
+  });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /did not stay running while it was read/,
+  });
+});
+
+test('two slices cannot both attest a namespace they share', async t => {
+  const { driver } = makeDriverUnderTest();
+  await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  // The stub hands every anchor the same namespace inodes. "Not the
+  // daemon's" is what procfs answers; "nobody else's" takes comparing
+  // against the slices already in play.
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /already held by another live slice/,
   });
 });

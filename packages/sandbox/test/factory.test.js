@@ -2,7 +2,8 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
-import { matches } from '@endo/patterns';
+import { makeExo } from '@endo/exo';
+import { M, matches } from '@endo/patterns';
 
 import { makeSandboxFactory } from '../src/factory.js';
 import {
@@ -332,7 +333,8 @@ const stubPolicyRequest = harden({
     openFiles: 4096,
     coreBytes: 0n,
     shmBytes: 0n,
-    writableBytes: 1024n * 1024n,
+    maxConcurrentOperations: 1,
+    writableBytes: 2n * 1024n * 1024n,
   }),
   mounts: harden([
     harden({
@@ -499,4 +501,37 @@ test('a disposed slice does not attest to a confinement it no longer has', async
   );
   await E(handle).dispose();
   await t.throwsAsync(E(handle).policy(), { message: /disposed/ });
+});
+
+test('a policy slice refuses to hand out mounts outside its own table', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([makePolicyStubDriver()]),
+    scratchProvider: /** @type {any} */ (
+      harden({
+        provideScratchMount: async () => harden({}),
+        provideHostPath: async () => '/var/lib/endo/scratch-xyz',
+      })
+    ),
+  });
+  const handle = await E(factory).make(
+    harden({
+      rootfs: { kind: 'oci', ref: `alpine@${stubPolicyRequest.imageDigest}` },
+      network: /** @type {const} */ ('broker-only'),
+      policy: stubPolicyRequest,
+    }),
+  );
+  // `policy()` attests the declared table as exact, so a MountHandle
+  // for a path outside it would be a capability contradicting the
+  // attestation the same slice hands out.
+  await t.throwsAsync(E(handle).scratch('/data'), {
+    message: /not available on a policy slice/,
+  });
+  const stubMount = makeExo(
+    'Mount',
+    M.interface('Mount', { help: M.call().returns(M.string()) }),
+    { help: () => 'stub Mount' },
+  );
+  await t.throwsAsync(E(handle).mount(stubMount, '/data'), {
+    message: /not available on a policy slice/,
+  });
 });
