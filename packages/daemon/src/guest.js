@@ -4,6 +4,8 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { q } from '@endo/errors';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+
+import { cancelPendingIterator } from './cancelable-iterator.js';
 import { makePetSitter } from './pet-sitter.js';
 import {
   assertPetNamePath,
@@ -407,11 +409,15 @@ export const makeGuestMaker = ({
         },
         followMessages: async () => {
           const iterator = guest.followMessages();
-          return readerFromIterator(/** @type {any} */ (iterator));
+          return readerFromIterator(/** @type {any} */ (iterator), {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
         followNameChanges: async () => {
           const iterator = guest.followNameChanges();
-          return readerFromIterator(iterator);
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
       }),
     );

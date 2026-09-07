@@ -7,6 +7,11 @@ import { makeExo } from '@endo/exo';
 import { q } from '@endo/errors';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+
+import {
+  cancelPendingIterator,
+  makeCancelableIterator,
+} from './cancelable-iterator.js';
 import {
   externalizeId,
   internalizeLocator,
@@ -390,23 +395,34 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['followNameChanges']} */
-    const followNameChanges = async function* followNameChanges(
-      ...petNamePath
-    ) {
-      assertNames(petNamePath);
-      if (petNamePath.length === 0) {
-        for await (const change of controller.followNameChanges()) {
+    const followNameChanges = (...petNamePath) =>
+      makeCancelableIterator(async function* followChanges(setCancelPending) {
+        assertNames(petNamePath);
+        if (petNamePath.length === 0) {
+          const subscription = controller.followNameChanges();
+          try {
+            const cancellation = setCancelPending(() =>
+              cancelPendingIterator(subscription),
+            );
+            if (cancellation !== undefined) await cancellation;
+            for await (const change of subscription) {
+              yield await enrichWithType(change);
+            }
+          } finally {
+            await subscription.return(undefined);
+          }
+          return undefined;
+        }
+        // Remote hubs expose their own stream protocol; cancellation here only
+        // reaches local root subscriptions, not a remote hub's pending work.
+        const hub = /** @type {NameHub} */ (await lookup(petNamePath));
+        for await (const change of /** @type {AsyncIterable<PetStoreNameChange>} */ (
+          await E(hub).followNameChanges()
+        )) {
           yield await enrichWithType(change);
         }
-        return;
-      }
-      const hub = /** @type {NameHub} */ (await lookup(petNamePath));
-      for await (const change of /** @type {AsyncIterable<PetStoreNameChange>} */ (
-        await E(hub).followNameChanges()
-      )) {
-        yield await enrichWithType(change);
-      }
-    };
+        return undefined;
+      });
 
     /** @type {EndoDirectory['remove']} */
     const remove = async (...petNamePath) => {
@@ -647,8 +663,12 @@ export const makeDirectoryMaker = ({
         list,
         listIdentifiers,
         listLocators,
-        followNameChanges: () =>
-          readerFromIterator(directory.followNameChanges()),
+        followNameChanges: () => {
+          const iterator = directory.followNameChanges();
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
+        },
         lookup,
         maybeLookup: directory.maybeLookup,
         reverseLookup,

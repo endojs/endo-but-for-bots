@@ -64,30 +64,78 @@ export const makeChangePubSub = () => {
 harden(makeChangePubSub);
 
 /**
+ * @template T
+ * @param {Promise<T>} pull
+ * @param {{ resolve: ((value: T | PromiseLike<T>) => void) | undefined }} cell
+ */
+const observePull = (pull, cell) => {
+  pull.then(
+    value => cell.resolve?.(value),
+    error => {
+      if (cell.resolve) cell.resolve(Promise.reject(error));
+    },
+  );
+};
+
+/**
  * @template TValue
  * @returns {Topic<TValue>}
  */
 export const makeChangeTopic = () => {
-  /** @type {ReturnType<makeChangePubSub<TValue>>} */
+  /** @typedef {IteratorResult<TValue, undefined>} Result */
+  /** @type {ReturnType<makeChangePubSub<Result>>} */
   const { sink, makeSpring } = makeChangePubSub();
   return harden({
     publisher: makeStream(nullIteratorQueue, sink),
     subscribe: () => {
-      // A subscriber reads published values from the spring. `makeStream`'s
-      // own `return()`/`throw()` settle via `acks.get()`, which for a
-      // subscriber is the spring — so they await the *next* published value
-      // and never settle once the reader has caught up. Override them so a
-      // subscription can be closed promptly. This matters for consumers that
-      // stop early (a `for await` that breaks) and for the @endo/exo-stream
-      // reader pump, which calls `return()` to release a stream; awaiting the
-      // spring there would deadlock the consumer's pending read.
-      const subscription = makeStream(makeSpring(), nullIteratorQueue);
+      /** @type {ReturnType<typeof makeSpring> | undefined} */
+      let spring = makeSpring();
+      /** @type {Set<{ resolve: ((result: Result | PromiseLike<Result>) => void) | undefined }>} */
+      const pending = new Set();
+      let closed = false;
+      const cancelPending = () => {
+        closed = true;
+        spring = undefined;
+        for (const cell of pending) {
+          cell.resolve?.(harden({ value: undefined, done: true }));
+          cell.resolve = undefined;
+        }
+        pending.clear();
+      };
       const reader = harden({
-        next: value => subscription.next(value),
-        return: async value => harden({ value, done: true }),
+        /** @returns {Promise<Result>} */
+        next: async () => {
+          if (closed || spring === undefined)
+            return harden({ value: undefined, done: true });
+          const waiter = makePromiseKit();
+          /** @type {{ resolve: ((result: Result | PromiseLike<Result>) => void) | undefined }} */
+          const cell = { resolve: waiter.resolve };
+          pending.add(cell);
+          // The shared promise tail only retains this detachable cell, never
+          // the subscription or its cursor. Native reactions cannot be removed,
+          // but cancellation clears their references to consumer resources.
+          observePull(spring.get(), cell);
+          try {
+            const result = await waiter.promise;
+            if (result.done) cancelPending();
+            return result;
+          } catch (error) {
+            cancelPending();
+            throw error;
+          } finally {
+            pending.delete(cell);
+            cell.resolve = undefined;
+          }
+        },
+        return: async value => {
+          cancelPending();
+          return harden({ value, done: true });
+        },
         throw: async error => {
+          cancelPending();
           throw error;
         },
+        cancelPending,
         [Symbol.asyncIterator]: () => reader,
       });
       return reader;

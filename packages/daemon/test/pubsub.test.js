@@ -125,3 +125,19 @@ test('change topic terminates with error', async (/** @type {import('ava').Asser
     message: 'sentinel',
   });
 });
+
+test('return settles all pending pulls without publishing and isolates subscribers', async t => {
+  t.timeout(5000);
+  const { publisher, subscribe } = makeChangeTopic();
+  const closed = subscribe();
+  const active = subscribe();
+  t.teardown(() => active.return());
+  const first = closed.next();
+  const second = closed.next();
+  await closed.return();
+  t.true((await first).done);
+  t.true((await second).done);
+  await publisher.next('still active');
+  t.deepEqual(await active.next(), { value: 'still active', done: false });
+  t.true((await closed.next()).done);
+});
