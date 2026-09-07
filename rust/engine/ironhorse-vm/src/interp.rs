@@ -47702,7 +47702,27 @@ impl Interp {
         // a named key boxes to `%String.prototype%` (methods / `.length`).
         if let Payload::String(off) = obj.value {
             if id == crate::value::XS_NO_ID {
-                return Ok(self.string_index_get(off, index));
+                if u64::from(index) < self.str_len(off) as u64 {
+                    return Ok(self.string_index_get(off, index));
+                }
+                // Out of range is NOT `undefined`. `fxStringGetProperty`
+                // (`xsString.c`) answers with the string accessor only for
+                // `length` or an index below the length, and otherwise falls
+                // THROUGH to `fxOrdinaryGetProperty` — so an index defined on
+                // the wrapper prototype is still inherited by a primitive
+                // receiver. `String.prototype[5] = 'P'; 'ab'[5]` is `'P'` on
+                // XS, and was `undefined` here while
+                // `Reflect.get(Object('ab'), '5')` — the same read spelled
+                // reflectively — already answered `'P'`.
+                return match self.string_proto {
+                    proto if proto.is_null() => Ok(Slot::undefined()),
+                    // Look the index name up rather than mint it, for the same
+                    // reason every other index read does.
+                    proto => match self.index_read_key_id(index) {
+                        Some(id) => self.ordinary_get(code, proto, id, obj),
+                        None => self.uninterned_index_get(code, proto, index, obj),
+                    },
+                };
             }
             return self.string_property_get(code, off, id, obj);
         }
@@ -47812,9 +47832,15 @@ impl Interp {
         }) = self.wrapper_data.get(&inst).copied()
         {
             if id == crate::value::XS_NO_ID {
-                return Ok(self.string_index_get(off, index));
-            }
-            if Some(id) == self.length_id {
+                // Only an IN-RANGE index is the String exotic's own unit. An
+                // out-of-range index falls through to the ordinary walk below,
+                // exactly as `fxStringGetProperty` falls through to
+                // `fxOrdinaryGetProperty`, so the wrapper still inherits an
+                // index its prototype chain defines.
+                if u64::from(index) < self.str_len(off) as u64 {
+                    return Ok(self.string_index_get(off, index));
+                }
+            } else if Some(id) == self.length_id {
                 return Ok(Slot::integer(self.str_len(off) as i32));
             }
         }
