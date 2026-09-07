@@ -658,7 +658,7 @@ jobs:
           yarn bundle:xs
 
       - name: Build xsnap crate
-        run: cargo check --manifest-path rust/endo/xsnap/Cargo.toml
+        run: cargo check --locked --manifest-path rust/endo/xsnap/Cargo.toml
 
       - name: Test the store-backed worker lifecycle (endo crate)
         # The supervisor's Ironhorse heap-persistence option
@@ -672,7 +672,7 @@ jobs:
         # cfg(feature = "ironhorse-engine"), so without the pin a
         # default-feature flip would turn this step into a 0-test
         # green pass with no error (wave-3 finding).
-        run: cargo test -p endo --features ironhorse-engine --test ironhorse_store_worker
+        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker
 
   # Keep the complete engine workspace and the daemon-side SQLite
   # heap-store backend on one pinned rustfmt version. On pull requests,
@@ -707,11 +707,17 @@ jobs:
           # making `git diff` exit on SIGPIPE and the runner's `pipefail`
           # misclassify a relevant large PR as a miss.
           elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$' >/dev/null; then
+            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^rust-toolchain\.toml$' >/dev/null; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "hit=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Verify shared IronHorse dependency resolutions
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        run: |
+          python3 rust/engine/scripts/test-lockfile-agreement.py
+          python3 rust/engine/scripts/check-lockfile-agreement.py
 
       - name: Install pinned rustfmt
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
@@ -782,7 +788,7 @@ jobs:
           # making `git diff` exit on SIGPIPE and the runner's `pipefail`
           # misclassify a relevant large PR as a miss.
           elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$' >/dev/null; then
+            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^rust-toolchain\.toml$' >/dev/null; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "hit=false" >> "$GITHUB_OUTPUT"
@@ -862,7 +868,7 @@ jobs:
           # No `grep -q`: under `pipefail`, its early close can turn a
           # matching large diff into a false miss through SIGPIPE.
           elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.' >/dev/null; then
+            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^rust-toolchain\.toml$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.' >/dev/null; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "hit=false" >> "$GITHUB_OUTPUT"
