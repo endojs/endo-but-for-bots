@@ -15,13 +15,14 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
 // them.
 
 // ── Background turns ─────────────────────────────────────────────────────────
-// A Floot turn keeps running on the daemon even after you leave its space: the
-// reply reader is consumed by a background loop kept HERE, outside any component
-// instance, so unmounting a Floot space never returns the reader (which would
-// abort the agent) — the turn finishes and persists in the background. Keeping
-// the loop module-level also lets a remounted component reattach to a still-
-// streaming reply and show a "thinking" indicator. The entry is removed once the
-// turn ends, so a finished reply simply falls back to getHistory().
+// A Floot turn runs on the daemon (`session.startTurn`). This side is a view: it
+// pulls the turn's disposable `watch()` stream and stops the turn only by
+// calling `cancel()`. Dropping the stream — unmount, tab close, gateway loss —
+// detaches this viewer and leaves the turn running to finish and persist.
+// The loop is kept HERE, outside any component instance, so a remounted
+// component reattaches to the accumulated state of a still-streaming reply and
+// shows a "thinking" indicator. The entry is removed once the turn ends, so a
+// finished reply simply falls back to getHistory().
 /**
  * @typedef {{ role: 'assistant' | 'tool', text?: string, id?: string,
  *   name?: string, args?: string, result?: string | null }} TurnMessage
@@ -42,20 +43,22 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
 const inFlightTurns = new Map();
 
 /**
- * Consume a reply reader in the background, accumulating renderable turn state
- * and notifying subscribers as events arrive. Survives component unmount.
+ * Watch a daemon-owned turn in the background, accumulating renderable turn
+ * state and notifying subscribers as events arrive. Survives component unmount.
  *
  * @param {string} key registry key (factory path + session id)
  * @param {string} sessionId
- * @param {any} reader the reply reader returned by session.converse()
+ * @param {any} turnRef the FlootTurn returned by session.startTurn()
  * @returns {FlootTurn}
  */
-const startFlootTurn = (key, sessionId, reader) => {
-  // Stream the reply over the exo-stream protocol rather than one CapTP round
+const startFlootTurn = (key, sessionId, turnRef) => {
+  // Stream the view over the exo-stream protocol rather than one CapTP round
   // trip per event. `buffer` primes the synchronize chain; the responder is a
   // buffered channel, so it acknowledges eagerly regardless — the pre-resolved
   // nodes only save the first round trip.
-  const replies = iterateReader(reader, { buffer: 8 });
+  const repliesP = E(turnRef)
+    .watch()
+    .then(view => iterateReader(view, { buffer: 8 }));
   /** @type {Set<(ev: { type: string }) => void>} */
   const listeners = new Set();
   /** @type {TurnMessage[]} */
@@ -100,19 +103,45 @@ const startFlootTurn = (key, sessionId, reader) => {
     stop() {
       if (stopped) return;
       stopped = true;
-      // Closing the stream fires the producer's onClose, which aborts the
-      // in-flight agent turn (stops token generation and tool rounds).
-      replies.return().catch(() => {});
+      // Cancelling is the only thing that stops the turn: dropping the view
+      // stream would just detach this viewer and leave it generating.
+      E(turnRef)
+        .cancel()
+        .catch(() => {});
     },
   };
   inFlightTurns.set(key, turn);
 
   (async () => {
     try {
-      for await (const raw of replies) {
+      for await (const raw of await repliesP) {
         const value = /** @type {any} */ (raw);
         if (stopped) break;
-        if (value.type === 'delta') {
+        if (value.type === 'snapshot') {
+          // A view opens on the turn's state as of the moment `watch()` ran, so
+          // no event is lost to the round trip and a reattaching component
+          // repaints a turn already in progress. Adopt it wholesale.
+          const { status } = value;
+          messages.length = 0;
+          // The snapshot arrives hardened; a pending tool message is still
+          // waiting for its result to be written into it, so keep copies.
+          messages.push(
+            ...status.messages.map((/** @type {TurnMessage} */ message) => ({
+              ...message,
+            })),
+          );
+          pendingTools.clear();
+          for (const message of messages) {
+            if (message.role === 'tool' && message.id && !message.result) {
+              pendingTools.set(message.id, message);
+            }
+          }
+          turn.streamingText = status.streamingText;
+          turn.phase = status.phase;
+          turn.usage = status.usage;
+          turn.error = status.error;
+          emit({ type: 'snapshot' });
+        } else if (value.type === 'delta') {
           turn.streamingText += value.text;
           emit({ type: 'delta' });
         } else if (value.type === 'final') {
@@ -401,7 +430,7 @@ const DEFAULT_PRESET_ID = 'general';
  * `listBackends()`, `listModels(backendId?)`, `getSession(id) -> facet`,
  * `renameSession(id,title)`, `deleteSession(id)`, and `listPresets()`.
  * A session facet exposes
- * `converse(input) -> replyReader`, `getHistory()`, `getInfo()`, and
+ * `startTurn(input) -> FlootTurn`, `getHistory()`, `getInfo()`, and
  * `getUsage()`.
  *
  * When `audioPath` is given, it resolves a speech-to-text object and enables a
@@ -792,7 +821,12 @@ export const flootComponent = (
         // Ignore events for a session we're no longer viewing (defensive; the
         // busy guard normally blocks switching mid-turn).
         if (activeSessionId !== turn.sessionId) return;
-        if (ev.type === 'delta' || ev.type === 'final') {
+        if (ev.type === 'snapshot') {
+          // The turn's state as of the moment this view opened. Repaint from
+          // it; anything it already carries is text nobody here has spoken.
+          if (turn.usage) usage = turn.usage;
+          setStatus(`${turn.phase || 'thinking'}…`);
+        } else if (ev.type === 'delta' || ev.type === 'final') {
           if (
             speakLive &&
             turnTtsFeed &&
@@ -870,10 +904,10 @@ export const flootComponent = (
       turnTtsFeed = makeTextFeed();
       playAudioStream(E(ttsServer).synthesize(turnTtsFeed.reader));
     }
-    // Start the turn in the background — it owns the reply reader and keeps
-    // running if this space is left — then render it through the shared view.
-    const reader = E(facetFor(session)).converse(text);
-    const turn = startFlootTurn(turnKey(session.id), session.id, reader);
+    // Start the turn on the daemon — it keeps running if this space is left —
+    // then render it through the shared view.
+    const turnRef = E(facetFor(session)).startTurn(text);
+    const turn = startFlootTurn(turnKey(session.id), session.id, turnRef);
     await attachTurnView(turn, session, speakLive);
   };
 
