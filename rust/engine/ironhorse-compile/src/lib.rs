@@ -33,9 +33,9 @@ pub use ironhorse_regexp::unicode;
 
 pub use ast::{Item, Node, TREE_DEPTH_LIMIT};
 pub use coder::{
-    compile, compile_atoms, compile_atoms_goal, compile_atoms_with,
-    declares_top_level_var_or_function, compile_module, compile_module_atoms, compile_with,
-    script_goal_deviates, Goal,
+    compile, compile_atoms, compile_atoms_goal, compile_atoms_with, compile_module,
+    compile_module_atoms, compile_with, declares_top_level_var_or_function,
+    script_goal_deviates,
 };
 pub use error::{LexError, LexErrorKind};
 pub use lexer::{BigIntLiteral, Lexeme, Lexer};
@@ -44,7 +44,7 @@ pub use parser::{
     ParseError, ParseErrorKind, Parser, CASCADE_COST, OPERAND_COST, PARSER_STACK_BUDGET,
     STATEMENT_COST,
 };
-pub use scoper::{scope_module, scope_program, ScopeTree};
+pub use scoper::{scope_module, scope_program, Goal, ScopeTree};
 pub use token::Token;
 
 /// Parse `source` as a Script and return the whole-parse **parse-meter

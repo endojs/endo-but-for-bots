@@ -3169,6 +3169,27 @@ configurable. Pinned in `hardened_js_boundary.rs` (Script direction, oracle-free
 and `ironhorse-262/tests/global_binding_attributes.rs` (eval direction,
 dual-run — XS and node agree an eval-created global var stays deletable).
 
+**The goal is now stated, not encoded.** `ironhorse_compile::Goal` is
+three-valued — `Script`, `Module`, `Eval` — and lives in `scoper.rs`, the lower
+layer that first consumes it (`coder` re-exports it). Before, the scoper took
+`run_goal(root, script_goal: bool)`, so the Module path passed `false` and was
+therefore *labelled as the eval goal*; that was inert only because a module body
+scope is `Token::Module` and never reaches the hoist decision, which nothing
+enforced. `eval_scope_hoists_vars` now carries `debug_assert`s making that an
+enforced invariant rather than a comment.
+
+Making Module expressible also made it mis-usable, which the review caught:
+`compile_atoms_goal` is public, and with a three-valued goal it would happily
+take `Goal::Module` while still parsing with the *program* grammar — rejecting
+real module source outright and, worse, silently emitting **different bytes**
+(29 vs 54 on `var x = 1; x`) for source that parses both ways. It now delegates
+`Goal::Module` to the module pipeline, so every goal reaches the right one.
+`tests/goal_contract.rs` pins all three: each goal equals its named wrapper, the
+Module goal equals `compile_module_atoms` and ignores caller strictness, and the
+Script/eval split stays confined to a strict program that declares a top-level
+`var`/function. No bytes moved: the curated module byte-identity gate and the
+nine-subtree sweep are unchanged.
+
 Because the bytecode is identical for a sloppy program yet `D` still differs,
 the class of programs that can *behave* differently between the goals is wider
 than the class whose *bytes* differ. `ironhorse_compile::script_goal_deviates`
