@@ -1479,6 +1479,8 @@ harden(makeStreamingAgent);
 // Petname (in the factory guest's own petstore) where the session registry —
 // an array of { id, title, createdAt } — is persisted.
 const REGISTRY_NAME = 'floot-sessions';
+// Legacy write-ahead snapshot: authoritative until migrated into the journal.
+const REGISTRY_BACKUP_NAME = 'floot-sessions-backup';
 const REGISTRY_PREFIX = 'floot-sessions-v1-';
 /**
  * Snapshots retained behind the newest. One is enough for correctness — the
@@ -1732,6 +1734,17 @@ export const make = (hostPowers, _context, { env } = {}) => {
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
+  const retireRegistryBackup = async () => {
+    try {
+      if (await E(powers).has(REGISTRY_BACKUP_NAME)) {
+        await E(powers).remove(REGISTRY_BACKUP_NAME);
+      }
+    } catch (error) {
+      // The journal is already durable. Keep the obsolete backup rooted and
+      // retry on the next load/save without rolling back the committed record.
+      console.error('[floot-factory] registry backup cleanup failed:', error);
+    }
+  };
   const loadRegistry = () => {
     if (registry) return Promise.resolve(registry);
     if (!registryLoadP) {
@@ -1757,8 +1770,24 @@ export const make = (hostPowers, _context, { env } = {}) => {
           ) {
             throw Error('Floot lifecycle registry journal is corrupt');
           }
+          await retireRegistryBackup();
           registry = [...stored.sessions];
           registrySequence = stored.sequence + 1n;
+        } else if (await E(powers).has(REGISTRY_BACKUP_NAME)) {
+          const stored = await E(powers).lookup(REGISTRY_BACKUP_NAME);
+          if (!Array.isArray(stored)) {
+            throw Error('Floot legacy registry backup is corrupt');
+          }
+          // An interrupted legacy replacement may have no canonical name,
+          // or a stale one. Publish its backup to a fresh journal name before
+          // releasing that recovery root or exposing the registry in memory.
+          await E(powers).storeValue(
+            harden({ version: 1, sequence: 0n, sessions: stored }),
+            `${REGISTRY_PREFIX}${'0'.repeat(20)}`,
+          );
+          await retireRegistryBackup();
+          registry = [...stored];
+          registrySequence = 1n;
         } else if (await E(powers).has(REGISTRY_NAME)) {
           const stored = await E(powers).lookup(REGISTRY_NAME);
           registry = Array.isArray(stored) ? [...stored] : [];
@@ -1780,6 +1809,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const saveRegistry = () => {
     const result = registryWrite.then(async () => {
       const sequence = registrySequence;
+      // Reserve the name before the remote write: a rejected acknowledgement
+      // does not prove that storeValue failed to commit. Later saves must use
+      // a new name rather than colliding forever with that uncertain snapshot.
+      registrySequence += 1n;
       const name = `${REGISTRY_PREFIX}${`${sequence}`.padStart(20, '0')}`;
       await E(powers).storeValue(
         harden({
@@ -1789,7 +1822,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         }),
         name,
       );
-      registrySequence += 1n;
+      await retireRegistryBackup();
       // Append-only was never meant to be unbounded: every lifecycle
       // transition wrote a snapshot and nothing removed one, so the factory
       // host's pet store accumulated a full copy of the session array per
@@ -1805,8 +1838,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
           .catch(() => undefined);
       }
     });
-    // Keep the chain alive even if this write rejects.
-    registryWrite = result.catch(() => {});
+    // Preserve rejection for the caller while keeping later writes possible
+    // and recording failures even when callers discard their promise.
+    registryWrite = result.catch(error => {
+      console.error('[floot-factory] session registry save failed:', error);
+    });
     return result;
   };
 
