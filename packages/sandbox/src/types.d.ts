@@ -256,6 +256,14 @@ export type SlicePolicyResources = {
   cpuCores: number;
   openFiles: number;
   coreBytes: bigint;
+  /**
+   * Ceiling for the `/dev/shm` tmpfs. It is a resource rather than a
+   * mount because that is the shape the runtime configures and reports
+   * it in — it attaches one whether or not anyone asked — and it counts
+   * toward `writableBytes` like every other writable path.
+   */
+  shmBytes: bigint;
+  /** Must equal `shmBytes` plus the sum of the mount table's ceilings. */
   writableBytes: bigint;
 };
 
@@ -310,9 +318,15 @@ export type ObservedSliceState = {
     ipc: boolean;
     mount: boolean;
   };
-  /** The anchor's network namespace, as `procfs` describes it. */
+  /**
+   * The anchor's network namespace as `procfs` describes it, beside the
+   * identity of the one the policy named. They must be the same
+   * namespace: a loopback-only inventory is also what a fresh empty
+   * namespace has.
+   */
   network: {
     namespaceId: string;
+    brokerNamespaceId: string;
     interfaces: readonly string[];
     routableRoutes: number;
   };
@@ -329,6 +343,8 @@ export type ObservedSliceState = {
     seccompMode: number | null;
     noNewPrivs: boolean | null;
     effectiveCapabilities: bigint | null;
+    permittedCapabilities: bigint | null;
+    boundingCapabilities: bigint | null;
   };
   /** Recorded storage ceiling per declared volume; `null` when none is. */
   volumeQuotas: ReadonlyMap<string, bigint | null>;

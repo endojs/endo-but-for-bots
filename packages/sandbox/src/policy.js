@@ -80,6 +80,21 @@ const REQUIRED_MOUNT_OPTIONS = harden(['nodev', 'nosuid']);
  */
 const BROKER_ONLY_INTERFACES = harden(['lo']);
 
+/**
+ * The shared-memory tmpfs a container runtime attaches whether or not
+ * anyone asked, and whose size it takes from its own flag and reports
+ * in its own field rather than through the mount table. It is a
+ * writable path in the slice, so it carries a declared ceiling like
+ * every other one — as a resource rather than a mount, because that is
+ * the shape the runtime configures and reports it in.
+ *
+ * Its mount options are the one thing not read back. The runtime sets
+ * `nosuid` there by default, and `no-new-privileges` — which *is*
+ * proved, from the kernel — independently makes a setuid binary
+ * written to it grant nothing on exec.
+ */
+const SHM_DESTINATION = '/dev/shm';
+
 /** Image references must be pinned by digest; tags are rejected. */
 const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
@@ -177,6 +192,12 @@ const assertExactKeys = (record, keys, label) => {
 export const parseByteSize = text => {
   if (typeof text === 'bigint') return text >= 0n ? text : null;
   if (typeof text === 'number') {
+    // Not a claim that the domain stops at 2**53 — it does not, which is
+    // why every ceiling here is a `bigint`. It is that a JSON number
+    // above that has *already* lost precision by the time it reaches
+    // this function, so it cannot serve as an exact ceiling and "we
+    // cannot read this exactly" is genuinely "not proved". Anything
+    // wider has to arrive as text to survive the trip.
     return Number.isSafeInteger(text) && text >= 0 ? BigInt(text) : null;
   }
   if (typeof text !== 'string') return null;
@@ -212,11 +233,14 @@ const assertPolicyMount = candidate => {
   assertExactKeys(record, keys, `mount ${q(record.role)}`);
   const role = assertPortableName(record.role, 'mount role');
   const destination = record.destination;
+  // `INNER_PATH_PATTERN` requires every segment to begin with an
+  // alphanumeric, so it is also what rejects `..` — a second traversal
+  // check beside it would read as independent defence while actually
+  // being unreachable, and would invite relaxing the pattern later on
+  // the belief that traversal was still caught.
   if (
     typeof destination !== 'string' ||
-    !INNER_PATH_PATTERN.test(destination) ||
-    destination.includes('/../') ||
-    destination.endsWith('/..')
+    !INNER_PATH_PATTERN.test(destination)
   ) {
     throw makeError(
       X`slice policy mount ${q(role)} needs an absolute normal destination; got ${q(destination)}`,
@@ -324,6 +348,7 @@ export const assertSlicePolicyRequest = request => {
       'cpuCores',
       'openFiles',
       'coreBytes',
+      'shmBytes',
       'writableBytes',
     ],
     'resources',
@@ -334,6 +359,7 @@ export const assertSlicePolicyRequest = request => {
     cpuCores: assertPositiveCount(resourceRecord.cpuCores, 'cpuCores'),
     openFiles: assertPositiveCount(resourceRecord.openFiles, 'openFiles'),
     coreBytes: assertByteCount(resourceRecord.coreBytes, 'coreBytes'),
+    shmBytes: assertByteCount(resourceRecord.shmBytes, 'shmBytes'),
     writableBytes: assertByteCount(
       resourceRecord.writableBytes,
       'writableBytes',
@@ -351,7 +377,12 @@ export const assertSlicePolicyRequest = request => {
   const roles = new Set();
   const destinations = new Set();
   const sources = new Set();
-  let writable = 0n;
+  // The shared-memory tmpfs is a writable path the runtime attaches on
+  // its own, so it counts toward the aggregate whether or not the table
+  // mentions it — and it must not also appear there, because the
+  // runtime takes its size from `--shm-size` and would ignore a second
+  // declaration of the same path.
+  let writable = resources.shmBytes;
   for (const mount of mounts) {
     if (roles.has(mount.role)) {
       throw makeError(
@@ -362,6 +393,11 @@ export const assertSlicePolicyRequest = request => {
     if (destinations.has(mount.destination)) {
       throw makeError(
         X`slice policy mount destination ${q(mount.destination)} is duplicated`,
+      );
+    }
+    if (mount.destination === SHM_DESTINATION) {
+      throw makeError(
+        X`slice policy declares ${q(SHM_DESTINATION)} as a mount; its ceiling belongs in resources.shmBytes, which is where the runtime takes it from`,
       );
     }
     destinations.add(mount.destination);
@@ -375,13 +411,13 @@ export const assertSlicePolicyRequest = request => {
     }
     writable += mount.sizeBytes;
   }
-  // The aggregate ceiling is the sum of the per-mount ceilings, not an
-  // independent number: nothing enforces a total that no single mount
-  // is bounded by, so a request whose parts do not add up to its whole
-  // is asking for a control the host cannot apply.
+  // The aggregate ceiling is the sum of the per-path ceilings, not an
+  // independent number: nothing enforces a total that no single path is
+  // bounded by, so a request whose parts do not add up to its whole is
+  // asking for a control the host cannot apply.
   if (writable !== resources.writableBytes) {
     throw makeError(
-      X`slice policy writableBytes ${q(resources.writableBytes)} does not equal the sum of its writable mounts ${q(writable)}`,
+      X`slice policy writableBytes ${q(resources.writableBytes)} does not equal the sum of its writable paths ${q(writable)}`,
     );
   }
 
@@ -475,6 +511,8 @@ export const assemblePolicyArgv = policy => {
     `nofile=${resources.openFiles}:${resources.openFiles}`,
     '--ulimit',
     `core=${resources.coreBytes}:${resources.coreBytes}`,
+    '--shm-size',
+    `${resources.shmBytes}`,
   ];
   for (const mount of policy.mounts) {
     if (mount.kind === 'tmpfs') {
@@ -650,7 +688,11 @@ const attestMounts = (policy, state) => {
   // declared entries against it. An absent list is read as an empty one:
   // the declared entries are then reported as unattached, which is the
   // same rejection by a more specific name.
-  if (effectiveMounts !== undefined && !Array.isArray(effectiveMounts)) {
+  if (
+    effectiveMounts !== undefined &&
+    effectiveMounts !== null &&
+    !Array.isArray(effectiveMounts)
+  ) {
     return unproved('mount table', effectiveMounts);
   }
   for (const candidate of effectiveMounts ?? []) {
@@ -796,13 +838,24 @@ export const attestSlicePolicy = (policy, state) => {
   if (state.processIdentity.seccompMode !== SECCOMP_MODE_FILTER) {
     return unproved('seccomp', state.processIdentity.seccompMode);
   }
-  if (state.processIdentity.effectiveCapabilities !== 0n) {
-    return unproved(
-      'dropped capabilities',
-      state.processIdentity.effectiveCapabilities === null
-        ? null
-        : `0x${state.processIdentity.effectiveCapabilities.toString(16)}`,
-    );
+  // All three capability masks, not just the effective one. A process
+  // whose permitted set is non-empty can raise any of it back into
+  // effect with one `capset()`, and a non-empty bounding set is what
+  // would let a descendant acquire one at all, so an empty `CapEff`
+  // beside either of those is a posture that lasts until the slice
+  // decides otherwise.
+  for (const set of /** @type {const} */ ([
+    'effectiveCapabilities',
+    'permittedCapabilities',
+    'boundingCapabilities',
+  ])) {
+    const mask = state.processIdentity[set];
+    if (mask !== 0n) {
+      return unproved(
+        'dropped capabilities',
+        mask === null ? null : `${set}=0x${mask.toString(16)}`,
+      );
+    }
   }
   const devices = observed(inspect, 'HostConfig.Devices');
   if (!Array.isArray(devices) || devices.length !== 0) {
@@ -829,6 +882,17 @@ export const attestSlicePolicy = (policy, state) => {
   ) {
     return unproved('network namespace identity', networkNamespaceId);
   }
+  // A loopback-only inventory is not by itself the broker's namespace: a
+  // slice that landed in a fresh empty namespace has the same inventory
+  // and a perfectly well-formed identity. It matters because the broker
+  // lease binds to the id this attestation reports, so an id that is not
+  // the broker's binds the lease to a namespace with no listener in it.
+  if (networkNamespaceId !== state.network.brokerNamespaceId) {
+    return unproved(
+      'broker namespace identity',
+      `joined ${networkNamespaceId}, broker holds ${state.network.brokerNamespaceId}`,
+    );
+  }
 
   // Resource ceilings, read back from the runtime's resolved view. A
   // host that silently ignored a flag reports the ignored value here.
@@ -839,6 +903,10 @@ export const attestSlicePolicy = (policy, state) => {
   const memorySwap = parseByteSize(observed(inspect, 'HostConfig.MemorySwap'));
   if (memorySwap === null || memorySwap !== policy.resources.memoryBytes) {
     return unproved('swap ceiling', memorySwap);
+  }
+  const shmSize = parseByteSize(observed(inspect, 'HostConfig.ShmSize'));
+  if (shmSize === null || shmSize !== policy.resources.shmBytes) {
+    return unproved(`shared-memory ceiling at ${SHM_DESTINATION}`, shmSize);
   }
   if (observed(inspect, 'HostConfig.PidsLimit') !== policy.resources.pids) {
     return unproved('pid ceiling', observed(inspect, 'HostConfig.PidsLimit'));
@@ -925,6 +993,7 @@ export const attestSlicePolicy = (policy, state) => {
       cpuCores: policy.resources.cpuCores,
       openFiles: policy.resources.openFiles,
       coreBytes: policy.resources.coreBytes,
+      shmBytes: policy.resources.shmBytes,
       writableBytes: policy.resources.writableBytes,
     }),
     mounts,

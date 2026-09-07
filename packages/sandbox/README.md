@@ -166,6 +166,13 @@ An otherwise reachable driver is unavailable unless its probe proves
 process-group or container-wide termination and crash cleanup.
 The factory never substitutes an unconfined host process.
 
+A `make({ policy })` call is the one exception to registration order:
+`'auto'` then considers only drivers that can enforce and attest a
+policy, so it does not land on bwrap — which cannot — while podman is
+installed.
+When no registered driver can, the call is refused as "no backend that
+can enforce and attest a slice policy".
+
 ## Capability surface
 
 The capability surface:
@@ -434,7 +441,11 @@ const slice = await E(sandbox).make({
       cpuCores: 4,
       openFiles: 4096,
       coreBytes: 0n,
-      writableBytes: 16n * 1024n ** 3n,
+      // `/dev/shm`: a writable path the runtime attaches whether or
+      // not anyone asks, sized by its own flag rather than the table.
+      shmBytes: 64n * 1024n ** 2n,
+      // shmBytes plus the mount table's ceilings, exactly.
+      writableBytes: 16n * 1024n ** 3n + 64n * 1024n ** 2n,
     },
     // The whole mount table. `mounts` must be empty and there is no
     // scratch layer: an undeclared writable path is what this excludes.
@@ -480,13 +491,14 @@ files, cores — stay `number`.
 | uid / gid in the slice      | `/proc/<pid>/status` through `uid_map`       |
 | private user/pid/ipc/mnt ns | `/proc/<pid>/ns/*` differs from the daemon's |
 | `broker-only` network       | `/proc/<pid>/net/dev` holds exactly `lo`     |
-| network namespace identity  | `/proc/<pid>/ns/net` inode                   |
+| the namespace is the broker's | anchor and sidecar `ns/net` inodes match   |
 | read-only root              | resolved `HostConfig`                        |
 | no-new-privileges           | `/proc/<pid>/status` `NoNewPrivs:`           |
 | seccomp filter loaded       | `/proc/<pid>/status` `Seccomp:` mode         |
-| dropped capabilities        | `/proc/<pid>/status` `CapEff:` mask          |
+| dropped capabilities        | `CapEff`, `CapPrm` and `CapBnd` all empty     |
 | no devices, no host binds   | resolved `Devices` and the mount table       |
 | memory, swap, pids, cpu     | resolved `HostConfig`, and cgroup v2         |
+| `/dev/shm` ceiling          | resolved `HostConfig.ShmSize`                |
 | open-file and core ceilings | resolved `Ulimits`                           |
 | writable ceiling per mount  | tmpfs `size=`; volume quota from storage     |
 | descendant reaping          | private pid ns + exact-label reconciliation  |
@@ -495,6 +507,17 @@ The memory, pid, and cpu ceilings additionally require the matching
 cgroup v2 controllers to be delegated to the daemon's user; a host that
 cannot delegate them cannot apply the ceilings, whatever the runtime
 echoed back, so the slice is refused.
+
+All three capability masks are read, not just the effective one: a
+process whose permitted set is populated is one `capset()` from having
+it back, so an empty `CapEff` beside a populated `CapPrm` or `CapBnd`
+is a posture that lasts only as long as the slice chooses.
+
+The network namespace is checked for identity as well as inventory. A
+loopback-only inventory is also what a *fresh empty* namespace has, and
+the broker lease binds to the id this attestation reports, so an id
+that is not the sidecar's would bind the lease to a namespace with no
+listener in it.
 
 The attestation is read from a **slice anchor**: an ordinary operation
 container created from the same frozen policy prefix every later spawn
@@ -533,7 +556,8 @@ Beyond the podman prerequisites above, a policy slice needs:
   to the daemon's user (`Delegate=` on the systemd user slice).
   Without it the ceilings are unenforceable and the slice is refused.
 - A prepared network namespace holding the broker's loopback listener
-  and no routable interface, named by `brokerSidecar`.
+  and no routable interface, named by `brokerSidecar` — as a running
+  container, or as a namespace pinned at a path.
 - Each declared volume created with a storage quota, since nothing can
   impose one on a volume after the fact.
 - An image pinned and resolvable by digest in local storage.

@@ -10,9 +10,23 @@ import {
   parseNamespaceInode,
   parseNetDev,
   readNetworkNamespace,
+  readNetworkNamespaceIdAtPath,
   readProcessStatus,
   readUnsharedNamespaces,
 } from '../src/observe.js';
+
+/**
+ * A missing fixture entry rejects the way the filesystem does, code and
+ * all: the readers distinguish "this file is not here" from "this file
+ * could not be read", so a fixture that lost the code would exercise
+ * the wrong branch.
+ *
+ * @param {string} path
+ */
+const missing = path =>
+  Object.assign(new Error(`ENOENT: no such file or directory, ${path}`), {
+    code: 'ENOENT',
+  });
 
 /**
  * Build a `ProcReader` over a fixture filesystem, so the parsers can be
@@ -20,22 +34,30 @@ import {
  *
  * @param {Record<string, string>} files
  * @param {Record<string, string>} links
+ * @param {Record<string, bigint>} [inodes]
  */
-const makeFixtureProc = (files, links) =>
+const makeFixtureProc = (files, links, inodes = {}) =>
   harden({
     /** @param {string} path */
     readFile: async path => {
       await null;
       const body = files[path];
-      if (body === undefined) throw new Error(`ENOENT ${path}`);
+      if (body === undefined) throw missing(path);
       return body;
     },
     /** @param {string} path */
     readLink: async path => {
       await null;
       const target = links[path];
-      if (target === undefined) throw new Error(`ENOENT ${path}`);
+      if (target === undefined) throw missing(path);
       return target;
+    },
+    /** @param {string} path */
+    readInode: async path => {
+      await null;
+      const inode = inodes[path];
+      if (inode === undefined) throw missing(path);
+      return inode;
     },
   });
 
@@ -202,7 +224,7 @@ test('process identity is reported inside the slice user namespace', async t => 
   const proc = makeFixtureProc(
     {
       '/proc/77/status':
-        'Name:\tsleep\nUid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nNoNewPrivs:\t1\nSeccomp:\t2\nSeccomp_filters:\t1\nCapEff:\t0000000000000000\n',
+        'Name:\tsleep\nUid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nNoNewPrivs:\t1\nSeccomp:\t2\nSeccomp_filters:\t1\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\n',
       '/proc/77/uid_map': '         0     100000      65536\n',
       '/proc/77/gid_map': '         0     100000      65536\n',
     },
@@ -217,6 +239,8 @@ test('process identity is reported inside the slice user namespace', async t => 
       seccompMode: 2,
       noNewPrivs: true,
       effectiveCapabilities: 0n,
+      permittedCapabilities: 0n,
+      boundingCapabilities: 0n,
     },
   );
   // `Seccomp_filters:` starts with the same word as `Seccomp:`; the
@@ -252,13 +276,15 @@ test('a kernel that reports no seccomp mode does not claim one', async t => {
   t.is(identity.seccompMode, null);
   t.is(identity.noNewPrivs, null);
   t.is(identity.effectiveCapabilities, null);
+  t.is(identity.permittedCapabilities, null);
+  t.is(identity.boundingCapabilities, null);
 });
 
 test('a capability mask the process kept is read as a bit set', async t => {
   const proc = makeFixtureProc(
     {
       '/proc/77/status':
-        'Uid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nNoNewPrivs:\t0\nCapEff:\t0000003fffffffff\n',
+        'Uid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nNoNewPrivs:\t0\nCapPrm:\t0000003fffffffff\nCapEff:\t0000000000000000\nCapBnd:\t0000003fffffffff\n',
       '/proc/77/uid_map': '         0     100000      65536\n',
       '/proc/77/gid_map': '         0     100000      65536\n',
     },
@@ -266,7 +292,51 @@ test('a capability mask the process kept is read as a bit set', async t => {
   );
   const identity = await readProcessStatus(proc, 77);
   t.is(identity.noNewPrivs, false);
+  // An empty effective set beside a populated permitted one: the
+  // process is one `capset()` from having every capability back, which
+  // is why all three masks are reported rather than just the first.
+  t.is(identity.effectiveCapabilities, 0n);
   // Wider than a double can hold exactly, so it is read as a bigint
   // rather than narrowed to whatever fits.
-  t.is(identity.effectiveCapabilities, 0x3f_ffff_ffffn);
+  t.is(identity.permittedCapabilities, 0x3f_ffff_ffffn);
+  t.is(identity.boundingCapabilities, 0x3f_ffff_ffffn);
+});
+
+test('a kernel with no IPv6 stack reports no IPv6 routes, not a failure', async t => {
+  // `ipv6.disable=1` removes `ipv6_route` entirely. Absent and empty
+  // mean the same thing for a route table, unlike for the interface
+  // inventory, where they must not collapse.
+  const proc = makeFixtureProc(
+    {
+      '/proc/77/net/dev': LOOPBACK_ONLY_NET_DEV,
+      '/proc/77/net/route': EMPTY_IPV4_ROUTES,
+    },
+    { '/proc/77/ns/net': 'net:[4026532567]' },
+  );
+  const observed = await readNetworkNamespace(proc, 77);
+  t.is(observed.routableRoutes, 0);
+  t.deepEqual([...observed.interfaces], ['lo']);
+});
+
+test('a namespace pinned at a path is identified by its inode', async t => {
+  // A bind-mounted netns is not a symlink, so it has no `net:[…]`
+  // target; its inode is the number a process inside it reports.
+  const proc = makeFixtureProc(
+    {},
+    {},
+    { '/run/netns/broker-s1': 4_026_532_567n },
+  );
+  const namespaceId = await readNetworkNamespaceIdAtPath(
+    proc,
+    '/run/netns/broker-s1',
+  );
+  t.is(namespaceId, 'net-4026532567');
+});
+
+test('a netns path nobody can stat is an error, not an identity', async t => {
+  const proc = makeFixtureProc({}, {}, {});
+  await t.throwsAsync(
+    readNetworkNamespaceIdAtPath(proc, '/run/netns/broker-s1'),
+    { message: /cannot identify the network namespace/ },
+  );
 });

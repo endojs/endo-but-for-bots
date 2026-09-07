@@ -171,6 +171,7 @@ test('__getMethodNames__() round-trips the documented capability surface', async
 test('NetworkProfileShape accepts the documented profiles and rejects others', t => {
   for (const profile of [
     'none',
+    'broker-only',
     'private',
     'host-loopback',
     'host-lan',
@@ -330,6 +331,7 @@ const stubPolicyRequest = harden({
     cpuCores: 4,
     openFiles: 4096,
     coreBytes: 0n,
+    shmBytes: 0n,
     writableBytes: 1024n * 1024n,
   }),
   mounts: harden([
@@ -392,7 +394,9 @@ test('a backend that cannot attest a policy is refused the slice', async t => {
   });
   // Rejecting at `make()` rather than at `policy()` is the point: a
   // slice that cannot prove its confinement must not exist and then
-  // decline to describe itself.
+  // decline to describe itself. And it is refused as "no such backend"
+  // rather than reached and then turned away, so `auto` cannot land on
+  // it while a policy-capable driver is registered.
   await t.throwsAsync(
     E(factory).make(
       harden({
@@ -401,8 +405,68 @@ test('a backend that cannot attest a policy is refused the slice', async t => {
         policy: stubPolicyRequest,
       }),
     ),
-    { message: /cannot enforce or attest a slice policy/ },
+    { message: /no backend that can enforce and attest a slice policy/ },
   );
+});
+
+test('a policy slice picks the attesting backend over an earlier one', async t => {
+  // `auto` returns the first available driver, and the plugin registers
+  // bwrap — which cannot attest — before podman. Without the capability
+  // filter, every policy slice on a host with both backends installed
+  // would land on the one that has to refuse it.
+  const factory = makeSandboxFactory({
+    drivers: harden([
+      { ...makePolicyStubDriver({ attests: false }), name: 'bwrap' },
+      makePolicyStubDriver(),
+    ]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  const handle = await E(factory).make(
+    harden({
+      rootfs: { kind: 'oci', ref: `alpine@${stubPolicyRequest.imageDigest}` },
+      network: /** @type {const} */ ('broker-only'),
+      policy: stubPolicyRequest,
+    }),
+  );
+  const attestation = await E(handle).policy();
+  t.is(attestation.version, 'SlicePolicyAttestationV1');
+});
+
+test('a policy slice is not given a scratch layer outside its own table', async t => {
+  // The daemon's real powers can allocate one, and the driver then
+  // rejects the slice for the undeclared writable path it never asked
+  // for. The scratch mount must not be minted at all under a policy.
+  let scratchRequests = 0;
+  /** @type {any} */
+  let seenSpec;
+  const driver = {
+    ...makePolicyStubDriver(),
+    prepareSlice: async (/** @type {any} */ spec) => {
+      seenSpec = spec;
+      return harden({ spec });
+    },
+  };
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: /** @type {any} */ (
+      harden({
+        provideScratchMount: async () => {
+          scratchRequests += 1;
+          return harden({});
+        },
+        provideHostPath: async () => '/var/lib/endo/scratch-xyz',
+      })
+    ),
+  });
+  await E(factory).make(
+    harden({
+      rootfs: { kind: 'oci', ref: `alpine@${stubPolicyRequest.imageDigest}` },
+      network: /** @type {const} */ ('broker-only'),
+      policy: stubPolicyRequest,
+    }),
+  );
+  t.is(scratchRequests, 0);
+  t.is(seenSpec.scratchHostPath, '');
 });
 
 test('a slice created without a policy has no attestation to report', async t => {

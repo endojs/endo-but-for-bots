@@ -120,6 +120,7 @@ const SlicePolicyRequestShape = M.splitRecord({
     cpuCores: M.number(),
     openFiles: M.number(),
     coreBytes: M.nat(),
+    shmBytes: M.nat(),
     writableBytes: M.nat(),
   }),
   mounts: M.arrayOf(SlicePolicyMountShape),

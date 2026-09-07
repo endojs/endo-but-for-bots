@@ -23,6 +23,8 @@ const OTHER_DIGEST = `sha256:${'b2'.repeat(32)}`;
 const IMAGE = `registry.example/agent@${DIGEST}`;
 const ANCHOR_PID = 4242;
 const GIB = 1024n * 1024n * 1024n;
+const MIB = 1024n * 1024n;
+const SIDECAR_PID = 4141;
 
 const POLICY = harden({
   profile: 'hosted-agent-v1',
@@ -36,7 +38,8 @@ const POLICY = harden({
     cpuCores: 4,
     openFiles: 4096,
     coreBytes: 0n,
-    writableBytes: 16n * GIB,
+    shmBytes: 64n * MIB,
+    writableBytes: 16n * GIB + 64n * MIB,
   }),
   mounts: harden([
     harden({
@@ -100,6 +103,7 @@ const ANCHOR_INSPECT = harden({
     Devices: [],
     Memory: 4_294_967_296,
     MemorySwap: 4_294_967_296,
+    ShmSize: 67_108_864,
     PidsLimit: 512,
     CpuQuota: 400_000,
     CpuPeriod: 100_000,
@@ -141,7 +145,12 @@ const PROC_FILES = harden({
   [`/proc/${ANCHOR_PID}/net/ipv6_route`]:
     '00000000000000000000000000000001 80 00000000000000000000000000000000 00 00000000000000000000000000000000 00000000 00000001 00000001 80200001 lo\n',
   [`/proc/${ANCHOR_PID}/status`]:
-    'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nNoNewPrivs:\t1\nSeccomp:\t2\nCapEff:\t0000000000000000\n',
+    'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nNoNewPrivs:\t1\nSeccomp:\t2\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\n',
+  // The broker's own namespace, which the anchor must have joined.
+  [`/proc/${SIDECAR_PID}/net/dev`]:
+    'Inter-|   Receive |  Transmit\n face |bytes\n    lo:  0 0 0 0\n',
+  [`/proc/${SIDECAR_PID}/net/route`]: 'Iface\tDestination\tGateway\n',
+  [`/proc/${SIDECAR_PID}/net/ipv6_route`]: '',
   [`/proc/${ANCHOR_PID}/uid_map`]: '         0     100000      65536\n',
   [`/proc/${ANCHOR_PID}/gid_map`]: '         0     100000      65536\n',
 });
@@ -156,6 +165,7 @@ const PROC_LINKS = harden({
   [`/proc/${ANCHOR_PID}/ns/ipc`]: 'ipc:[4026532102]',
   [`/proc/${ANCHOR_PID}/ns/mnt`]: 'mnt:[4026532103]',
   [`/proc/${ANCHOR_PID}/ns/net`]: 'net:[4026532567]',
+  [`/proc/${SIDECAR_PID}/ns/net`]: 'net:[4026532567]',
 });
 
 /**
@@ -179,6 +189,11 @@ const makeProcfs = (fileOverrides = {}, linkOverrides = {}) => {
       const target = links[path];
       if (target === undefined) throw new Error(`ENOENT ${path}`);
       return target;
+    },
+    /** @param {string} path */
+    readInode: async path => {
+      await null;
+      throw new Error(`ENOENT ${path}`);
     },
   });
 };
@@ -205,7 +220,9 @@ const makeEngineStub = ({ calls, responses = {} }) => {
     if (args.includes('{{.Digest}}')) return 'image-digest';
     if (args[0] === 'volume') return `volume-${args[args.length - 1]}`;
     if (args[0] === 'container' && args[1] === 'inspect') {
-      return 'container-inspect';
+      return args.includes('{{.State.Pid}}')
+        ? 'sidecar-pid'
+        : 'container-inspect';
     }
     if (args[0] === 'create') return 'create';
     if (args[0] === 'start') return 'start';
@@ -226,6 +243,7 @@ const makeEngineStub = ({ calls, responses = {} }) => {
     'volume-workspace-s1': { stdout: '{"Options":{"size":"8GiB"}}\n' },
     'volume-codex-state-s1': { stdout: '{"Options":{"o":"size=4GiB"}}\n' },
     'container-inspect': { stdout: `${JSON.stringify([ANCHOR_INSPECT])}\n` },
+    'sidecar-pid': { stdout: `${SIDECAR_PID}\n` },
     create: {},
     start: {},
     rm: {},
@@ -333,6 +351,7 @@ test('the anchor is created under the whole policy prefix', async t => {
   t.deepEqual(valuesOf('--pids-limit'), ['512']);
   t.deepEqual(valuesOf('--cpus'), ['4']);
   t.deepEqual(valuesOf('--ulimit'), ['nofile=4096:4096', 'core=0:0']);
+  t.deepEqual(valuesOf('--shm-size'), ['67108864']);
   t.true(argv.includes('--read-only'));
   t.true(argv.includes('--read-only-tmpfs=false'));
   t.deepEqual(valuesOf('--security-opt'), ['no-new-privileges']);
@@ -533,5 +552,52 @@ test('a slice whose kernel loaded no seccomp filter fails construction', async t
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
     message: /seccomp/,
+  });
+});
+
+test('a slice that joined some namespace other than the broker fails', async t => {
+  const { driver } = makeDriverUnderTest({
+    // The anchor is loopback-only and well-formed — it is simply not in
+    // the namespace the broker's listener is in. Nothing about the
+    // interface inventory distinguishes the two.
+    procfs: makeProcfs(
+      {},
+      { [`/proc/${SIDECAR_PID}/ns/net`]: 'net:[4026539999]' },
+    ),
+  });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /broker namespace identity/,
+  });
+});
+
+test('a broker sidecar that is not running fails construction', async t => {
+  const { driver, calls } = makeDriverUnderTest({
+    responses: { 'sidecar-pid': { code: 125, stdout: 'no such container' } },
+  });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /broker sidecar .* is not a running container/,
+  });
+  // The anchor this attempt minted does not outlive it.
+  const anchor = createCalls(calls)[0];
+  if (anchor !== undefined) {
+    t.true(
+      calls.some(
+        call => call.args[0] === 'rm' && call.args.includes(anchor.args[2]),
+      ),
+    );
+  } else {
+    t.pass('the sidecar was resolved before any anchor existed');
+  }
+});
+
+test('a rootful engine fails construction even without the probe gate', async t => {
+  const { driver } = makeDriverUnderTest({
+    // `prepareSlice` is a public entry point; a consumer that skips the
+    // factory's probe must not get an attestation stamped
+    // `rootless-podman` with nothing having checked.
+    responses: { rootless: { stdout: 'false\n' } },
+  });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /rootless backend/,
   });
 });
