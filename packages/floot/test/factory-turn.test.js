@@ -13,6 +13,16 @@ test('factory facets retain disconnected turns, commit history, and provision de
   const backendEvents = makeBufferedReader();
   const store = new Map();
   store.set('user', harden({}));
+  const handoffs = [];
+  store.set(
+    'dev-review',
+    Far('DevReviewConnection', {
+      start: options => {
+        handoffs.push(options);
+        return harden({ runId: 'review-run' });
+      },
+    }),
+  );
   const guest = Far('TestGuest', {
     has: name => store.has(name),
     lookup: name => store.get(name),
@@ -38,6 +48,8 @@ test('factory facets retain disconnected turns, commit history, and provision de
   t.teardown(releaseAck);
   /** @type {{ dynamicTools: Array<{ name: string }> } | undefined} */
   let catalog;
+  /** @type {{ execute(name: string, args: object): Promise<string> } | undefined} */
+  let hostedTools;
   const backend = Far('TestBackend', {
     describe: () =>
       harden({
@@ -49,6 +61,7 @@ test('factory facets retain disconnected turns, commit history, and provision de
       }),
     create: async (options, toolSet) => {
       catalog = await E(toolSet).describe();
+      hostedTools = toolSet;
       return harden({
         run: Far('TestRun', {
           send: () => {
@@ -136,6 +149,32 @@ test('factory facets retain disconnected turns, commit history, and provision de
   t.true(dispatched);
   if (!catalog) throw Error('Hosted catalog was not supplied');
   t.true(catalog.dynamicTools.some(tool => tool.name === 'spawnSubagent'));
+  t.true(catalog.dynamicTools.some(tool => tool.name === 'handoffDesign'));
+  // The backend's live tool capability remains usable after its UI detaches.
+  if (!hostedTools) throw Error('Hosted tools were not supplied');
+  const handoff = await E(hostedTools).execute(
+    'handoffDesign',
+    harden({
+      name: 'design',
+      title: 'Design',
+      design: 'Agreed acceptance criteria',
+      base: 'main',
+      rounds: '2',
+    }),
+  );
+  t.regex(handoff, /review-run/);
+  t.deepEqual(handoffs, [
+    {
+      requestId: 'design',
+      params: {
+        title: 'Design',
+        summary: 'Agreed acceptance criteria',
+        base: 'main',
+        rounds: 2n,
+      },
+    },
+  ]);
+  t.deepEqual(store.get('review-design'), { runId: 'review-run' });
   backendEvents.push(harden({ type: 'text-delta', text: 'hello back' }));
   backendEvents.push(harden({ type: 'end', checkpoint: 'committed' }));
   await ackStarted;

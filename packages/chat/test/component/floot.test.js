@@ -540,3 +540,50 @@ test.serial(
     t.is(turns[2].text, 'queued after replacement');
   },
 );
+
+test.serial('idle conversations display workflow readiness mail', async t => {
+  const { parent, turns, setHistoryReader } = await setup(t);
+  t.timeout(10_000);
+  setHistoryReader(() =>
+    harden([
+      {
+        role: 'user',
+        content: 'Your design is ready at commit abc123.',
+        meta: { mail: { from: 'workflow', messageNumber: '7' } },
+      },
+    ]),
+  );
+  await waitForDOM(
+    () => parent.textContent.includes('Your design is ready at commit abc123.'),
+    10,
+    5000,
+  );
+  t.is(turns.length, 0, 'refreshing mail does not start a UI turn');
+});
+
+test.serial(
+  'a delayed mail refresh cannot overwrite a new daemon-owned turn',
+  async t => {
+    const { parent, turns, send, setHistoryReader } = await setup(t);
+    t.timeout(10_000);
+    let refreshStarted = false;
+    let release = () => {};
+    const history = new Promise(resolve => {
+      release = () =>
+        resolve(harden([{ role: 'assistant', content: 'stale mail history' }]));
+    });
+    t.teardown(release);
+    setHistoryReader(() => {
+      refreshStarted = true;
+      return history;
+    });
+    await waitForDOM(() => refreshStarted, 10, 5000);
+    await send('Keep this active design discussion');
+    await waitFor(() => turns.length === 1);
+    release();
+    await tick(30);
+    t.true(parent.textContent.includes('Keep this active design discussion'));
+    t.false(parent.textContent.includes('stale mail history'));
+    t.truthy(parent.querySelector('[aria-label="Stop"]'));
+  },
+);
