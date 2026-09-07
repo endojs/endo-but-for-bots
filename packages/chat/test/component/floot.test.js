@@ -48,6 +48,7 @@ const setup = async (t, count = 2, recover = false) => {
   const turns = [];
   const deleted = [];
   let nextId = count;
+  let failCreation = false;
   const makeTurn = (id, text) => {
     const channel = makeBufferedReader();
     const status = () =>
@@ -79,7 +80,9 @@ const setup = async (t, count = 2, recover = false) => {
         const turn = turns.find(
           candidate => candidate.id === id && !candidate.channel.isClosed(),
         );
-        return turn ? harden({ input: turn.text, turn: turn.ref }) : null;
+        return turn
+          ? harden({ input: turn.text, turn: turn.ref, history: [] })
+          : null;
       },
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0, turns: 0 }),
       startTurn: text => makeTurn(id, text),
@@ -97,13 +100,14 @@ const setup = async (t, count = 2, recover = false) => {
       // quickly the daemon shuts down a backend, or whether deletion succeeds.
     },
     createSession: () => {
+      if (failCreation) throw Error('creation unavailable');
       const id = `s${nextId}`;
       nextId += 1;
       sessions.push({ id, title: `Session ${id}`, createdAt: nextId });
       return facet(id);
     },
   });
-  const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+  let cleanup = flootComponent(parent, factory, [], () => {}, [], []);
   t.teardown(() => {
     cleanup();
     for (const { channel } of turns) channel.push(harden({ type: 'end' }));
@@ -134,6 +138,13 @@ const setup = async (t, count = 2, recover = false) => {
     deleted,
     send,
     remove,
+    setCreationFailure: value => {
+      failCreation = value;
+    },
+    remount: () => {
+      cleanup();
+      cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    },
     setHistoryReader: (/** @type {() => any} */ reader) => {
       readHistory = reader;
     },
@@ -302,5 +313,53 @@ test.serial(
     release();
     await tick(30);
     t.true(parent.textContent.includes('do not erase this input'));
+  },
+);
+
+test.serial(
+  'session creation failure does not poison later submissions',
+  async t => {
+    const { parent, turns, send, remove, setCreationFailure } = await setup(
+      t,
+      1,
+    );
+    remove(0);
+    setCreationFailure(true);
+    await send('first attempt');
+    await waitFor(() => parent.textContent.includes('creation unavailable'));
+    setCreationFailure(false);
+    await send('retry');
+    await waitFor(() => turns.length === 1);
+    t.is(turns[0].text, 'retry');
+  },
+);
+
+test.serial('remount restores the prompt for a cached live turn', async t => {
+  const { parent, turns, send, remount } = await setup(t);
+  await send('keep this prompt visible');
+  await waitFor(() => turns.length === 1);
+  remount();
+  await waitFor(() => parent.querySelector('[aria-label="Stop"]'));
+  t.true(parent.textContent.includes('keep this prompt visible'));
+});
+
+test.serial(
+  'recovery uses the turn baseline while committed output awaits teardown',
+  async t => {
+    const { parent, turns, send, remount, setHistoryReader } = await setup(t);
+    await send('one prompt');
+    await waitFor(() => turns.length === 1);
+    turns[0].channel.push(harden({ type: 'delta', text: 'one answer' }));
+    await waitFor(() => parent.textContent.includes('one answer'));
+    setHistoryReader(() =>
+      harden([
+        { role: 'user', content: 'one prompt' },
+        { role: 'assistant', content: 'one answer' },
+      ]),
+    );
+    remount();
+    await waitFor(() => parent.querySelector('[aria-label="Stop"]'));
+    t.is(parent.textContent.split('one prompt').length - 1, 1);
+    t.is(parent.textContent.split('one answer').length - 1, 1);
   },
 );

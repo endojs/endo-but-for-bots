@@ -532,6 +532,7 @@ const provisionPresetObjects = async (
  *     writer: object,
  *     meta?: object,
  *     signal?: AbortSignal,
+ *     onStart?: (history: Array<Record<string, any>>) => void,
  *   ) => Promise<void>,
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number }>,
@@ -1027,7 +1028,7 @@ export const makeStreamingAgent = async (
     }
   };
 
-  const converse = (input, writer, meta, signal) => {
+  const converse = (input, writer, meta, signal, onStart) => {
     if (stopped || quarantineError) {
       const error =
         quarantineError || Error('Floot session agent is shutting down');
@@ -1039,8 +1040,10 @@ export const makeStreamingAgent = async (
     const forwardAbort = () => turnController.abort();
     if (signal?.aborted) forwardAbort();
     else signal?.addEventListener('abort', forwardAbort, { once: true });
-    const result = turnChain.then(() =>
-      stopped
+    const result = turnChain.then(async () => {
+      // Capture recovery history within the execution chain, after earlier mail.
+      if (onStart) onStart(await getHistory());
+      return stopped
         ? Promise.reject(Error('Floot session agent is shutting down'))
         : runTurn(input, writer, meta, turnController.signal).catch(err => {
             // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
@@ -1068,8 +1071,8 @@ export const makeStreamingAgent = async (
             // inbox's turnDone) would hang forever. Rethrow so callers still see it.
             writer.abort(err instanceof Error ? err.message : String(err));
             throw err;
-          }),
-    );
+          });
+    });
     const releaseTurn = () => {
       signal?.removeEventListener('abort', forwardAbort);
       turnControllers.delete(turnController);
@@ -2027,11 +2030,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const getFacet = id => {
     let facet = facets.get(id);
     if (!facet) {
-      const turns = makeSessionTurnSlot(async (input, writer, signal) => {
-        await assertSessionReady(id);
-        const agent = await getAgent(id);
-        await agent.converse(input, writer, undefined, signal);
-      });
+      const turns = makeSessionTurnSlot(
+        async (input, writer, signal, setHistory) => {
+          await assertSessionReady(id);
+          const agent = await getAgent(id);
+          await agent.converse(input, writer, undefined, signal, setHistory);
+        },
+      );
       facet = makeExo('FlootSession', FlootSessionInterface, {
         async getInfo() {
           const entry = await assertSessionReady(id);
@@ -2068,7 +2073,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
         },
         async getCurrentTurn() {
           await assertSessionReady(id);
-          return turns.getCurrent();
+          const current = turns.getCurrent();
+          if (!current) return null;
+          return harden({ ...current, history: await current.history });
         },
         async getHistory() {
           await assertSessionReady(id);
@@ -2129,7 +2136,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           });
         },
         help() {
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn } or null; one UI turn may be outstanding; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);

@@ -582,11 +582,14 @@ export const flootComponent = (
   };
 
   // Pull the spoken transcript for a session from its guest into the cache.
-  const loadHistory = async (/** @type {FlootSession} */ session) => {
+  const loadHistory = async (
+    /** @type {FlootSession} */ session,
+    historyP = E(facetFor(session)).getHistory(),
+  ) => {
     const previousMessages = session.messages;
     const previousLength = previousMessages.length;
     try {
-      const history = await E(facetFor(session)).getHistory();
+      const history = await historyP;
       // A new submission or refresh takes precedence over stale history I/O.
       if (
         session.messages !== previousMessages ||
@@ -764,6 +767,8 @@ export const flootComponent = (
   let turnPromise = null;
   let opening = harden({});
   let viewReady = Promise.resolve();
+  /** @type {WeakMap<FlootSession, FlootTurn>} */
+  const displayedPrompts = new WeakMap();
 
   // The text feed driving live spoken replies for the current turn (null when
   // TTS is off or idle). Aborting it ends synthesis; stopTts() halts playback.
@@ -940,6 +945,7 @@ export const flootComponent = (
       session.id,
       turnRef,
     );
+    displayedPrompts.set(session, turn);
     await attachTurnView(turn, session, speakLive);
   };
 
@@ -970,8 +976,10 @@ export const flootComponent = (
         (submittedSessionId && activeSessionId !== submittedSessionId)
       )
         return;
-      turnPromise = runConverse(text);
-      await turnPromise.catch(() => {});
+      turnPromise = runConverse(text).catch(error => {
+        if (!cancelled) setStatus(`error: ${error.message}`);
+      });
+      await turnPromise;
     });
     return submitChain;
   };
@@ -997,16 +1005,21 @@ export const flootComponent = (
       // browser registry is only a cache; it is never the source of liveness.
       const current = await E(facetFor(session)).getCurrentTurn();
       if (!stillSelected()) return;
-      if (!session.loaded) await loadHistory(session);
-      if (!stillSelected()) return;
       let turn = liveTurnFor(session.id);
+      if (
+        !session.loaded ||
+        (current && displayedPrompts.get(session) !== turn) ||
+        (current && !turn)
+      )
+        await loadHistory(
+          session,
+          current ? current.history : E(facetFor(session)).getHistory(),
+        );
+      if (!stillSelected()) return;
       if (!turn && current) {
         const turnStatus = await E(current.turn).getStatus();
         if (!stillSelected()) return;
         if (!turnStatus.done) {
-          if (typeof current.input === 'string') {
-            session.messages.push({ role: 'user', text: current.input });
-          }
           turn = startFlootTurn(
             turnsForFactory(factory),
             session.id,
@@ -1018,6 +1031,12 @@ export const flootComponent = (
         }
       }
       if (!stillSelected()) return;
+      if (turn && displayedPrompts.get(session) !== turn && current) {
+        if (typeof current.input === 'string') {
+          session.messages.push({ role: 'user', text: current.input });
+        }
+        displayedPrompts.set(session, turn);
+      }
       if (turn && !busy) turnPromise = attachTurnView(turn, session);
       notify();
     })().catch(error => {

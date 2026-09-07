@@ -14,7 +14,7 @@ Implemented on the session facet:
 - **`startTurn(input) -> FlootTurn`** replaces **`converse(input) -> replyReader`**.
 - **`FlootTurn`**: `getStatus()`, `watch()` (disposable view stream), `cancel()`,
   `whenFinished()`.
-- **`getCurrentTurn() -> { input, turn } | null`** recovers the outstanding UI turn.
+- **`getCurrentTurn() -> { input, turn, history } | null`** recovers the outstanding UI turn.
 - Drain loop lives in `packages/floot/src/session-turn.js` on the daemon.
 - Chat observes via `watch()`; **Stop** calls **`Turn.cancel()`** only.
 
@@ -95,6 +95,13 @@ Hosted provisioning receives the session's fully assembled tool snapshot, includ
 subagent and account tools when their capabilities were endowed.
 The provider loop uses the same registry; hosted sessions intentionally pin their
 snapshot at provisioning for continuity and authority checks.
+
+Recovery history is the baseline captured inside the serialized execution chain,
+before the turn starts (including earlier mail).
+It excludes the current turn even while its durable commit awaits acknowledgement;
+observers combine this baseline with the prompt and turn snapshot.
+Recovering a queued UI turn waits for earlier mail to finish before this baseline
+can be captured.
 
 ## Validation
 

@@ -14,7 +14,7 @@ test('a session retains its turn through cancellation and releases it after tear
       }),
   );
   const turn = slot.start('hello');
-  t.deepEqual(slot.getCurrent(), { input: 'hello', turn });
+  t.like(slot.getCurrent(), { input: 'hello', turn });
   t.throws(() => slot.start('overlap'), { message: /active turn/ });
   await E(turn).cancel();
   t.is(slot.getCurrent()?.turn, turn);
@@ -38,6 +38,6 @@ test('turn discovery never reveals a streamed input capability', async t => {
   });
   const turn = slot.start(input);
   t.is(received, input);
-  t.deepEqual(slot.getCurrent(), { input: null, turn });
+  t.like(slot.getCurrent(), { input: null, turn });
   await E(turn).whenFinished();
 });
