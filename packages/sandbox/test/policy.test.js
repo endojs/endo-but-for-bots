@@ -620,7 +620,9 @@ const unprovedStates = [
   [
     'a host that cannot delegate the controllers',
     { resources: harden({ cgroupControllers: harden(['io']) }) },
-    /cgroup delegation/,
+    // Names what the host does delegate as well as what it does not:
+    // the missing set alone reads as though those were the ones it had.
+    /cgroup delegation.*delegated io, needs memory,pids,cpu/,
   ],
   [
     'an undeclared bind mount',
