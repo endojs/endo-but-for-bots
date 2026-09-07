@@ -867,3 +867,84 @@ test.serial("a turn's tool calls collapse into one group", async t => {
   );
 });
 
+// ── Screen wake lock ─────────────────────────────────────────────────────────
+
+/**
+ * Install a `navigator.wakeLock` stand-in for the duration of one test. The
+ * component reads `globalThis.navigator?.wakeLock` afresh on every apply, and
+ * `navigator` stays configurable after lockdown, so this is what lets the
+ * wiring be exercised at all: under plain Node the API is absent and every
+ * request short-circuits.
+ *
+ * @param {ExecutionContext} t
+ * @param {number} [latencyMs] how long `request()` takes to resolve
+ */
+const stubWakeLock = (t, latencyMs = 0) => {
+  const sentinels = [];
+  const wakeLock = {
+    request: () =>
+      new Promise(resolve => {
+        const sentinel = {
+          released: false,
+          release: () => {
+            sentinel.released = true;
+            return Promise.resolve();
+          },
+          addEventListener: () => {},
+        };
+        sentinels.push(sentinel);
+        testWindow.setTimeout(() => resolve(sentinel), latencyMs);
+      }),
+  };
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { wakeLock },
+    configurable: true,
+  });
+  t.teardown(() => {
+    if (had) Object.defineProperty(globalThis, 'navigator', had);
+    else delete (/** @type {any} */ (globalThis).navigator);
+  });
+  return {
+    sentinels,
+    get held() {
+      return sentinels.filter(sentinel => !sentinel.released);
+    },
+  };
+};
+
+test.serial('a busy turn holds exactly one screen lock', async t => {
+  // The lock is driven by `notify()`, which fires many times per turn. Each
+  // surplus request would be a lock held by the platform that this component
+  // can no longer reach, which is the battery bug the policy exists to avoid.
+  const lock = stubWakeLock(t, 5);
+  const { parent, turns, send } = await setup(t);
+  t.deepEqual(lock.held, [], 'an idle session holds nothing');
+
+  await send('keep the screen on');
+  await waitFor(() => turns.length === 1);
+  turns[0].channel.push(harden({ type: 'delta', text: 'thinking' }));
+  turns[0].channel.push(harden({ type: 'delta', text: ' out' }));
+  turns[0].channel.push(harden({ type: 'delta', text: ' loud' }));
+  await waitFor(() => parent.textContent.includes('thinking out loud'));
+  await waitFor(() => lock.held.length === 1);
+  t.is(lock.sentinels.length, 1, 'one request for one busy stretch');
+
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(() => parent.querySelector('[aria-label="Send"]'));
+  await waitFor(() => lock.held.length === 0);
+  t.pass();
+});
+
+test.serial('unmounting releases the screen lock', async t => {
+  const lock = stubWakeLock(t);
+  const { turns, send, remount } = await setup(t);
+  await send('still running when we leave');
+  await waitFor(() => turns.length === 1);
+  await waitFor(() => lock.held.length === 1);
+  // `remount` disposes the old component; the turn keeps running in the
+  // background, but this view has no business holding the screen for it.
+  remount();
+  await waitFor(() => lock.held.length === 0);
+  t.pass();
+});
