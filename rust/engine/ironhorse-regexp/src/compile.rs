@@ -160,9 +160,10 @@ const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 /// limit is orders of magnitude above real patterns and, with the per-level
 /// frames measured at under 7 KiB unoptimized, keeps the compiler's worst
 /// case under 4 MiB of host stack. Pattern *length* is not
-/// nesting: an alternation or sequence of any length is linear in this
-/// crate (see [`Compiler::disjunction_parse`], [`Compiler::measure`] and
-/// [`Compiler::emit`]).
+/// nesting: an alternation, a sequence or a `v`-mode class's list of string
+/// alternatives (`[\q{ab|cd|…}]`, which becomes a left-nested disjunction) of
+/// any length is linear in this crate (see [`Compiler::disjunction_parse`],
+/// [`Compiler::measure`] and [`Compiler::emit`]).
 pub const MAX_NESTING_DEPTH: u32 = 512;
 
 struct Compiler {
@@ -1943,16 +1944,29 @@ impl Compiler {
                 self.size += 8 + ((1 + count) as i64) * 4;
             }
             Shape::Disjunction(..) => {
+                // C: step, size += 12, measure(left), measure(right). The
+                // pattern's `|` chain is right-nested, but a `v`-mode class's
+                // string alternatives (`[\q{ab|cd|…}]`, `charset_strings_
+                // disjunction`) are left-nested, one level per alternative, so
+                // the walk keeps its own stack of pending right sides instead
+                // of recursing on either: a node's step is assigned before its
+                // left side is measured, and its right side is measured when
+                // the left side has finished, which is the C order.
+                let mut pending_rights: Vec<NodeId> = Vec::new();
                 let mut id = id;
                 loop {
-                    let Shape::Disjunction(left, right) = self.child_shape(id) else {
+                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
+                        self.nodes[id].step = self.size as i32;
+                        self.size += 12; // mxDisjunctionStepSize
+                        pending_rights.push(right);
+                        id = left;
+                    } else {
                         self.measure(id, direction);
-                        break;
-                    };
-                    self.nodes[id].step = self.size as i32;
-                    self.size += 12; // mxDisjunctionStepSize
-                    self.measure(left, direction);
-                    id = right;
+                        match pending_rights.pop() {
+                            Some(right) => id = right,
+                            None => break,
+                        }
+                    }
                 }
             }
             Shape::Sequence(..) => {
@@ -2074,18 +2088,28 @@ impl Compiler {
             // spine in a loop, as `measure` does, emitting every step in the
             // C order.
             Shape::Disjunction(..) => {
+                // As in `measure`: an explicit stack of pending right sides
+                // covers the right-nested `|` chain and the left-nested
+                // `v`-mode string alternatives alike, in the C order (a
+                // node's step, its left side, then its right side; the
+                // sequel is the same for every alternative).
+                let mut pending_rights: Vec<NodeId> = Vec::new();
                 let mut id = id;
                 loop {
-                    let Shape::Disjunction(left, right) = self.child_shape(id) else {
+                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
+                        let at = (self.nodes[id].step / 4) as usize;
+                        self.code[at] = CX_DISJUNCTION_STEP;
+                        self.code[at + 1] = self.nodes[left].step;
+                        self.code[at + 2] = self.nodes[right].step;
+                        pending_rights.push(right);
+                        id = left;
+                    } else {
                         self.emit(id, direction, sequel);
-                        break;
-                    };
-                    let at = (self.nodes[id].step / 4) as usize;
-                    self.code[at] = CX_DISJUNCTION_STEP;
-                    self.code[at + 1] = self.nodes[left].step;
-                    self.code[at + 2] = self.nodes[right].step;
-                    self.emit(left, direction, sequel);
-                    id = right;
+                        match pending_rights.pop() {
+                            Some(right) => id = right,
+                            None => break,
+                        }
+                    }
                 }
             }
             Shape::Sequence(..) => {
@@ -2533,12 +2557,36 @@ mod recursion_bounds {
         // Duplicate names across alternatives are still legal (the
         // participate-list surgery is replayed innermost-first, as the
         // recursion's returns performed it) …
-        let program = compile("(?<x>a)|(?<x>b)|(?<x>c)", "").expect("duplicate names across alternatives");
+        let program =
+            compile("(?<x>a)|(?<x>b)|(?<x>c)", "").expect("duplicate names across alternatives");
         assert!(match_regexp(&program, b"c", 0).matched);
         // … and a duplicate within one scope is still refused.
         assert!(matches!(
             compile("(?<x>a)(?<x>b)", "").map(|_| ()),
             Err(CompileError::Syntax(_))
         ));
+    }
+
+    #[test]
+    fn class_string_alternatives_are_not_recursion_depth() {
+        // A `v`-mode class's multi-character strings become a *left*-nested
+        // `Disjunction` chain (`charset_strings_disjunction`), one level per
+        // alternative and outside the group-nesting budget: 200,000 of them
+        // (a 1.4 MB pattern) overflowed an 8 MiB optimized stack in the
+        // measure pass, and 5,000 the default debug test thread this runs on
+        // deliberately. The `measure`/`emit` walks keep their own stack now.
+        let strings: Vec<String> = (0..50_000).map(|i| format!("x{i}_")).collect();
+        let pattern = format!("[\\q{{{}}}]", strings.join("|"));
+        let program = compile(&pattern, "v").expect("a class of many strings compiles");
+        let outcome = match_regexp(&program, b"x49999_", 0);
+        assert!(outcome.matched);
+        assert_eq!(outcome.captures[0], (0, 7));
+        // A single-character alternative folds into the set half of the
+        // disjunction (`chars[0] != 0`) rather than the string chain.
+        let mixed = format!("[a\\q{{{}}}]", strings.join("|"));
+        let program = compile(&mixed, "v").expect("strings beside a set compile");
+        assert!(match_regexp(&program, b"a", 0).matched);
+        assert!(match_regexp(&program, b"x7_", 0).matched);
+        assert!(!match_regexp(&program, b"y", 0).matched);
     }
 }
