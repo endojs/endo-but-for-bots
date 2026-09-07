@@ -616,6 +616,19 @@ Beyond the podman prerequisites above, a policy slice needs:
 [`test/podman-policy.test.js`](./test/podman-policy.test.js) covers the
 same decisions against a stubbed engine everywhere else.
 
+The two live cases report what a host could satisfy rather than
+asserting it in advance, because that is a property of the host. On a
+rootless podman host without `Delegate=`, the refusal case still
+reaches the `broker-only network` check — which means everything that
+runs before it held against real state: the whole policy argv was
+accepted, the anchor started, `podman container inspect` parsed, and
+the namespace links, `uid_map` translation, seccomp mode and capability
+masks were all read out of `/proc/<pid>/…` across the rootless user
+namespace. What such a host cannot reach is the tail — the ceiling
+read-back, the mount table, the volume quotas, and minting the
+attestation. Those need a host that delegates `memory`, `pids` and
+`cpu`, and the log says which case took which path.
+
 ## Hardening layers
 
 Phase 1.5 surfaces three additional confinement knobs the slice

@@ -1061,7 +1061,14 @@ export const attestSlicePolicy = (policy, state) => {
     controller => !hostResources.cgroupControllers.includes(controller),
   );
   if (missingControllers.length > 0) {
-    return unproved('cgroup delegation', missingControllers.join(','));
+    // Both halves, because the generic renderer says "observed X" and
+    // the missing set alone reads as though those were the controllers
+    // the host had. An operator reading this needs to know what it
+    // does delegate as much as what it does not.
+    return unproved(
+      'cgroup delegation',
+      `delegated ${hostResources.cgroupControllers.join(',') || 'none'}, needs ${missingControllers.join(',')}`,
+    );
   }
 
   const mounts = attestMounts(policy, state);
