@@ -98,6 +98,24 @@ const SHM_DESTINATION = '/dev/shm';
 /** Image references must be pinned by digest; tags are rejected. */
 const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
+/**
+ * A whole digest-pinned image reference: `registry/name@sha256:<64 hex>`.
+ *
+ * The reference reaches the container runtime as a *positional*
+ * argument, after every flag, so a value beginning with `-` is parsed
+ * as one more flag and the next token becomes the image. That is an
+ * argument injection into the very command this module exists to
+ * constrain, and the flags it can add — `--security-opt unmask=ALL`,
+ * `--cgroupns host`, `--sysctl` — are ones the attestation does not
+ * read, so the slice would come back weakened and attest clean.
+ *
+ * A policy already requires a pinned digest, so demanding the whole
+ * reference be in that shape costs nothing legitimate.
+ */
+export const PINNED_IMAGE_REFERENCE_PATTERN =
+  /^[a-z0-9][a-z0-9._-]*(?::\d{1,5})?(?:\/[a-z0-9][a-z0-9._-]*)*@sha256:[0-9a-f]{64}$/;
+harden(PINNED_IMAGE_REFERENCE_PATTERN);
+
 /** Portable, bounded name for a volume, container, or mount role. */
 const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
@@ -867,6 +885,28 @@ export const attestSlicePolicy = (policy, state) => {
   if (observed(inspect, 'HostConfig.ReadonlyRootfs') !== true) {
     return unproved('read-only root');
   }
+  // Nothing may be in force that the policy did not ask for. The two
+  // kernel-proved controls below say a filter is loaded and privileges
+  // cannot be regained; they say nothing about `unmask=`, `mask=`,
+  // `label=disable`, or `apparmor=unconfined`, each of which weakens
+  // the slice without touching either answer.
+  const securityOpts = observed(inspect, 'HostConfig.SecurityOpt');
+  if (securityOpts !== undefined && securityOpts !== null) {
+    if (!Array.isArray(securityOpts)) {
+      return unproved('security options', securityOpts);
+    }
+    const unrecognized = securityOpts
+      .map(String)
+      .filter(
+        option =>
+          !/^no-new-privileges(:true)?$/.test(option) &&
+          !option.startsWith('seccomp='),
+      );
+    if (unrecognized.length > 0) {
+      return unproved('security options', unrecognized.join(' '));
+    }
+  }
+
   // The three per-process privilege controls all have a kernel answer
   // for the live anchor, so none of them is taken from the runtime's
   // report of its own configuration. That report is not merely weaker:

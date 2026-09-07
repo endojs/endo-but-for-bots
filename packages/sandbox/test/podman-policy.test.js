@@ -779,3 +779,39 @@ test('an anchor that will not go away is not a clean teardown', async t => {
     message: /policy anchor removal failed/,
   });
 });
+
+test('an image reference that podman would read as a flag is refused', async t => {
+  const { driver, calls } = makeDriverUnderTest();
+  // The reference is a positional argument, after every flag, so one
+  // beginning with `-` becomes a flag and the next token becomes the
+  // image — an argument injection into the command that establishes
+  // the confinement, adding flags the attestation does not read back.
+  await t.throwsAsync(
+    driver.prepareSlice(
+      /** @type {any} */ (
+        makeSpec({
+          rootfs: harden({
+            kind: 'oci',
+            ref: '--security-opt=unmask=ALL',
+          }),
+        })
+      ),
+    ),
+    { message: /digest-pinned image reference/ },
+  );
+  t.deepEqual(createCalls(calls), [], 'nothing was created');
+});
+
+test('a tag-shaped image reference is refused under a policy', async t => {
+  const { driver } = makeDriverUnderTest();
+  await t.throwsAsync(
+    driver.prepareSlice(
+      /** @type {any} */ (
+        makeSpec({
+          rootfs: harden({ kind: 'oci', ref: 'docker.io/library/alpine:3.19' }),
+        })
+      ),
+    ),
+    { message: /digest-pinned image reference/ },
+  );
+});

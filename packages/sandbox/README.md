@@ -499,6 +499,7 @@ files, cores — stay `number`.
 | the namespace is the broker's | anchor and sidecar `ns/net` inodes match   |
 | read-only root              | resolved `HostConfig`                        |
 | no-new-privileges           | `/proc/<pid>/status` `NoNewPrivs:`           |
+| no other security option    | resolved `HostConfig.SecurityOpt`            |
 | seccomp filter loaded       | `/proc/<pid>/status` `Seccomp:` mode         |
 | dropped capabilities        | `CapEff`, `CapPrm` and `CapBnd` all empty     |
 | uid / gid cannot be regained | real, saved and fs ids match the effective  |
@@ -593,7 +594,11 @@ Beyond the podman prerequisites above, a policy slice needs:
   container, or as a namespace pinned at a path.
 - Each declared volume created with a storage quota, since nothing can
   impose one on a volume after the fact.
-- An image pinned and resolvable by digest in local storage.
+- An image pinned and resolvable by digest in local storage. Under a
+  policy the whole reference must be in `name@sha256:<64 hex>` form:
+  it reaches the runtime as a positional argument, so one beginning
+  with `-` would be read as a flag, and the flags that could add are
+  ones the attestation does not read back.
 
 `yarn test:drivers` runs the live acceptance cases on a podman host;
 [`test/podman-policy.test.js`](./test/podman-policy.test.js) covers the
