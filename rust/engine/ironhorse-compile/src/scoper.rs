@@ -409,19 +409,7 @@ pub fn run(root: &Item) -> Result<ScopeTree, ParseError> {
 
 // ============================ scoper state ============================
 
-/// The deepest tree the scoper (and, downstream, the coder) will walk.
-///
-/// Both passes recurse once per tree level on the host's native stack, and
-/// the tree is deeper than the source is nested wherever the grammar folds a
-/// flat run into a left-nested chain: `a + a + … + a` with `n` terms, or
-/// `a.b.c…` with `n` members, is `n` levels deep although the parser never
-/// recursed for it. [`crate::parser::PARSER_STACK_BUDGET`] bounds source
-/// nesting; this bounds those chains, refusing past it with the parser's own
-/// `"stack overflow"` `SyntaxError`. It sits above any tree the parser budget
-/// can produce (the deepest, a 512-level statement nest, is about 1,500 tree
-/// levels), so only the flat-chain shapes ever reach it, and at the walks'
-/// measured frame sizes it holds each pass under 4 MiB of host stack.
-pub const TREE_DEPTH_LIMIT: u32 = 2048;
+use crate::ast::TREE_DEPTH_LIMIT;
 
 /// Ambient hoister/binder state threaded through the passes, plus the
 /// arena and the by-address side tables the immutable AST needs.
@@ -932,8 +920,10 @@ impl Scoper {
 
 impl Scoper {
     /// Walk one tree level with `f`, refusing past [`TREE_DEPTH_LIMIT`] with
-    /// the parser's `"stack overflow"` `SyntaxError`. The level is released
-    /// on every return path.
+    /// the parser's `"stack overflow"` `SyntaxError`. The parser never builds
+    /// a tree that deep (it refuses at construction), so this is the backstop
+    /// that keeps the walk bounded however the tree was produced. The level
+    /// is released on every return path.
     fn descend<T>(
         &mut self,
         line: u32,

@@ -31,7 +31,7 @@ pub mod token_flags;
 /// lexer's `crate::unicode` path is unchanged.
 pub use ironhorse_regexp::unicode;
 
-pub use ast::{Item, Node};
+pub use ast::{Item, Node, TREE_DEPTH_LIMIT};
 pub use coder::{
     compile, compile_atoms, compile_atoms_with, compile_module, compile_module_atoms, compile_with,
 };
@@ -42,7 +42,7 @@ pub use parser::{
     ParseError, ParseErrorKind, Parser, CASCADE_COST, OPERAND_COST, PARSER_STACK_BUDGET,
     STATEMENT_COST,
 };
-pub use scoper::{scope_module, scope_program, ScopeTree, TREE_DEPTH_LIMIT};
+pub use scoper::{scope_module, scope_program, ScopeTree};
 pub use token::Token;
 
 /// Parse `source` as a Script and return the whole-parse **parse-meter

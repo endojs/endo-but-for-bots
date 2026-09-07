@@ -441,7 +441,7 @@ pub struct Coder<'a> {
     /// `code_declare`) is correctly exempt.
     error: Option<crate::parser::ParseError>,
     /// Tree levels currently on the native stack (see
-    /// [`crate::scoper::TREE_DEPTH_LIMIT`] and [`Self::code_node`]).
+    /// [`crate::ast::TREE_DEPTH_LIMIT`] and [`Self::code_node`]).
     depth: u32,
 }
 
@@ -1014,13 +1014,13 @@ impl Coder<'_> {
     }
 
     fn code_node(&mut self, node: &Node) {
-        // The scoper has already refused any tree deeper than
-        // [`crate::scoper::TREE_DEPTH_LIMIT`] before coding starts; this
-        // backstop keeps the coder's own recursion bounded regardless of how
-        // it is driven. `report` records the first error and the node is
-        // skipped — the output is discarded once an error is recorded, as
-        // for every other code-time `fxReportParserError`.
-        if self.depth >= crate::scoper::TREE_DEPTH_LIMIT {
+        // The parser refuses to build a tree deeper than
+        // [`crate::ast::TREE_DEPTH_LIMIT`] and the scoper re-checks it before
+        // coding starts; this backstop keeps the coder's own recursion bounded
+        // regardless of how it is driven. `report` records the first error
+        // and the node is skipped — the output is discarded once an error is
+        // recorded, as for every other code-time `fxReportParserError`.
+        if self.depth >= crate::ast::TREE_DEPTH_LIMIT {
             self.report(node.line, "stack overflow");
             return;
         }
