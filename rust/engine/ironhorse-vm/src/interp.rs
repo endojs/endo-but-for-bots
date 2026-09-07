@@ -16114,6 +16114,24 @@ impl Interp {
                                     && self.string_key_name(id).as_deref() == Some("length")
                             }) {
                                 false
+                            } else if numeric_index.is_some_and(|index| {
+                                match self.wrapper_data.get(&inst).copied() {
+                                    Some(Slot {
+                                        kind: Kind::String,
+                                        value: Payload::String(off),
+                                        ..
+                                    }) => (index as usize) < self.str_len(off),
+                                    _ => false,
+                                }
+                            }) {
+                                // A String wrapper's units are non-configurable,
+                                // and this arm never consulted them: `delete
+                                // (new String("hi"))[0]` answered `true` where
+                                // XS's `fxStringDeleteProperty` refuses on
+                                // exactly this branch (`!id && index < length`).
+                                // `Reflect.deleteProperty` already refused it
+                                // through `mop_delete`, so the two disagreed.
+                                false
                             } else {
                                 id.is_none_or(|id| self.delete_own_property(inst, id))
                             }
@@ -32889,11 +32907,22 @@ impl Interp {
                 // (or `undefined` for an invalid index); a non-canonical key is
                 // an ordinary own-property descriptor.
                 if let Some(&ta) = self.typed_arrays.get(&inst) {
-                    let descriptor = if let Some(n) = self.ta_numeric_index(arg1) {
-                        self.ta_index_own_descriptor(ta, n)
-                    } else {
-                        let id = self.to_property_id(code, arg1)?;
-                        self.ordinary_get_own_descriptor(inst, id)
+                    // `ToPropertyKey` runs FIRST, so a numeric key is the same
+                    // key as its string spelling: `gopd(view, 1)` must answer
+                    // the element descriptor exactly as `gopd(view, "1")` does.
+                    // Reading the canonical index off the raw argument saw only
+                    // the string form and sent a number key down the ordinary
+                    // path, where it read `undefined` — and interned a name for
+                    // it. `to_read_key` canonicalizes both spellings and mints
+                    // nothing.
+                    let descriptor = match self.to_read_key(code, arg1)? {
+                        ReadKey::Index(index) => {
+                            self.ta_index_own_descriptor(ta, f64::from(index))
+                        }
+                        ReadKey::Id(id) => match self.ta_numeric_index_at(id, 0) {
+                            Some(n) => self.ta_index_own_descriptor(ta, n),
+                            None => self.ordinary_get_own_descriptor(inst, id),
+                        },
                     };
                     match descriptor {
                         Some(descriptor) => {
@@ -51542,8 +51571,8 @@ impl Interp {
                 Ok(proxy_slot)
             }
             NativeMethod::ObjectGetOwnPropertyDescriptor => {
-                let id = self.to_property_id(code, arg(self, 1))?;
-                match self.mop_get_own_property(code, proxy, id)? {
+                let key = self.to_read_key(code, arg(self, 1))?;
+                match self.mop_get_own_property_read(code, proxy, key)? {
                     Some(d) => Ok(self.descriptor_object(d)),
                     None => Ok(Slot::undefined()),
                 }

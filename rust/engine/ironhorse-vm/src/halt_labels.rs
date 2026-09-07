@@ -285,6 +285,8 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "to_numeric:non-value-kind",
     "to_property_id:non-string-key",
     "to_property_id:symbol-without-descriptor",
+    "to_read_key:non-string-key",
+    "to_read_key:symbol-without-descriptor",
     "typeof:non-value-kind",
     "yield:no-generator",
     "yield:stack-underflow",
