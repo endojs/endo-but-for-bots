@@ -21,6 +21,7 @@ import { execFile } from 'node:child_process';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { promisify } from 'node:util';
 
+import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -359,16 +360,8 @@ const MODELS = [
     title: 'Claude Haiku 4.5',
     description: 'Fastest and cheapest — best for quick, simple turns.',
   },
-  {
-    id: 'claude-cli',
-    title: 'Claude Code CLI (sandbox)',
-    description:
-      'A sandboxed Claude Code session (@endo/claude-sandbox) — the CLI runs ' +
-      'its own tools inside the container over a 9P-projected workspace.',
-  },
 ];
-// Not an LLM id: sessions pinned to this entry route through a ClaudeClient
-// capability (@endo/claude-sandbox) instead of the streaming API provider.
+// Recognize persisted legacy sessions so revival refuses them explicitly.
 const CLAUDE_CLI_MODEL_ID = 'claude-cli';
 // Mirrors createStreamingProvider's fallback so the UI's notion of "default"
 // agrees with what an unpinned session actually runs.
@@ -1590,67 +1583,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return providerConfigP;
   };
 
-  // The ClaudeClient capability backing `claude-cli` sessions, resolved lazily
-  // from the factory host's petstore (FLOOT_CLAUDE_CLIENT names it; default
-  // "claude-client"). Provisioned separately by @endo/claude-sandbox's setup —
-  // sessions pinned to claude-cli fail with a clear error until it exists.
-  // A ClaudeClient is a *session-scoped* capability, not a shared service: it
-  // carries one CLI conversation (every turn after the first runs
-  // `claude -p --continue`), one projected workspace, and one turn queue. Two
-  // floot sessions sharing one client would therefore read and overwrite each
-  // other's conversation and files, and serialize behind each other — breaking
-  // the one-session-one-guest isolation the rest of this factory maintains.
-  //
-  // So each session binds its own client, looked up as `<base>-<sessionId>`.
-  // The bare `<base>` name is accepted as a fallback for a single-session
-  // setup, but is claimed exclusively: a second session asking for it fails
-  // loudly rather than silently sharing a conversation.
-  /** @type {Map<string, Promise<any>>} */
-  const claudeClients = new Map();
-  /** @type {string | undefined} */
-  let sharedClientClaimedBy;
-  const getClaudeClient = id => {
-    let clientP = claudeClients.get(id);
-    if (!clientP) {
-      const base = env?.FLOOT_CLAUDE_CLIENT || 'claude-client';
-      const perSession = `${base}-${id}`;
-      clientP = (async () => {
-        if (await E(powers).has(perSession)) {
-          return E(powers).lookup(perSession);
-        }
-        if (
-          sharedClientClaimedBy !== undefined &&
-          sharedClientClaimedBy !== id
-        ) {
-          throw new Error(
-            `floot: session ${id} cannot use the shared ClaudeClient "${base}" —` +
-              ` session ${sharedClientClaimedBy} already holds it, and a client` +
-              ` carries one CLI conversation and workspace. Provision` +
-              ` "${perSession}" with @endo/claude-sandbox for this session.`,
-          );
-        }
-        if (!(await E(powers).has(base))) {
-          throw new Error(
-            `floot: no ClaudeClient capability for session ${id} — provision` +
-              ` "${perSession}" (or "${base}" for a single-session setup) with` +
-              ` @endo/claude-sandbox, or set FLOOT_CLAUDE_CLIENT.`,
-          );
-        }
-        const shared = await E(powers).lookup(base);
-        sharedClientClaimedBy = id;
-        return shared;
-      })().catch(error => {
-        claudeClients.delete(id);
-        throw error;
-      });
-      claudeClients.set(id, clientP);
-    }
-    return clientP;
-  };
-  // Hand a session only the authority its turns need. A session runs prompts;
-  // it has no business interrupting or terminating the sandbox session out
-  // from under the factory that provisioned it, so the client is attenuated to
-  // its `send` method before it reaches the agent.
+  // Legacy credential-in-slice Claude clients are deliberately not admitted.
+  // A verified Claude implementation must use the hosted factory boundary.
+  // Sessions receive only the turn protocol: send, interrupt, and acknowledge.
+  // Factory-owned termination and resource administration stay outside the agent.
   const makeSendOnlyClient = client =>
     harden({
       send: (prompt, opts) => E(client).send(prompt, opts),
@@ -1667,6 +1603,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       .map(name => name.trim())
       .filter(Boolean),
     'codex-backend',
+    'claude-backend',
   ];
   /** @type {Promise<Map<string, { factory: any, descriptor: any }>> | undefined} */
   let hostedBackendsP;
@@ -1929,9 +1866,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
           codePath,
         );
         // Build (or reuse) the backend for this session's pinned model; an
-        // unpinned session follows the factory's configured default. The
-        // claude-cli pseudo-model routes through a ClaudeClient capability
-        // instead of a streaming API provider.
+        // unpinned session follows the factory's configured default.
+        // Persisted legacy CLI sessions fail instead of bypassing admission.
         let agentConfig;
         if (entry?.backendId) {
           const backend = (await getHostedBackends()).get(entry.backendId);
@@ -1954,9 +1890,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             },
           };
         } else if (entry?.model === CLAUDE_CLI_MODEL_ID) {
-          agentConfig = {
-            claudeClient: makeSendOnlyClient(await getClaudeClient(id)),
-          };
+          Fail`Legacy Claude CLI sessions are unavailable: provision an attested hosted backend with brokered credentials and verified tool isolation`;
         } else {
           // A thunk, not a resolved provider: `refreshCredentials()` clears
           // the factory's cache, and a session that had captured its provider
@@ -2192,30 +2126,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
           failures.push(error);
         }
       }
-    } else if (entry.model === CLAUDE_CLI_MODEL_ID) {
-      // Terminate only a client this session actually obtained.
-      // `getClaudeClient` has claim side effects, so calling it here would
-      // let a deletion acquire the shared client *on behalf of* the session
-      // being deleted and then destroy it — taking down a live sibling's
-      // conversation and workspace — or, when a sibling already holds the
-      // claim, throw and make this session permanently undeletable.
-      const clientP = claudeClients.get(id);
-      if (clientP) {
-        try {
-          await E(await clientP).terminate();
-          claudeClients.delete(id);
-          if (sharedClientClaimedBy === id) sharedClientClaimedBy = undefined;
-        } catch (error) {
-          // Keep the map entry so a lifecycle retry terminates it again
-          // rather than silently skipping a client that is still running.
-          failures.push(error);
-        }
-      } else if (sharedClientClaimedBy === id) {
-        // Never built one, but the claim is recorded against this session;
-        // releasing it lets a sibling take the shared client.
-        sharedClientClaimedBy = undefined;
-      }
     }
+
     // A hosted/CLI teardown failure can mean a host-side Endo tool call is
     // still settling. Keep the session guest and its capabilities alive until
     // backend termination succeeds on a later lifecycle retry.

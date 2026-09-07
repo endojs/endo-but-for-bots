@@ -26,6 +26,15 @@ that make it a hands-free voice assistant.
 The browser UI lives in [`@endo/chat`](../chat); a Chat Space looks these three
 objects up by pet-name and streams to/from them.
 
+## Hosted security status
+
+Floot refuses the legacy `claude-cli` backend because its credential-in-slice
+provisioning does not satisfy the attested hosted contract.
+Claude must use an operator-provisioned verified hosted backend (`claude-backend`).
+Codex policy composition and broker primitives are available, but live runtime,
+listener, and subscription acceptance remain prerequisites for production use.
+See [deployment acceptance](../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md).
+
 ## Demo dependencies
 
 Everything below must be present on the machine running the Endo daemon (the
