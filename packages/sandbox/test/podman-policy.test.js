@@ -141,7 +141,7 @@ const PROC_FILES = harden({
   [`/proc/${ANCHOR_PID}/net/ipv6_route`]:
     '00000000000000000000000000000001 80 00000000000000000000000000000000 00 00000000000000000000000000000000 00000000 00000001 00000001 80200001 lo\n',
   [`/proc/${ANCHOR_PID}/status`]:
-    'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\n',
+    'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nSeccomp:\t2\n',
   [`/proc/${ANCHOR_PID}/uid_map`]: '         0     100000      65536\n',
   [`/proc/${ANCHOR_PID}/gid_map`]: '         0     100000      65536\n',
 });
@@ -520,4 +520,18 @@ test('teardown removes the anchor along with the operations', async t => {
   t.true(
     calls.some(call => call.args[0] === 'rm' && call.args.includes(anchorName)),
   );
+});
+
+test('a slice whose kernel loaded no seccomp filter fails construction', async t => {
+  const { driver } = makeDriverUnderTest({
+    // The engine still reports its default profile in `SecurityOpt`;
+    // only the kernel says whether a filter is actually loaded.
+    procfs: makeProcfs({
+      [`/proc/${ANCHOR_PID}/status`]:
+        'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nSeccomp:\t0\n',
+    }),
+  });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /seccomp/,
+  });
 });

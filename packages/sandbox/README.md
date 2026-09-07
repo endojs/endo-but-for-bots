@@ -482,6 +482,7 @@ files, cores — stay `number`.
 | `broker-only` network       | `/proc/<pid>/net/dev` holds exactly `lo`     |
 | network namespace identity  | `/proc/<pid>/ns/net` inode                   |
 | read-only root, no-new-priv | resolved `HostConfig`                        |
+| seccomp filter loaded       | `/proc/<pid>/status` `Seccomp:` mode         |
 | dropped capabilities        | the container's empty `EffectiveCaps`        |
 | no devices, no host binds   | resolved `Devices` and the mount table       |
 | memory, swap, pids, cpu     | resolved `HostConfig`, and cgroup v2         |

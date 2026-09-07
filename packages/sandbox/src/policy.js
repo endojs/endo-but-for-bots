@@ -38,6 +38,8 @@
 
 import { makeError, q, X } from '@endo/errors';
 
+import { SECCOMP_MODE_FILTER } from './observe.js';
+
 /** @import { SlicePolicyRequest, SlicePolicyMount, SlicePolicyAttestation, ObservedSliceState } from './types.js' */
 
 /**
@@ -787,8 +789,12 @@ export const attestSlicePolicy = (policy, state) => {
   if (!securityOptList.some(option => option.startsWith('no-new-privileges'))) {
     return unproved('no-new-privileges', securityOptList.join(' '));
   }
-  if (securityOptList.some(option => option === 'seccomp=unconfined')) {
-    return unproved('seccomp', 'unconfined');
+  // Seccomp is the one posture control the runtime's own report cannot
+  // settle: a host whose engine defaults to an unconfined profile says
+  // nothing about it in `SecurityOpt` at all. The kernel's answer for
+  // the live process is whether a filter is loaded.
+  if (state.processIdentity.seccompMode !== SECCOMP_MODE_FILTER) {
+    return unproved('seccomp', state.processIdentity.seccompMode);
   }
   // An empty effective capability set is the kernel's answer, not the
   // `--cap-drop ALL` we asked for.

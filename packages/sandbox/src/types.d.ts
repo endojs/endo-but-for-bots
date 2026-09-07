@@ -316,8 +316,12 @@ export type ObservedSliceState = {
     interfaces: readonly string[];
     routableRoutes: number;
   };
-  /** The anchor's uid/gid inside its own user namespace. */
-  processIdentity: { uid: number; gid: number };
+  /**
+   * The anchor's uid/gid inside its own user namespace, and the seccomp
+   * mode the kernel reports for it. `seccompMode` is `null` when the
+   * kernel reports none, which is read as "no filter proved".
+   */
+  processIdentity: { uid: number; gid: number; seccompMode: number | null };
   /** Recorded storage ceiling per declared volume; `null` when none is. */
   volumeQuotas: ReadonlyMap<string, bigint | null>;
   /** Host controls the ceilings depend on. */
