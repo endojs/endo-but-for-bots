@@ -147,7 +147,7 @@ Regression coverage lands in `ironhorse-262/tests/native_callable_invocation.rs`
 and `tests/errors_coercions_strict.rs`, and in the sqlite store's
 `tests/engine_lifecycle.rs` so the behaviour survives snapshot round-trips.
 
-All five are the same root cause seen from five angles.
+These fixes address arguments-object fast paths and missing apply metering.
 IronHorse backs an `arguments` exotic object with the same `arrays` side table
 it uses for a real Array, so every fast path keyed on
 `self.arrays.contains_key(..)` also fired for `arguments` and read raw compact
@@ -174,9 +174,10 @@ projection, and forwarded the cell itself as the argument.
 
 The oracle returns `1`; IronHorse returned `1,2`.
 
-Both shortcuts now exclude arguments objects and route them through
-`CreateListFromArrayLike`, which also closes `F177`: `arraylike_length` no
-longer answers `Get(arguments, "length")` out of the array side table, so an
+The apply shortcuts now route arguments objects through
+`CreateListFromArrayLike`; `AggregateError` uses `IterableToList` so iterator
+overrides remain observable.
+The shared `arraylike_length` fix also closes `F177`: it no longer answers `Get(arguments, "length")` out of the array side table, so an
 assigned, deleted, or redefined `length` is honoured.
 
 `F178` and `F173` are the metering consequence.
@@ -187,11 +188,15 @@ The residual is now charged by a shared helper at all three apply sites -- the
 two opcode trampolines and the abstract dispatcher that a bound or proxied
 `apply` reaches -- with a credit for the metering an ordinary object or an
 arguments object has already paid through its property MOP path.
-Dense Arrays and Proxies keep the full array schedule and are unchanged.
+Dense Arrays keep the full array schedule.
+Sparse Arrays and Proxies also receive that schedule after their observable reads.
 
-`apply_array_like_reads_are_computron_exact` holds these to raw-meter equality
-with the oracle rather than result agreement, so the credits cannot drift
-silently.
+`apply_array_like_reads_are_computron_exact` checks whole-computron equality
+with the oracle in addition to result agreement.
+It does not assert raw-meter equality; sub-computron residuals can remain.
+`apply_array_like_credits_are_raw_meter_exact` separately pins the raw meter
+for the plain-object native/user calls and mapped-arguments call that calibrate
+the two credits.
 
 ### The residual this leaves
 

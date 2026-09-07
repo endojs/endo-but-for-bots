@@ -139,6 +139,26 @@ fn apply_array_like_reads_are_computron_exact() {
     }
 }
 
+/// Pin the calibrated credits below whole-computron rounding. Sparse arrays
+/// and bound callees have independent raw residuals, covered above only at
+/// whole-computron precision.
+#[test]
+fn apply_array_like_credits_are_raw_meter_exact() {
+    for source in [
+        "Math.max.apply(null,{length:2,0:3,1:8})",
+        "(function(a,b){return a+b}).apply(null,{length:2,0:3,1:8})",
+        "(function(){return Math.max.apply(null,arguments)})(3,8)",
+    ] {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+        assert!(run.result_agrees, "{source}: {run:?}");
+        assert_eq!(
+            run.ironhorse_meter_raw, run.oracle_meter_raw,
+            "{source}: {run:?}",
+        );
+    }
+}
+
 #[test]
 fn native_method_apply_over_receiver() {
     // A native *method* receiver (`String.prototype.concat`) applied with a
