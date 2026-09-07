@@ -33354,7 +33354,9 @@ impl Interp {
                 // conversion still runs when the receiver is nullish. Reuse
                 // the general object boxer so primitives expose their
                 // wrapper's own properties.
-                let id = self.to_property_id(code, arg0)?;
+                // A pure own-property PROBE: it creates nothing, so an index
+                // the table has never held is not minted for it.
+                let key = self.to_read_key(code, arg0)?;
                 let object = self.array_to_object(this)?;
                 let inst = match object.value {
                     Payload::Reference(object) => object,
@@ -33362,7 +33364,7 @@ impl Interp {
                 };
                 self.meter.tick_raw(PROPERTY_IS_ENUMERABLE_METERING);
                 Slot::boolean(
-                    self.mop_get_own_property(code, inst, id)?
+                    self.mop_get_own_property_read(code, inst, key)?
                         .is_some_and(|descriptor| descriptor.enumerable == Some(true)),
                 )
             }
@@ -33388,6 +33390,10 @@ impl Interp {
                     {
                         continue;
                     }
+                    // The descriptor read above can run a proxy trap or an
+                    // accessor, which may NAME this index (promoting an array
+                    // item to an ordinary slot); refresh before the Get.
+                    let read_key = self.refresh_read_key(read_key);
                     let value = self.mop_get_read(code, inst, read_key, object)?;
                     properties.push((key, value));
                 }
@@ -47348,27 +47354,6 @@ impl Interp {
         }
     }
 
-    /// The id a Proxy trap's post-trap invariant check needs to name the key
-    /// back to `target`, or `None` when the target provably has no own
-    /// property under it.
-    ///
-    /// An ORDINARY target cannot carry an own property under a name the table
-    /// never held, so the check is vacuous there and the key is never minted —
-    /// which is what keeps `new Proxy({}, { get() {} })[i]` over novel indices
-    /// inside the id space. Only a target whose own index properties live in a
-    /// side table, or another proxy, has to be asked, and only there is the
-    /// key minted (unmetered: XS reaches the same property without one).
-    fn target_own_key_id(&mut self, key: ReadKey, target: crate::value::SlotIndex) -> Option<u16> {
-        match key {
-            ReadKey::Id(id) => Some(id),
-            ReadKey::Index(index) => match self.index_read_key_id(index) {
-                Some(id) => Some(id),
-                None if self.is_ordinary_object(target) => None,
-                None => Some(self.intern_key_unmetered(&index.to_string())),
-            },
-        }
-    }
-
     /// `[[Get]]` of an index key whose canonical name the key table has never
     /// held, with `receiver` as the `[[Get]]` receiver.
     ///
@@ -47664,14 +47649,14 @@ impl Interp {
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
         let boolean = self.truthy(&result);
         if !boolean {
-            if let Some(id) = self.target_own_key_id(ReadKey::Index(index), target) {
-                if let Some(d) = self.mop_get_own_property(code, target, id)? {
-                    if d.configurable == Some(false) {
-                        return Err(self.catchable_type_error());
-                    }
-                    if !self.mop_is_extensible(code, target)? {
-                        return Err(self.catchable_type_error());
-                    }
+            if let Some(d) =
+                self.mop_get_own_property_read(code, target, ReadKey::Index(index))?
+            {
+                if d.configurable == Some(false) {
+                    return Err(self.catchable_type_error());
+                }
+                if !self.mop_is_extensible(code, target)? {
+                    return Err(self.catchable_type_error());
                 }
             }
         }
@@ -50103,6 +50088,9 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 }
             };
+            // The descriptor read above can run a proxy trap that names this
+            // index; refresh before the define.
+            let key = self.refresh_read_key(key);
             if !self.mop_define_own_property_read(code, inst, key, desc)? {
                 return Ok(false);
             }
@@ -51181,10 +51169,7 @@ impl Interp {
         if trap_result.kind != Kind::Undefined && trap_result.kind != Kind::Reference {
             return Err(self.catchable_type_error());
         }
-        let target_desc = match self.target_own_key_id(key_id, target) {
-            Some(id) => self.mop_get_own_property(code, target, id)?,
-            None => None,
-        };
+        let target_desc = self.mop_get_own_property_read(code, target, key_id)?;
         if trap_result.kind == Kind::Undefined {
             match target_desc {
                 None => return Ok(None),
@@ -51415,12 +51400,11 @@ impl Interp {
         self.array_iterator_proxy_get_context = saved_context;
         let trap_result = trap_result?;
         // Naming the key back to the target, deferred past the trap (which may
-        // itself have interned it); `None` means the target provably has no
-        // own property under it, so the invariant check is vacuous.
-        let Some(id) = self.target_own_key_id(key_id, target) else {
-            return Ok(trap_result);
-        };
-        if let Some(d) = self.mop_get_own_property(code, target, id)? {
+        // itself have interned it). Asked by INDEX when the table still has no
+        // name for it: an array / TypedArray / String-wrapper / proxy target
+        // answers out of its side table, so `new Proxy([], handler)[i]` needs
+        // no name either.
+        if let Some(d) = self.mop_get_own_property_read(code, target, key_id)? {
             if d.configurable == Some(false) {
                 if d.is_data()
                     && d.writable == Some(false)
@@ -51511,10 +51495,7 @@ impl Interp {
         if !self.truthy(&result) {
             return Ok(false);
         }
-        let target_desc = match self.target_own_key_id(key_id, target) {
-            Some(id) => self.mop_get_own_property(code, target, id)?,
-            None => None,
-        };
+        let target_desc = self.mop_get_own_property_read(code, target, key_id)?;
         match target_desc {
             None => Ok(true),
             Some(d) => {
