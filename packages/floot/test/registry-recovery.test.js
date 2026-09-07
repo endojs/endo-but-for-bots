@@ -9,6 +9,23 @@ const backupName = 'floot-sessions-backup';
 const journalName = 'floot-sessions-v1-00000000000000000000';
 const entries = harden([{ id: 'saved', title: 'Saved', createdAt: 1 }]);
 
+/** @typedef {{ version: number, sequence: bigint, sessions: typeof entries }} Journal */
+/** @typedef {Map<string, typeof entries | Journal>} RegistryStore */
+
+/** @param {RegistryStore} store */
+const readJournal = store => {
+  const value = store.get(journalName);
+  if (!value || Array.isArray(value)) throw Error('Missing journal snapshot');
+  return value;
+};
+
+/**
+ * @param {RegistryStore} store
+ * @param {object} [hooks]
+ * @param {(name: string) => void} [hooks.beforeStore]
+ * @param {(name: string) => void} [hooks.afterStore]
+ * @param {(name: string) => void} [hooks.beforeRemove]
+ */
 const makeHost = (
   store,
   {
@@ -39,21 +56,23 @@ const makeHost = (
 
 for (const canonical of [undefined, harden([])]) {
   test(`legacy backup wins over ${canonical ? 'stale' : 'missing'} canonical registry`, async t => {
+    /** @type {RegistryStore} */
     const store = new Map([[backupName, entries]]);
     if (canonical) store.set('floot-sessions', canonical);
     const host = makeHost(store, {
       beforeStore: () => t.true(store.has(backupName)),
-      beforeRemove: () => t.deepEqual(store.get(journalName).sessions, entries),
+      beforeRemove: () => t.deepEqual(readJournal(store).sessions, entries),
     });
     t.is((await E(make(host)).listSessions())[0].id, 'saved');
     t.false(store.has(backupName));
-    t.deepEqual(store.get(journalName).sessions, entries);
+    t.deepEqual(readJournal(store).sessions, entries);
     t.is((await E(make(host)).listSessions())[0].id, 'saved');
   });
 }
 
 test('failed legacy migration retains its root and retries on load', async t => {
   let fail = true;
+  /** @type {RegistryStore} */
   const store = new Map([[backupName, entries]]);
   const host = makeHost(store, {
     beforeStore: () => {
@@ -73,10 +92,10 @@ test('failed legacy migration retains its root and retries on load', async t => 
 
 test('journal wins over leftover backup and failed cleanup retries after restart', async t => {
   let fail = true;
-  const store = new Map([
-    [backupName, entries],
-    [journalName, harden({ version: 1, sequence: 0n, sessions: [] })],
-  ]);
+  /** @type {RegistryStore} */
+  const store = new Map();
+  store.set(backupName, entries);
+  store.set(journalName, harden({ version: 1, sequence: 0n, sessions: [] }));
   const host = makeHost(store, {
     beforeRemove: () => {
       if (fail) throw Error('Cleanup unavailable');
@@ -92,6 +111,7 @@ test('journal wins over leftover backup and failed cleanup retries after restart
 test('a lost journal acknowledgement does not wedge later saves', async t => {
   t.timeout(5000);
   let fail = true;
+  /** @type {RegistryStore} */
   const store = new Map([['floot-sessions', entries]]);
   const host = makeHost(store, {
     afterStore: () => {
@@ -102,15 +122,16 @@ test('a lost journal acknowledgement does not wedge later saves', async t => {
   await t.throwsAsync(() => E(factory).renameSession('saved', 'Uncertain'), {
     message: 'Acknowledgement lost',
   });
-  t.is(store.get(journalName).sessions[0].title, 'Uncertain');
+  t.is(readJournal(store).sessions[0].title, 'Uncertain');
   fail = false;
   await E(factory).renameSession('saved', 'Latest');
-  t.is(store.get(journalName).sessions[0].title, 'Uncertain');
+  t.is(readJournal(store).sessions[0].title, 'Uncertain');
   t.is((await E(make(host)).listSessions())[0].title, 'Latest');
 });
 
 test('a lost migration acknowledgement recovers its journal on retry', async t => {
   t.timeout(5000);
+  /** @type {RegistryStore} */
   const store = new Map([[backupName, entries]]);
   const host = makeHost(store, {
     afterStore: () => {
@@ -122,7 +143,7 @@ test('a lost migration acknowledgement recovers its journal on retry', async t =
     message: 'Acknowledgement lost',
   });
   t.true(store.has(backupName));
-  t.deepEqual(store.get(journalName).sessions, entries);
+  t.deepEqual(readJournal(store).sessions, entries);
   t.is((await E(factory).listSessions())[0].id, 'saved');
   t.false(store.has(backupName));
 });
