@@ -3649,6 +3649,8 @@ __metadata:
     eslint: "catalog:dev"
     ses: "workspace:^"
     typescript: "catalog:dev"
+  bin:
+    thix: ./bin/thix.js
   languageName: unknown
   linkType: soft
 
