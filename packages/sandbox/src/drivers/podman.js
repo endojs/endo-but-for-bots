@@ -20,6 +20,7 @@ import {
   attestSlicePolicy,
   parseByteSize,
   PINNED_IMAGE_REFERENCE_PATTERN,
+  REQUIRED_CGROUP_CONTROLLERS,
   sliceConfigFingerprint,
 } from '../policy.js';
 import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
@@ -1563,7 +1564,12 @@ export const makePodmanDriver = ({
     // `private` does.  When neither binary is on PATH but the caller
     // asked for `private`, fail with a structured error rather than
     // letting podman emit a generic ENOENT later.
-    const netBackend = await probeRootlessNetBackend(cp);
+    // Only the `private` profile needs one. A `broker-only` slice joins
+    // a namespace the policy names and never consults this, so forking
+    // two `--version` probes for it would only produce a misleading
+    // "no rootless network backend" line in `help()`.
+    const netBackend =
+      spec.network === 'broker-only' ? null : await probeRootlessNetBackend(cp);
     if (spec.network === 'private' && netBackend === null) {
       throw makeError(
         X`podman driver: network 'private' requires either slirp4netns or pasta on PATH; neither was found`,
@@ -1690,7 +1696,14 @@ export const makePodmanDriver = ({
         argv: policyArgv,
         anchorName: attested.anchorName,
         fingerprint: attested.fingerprint,
-        cgroupControllers: harden([...cgroup2.controllers]),
+        // Only the controllers an attested ceiling is applied through:
+        // refusing a later operation because an unrelated one was
+        // undelegated would refuse it over nothing the slice depends on.
+        cgroupControllers: harden(
+          REQUIRED_CGROUP_CONTROLLERS.filter(controller =>
+            cgroup2.controllers.includes(controller),
+          ),
+        ),
         attestation: attested.attestation,
       });
     }

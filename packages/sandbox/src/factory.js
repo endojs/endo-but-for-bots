@@ -39,7 +39,11 @@ const METHOD_HELP = harden({
     'listBackends() — probe every registered driver. Returns Array<BackendProbe>.',
   make:
     'make(opts) — mint a new SandboxHandle. opts.rootfs is required; ' +
-    'opts.network defaults to "none"; opts.backend defaults to "auto".',
+    'opts.network defaults to "none"; opts.backend defaults to "auto". ' +
+    'opts.policy enforces a deployment policy and makes policy() report ' +
+    'its attestation: it requires network "broker-only", a ' +
+    'digest-pinned OCI rootfs, and an empty opts.mounts, since the ' +
+    'policy declares the whole mount table.',
 });
 
 const HANDLE_HELP_BASE = `\

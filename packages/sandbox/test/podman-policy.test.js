@@ -204,9 +204,13 @@ const makeProcfs = (fileOverrides = {}, linkOverrides = {}) => {
  * issues. `responses` replaces one answer so a test can name the single
  * thing the host did differently.
  *
- * @param {{ calls: Array<{ command: string, args: string[] }>, responses?: Record<string, { code?: number, stdout?: string }> }} options
+ * `holdAttached` leaves the attached `start` child running, so an
+ * operation stays live the way a long-running command does — which is
+ * what a concurrency ceiling is about.
+ *
+ * @param {{ calls: Array<{ command: string, args: string[] }>, responses?: Record<string, { code?: number, stdout?: string }>, holdAttached?: boolean }} options
  */
-const makeEngineStub = ({ calls, responses = {} }) => {
+const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
   /**
    * @param {string[]} args
    * @returns {string}
@@ -270,9 +274,14 @@ const makeEngineStub = ({ calls, responses = {} }) => {
         stderr: stderrStream,
         stdin: new PassThrough(),
       });
+      const attached = kind === 'start' && args.includes('--attach');
       void Promise.resolve().then(() => {
         stdoutStream.end(answer.stdout ?? '');
         stderrStream.end();
+        if (attached && holdAttached) return;
+        // Control commands settle on 'close'; an attached `start` child
+        // is awaited on 'exit'.
+        child.emit('exit', answer.code ?? 0, null);
         child.emit('close', answer.code ?? 0, null);
       });
       return child;
@@ -281,14 +290,18 @@ const makeEngineStub = ({ calls, responses = {} }) => {
 };
 
 /**
- * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any }} [options]
+ * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean }} [options]
  */
 const makeDriverUnderTest = (options = {}) => {
   /** @type {Array<{ command: string, args: string[] }>} */
   const calls = [];
   const driver = makePodmanDriver({
     childProcess: /** @type {any} */ (
-      makeEngineStub({ calls, responses: options.responses })
+      makeEngineStub({
+        calls,
+        responses: options.responses,
+        holdAttached: options.holdAttached,
+      })
     ),
     env: {},
     ownerId: 'formula-policy-owner',
@@ -646,7 +659,7 @@ test('an operation the engine resolved differently is refused', async t => {
 });
 
 test('a slice admits only the operations its policy declared', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest({ holdAttached: true });
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   // Every ceiling is applied per container, so the attested slice-wide
   // aggregate is only true while the live count is the one it was
@@ -693,7 +706,7 @@ test('two slices cannot both attest a namespace they share', async t => {
 });
 
 test('concurrent spawns cannot both slip past the operation ceiling', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest({ holdAttached: true });
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   // Reading the live count and registering the entry are many awaits
   // apart. Without a synchronous reservation both of these observe an
@@ -814,4 +827,57 @@ test('a tag-shaped image reference is refused under a policy', async t => {
     ),
     { message: /digest-pinned image reference/ },
   );
+});
+
+test('a removal that never settles does not burn an admission slot', async t => {
+  let removals = 0;
+  const { driver } = makeDriverUnderTest({
+    responses: {
+      // A removal that reports failure rather than success. The reap
+      // surfaces it, and `live.size` is what admission counts, so an
+      // entry deleted only on the success path would burn a slot on an
+      // otherwise healthy slice for as long as it lives.
+      rm: {
+        get code() {
+          removals += 1;
+          return removals === 1 ? 125 : 0;
+        },
+      },
+    },
+  });
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  const proc = await driver.spawn(slice, ['/bin/echo', 'hi'], {});
+  await proc.wait().catch(() => undefined);
+  // The slot is back even though the reap reported a failure.
+  await t.notThrowsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}));
+});
+
+test('an unrelated controller losing delegation does not refuse an operation', async t => {
+  let controllerReads = 0;
+  const procfs = makeProcfs();
+  const narrowing = harden({
+    ...procfs,
+    /** @param {string} path */
+    readFile: async path => {
+      await null;
+      if (path.endsWith('cgroup.controllers')) {
+        controllerReads += 1;
+        // `io` goes away; no attested ceiling is applied through it.
+        return controllerReads > 1
+          ? 'cpu memory pids\n'
+          : 'cpu io memory pids\n';
+      }
+      return procfs.readFile(path);
+    },
+  });
+  const { driver } = makeDriverUnderTest({ procfs: narrowing });
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  await t.notThrowsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}));
+});
+
+test('a broker-only slice does not probe for a rootless network backend', async t => {
+  const { driver, calls } = makeDriverUnderTest();
+  await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  // It joins the namespace the policy names and never consults one.
+  t.false(calls.some(call => ['slirp4netns', 'pasta'].includes(call.command)));
 });
