@@ -35,9 +35,16 @@ objects up by pet-name and streams to/from them.
 
 ## Hosted security status
 
-Floot refuses the legacy `claude-cli` backend because its credential-in-slice
-provisioning does not satisfy the attested hosted contract.
-Claude must use an operator-provisioned verified hosted backend (`claude-backend`).
+Floot refuses the legacy `claude-cli` route, which looked a bare `ClaudeClient`
+up by name from its own profile.
+Claude runs only through an operator-provisioned hosted backend discovered as
+`claude-backend`: [`@endo/claude-sandbox`](../claude-sandbox/README.md#claudebackendfactory-floot-hosted-backend)
+supplies one (`setup-hosted.js`) that runs `claude -p` in a rootless Podman
+slice per session and bridges the session's pinned Endo tools in over a
+per-session MCP socket.
+That backend still materialises the credential inside the slice; binding it is
+an operator decision, not a certification against the token-free hosted
+contract.
 Codex policy composition and broker primitives are available, but live runtime,
 listener, and subscription acceptance remain prerequisites for production use.
 See [deployment acceptance](../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md).
