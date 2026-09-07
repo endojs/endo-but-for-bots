@@ -87,8 +87,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   is unaffected.
  * @property {(options?: { keep?: Array<string> }) => Promise<Array<string>>} collectVats
  * @property {() => Promise<void>} shutdown
- * @property {() => Promise<void>} crash abandon live state the way a
- *   power failure would; the store remains recoverable
+ * @property {() => Promise<void>} crash drain queued work then terminate without snapshots
  */
 
 // 128 random bits as lowercase hex: worker ids and default swissnums.
@@ -118,7 +117,7 @@ const ENDPOINT_SESSION = 'endpoint';
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
-export const makeThixotropeDaemon = async ({
+const buildDaemon = async ({
   store,
   engine,
   codec,
@@ -171,7 +170,10 @@ export const makeThixotropeDaemon = async ({
         ) => holder.sink.deliver(bytes, sequenceNumber),
       });
       holder.sink = hub.attachSession(workerId, {
-        send: (/** @type {Uint8Array} */ bytes) => transport.write(bytes),
+        send: (
+          /** @type {Uint8Array} */ bytes,
+          /** @type {string | undefined} */ sequence = undefined,
+        ) => transport.write(bytes, sequence),
         // The worker transport journals frames against heap snapshots;
         // hub frames toward a momentarily-detached worker session must
         // queue, never break.
@@ -249,18 +251,21 @@ export const makeThixotropeDaemon = async ({
   // resumeSession seam (handshake-free, restorable exports), frames
   // flowing directly between the hub duct and the client's message
   // handler.
+  let stopped = false;
+  /** @type {Uint8Array[]} */
+  const endpointOutbound = [];
   const endpointConnection = harden({
     netlayer: harden({ location: endpointResumption.peerLocation }),
     isOutgoing: true,
     get isDestroyed() {
-      return false;
+      return stopped;
     },
-    write: (/** @type {Uint8Array} */ bytes) => endpointSink.deliver(bytes),
+    write: (/** @type {Uint8Array} */ bytes) => {
+      if (stopped) return;
+      if (endpointSink === undefined) endpointOutbound.push(bytes);
+      else endpointSink.deliver(bytes);
+    },
     end: () => {},
-  });
-  endpointSink = hub.attachSession(ENDPOINT_SESSION, {
-    send: (/** @type {Uint8Array} */ bytes) =>
-      endpointHandlers.handleMessageData(endpointConnection, bytes),
   });
   records.registerWorkerConnection(endpointConnection, ENDPOINT_ID);
   const endpointResumed = endpointHandlers.resumeSession(
@@ -289,7 +294,10 @@ export const makeThixotropeDaemon = async ({
     identity = undefined,
   ) => {
     const sink = hub.attachSession(sessionKey, {
-      send: (/** @type {Uint8Array} */ bytes) => connection.write(bytes),
+      send: (
+        /** @type {Uint8Array} */ bytes,
+        /** @type {string | undefined} */ sequence = undefined,
+      ) => connection.write(bytes, sequence),
       // Resumable peers and outbound exporter sessions are durable:
       // frames toward them queue across a disconnect. An ephemeral
       // peer that is gone is gone.
@@ -401,7 +409,10 @@ export const makeThixotropeDaemon = async ({
         get isDestroyed() {
           return destroyed;
         },
-        write: (/** @type {Uint8Array} */ bytes) => socket.write(bytes),
+        write: (
+          /** @type {Uint8Array} */ bytes,
+          /** @type {string | undefined} */ sequence = undefined,
+        ) => socket.write(bytes, sequence),
         end: () => {
           if (!destroyed) {
             destroyed = true;
@@ -417,6 +428,7 @@ export const makeThixotropeDaemon = async ({
       /** @type {Uint8Array} */ data,
       /** @type {number | undefined} */ sequenceNumber = undefined,
     ) => {
+      if (stopped) return;
       const bound = connectionSessions.get(connection);
       if (bound !== undefined) {
         bound.deliver(data, sequenceNumber);
@@ -514,6 +526,7 @@ export const makeThixotropeDaemon = async ({
       }
     },
     handleConnectionClose: (/** @type {any} */ connection) => {
+      if (stopped) return;
       const dial = pendingOutbound.get(connection);
       if (dial !== undefined) {
         // The dial died before its handshake: the gift withdrawal can
@@ -569,9 +582,18 @@ export const makeThixotropeDaemon = async ({
       if (meta.established === undefined) {
         return undefined;
       }
-      const frames = sessionStore
-        .readFrames()
-        .map(({ n, b64 }) => ({ n, bytes: decodeBase64(b64) }));
+      const savedFrames = sessionStore.readFrames();
+      const frames = savedFrames.map(({ n, b64 }) => ({
+        n,
+        bytes: decodeBase64(b64),
+      }));
+      const hubDelivery = savedFrames.reduce(
+        (max, frame) => {
+          const sequence = BigInt(frame.hubSequence ?? '0');
+          return sequence > max ? sequence : max;
+        },
+        BigInt(meta.hubDelivery ?? '0'),
+      );
       // A crash can land between the frame append and the sendSeq
       // meta write; the frames file is the authority on how far the
       // sequence actually advanced.
@@ -590,6 +612,7 @@ export const makeThixotropeDaemon = async ({
       return {
         recvSeq,
         sendSeq,
+        hubDelivery: String(hubDelivery),
         frames,
       };
     },
@@ -606,17 +629,39 @@ export const makeThixotropeDaemon = async ({
       /** @type {string} */ token,
       /** @type {number} */ n,
       /** @type {Uint8Array} */ bytes,
+      /** @type {string | undefined} */ hubSequence = undefined,
     ) => {
       const sessionStore = store.provideSessionStore(token);
-      sessionStore.appendFrame({ n, b64: encodeBase64(bytes) });
+      sessionStore.appendFrame({
+        n,
+        b64: encodeBase64(bytes),
+        ...(hubSequence === undefined ? {} : { hubSequence }),
+      });
       sessionStore.setMeta({
         ...sessionStore.getMeta(),
         sendSeq: n,
+        ...(hubSequence === undefined ? {} : { hubDelivery: hubSequence }),
         established: true,
       });
     },
     recordAck: (/** @type {string} */ token, /** @type {number} */ n) => {
-      store.provideSessionStore(token).truncateFramesUpTo(n);
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      let sendSeq = Number(meta.sendSeq ?? 0);
+      let hubDelivery = BigInt(meta.hubDelivery ?? '0');
+      for (const frame of sessionStore.readFrames()) {
+        sendSeq = Math.max(sendSeq, frame.n);
+        const sequence = BigInt(frame.hubSequence ?? '0');
+        if (sequence > hubDelivery) hubDelivery = sequence;
+      }
+      // Retain acceptance before removing its journal evidence, including
+      // recovery from a crash between appendFrame and the metadata write.
+      sessionStore.setMeta({
+        ...meta,
+        sendSeq,
+        hubDelivery: String(hubDelivery),
+      });
+      sessionStore.truncateFramesUpTo(n);
     },
     recordInbound: (/** @type {string} */ token, /** @type {number} */ n) => {
       const sessionStore = store.provideSessionStore(token);
@@ -762,15 +807,21 @@ export const makeThixotropeDaemon = async ({
     'worker-controller': makeWorkerControllerResource,
   });
 
-  // Restore: reattach every worker transport (asleep) and re-seat the
-  // endpoint's recorded exports (resources by name; pending answers
-  // reject at-most-once). Hub tables restored themselves.
+  // Seat the endpoint's recorded exports before accepting any retained hub
+  // output. Startup writes toward the hub wait until its sink is attached.
+  records.restoreWorker(ENDPOINT_ID);
+  endpointSink = hub.attachSession(ENDPOINT_SESSION, {
+    send: (/** @type {Uint8Array} */ bytes) =>
+      endpointHandlers.handleMessageData(endpointConnection, bytes),
+  });
+  for (const bytes of endpointOutbound.splice(0)) endpointSink.deliver(bytes);
+
+  // Reattach worker transports asleep, after the endpoint can receive frames.
   for (const workerId of store.listWorkerIds()) {
     if (workerId !== ENDPOINT_ID) {
       provideWorkerSession(workerId);
     }
   }
-  records.restoreWorker(ENDPOINT_ID);
 
   // Only after every session is seated does the daemon accept
   // connections: an early resume must never race the restore.
@@ -791,6 +842,24 @@ export const makeThixotropeDaemon = async ({
   for (const dial of hub.pendingDials()) {
     handoffDialRef.connect(dial.location, dial.sessionKey);
   }
+
+  const stopDaemon = async () => {
+    for (const entry of workers.values()) entry.transport.end();
+    try {
+      // Drain every transport even when one termination fails. No queued wake
+      // may outlive the state-directory ownership released by our caller.
+      const results = await Promise.allSettled(
+        [...workers.values()].map(entry => entry.transport.crash()),
+      );
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+      }
+    } finally {
+      stopped = true;
+      endpointClient.shutdown();
+      netlayerRef.netlayer.shutdown();
+    }
+  };
 
   /** @type {ThixotropeDaemon} */
   const daemon = {
@@ -877,35 +946,84 @@ export const makeThixotropeDaemon = async ({
       return harden(swept.sort());
     },
     shutdown: async () => {
-      for (const entry of workers.values()) {
-        // eslint-disable-next-line no-await-in-loop
-        await entry.transport.sleep();
+      try {
+        for (const entry of workers.values()) {
+          // eslint-disable-next-line no-await-in-loop
+          await entry.transport.sleep();
+        }
+      } finally {
+        // A later vat can reopen one parked earlier, and a failed sleep must
+        // still stop intake before terminating every remaining incarnation.
+        await stopDaemon();
       }
-      for (const entry of workers.values()) {
-        entry.transport.end();
-      }
-      // A later vat can send to one already parked above. Stop intake,
-      // then terminate any such reopened incarnation. Its journal retains
-      // the suffix after the sleep image for the next daemon to replay.
-      for (const entry of workers.values()) {
-        // eslint-disable-next-line no-await-in-loop
-        await entry.transport.crash();
-      }
-      endpointClient.shutdown();
-      netlayerRef.netlayer.shutdown();
     },
-    crash: async () => {
-      for (const entry of workers.values()) {
-        entry.transport.end();
-      }
-      for (const entry of workers.values()) {
-        // eslint-disable-next-line no-await-in-loop
-        await entry.transport.crash();
-      }
-      endpointClient.shutdown();
-      netlayerRef.netlayer.shutdown();
-    },
+    crash: stopDaemon,
   };
   return harden(daemon);
+};
+/**
+ * Acquire engine ownership before reading or restoring daemon state.
+ * @param {Parameters<typeof buildDaemon>[0]} options
+ */
+export const makeThixotropeDaemon = async options => {
+  const release = await options.engine.acquireStore?.(options.store.statePath);
+  try {
+    /** @param {any} record @returns {any} */
+    const guard = record =>
+      harden(
+        Object.fromEntries(
+          Object.entries(record).map(([key, value]) => [
+            key,
+            typeof value !== 'function'
+              ? value
+              : (...args) => {
+                  options.engine.assertStoreOwnership?.();
+                  const result = Reflect.apply(value, record, args);
+                  return key === 'provideWorkerStore' ||
+                    key === 'provideSessionStore'
+                    ? guard(result)
+                    : result;
+                },
+          ]),
+        ),
+      );
+    const daemon = await buildDaemon({
+      ...options,
+      store: guard(options.store),
+    });
+    /** @type {Promise<void> | undefined} */
+    let closing;
+    /** @param {() => Promise<void>} stop */
+    const close = stop => {
+      closing ??= (async () => {
+        try {
+          await stop();
+        } finally {
+          await release?.();
+        }
+      })();
+      return closing;
+    };
+    return harden({
+      ...daemon,
+      shutdown: () => close(daemon.shutdown),
+      crash: () => close(daemon.crash),
+      inspectWorkers: () =>
+        harden(
+          daemon.listWorkerIds().map(workerId => {
+            const workerStore = options.store.provideWorkerStore(workerId);
+            return harden({
+              workerId,
+              ...workerStore.getMeta(),
+              journalLength: workerStore.journalLength(),
+              awake: daemon.getWorker(workerId).isAwake(),
+            });
+          }),
+        ),
+    });
+  } catch (error) {
+    await release?.();
+    throw error;
+  }
 };
 harden(makeThixotropeDaemon);

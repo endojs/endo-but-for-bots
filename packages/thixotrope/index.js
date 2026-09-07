@@ -1,3 +1,4 @@
+// @ts-check
 // This thunk module re-exports a strict subset of src/: the supported
 // public surface of the machine. The peer replay engines
 // (src/peer-replay-engine.js), the in-memory store, the durable worker
@@ -12,3 +13,4 @@ export { makeIronhorseEngine } from './src/ironhorse-engine.js';
 export { makeFsStore } from './src/store-fs.js';
 export { makeTimerResource } from './src/resources.js';
 export { makeDurableNetLayer } from './src/durable-netlayer.js';
+export { inspectIronhorseStore } from './src/inspect-ironhorse.js';

@@ -8,6 +8,8 @@
  * stays open for future JS engines with other heap snapshot mechanisms.
  *
  * @typedef {object} WorkerEngine
+ * @property {() => void} [assertStoreOwnership] fail closed when ownership is lost
+ * @property {(statePath?: string) => Promise<() => Promise<void>>} [acquireStore] acquire exclusive ownership before opening a daemon
  * @property {boolean} canSnapshot whether `snapshot` returns a real
  *   engine-level snapshot ref; if false the host must retain the full
  *   journal and the engine must reconstruct state by replay

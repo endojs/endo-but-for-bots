@@ -87,7 +87,7 @@ split examples.
 The metadata identifies which demo owns a directory and rejects a mismatch.
 
 CI's `test-thixotrope-ironhorse` job builds the release worker and SES/OCapN
-bundles, then runs fourteen serial AVA scenarios:
+bundles, then runs the original fourteen serial AVA scenarios:
 
 1. A basic cross-vat counter call.
 2. A persisted promise listener that settles after restart.
@@ -104,14 +104,20 @@ bundles, then runs fourteen serial AVA scenarios:
 13. Metered failure quarantine with a healthy sibling.
 14. Corrupt-image refusal and incarnation cleanup.
 
-The suite is selected by `ava.ironhorse.config.mjs` and lives in
-`test/ironhorse/scenarios.js`.
+Nine additional reliability scenarios in `test/ironhorse/reliability.js` cover
+four actual daemon SIGKILL boundaries, competing supervisors, runtime identity,
+inspection of quarantined workers, custom heap-path refusal, and ownership-helper
+loss during worker startup.
+The suite is selected by `ava.ironhorse.config.mjs`; it runs the two files serially.
 It requires the real binary and bundles: missing artifacts fail the lane instead
 of skipping tests.
 Each scenario owns an independent directory and tears down its daemon and workers.
 Fault injection targets the counter delivery before execution and after its heap commit.
-The daemon crash helper drains queued transport work before stopping workers; these
-scenarios do not simulate arbitrary daemon SIGKILL or machine power loss.
+The original daemon crash helper drains queued transport work before stopping workers.
+The subprocess suite instead stops the daemon synchronously after journal append,
+heap commit, output acceptance, or snapshot metadata publication, then SIGKILLs it.
+These tests verify exactly one counter increment after a fresh process restores the store.
+They do not simulate hardware power loss or storage devices that ignore fsync.
 `THIXOTROPE_IRONHORSE_WORKER` can select a different binary.
 
 `makeIronhorseEngine({ workerBinary, bootPaths, storePath, crankBudget,
@@ -128,7 +134,9 @@ SQLite files. A running incarnation uses a private writable copy. Sleep folds
 the WAL, saves and syncs an image, then pairs its reference with the transport's
 journal cut and outbound sequence base. Recovery copies **that exact image**
 and replays the journal suffix; it never adopts an abandoned incarnation's
-newer database. Hub watermarks suppress already-accepted output. This MVP pays
+newer database. Hub input watermarks and a durable outbox commit together before forwarding.
+Destination journals record stable outbox sequence numbers with each frame, so
+resending a frame after a daemon crash cannot duplicate a guest delivery. This MVP pays
 for a whole database copy on sleep/wake, while ordinary cranks write dirty
 state incrementally. Daemon journal/metadata writes are also synced.
 
@@ -138,18 +146,56 @@ watchdog defaults to 60 seconds. A deterministic VM halt, including budget
 exhaustion, preserves the last image and journal for inspection, records a
 failure in worker metadata, and retires the logical comms session so pending
 calls reject. Other vats continue to run. Failed vats do not replay the same
-poison input after a restart; there is no repair/upgrade command yet.
+poison input after a restart; inspection does not retry that input.
 
-This remains an experimental, local, single-supervisor MVP. Do not run two
-commands against the same state directory concurrently. Use a matching engine
-build and bootstrap for its stored images; upgrade migration of live guest code
-is outside this demo. Async generators and `Array.fromAsync` suspensions remain
+This remains an experimental, local, single-supervisor MVP.
+A kernel-backed directory lease refuses concurrent supervisors.
+Workers hold shared incarnation leases until they exit; a replacement supervisor
+must acquire the exclusive incarnation lease before reclaiming abandoned copies.
+Lock files stay in place: never unlink them to force an unlock.
+Use a matching engine build and bootstrap for stored images; upgrade migration
+of live guest code is outside this demo. Async generators and `Array.fromAsync` suspensions remain
 refused by the engine's persistence gate. The bootstrap omits the unfinished
 optional Iterator-helper profile and uses SES's minimal override-taming profile.
 This keeps the array iterator as a frozen native data property, as required by
 Ironhorse's current typed-array copy path. The loopback netlayer is a testing transport;
 a fixed public listener, service installation, and remote authentication UX are
 not part of this CLI.
+
+
+### Compatibility and recovery
+
+`runtime.json` records the worker executable hash, ordered bootstrap hashes,
+crank budget, and host delivery protocol.
+The worker's SQLite signature includes the resulting profile digest.
+The supervisor validates this manifest under its lease before restoring heaps or
+cleaning abandoned incarnations, and executes private checked copies throughout
+its lifetime so edits to the original paths cannot change a later wake.
+This release also advances the engine boot-layout signature to 21.
+
+Use `demo:ironhorse:counter status PATH` (or the promise variant) for administrative
+worker metadata without sending messages to guest capabilities.
+`demo:ironhorse:counter inspect PATH` reads the manifest and metadata without
+starting a daemon, acquiring worker capabilities, repairing files, or requiring a
+matching binary; it remains available for incompatible or quarantined stores.
+`inspectIronhorseStore(PATH)` exposes that read-only operation to embedders.
+An inspection of a running store is not a transactional backup.
+
+Recovery is deliberately explicit:
+
+- After process death, reopen with the same runtime and budget; leases release
+  when their owning processes exit, and the new supervisor recovers image plus journal.
+- On an identity mismatch, restore the matching executable and bootstrap bytes.
+  Do not edit the manifest to bypass the check.
+- Older stores without a manifest are refused rather than assigned an unverified
+  identity; retain their original checkout/runtime, or initialize a fresh directory.
+- For a quarantined guest, inspect and preserve its image, journal, and metadata.
+  A fresh demo can be initialized in a separate directory while keeping that evidence.
+  This change does not clear quarantine, replay poison inputs, or migrate live code.
+
+The engine now materializes modeled intrinsic surfaces before preventing
+extensions and refuses late intrinsic installation onto non-extensible objects.
+There is no bootstrap priming workaround for `Symbol.unscopables`.
 
 ## Example
 

@@ -6,7 +6,7 @@ XS runtime dependency. The host adapter and runnable two-guest-vat demo are in
 
 ```
 cargo build --release -p thixotrope-ironhorse-worker
-thixotrope-ironhorse-worker heap.sqlite boot.js worker-peer.js
+thixotrope-ironhorse-worker heap.sqlite PROFILE_DIGEST ACTIVE_LEASE_PATH boot.js worker-peer.js
 ```
 
 For a fresh file, the runner evaluates trusted boot files and commits before
@@ -25,9 +25,17 @@ successful exit; the adapter requires that success before copying an image.
 The NDJSON interface is a **trusted supervisor interface**, not a guest-facing
 protocol. Guests run in SES compartments supplied by the worker bootstrap. Guest
 OCapN output stays in the heap queue until a separate crank drains and commits
-it. The adapter then releases those frames to the comms hub. The filesystem
-store and engine are private to one supervisor; concurrent openers are outside
-the demo contract.
+it.
+The adapter then releases those frames to the comms hub.
+The daemon acquires a kernel lease through `--lock-state STATE_DIRECTORY`.
+The helper reports `locked`, waits for `prepare` after host compatibility checks,
+reclaims abandoned incarnations under an exclusive worker lease, then reports
+`ready` on stderr.
+The helper flocks the supervisor file descriptor inherited on stdout; the parent
+retains that descriptor until all workers stop, even if the helper dies.
+The helper exits when stdin closes.
+Each worker holds a shared lease on ACTIVE_LEASE_PATH until it exits.
+The adapter passes the verified runtime profile digest into the SQLite signature.
 
 The daemon transport owns replay, sequences, immutable sleep-image selection,
 and failure quarantine. A private live database may be ahead of the last sleep

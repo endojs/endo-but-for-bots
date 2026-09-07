@@ -53,14 +53,14 @@ import { Fail } from '@endo/errors';
 
 /**
  * @typedef {object} SocketOperations
- * @property {(bytes: Uint8Array) => void} write
+ * @property {(bytes: Uint8Array, hubSequence?: string) => void} write
  * @property {() => void} end
  *
  * @typedef {object} Connection
  * @property {any} netlayer
  * @property {boolean} isOutgoing
  * @property {boolean} isDestroyed
- * @property {(bytes: Uint8Array) => void} write
+ * @property {(bytes: Uint8Array, hubSequence?: string) => void} write
  * @property {() => void} end
  *
  * @typedef {object} NetlayerHandlers
@@ -97,13 +97,13 @@ import { Fail } from '@endo/errors';
  *   a remote-supplied token before it is used as a storage key
  * @property {(token: string) => void} onHello a fresh durable logical
  *   connection opened; create/reset its record
- * @property {(token: string) => { recvSeq: number, sendSeq: number, frames: Array<{ n: number, bytes: Uint8Array }> } | undefined} loadForResume
+ * @property {(token: string) => { recvSeq: number, sendSeq: number, hubDelivery?: string, frames: Array<{ n: number, bytes: Uint8Array }> } | undefined} loadForResume
  *   load the durable record for a token unknown to this process;
  *   undefined refuses the resumption
  * @property {(handlers: NetlayerHandlers, connection: Connection, token: string) => void} restoreSession
  *   reconstruct the OCapN session on the given logical connection
  *   (identity via `handlers.resumeSession`, exports re-seated)
- * @property {(token: string, n: number, bytes: Uint8Array) => void} recordOutbound
+ * @property {(token: string, n: number, bytes: Uint8Array, hubSequence?: string) => void} recordOutbound
  * @property {(token: string, n: number) => void} recordAck
  * @property {(token: string, n: number) => void} recordInbound persist
  *   the received watermark BEFORE the frame is dispatched (at-most-once)
@@ -184,6 +184,7 @@ export const makeDurableNetLayer = async ({
    * @property {boolean} isOriginator
    * @property {OcapnLocation | undefined} remoteLocation
    * @property {Connection} ocapnConnection
+   * @property {bigint} hubDelivery
    * @property {number} sendSeq
    * @property {Array<{ n: number, bytes: Uint8Array }>} sendBuf
    * @property {number} recvSeq
@@ -347,6 +348,7 @@ export const makeDurableNetLayer = async ({
       // Assigned immediately below via handlers.makeConnection.
       ocapnConnection: /** @type {any} */ (undefined),
       sendSeq: 0,
+      hubDelivery: 0n,
       sendBuf: [],
       recvSeq: 0,
       transport: undefined,
@@ -358,19 +360,26 @@ export const makeDurableNetLayer = async ({
     };
     /** @type {SocketOperations} */
     const logicalOps = {
-      write: bytes => {
+      write: (bytes, hubSequence) => {
         if (logical.destroyed) {
           return;
         }
-        logical.sendSeq += 1;
-        const entry = { n: logical.sendSeq, bytes };
-        logical.sendBuf.push(entry);
+        if (
+          hubSequence !== undefined &&
+          BigInt(hubSequence) <= logical.hubDelivery
+        )
+          return;
+        const entry = { n: logical.sendSeq + 1, bytes };
         if (logical.durable && resumption) {
           // Persist before the wire: an unpersisted frame that reached
           // the peer is fine (it acks; we forget), but a persisted-ack
           // for a frame a restarted process cannot replay is not.
-          resumption.recordOutbound(logical.token, entry.n, bytes);
+          resumption.recordOutbound(logical.token, entry.n, bytes, hubSequence);
         }
+        logical.sendSeq = entry.n;
+        logical.sendBuf.push(entry);
+        if (hubSequence !== undefined)
+          logical.hubDelivery = BigInt(hubSequence);
         if (logical.flowing) {
           transportWrite(logical, { t: 'f', n: entry.n }, entry.bytes);
         }
@@ -470,6 +479,7 @@ export const makeDurableNetLayer = async ({
               logical.durable = true;
               logical.recvSeq = record.recvSeq;
               logical.sendSeq = record.sendSeq;
+              logical.hubDelivery = BigInt(record.hubDelivery ?? '0');
               logical.sendBuf = record.frames.map(({ n, bytes }) => ({
                 n,
                 bytes,

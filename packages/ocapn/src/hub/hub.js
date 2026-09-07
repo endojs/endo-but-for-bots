@@ -249,12 +249,15 @@ export const makeOcapnHub = ({
    *   processedUpTo: number,
    *   durable: boolean,
    *   queue: Array<string>,
+   *   queueSequences: Array<string>,
+   *   nextDelivery: bigint,
+   *   flushing: boolean,
    *   identity: SessionIdentity | undefined,
    *   usedGiftHandoffs: Array<string>,
    *   pendingWithdraws: Array<PendingWithdraw>,
    *   nextHandoffCount: bigint,
    *   dialLocation: any,
-   *   send: (bytes: Uint8Array) => void,
+   *   send: (bytes: Uint8Array, deliverySequence?: string) => void,
    *   attached: boolean,
    *   remote: boolean,
    *   onAbort: ((error: unknown) => void) | undefined,
@@ -332,7 +335,9 @@ export const makeOcapnHub = ({
 
   // --- persistence ---
 
+  let deliveryDepth = 0;
   const persist = () => {
+    if (deliveryDepth > 0) return;
     if (!dirty) {
       return;
     }
@@ -368,6 +373,8 @@ export const makeOcapnHub = ({
         processedUpTo: session.processedUpTo,
         durable: session.durable,
         queue: [...session.queue],
+        queueSequences: [...session.queueSequences],
+        nextDelivery: String(session.nextDelivery),
         identity: session.identity,
         usedGiftHandoffs: [...session.usedGiftHandoffs],
         pendingWithdraws: session.pendingWithdraws.map(pending => ({
@@ -400,6 +407,9 @@ export const makeOcapnHub = ({
         processedUpTo: 0,
         durable: false,
         queue: [],
+        queueSequences: [],
+        nextDelivery: 0n,
+        flushing: false,
         identity: undefined,
         usedGiftHandoffs: [],
         pendingWithdraws: [],
@@ -458,6 +468,10 @@ export const makeOcapnHub = ({
       session.processedUpTo = Number(sd.processedUpTo ?? 0);
       session.durable = Boolean(sd.durable);
       session.queue = [...(sd.queue ?? [])];
+      session.queueSequences = sd.queueSequences
+        ? [...sd.queueSequences]
+        : session.queue.map((_, index) => String(BigInt(index) + 1n));
+      session.nextDelivery = BigInt(sd.nextDelivery ?? session.queue.length);
       session.identity = sd.identity;
       session.usedGiftHandoffs = [...(sd.usedGiftHandoffs ?? [])];
       session.pendingWithdraws = (sd.pendingWithdraws ?? []).map(
@@ -935,19 +949,17 @@ export const makeOcapnHub = ({
    */
   const dispatchBytes = (sessionKey, bytes) => {
     const session = provideSessionState(sessionKey);
-    if (session.attached) {
-      persist();
-      session.send(bytes);
-      return;
-    }
-    if (session.durable) {
+    if (session.attached || session.durable) {
       session.queue.push(hexFromBytes(bytes));
+      session.queueSequences.push('');
       dirty = true;
       persist();
-      if (session.dialLocation !== undefined && handoffs !== undefined) {
-        // An outbound exporter session with traffic waiting: ask the
-        // embedder to (re)dial. Idempotent at the embedder while a
-        // dial or connection is live.
+      flushOutbox(sessionKey);
+      if (
+        !session.attached &&
+        session.dialLocation !== undefined &&
+        handoffs !== undefined
+      ) {
         handoffs.connect(session.dialLocation, sessionKey);
       }
       return;
@@ -955,6 +967,32 @@ export const makeOcapnHub = ({
     logError(`dropping message toward detached session ${sessionKey}`);
     persist();
   };
+
+  /** @param {string} sessionKey */
+  function flushOutbox(sessionKey) {
+    const session = provideSessionState(sessionKey);
+    if (deliveryDepth > 0 || session.flushing || !session.attached) return;
+    session.flushing = true;
+    try {
+      while (session.queue.length > 0 && session.attached) {
+        // The destination journals the stable sequence with the bytes. A
+        // crash after send but before removal resends the same sequence.
+        if (session.queueSequences[0] === '') {
+          session.nextDelivery += 1n;
+          session.queueSequences[0] = String(session.nextDelivery);
+          dirty = true;
+          persist();
+        }
+        session.send(bytesFromHex(session.queue[0]), session.queueSequences[0]);
+        session.queue.shift();
+        session.queueSequences.shift();
+        dirty = true;
+        persist();
+      }
+    } finally {
+      session.flushing = false;
+    }
+  }
 
   /**
    * Encode and dispatch a hub-synthesized message (a gc hint, a
@@ -1049,78 +1087,86 @@ export const makeOcapnHub = ({
     ) {
       return;
     }
-    const pendings = session.pendingWithdraws.splice(0);
-    dirty = true;
-    for (const pending of pendings) {
-      try {
-        const gifter = sessions.get(pending.gifterSession);
-        if (gifter?.identity?.selfPrivateKey === undefined) {
-          throw Error('ocapn hub: the gifter session has no signing identity');
-        }
-        if (session.identity.selfPrivateKey === undefined) {
-          throw Error('ocapn hub: the exporter session has no self identity');
-        }
-        const signedGive = DescHandoffGiveSigEnvelopeCodec.read(
-          codec.makeReader(bytesFromHex(pending.giveHex)),
-        );
-        const gifterKeyPair = cryptography.makeOcapnKeyPairFromPrivateKey(
-          bytesFromHex(gifter.identity.selfPrivateKey),
-        );
-        const selfAtExporter = cryptography.makeOcapnKeyPairFromPrivateKey(
-          bytesFromHex(session.identity.selfPrivateKey),
-        );
-        const handoffCount = session.nextHandoffCount;
-        session.nextHandoffCount += 1n;
-        const handoffReceive = makeHandoffReceiveDescriptor(
-          signedGive,
-          handoffCount,
-          /** @type {any} */ (bytesFromHex(session.identity.sessionId)),
-          selfAtExporter.publicKey.id,
-        );
-        const signature = cryptography.signHandoffReceive(
-          handoffReceive,
-          gifterKeyPair,
-        );
-        const signedReceive = makeHandoffReceiveSigEnvelope(
-          handoffReceive,
-          signature,
-        );
-        const bootstrapRow = provideRef(sessionKey, 0n, 'object');
-        sendMessage(sessionKey, {
-          type: 'op:deliver',
-          to: refTokenFor(bootstrapRow.refId),
-          args: [makeSelector('withdraw-gift'), signedReceive],
-          answerPosition: BigInt(pending.position),
-          resolveMeDesc: false,
-        });
-      } catch (error) {
-        logError(
-          `withdraw of a pending gift toward ${sessionKey} failed:`,
-          error,
-        );
-        const answerRefId = `${sessionKey}#${session.epoch}:a${pending.position}`;
-        const row = refs.get(answerRefId);
-        if (row !== undefined && !row.dead) {
-          row.dead = true;
-          const orphans = row.listeners.splice(0);
-          dirty = true;
-          for (const resolverRefId of orphans) {
-            const resolverRow = refs.get(resolverRefId);
-            if (resolverRow === undefined || resolverRow.dead) {
-              // eslint-disable-next-line no-continue
-              continue;
-            }
-            settleToResolver(
-              resolverRow.origin,
-              refTokenFor(resolverRefId),
-              'break',
-              harden(Error('ocapn hub: the gift withdrawal failed')),
+    deliveryDepth += 1;
+    try {
+      const pendings = session.pendingWithdraws.splice(0);
+      dirty = true;
+      for (const pending of pendings) {
+        try {
+          const gifter = sessions.get(pending.gifterSession);
+          if (gifter?.identity?.selfPrivateKey === undefined) {
+            throw Error(
+              'ocapn hub: the gifter session has no signing identity',
             );
+          }
+          if (session.identity.selfPrivateKey === undefined) {
+            throw Error('ocapn hub: the exporter session has no self identity');
+          }
+          const signedGive = DescHandoffGiveSigEnvelopeCodec.read(
+            codec.makeReader(bytesFromHex(pending.giveHex)),
+          );
+          const gifterKeyPair = cryptography.makeOcapnKeyPairFromPrivateKey(
+            bytesFromHex(gifter.identity.selfPrivateKey),
+          );
+          const selfAtExporter = cryptography.makeOcapnKeyPairFromPrivateKey(
+            bytesFromHex(session.identity.selfPrivateKey),
+          );
+          const handoffCount = session.nextHandoffCount;
+          session.nextHandoffCount += 1n;
+          const handoffReceive = makeHandoffReceiveDescriptor(
+            signedGive,
+            handoffCount,
+            /** @type {any} */ (bytesFromHex(session.identity.sessionId)),
+            selfAtExporter.publicKey.id,
+          );
+          const signature = cryptography.signHandoffReceive(
+            handoffReceive,
+            gifterKeyPair,
+          );
+          const signedReceive = makeHandoffReceiveSigEnvelope(
+            handoffReceive,
+            signature,
+          );
+          const bootstrapRow = provideRef(sessionKey, 0n, 'object');
+          sendMessage(sessionKey, {
+            type: 'op:deliver',
+            to: refTokenFor(bootstrapRow.refId),
+            args: [makeSelector('withdraw-gift'), signedReceive],
+            answerPosition: BigInt(pending.position),
+            resolveMeDesc: false,
+          });
+        } catch (error) {
+          logError(
+            `withdraw of a pending gift toward ${sessionKey} failed:`,
+            error,
+          );
+          const answerRefId = `${sessionKey}#${session.epoch}:a${pending.position}`;
+          const row = refs.get(answerRefId);
+          if (row !== undefined && !row.dead) {
+            row.dead = true;
+            const orphans = row.listeners.splice(0);
+            dirty = true;
+            for (const resolverRefId of orphans) {
+              const resolverRow = refs.get(resolverRefId);
+              if (resolverRow === undefined || resolverRow.dead) {
+                // eslint-disable-next-line no-continue
+                continue;
+              }
+              settleToResolver(
+                resolverRow.origin,
+                refTokenFor(resolverRefId),
+                'break',
+                harden(Error('ocapn hub: the gift withdrawal failed')),
+              );
+            }
           }
         }
       }
+    } finally {
+      deliveryDepth -= 1;
     }
     persist();
+    for (const key of sessions.keys()) flushOutbox(key);
   };
 
   /**
@@ -1882,6 +1928,7 @@ export const makeOcapnHub = ({
     session.nextAnswer = 1n;
     session.processedUpTo = 0;
     session.queue.length = 0;
+    session.queueSequences.length = 0;
     session.identity = undefined;
     session.usedGiftHandoffs.length = 0;
     session.pendingWithdraws.length = 0;
@@ -1943,7 +1990,7 @@ export const makeOcapnHub = ({
      *
      * @param {string} sessionKey
      * @param {object} powers
-     * @param {(bytes: Uint8Array) => void} powers.send
+     * @param {(bytes: Uint8Array, deliverySequence?: string) => void} powers.send
      * @param {boolean} [powers.durable] frames toward this session
      *   queue in the tables while it is detached, instead of breaking
      *   to their senders
@@ -1988,17 +2035,26 @@ export const makeOcapnHub = ({
       // that its wire identity is known. They go out BEFORE the
       // queued frames: a queued listen on a gift's answer must reach
       // the exporter after the withdrawal that creates the answer.
-      flushPendingWithdraws(sessionKey);
-      while (session.queue.length > 0) {
-        // At-least-once: send, then drop from the queue — a crash
-        // between the two re-sends on the next attach rather than
-        // losing a settlement.
-        const frame = session.queue[0];
-        session.send(bytesFromHex(frame));
-        session.queue.shift();
-        dirty = true;
-        persist();
+      deliveryDepth += 1;
+      // A previously attempted prefix already has stable sequence numbers.
+      // Preserve it before newly generated withdrawals; only unattempted
+      // frames may move behind the withdrawals they depend on.
+      const firstUnattempted = session.queueSequences.findIndex(
+        id => id === '',
+      );
+      const split =
+        firstUnattempted < 0 ? session.queue.length : firstUnattempted;
+      const queued = session.queue.splice(split);
+      const sequences = session.queueSequences.splice(split);
+      try {
+        flushPendingWithdraws(sessionKey);
+      } finally {
+        session.queue.push(...queued);
+        session.queueSequences.push(...sequences);
+        deliveryDepth -= 1;
       }
+      persist();
+      for (const key of sessions.keys()) flushOutbox(key);
       return harden({
         /**
          * @param {Uint8Array} bytes one inbound OCapN frame
@@ -2013,22 +2069,31 @@ export const makeOcapnHub = ({
             sequenceNumber !== undefined &&
             sequenceNumber <= session.processedUpTo
           ) {
+            for (const key of sessions.keys()) flushOutbox(key);
             return;
           }
+          deliveryDepth += 1;
           try {
-            const parsed = withRollback(() => {
-              const { readOcapnMessage } = provideCodecKit(sessionKey);
-              return readOcapnMessage(codec.makeReader(bytes));
-            });
-            handleMessage(sessionKey, parsed);
-          } catch (error) {
-            frameError(sessionKey, error);
+            try {
+              const parsed = withRollback(() => {
+                const { readOcapnMessage } = provideCodecKit(sessionKey);
+                return readOcapnMessage(codec.makeReader(bytes));
+              });
+              handleMessage(sessionKey, parsed);
+            } catch (error) {
+              frameError(sessionKey, error);
+            }
+            if (sequenceNumber !== undefined) {
+              session.processedUpTo = sequenceNumber;
+              dirty = true;
+            }
+          } finally {
+            deliveryDepth -= 1;
           }
-          if (sequenceNumber !== undefined) {
-            session.processedUpTo = sequenceNumber;
-            dirty = true;
-          }
+          // Commit source watermark, reference changes, and every outgoing
+          // frame together before any destination can observe the delivery.
           persist();
+          for (const key of sessions.keys()) flushOutbox(key);
         },
         detach: () => {
           session.attached = false;

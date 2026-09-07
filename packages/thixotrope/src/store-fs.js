@@ -30,6 +30,7 @@ import { Fail, q } from '@endo/errors';
  * @property {string} [debugLabel] optional human-readable label; used
  *   only in diagnostics, never as an identifier
  * @property {string} [failure] deterministic halt; retained for inspection
+ * @property {string} [hubDelivery] highest hub outbox sequence covered by the snapshot
  * @property {{ ref: unknown, cut?: number } | null} [snapshot]
  *   the engine snapshot and the absolute journal index (`cut`) it
  *   subsumes
@@ -69,14 +70,15 @@ import { Fail, q } from '@endo/errors';
  * @typedef {object} SessionStore
  * @property {() => Record<string, any>} getMeta
  * @property {(meta: Record<string, any>) => void} setMeta
- * @property {(entry: { n: number, b64: string }) => void} appendFrame
- * @property {() => Array<{ n: number, b64: string }>} readFrames
+ * @property {(entry: { n: number, b64: string, hubSequence?: string }) => void} appendFrame
+ * @property {() => Array<{ n: number, b64: string, hubSequence?: string }>} readFrames
  * @property {(upToN: number) => void} truncateFramesUpTo drops frames
  *   with sequence number <= upToN (the peer acknowledged them)
  */
 
 /**
  * @typedef {object} ThixotropeStore
+ * @property {string} [statePath] filesystem ownership boundary
  * @property {() => any} getHubState the OCapN hub's persisted tables
  * @property {(state: any) => void} setHubState
  * @property {() => Array<string>} listWorkerIds
@@ -145,7 +147,7 @@ const syncPath = path => {
 const makeDirectory = path => {
   if (existsSync(path)) return;
   makeDirectory(dirname(path));
-  mkdirSync(path);
+  mkdirSync(path, { recursive: true });
   syncPath(dirname(path));
 };
 
@@ -192,7 +194,7 @@ export const makeFsStore = statePath => {
 
     let framesRepaired = false;
 
-    /** @param {Array<{ n: number, b64: string }>} entries */
+    /** @param {Array<{ n: number, b64: string, hubSequence?: string }>} entries */
     const writeFramesFile = entries => {
       const text = [...entries.map(entry => JSON.stringify(entry)), ''].join(
         '\n',
@@ -201,7 +203,7 @@ export const makeFsStore = statePath => {
       framesRepaired = true;
     };
 
-    /** @returns {Array<{ n: number, b64: string }>} */
+    /** @returns {Array<{ n: number, b64: string, hubSequence?: string }>} */
     const readFramesFile = () => {
       if (!existsSync(framesPath)) {
         return [];
@@ -209,7 +211,7 @@ export const makeFsStore = statePath => {
       const lines = readFileSync(framesPath, 'utf8')
         .split('\n')
         .filter(line => line !== '');
-      /** @type {Array<{ n: number, b64: string }>} */
+      /** @type {Array<{ n: number, b64: string, hubSequence?: string }>} */
       const entries = [];
       let torn = false;
       for (const line of lines) {
@@ -363,6 +365,7 @@ export const makeFsStore = statePath => {
 
   /** @type {ThixotropeStore} */
   const store = {
+    statePath,
     listWorkerIds: () =>
       existsSync(workersPath) ? readdirSync(workersPath).sort() : [],
     provideWorkerStore: makeWorkerStore,
@@ -439,7 +442,7 @@ export const makeMemoryStore = () => {
     return harden(workerStore);
   };
 
-  /** @type {Map<string, { meta: Record<string, any>, frames: Array<{ n: number, b64: string }> }>} */
+  /** @type {Map<string, { meta: Record<string, any>, frames: Array<{ n: number, b64: string, hubSequence?: string }> }>} */
   const sessions = new Map();
 
   /** @param {string} token */
