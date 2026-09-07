@@ -15,23 +15,47 @@ deployment can satisfy the asserted contract.
 
 ## Attestable sandbox enforcement
 
-`@endo/sandbox` must enforce and report `HostedAgentPolicyV1` from effective
-rootless Podman/container state.
-Today its Podman `network: "private"` is NAT rather than filtered isolation, and
-its `limits` record is not translated into cgroup/resource flags.
-The required changes and negative production tests belong in an independently
-reviewed sandbox PR.
-Until it lands, `makeCodexBackendFactory` rejects the policy and app-server does
-not start.
+The outer half has landed.
+`@endo/sandbox` now takes a `SlicePolicyRequest` at `make()` and reports a
+`SlicePolicyAttestationV1` from `SandboxHandle.policy()`, derived from effective
+rootless Podman and kernel state rather than from the flags it passed.
+A `broker-only` network profile joins an operator-prepared namespace and is
+usable only once `procfs` has shown it holds loopback and no routable
+interface, which is what `network: "private"`'s NAT could never establish.
+The resource ceilings are applied as cgroup and rlimit flags and read back from
+the runtime's resolved view against delegated cgroup v2 controllers, which the
+old per-process `limits` record never reached.
+Also proved: the digest-pinned image, uid and gid inside the slice's own user
+namespace, private user/PID/IPC/mount namespaces, read-only root,
+`no-new-privileges`, an empty effective capability set, a loaded seccomp
+filter, no devices, no host bind mounts, the exact declared mount table with
+`nosuid,nodev` and a writable ceiling on every entry, and descendant reaping.
+Anything absent, unreadable, or in an unrecognized shape fails `make()`, so a
+slice that cannot prove its confinement never exists.
+See `packages/sandbox/README.md` § "Slice policy and attestation".
 
-This dependency includes a broker-only network namespace and concrete
-credential-free sidecar transport with process-scoped routing that excludes
-model-launched descendants, cgroup and storage enforcement, private
-namespaces, read-only root, the exact workspace/state/tmpfs mount table, and
-the pinned Codex `workspaceWrite` child policy that makes control state
-read-only to model-launched commands, plus descendant reap/orphan reconciliation
-exactly as specified in
-[SANDBOX-CONTRACT.md](./SANDBOX-CONTRACT.md).
+`makeCodexBackendFactory` still rejects the policy and app-server still does not
+start, because `HostedAgentPolicyV1` also asserts claims the outer sandbox
+cannot observe:
+
+- `credentialInjection: "broker-only"` and `brokerTransport:
+  "loopback-sidecar"` are the broker's claims.
+  The sandbox proves the namespace holds nothing routable; it does not prove
+  what the listener inside it is, that it is credential-free, or that its route
+  is denied to model-launched descendants.
+- `toolSandbox`, `toolCodexHomeAccess`, and `toolBrokerAccess` are the pinned
+  app-server's claims about the inner `workspaceWrite` policy it applies before
+  starting untrusted commands.
+- The slice environment is still not attested, so an operator's `makeSlice` must
+  still place no credential or proxy setting there.
+
+An operator's `makeSlice` must therefore compose `HostedAgentPolicyV1` from
+`E(slice).policy()` plus attestations the broker and the pinned runtime supply
+for their own halves.
+Stamping the unproved fields into the record from a configuration constant
+would make `assertHostedAgentPolicyV1` accept a claim nothing established,
+which is the failure the whole attestation exists to exclude.
+The remaining halves are the two sections below.
 
 ## Provider credential broker
 

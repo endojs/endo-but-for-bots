@@ -473,21 +473,26 @@ files, cores — stay `number`.
 
 ### What is proved, and how
 
-| Control                          | Proof                                          |
-| -------------------------------- | ---------------------------------------------- |
-| rootless engine                   | `podman info`, at probe time                   |
-| image digest                      | container's resolved `ImageDigest`             |
-| uid / gid inside the slice        | `/proc/<pid>/status` through `uid_map`         |
-| private user/pid/ipc/mount ns     | `/proc/<pid>/ns/*` differs from the daemon's   |
-| `broker-only` network             | `/proc/<pid>/net/dev` holds exactly `lo`       |
-| network namespace identity        | `/proc/<pid>/ns/net` inode                     |
-| read-only root, no-new-privs      | resolved `HostConfig`                          |
-| dropped capabilities              | the container's empty `EffectiveCaps`          |
-| no devices, no host binds         | resolved `Devices` and mount table             |
-| memory / swap / pids / cpu ceiling | resolved `HostConfig`, plus delegated cgroup v2 controllers |
-| open-file and core ceilings       | resolved `Ulimits`                             |
-| per-mount writable ceiling        | tmpfs `size=`; volume quota from the storage driver |
-| descendant reaping                | private pid namespace + exact-label reconciliation |
+| Control                     | Proof                                        |
+| --------------------------- | -------------------------------------------- |
+| rootless engine             | `podman info`, at probe time                 |
+| image digest                | the container's resolved `ImageDigest`       |
+| uid / gid in the slice      | `/proc/<pid>/status` through `uid_map`       |
+| private user/pid/ipc/mnt ns | `/proc/<pid>/ns/*` differs from the daemon's |
+| `broker-only` network       | `/proc/<pid>/net/dev` holds exactly `lo`     |
+| network namespace identity  | `/proc/<pid>/ns/net` inode                   |
+| read-only root, no-new-priv | resolved `HostConfig`                        |
+| dropped capabilities        | the container's empty `EffectiveCaps`        |
+| no devices, no host binds   | resolved `Devices` and the mount table       |
+| memory, swap, pids, cpu     | resolved `HostConfig`, and cgroup v2         |
+| open-file and core ceilings | resolved `Ulimits`                           |
+| writable ceiling per mount  | tmpfs `size=`; volume quota from storage     |
+| descendant reaping          | private pid ns + exact-label reconciliation  |
+
+The memory, pid, and cpu ceilings additionally require the matching
+cgroup v2 controllers to be delegated to the daemon's user; a host that
+cannot delegate them cannot apply the ceilings, whatever the runtime
+echoed back, so the slice is refused.
 
 The attestation is read from a **slice anchor**: an ordinary operation
 container created from the same frozen policy prefix every later spawn
