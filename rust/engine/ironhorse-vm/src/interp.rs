@@ -60384,11 +60384,11 @@ mod tests {
     }
 
     #[test]
-    fn harden_transitive_freeze_is_miri_clean() {
+    fn harden_transitive_freeze_worklist_completes() {
         // Exercise the harden worklist (the Vec-backed graph walk, the slot-flag
         // mutation, and the allocation-metering ticks) over a small object graph
-        // so Miri validates the touched allocation path is UB-free. `harden`
-        // adds no `unsafe`; this pins the walk under `cargo +nightly miri test`.
+        // and assert that it completes. This ordinary unit test is not evidence
+        // of a Miri run; `harden` adds no `unsafe`.
         let (mut interp, outer, _inner, _id_a, _id_b, _id_c) = build_harden_graph();
         let arg = Slot::of(Kind::Reference, Payload::Reference(outer));
         let _ = interp.do_harden(&[], arg).expect("harden ok");
@@ -60527,19 +60527,17 @@ mod tests {
         assert_eq!(rec.opcode_count(Opcode::XS_CODE_END), 1);
     }
 
-    /// Miri-clean exercise of the generator suspend/resume + allocation paths
+    /// Exercise the generator suspend/resume + allocation paths
     /// (design § generators): runs the XS-compiled bytecode of
     /// `function* g(){ yield 1; yield 2; } var a=g(); a.next().value +
     /// a.next().value;` through `START_GENERATOR` (instance + saved-frame
     /// allocation), two `.next` resumes (`resume_generator` reinstalls the
     /// frame, the body runs to `YIELD`, snapshots into the `generators` side
     /// table via `stack.split_off`), the `BRANCH_STATUS` resume epilogue, and
-    /// a completion `fxNewGeneratorResult`. Asserts the result and that the
-    /// generator table was populated — under Miri this checks the new
-    /// allocation/Vec paths for UB (the crate is `#![forbid(unsafe_code)]`, so
-    /// this is a defensive backstop). Bytecode + symbols captured from the pin.
+    /// a completion `fxNewGeneratorResult`. Asserts completion and the result.
+    /// Bytecode + symbols captured from the pin. This runs as an ordinary test.
     #[test]
-    fn generator_suspend_resume_is_miri_clean() {
+    fn generator_suspend_resume_returns_yield_sum() {
         const BYTECODE: &[u8] = &[
             0x0b, 0x00, 0x9e, 0x02, 0x86, 0x01, 0x00, 0xe0, 0xe6, 0x01, 0x92, 0x86, 0x02, 0x00,
             0x8e, 0xe6, 0x02, 0x92, 0x4b, 0x4d, 0x02, 0x00, 0x59, 0x02, 0x00, 0x2e, 0x30, 0x0b,
@@ -60565,19 +60563,17 @@ mod tests {
         assert_eq!(out.result, "3", "1 + 2 from two yields");
     }
 
-    /// The stage-4 promise thenable-adoption keystone path is Miri-clean:
+    /// Exercise the stage-4 promise thenable-adoption keystone path:
     /// `var x=0; Promise.resolve({then:function(res){res(7)}}).then(function(v)
     /// {x=v}); x` drives the second-resolving-pair allocation
     /// (`make_resolving_functions` — the `promise_guards` Vec push), the
     /// count-3 thenable job queued on `promise_jobs`, and the drain
     /// (`run_thenable_job` re-entering `run_callback`, whose `res(7)` trips the
     /// second pair's guard and settles the promise, queuing + running the
-    /// reaction). Asserts the completion (the pre-drain `x` = 0) — under Miri
-    /// this exercises the new guard-table and thenable-job allocation paths for
-    /// UB (the crate is `#![forbid(unsafe_code)]`, so this is a defensive
-    /// backstop). Bytecode + symbols captured from the pin `48ee02d8cfe0`.
+    /// reaction). Asserts the completion (the pre-drain `x` = 0) as an ordinary
+    /// test. Bytecode + symbols captured from the pin `48ee02d8cfe0`.
     #[test]
-    fn promise_thenable_adoption_is_miri_clean() {
+    fn promise_thenable_adoption_preserves_script_completion() {
         const BYTECODE: &[u8] = &[
             0x0b, 0x00, 0x9e, 0x01, 0x86, 0x03, 0x00, 0xe0, 0xe6, 0x01, 0x92, 0x4b, 0x9e, 0x01,
             0x4d, 0x03, 0x00, 0x72, 0x00, 0xbf, 0x03, 0x00, 0x92, 0x4d, 0x04, 0x00, 0x67, 0x04,
@@ -60607,7 +60603,7 @@ mod tests {
     }
 
     /// The stage-4b async-function suspend/resume + result-promise settle path
-    /// is Miri-clean: `var x=0; async function f(){ x = await 7; } f(); x` drives
+    /// is exercised by `var x=0; async function f(){ x = await 7; } f(); x`, driving
     /// `new_async_instance` (the result-promise + resolving-pair allocation and
     /// the `async_instances` HashMap insert), `START_ASYNC`'s frame clone,
     /// `AWAIT`'s snapshot into the side table (`stack.split_off`), the
@@ -60615,12 +60611,10 @@ mod tests {
     /// `AsyncAwait` native reaction registered via `promise_then_native`), and
     /// the drain resume (`run_promise_job` → `step_async` reinstalling the frame
     /// and settling the result promise). Asserts the completion (the pre-drain
-    /// `x` = 0) — under Miri this exercises the new async side-table and
-    /// reaction allocation paths for UB (the crate is `#![forbid(unsafe_code)]`,
-    /// so this is a defensive backstop). Bytecode + symbols captured from the
-    /// pin `48ee02d8cfe0`.
+    /// `x` = 0) as an ordinary test. Bytecode + symbols captured from the pin
+    /// `48ee02d8cfe0`.
     #[test]
-    fn async_await_suspend_resume_is_miri_clean() {
+    fn async_await_suspend_resume_preserves_script_completion() {
         const BYTECODE: &[u8] = &[
             0x0b, 0x00, 0x9e, 0x02, 0x86, 0x01, 0x00, 0x8e, 0xe6, 0x01, 0x92, 0x86, 0x02, 0x00,
             0xe0, 0xe6, 0x02, 0x92, 0x4b, 0x4d, 0x01, 0x00, 0x07, 0x01, 0x00, 0x2e, 0x12, 0x0b,

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-09-06 |
+| **Updated** | 2026-09-08 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -702,9 +702,16 @@ this addresses is concrete: the class of bugs like the host-frame
 off-by-one documented in
 [daemon-rust-xs-performance](daemon-rust-xs-performance.md) (raw
 slot-pointer arithmetic silently reading wrong stack slots) is
-unrepresentable against typed arena accessors. CI enforcement:
-Miri on the arena and GC test suites, ASAN/UBSAN on the oracle
-harness (the remaining C), and the fuzz targets below. Logic bugs
+unrepresentable against typed arena accessors.
+CI enforcement is `forbid(unsafe_code)`, ordinary arena/GC unit tests, the fuzz
+targets below, and ASAN/UBSAN instrumentation scoped to the C oracle harness.
+The oracle sanitizer runner compiles all XS and shim C objects with Clang and
+links the sanitizer runtimes into the Rust harness; it does not instrument Rust.
+The initial sanitizer lane is advisory while the pinned XS alignment-UB findings
+are unresolved; its runner fails on reports without suppressing checks.
+There is no Miri CI lane, and ordinary unit-test names are not Miri evidence.
+This W0 amendment (2026-09-08, F034) replaces the earlier unimplemented Miri gate.
+Logic bugs
 (a wrong index reaching a kind-checked accessor) remain possible
 and surface as deterministic panics, which the supervisor already
 treats as worker death; a panic is a crashed crank, not a
@@ -872,7 +879,7 @@ the Compartment seam, and bootstraps test262, before any breadth.
 | Stage | Deliverable | Acceptance bar |
 |---|---|---|
 | 1. Thin slice: interpreter core + meter + oracle harness | `ironhorse-vm` arenas and value model; interpreter for the arithmetic/logic/branch/call/stack opcode subset; meter with the release-versioned cost table and XS check points; `xs-oracle` compiling source with XS and executing bytecode on both engines; a primordial `Compartment.evaluate` (fresh globals, shared intrinsics seam, no modules); `ironhorse-262` dual-run skeleton with the stage corpus; fuzz targets 1 and 2 | **Result** agreement with the oracle on the stage corpus; meter deterministic per release (identical computrons across repeated runs of the same build); computron-vs-XS recorded as advisory telemetry only; `forbid(unsafe_code)` holds outside `xs-oracle` |
-| 2. Object model and control flow | Objects, prototypes, property ops, closures, exceptions (jump-chain with JS/host flags), full 245-opcode coverage (built-ins stubbed); GC v1 (mark-sweep + chunk compaction) | test262 `language/` dual-run agreement on the covered grammar; GC test suite under Miri |
+| 2. Object model and control flow | Objects, prototypes, property ops, closures, exceptions (jump-chain with JS/host flags), full 245-opcode coverage (built-ins stubbed); GC v1 (mark-sweep + chunk compaction) | test262 `language/` dual-run agreement on the covered grammar; ordinary GC test suite (`forbid(unsafe_code)`), no Miri gate |
 | 3. Built-ins | Object/Array/String (built CESU-8; re-based to UTF-16 by the 2026-07-06 revision — § Value and heap model)/Math (canonical NaN)/JSON/Map/Set/TypedArray/BigInt; promises and job queue with the pump-loop latch semantics; RegExp port decision executed (resolved question 6: port `xsre`) | Built-ins sections dual-run **result** agreement; meter deterministic per release (computron-vs-XS advisory); the `mxMeterSome` fast-path annotations, where kept, preserve the meter's internal fast/slow-path consistency within an Ironhorse release rather than matching XS |
 | 4. Hardened JavaScript | `lockdown`, `harden`, `petrify`, `mutabilities`; full native `Compartment` + module machinery (ModuleSource, module maps); async/generators complete | The endor daemon boot bundles (`polyfills.js`, `ses_boot.js`, HandledPromise) run identically on both engines; SES conformance suites pass |
 | 5. Compiler port | `ironhorse-compile`: lexer, parser, scoper, coder replacing the oracle compiler; parse metering | Byte-identical bytecode versus the oracle compiler on the full conformance corpus; parse metering deterministic per release (parse computrons stable across runs; computron-vs-XS advisory); parser fuzz target armed |
@@ -914,7 +921,7 @@ the allocation-faithful object heap first: XS meters every `fxNewSlot`
 property paths, so the count depends on the engine's exact allocation
 sequence, not just its dispatch sequence. **Stage 2a (landed):** program
 frame + scope/variable/loop interpreter over compiler-emitted bytecode,
-GC v1 (mark-sweep + chunk slide-compaction, Miri-green), real
+GC v1 (mark-sweep + chunk slide-compaction, ordinary unit-tested), real
 `Compartment.evaluate` global binding, and the instruction-length
 walker; its new grammar is verified for **result agreement only** and
 deliberately kept out of the bit-exact corpus rather than faked.

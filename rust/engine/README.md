@@ -170,6 +170,39 @@ reproducibility and the "path dependency on xsnap" phrasing):
    xsnap's audited `xsnap-platform.{c,h}` and the identical feature
    defines) rather than as a Cargo path dependency on `xsnap`.
 
+### Oracle sanitizers and Rust safety checks
+
+After initializing the repository's pinned `c/moddable`, run from the repository root:
+
+```sh
+bash rust/engine/scripts/test-oracle-sanitizers.sh
+```
+
+This runs the oracle library, compiler/regexp parity, test262 harness, and portable
+fuzz tests with all XS and shim C objects instrumented by Clang AddressSanitizer and
+UndefinedBehaviorSanitizer.
+The Rust harness links the matching runtimes, and any sanitizer report fails the run.
+The native target is explicit so runtime linkage does not contaminate host proc macros.
+Artifacts live separately under `rust/engine/target/sanitizers` by default.
+This checks the C oracle boundary; it does not instrument Rust code.
+The initial lane is advisory because the pinned XS interpreter currently triggers
+UBSAN's alignment check in `xsRun.c` (`mxRunID` reads an unaligned `txS2`) and
+`xsdtoa.c:1699` (an unaligned `Bigint` member access).
+The first is reproduced at `xsRun.c:2417` by
+`long_completion_value_is_captured_untruncated` on macOS aarch64;
+`unary_number_operators_coerce_strings_and_wrappers` exposes the second.
+No sanitizer checks are suppressed; the runner returns failure and continues across
+test executables so additional findings remain visible.
+CI first requires the instrumented test targets to compile, then treats test-run
+failures as advisory: the check succeeds, with the failure recorded in its warning,
+step outcome, summary, and logs.
+Checkout, toolchain setup, and compilation failures still fail the check.
+Promoting the lane to a merge gate requires resolving the upstream failures.
+
+The pure-Rust engine crates enforce `forbid(unsafe_code)` and run ordinary unit and fuzz tests.
+There is no Miri CI lane; the previously named `*_is_miri_clean` tests have descriptive
+behavior names and do not establish a Miri result.
+
 ## Upstream moddable delta tracking (oracle bumped 8.2.3 → 8.3.1)
 
 The port is **oracle-locked**: every stage is byte-identity / four-valued
@@ -774,8 +807,8 @@ agree with **zero divergence**, every skip named:
 `language/statements/for-of` grows to **`covered=118`** (from 92) with `for (x of
 gen)` now driven, still `divergent=0`. The curated `stage4-generators.js` corpus
 is locked as `stage4_generators_corpus_is_bit_exact_against_oracle`, and the
-suspend/resume + allocation paths are exercised Miri-clean
-(`generator_suspend_resume_is_miri_clean`). Synchronous generator control is now
+suspend/resume + allocation paths are exercised by an ordinary unit test
+(`generator_suspend_resume_returns_yield_sum`). Synchronous generator control is now
 **complete**, each landed bit-exact against the oracle rather than named a skip:
 **`yield*` delegation** (`YIELD_STAR`, sharing the `YIELD` suspension machinery and
 carrying the delegate's iterator-result object as-is), **`.throw(e)` and `.return(v)`
@@ -849,8 +882,8 @@ covered), with the acceptance subtrees all `divergent=0`
 `all/race/allSettled/any/prototype/finally covered≤1`). The curated
 `stage4-async-promises.js` corpus (20 programs) is locked as the cargo bar
 `stage4_async_promises_corpus_is_bit_exact_against_oracle`, and the
-thenable-adoption allocation/drain path is exercised Miri-clean
-(`promise_thenable_adoption_is_miri_clean`). The honest **named skips** are: a
+thenable-adoption allocation/drain path is exercised by an ordinary unit test
+(`promise_thenable_adoption_preserves_script_completion`). The honest **named skips** are: a
 reaction handler / thenable `then` that **throws** (`promise:handler-throw` /
 `promise:thenable-then-throw` — cleanly unwinding the re-entrant callback frame
 after an internally-caught throw is the throw-family increment, alongside the
@@ -897,8 +930,8 @@ curated `stage4-async-await.js` corpus (14 programs — plain awaits, the
 native-promise fast path, nested async, multi-await chains, await-in-loop, async
 arrows, thenable await, rejection paths) is locked as the cargo bar
 `stage4_async_await_corpus_is_bit_exact_against_oracle`, and the suspend/resume +
-result-promise-settle path is exercised Miri-clean
-(`async_await_suspend_resume_is_miri_clean`). GC-roots: the `async_instances`
+result-promise-settle path is exercised by an ordinary unit test
+(`async_await_suspend_resume_preserves_script_completion`). GC-roots: the `async_instances`
 side table (its `frame: Option<SavedFrame>` and the result-promise/resolving-
 function slots) and the `async_run_stack` join the root set, on the same
 deterministic trigger points as the generator table; the `AsyncAwait(inst)`
@@ -1078,8 +1111,8 @@ intrinsic itself is a named skip (`compartment:intrinsic-surface`), exactly as
 the module goal is a named skip on the oracle seam. `lockdown`/`harden` (freezing
 the shared intrinsics) lands in the next child. GC roots were not touched (no
 run-loop/allocation-pressure wiring in this child), so the GC-roots ledger note
-carries forward untouched. The compartment evaluator's global-seeding path is
-**Miri-clean** (`ironhorse_vm::compartment::tests` under Miri, single-threaded).
+carries forward untouched. The compartment evaluator's global-seeding path has
+ordinary unit coverage in `ironhorse_vm::compartment::tests`; CI does not run Miri.
 
 The stage-4b **lockdown/harden** child (4/5) lands the Hardened-JavaScript
 `harden(x)`/`petrify(x)` globals from `xsLockdown.c` onto Ironhorse's stage-4
@@ -1148,8 +1181,8 @@ idempotent and returns its argument, a non-reference passes through, and
 its referent is not). Three `ironhorse-vm` unit tests
 (`harden_freezes_target_transitively_and_returns_it`,
 `petrify_freezes_single_object_not_transitively`,
-`harden_transitive_freeze_is_miri_clean`) lock the freeze semantics and pin the
-worklist Miri-clean. Re-running `built-ins/Object` confirms the freeze
+`harden_transitive_freeze_worklist_completes`) lock the freeze semantics and exercise the
+worklist as ordinary unit tests. Re-running `built-ins/Object` confirms the freeze
 machinery introduced **no regression**: `built-ins/Object total=3127
 covered=176 divergent=0 skipped=2951` (unchanged from child 1). **Scope fold
 (reported honestly, each an honest `Halt::Unsupported`, never a wrong value):**
@@ -1186,7 +1219,7 @@ note carries forward untouched and Miri is not implicated here.
 | 4a-5 modules (static half) | `ironhorse_vm::module` records/map/resolve/link/evaluate, TDZ, ModuleSource | 14 cargo-locked unit tests; `language/module-code` dual-run structurally skipped (oracle shim compiles the script goal only) — certified by the ironhorse-side corpus + manual-`xst` method |
 | 4b-2 async-function surface | `ASYNC_FUNCTION`/`START_ASYNC`/`AWAIT` opcodes | `language/{statements,expressions}/await covered=6/6 divergent=0`; `stage4-async-await.js` bit-exact |
 | 4b-3 Compartment | native `Compartment::evaluate_with_symbols` (per-machine intrinsics marker, not yet a shared frozen graph) | `stage4-compartment.js` differential across two compartments, result+computron agreement |
-| 4b-4 lockdown/harden | native `harden(x)`/`petrify(x)` over the slot arena | `stage4-harden.js` (30 programs) result-gated agreement; 3 Miri-clean freeze unit tests; `built-ins/Object` unchanged at `covered=176 divergent=0` |
+| 4b-4 lockdown/harden | native `harden(x)`/`petrify(x)` over the slot arena | `stage4-harden.js` (30 programs) result-gated agreement; 3 ordinary freeze unit tests; `built-ins/Object` unchanged at `covered=176 divergent=0` |
 | 4b-5 closure (this child) | boot-bundle identical-run verdict + ses-xs-parity tally | below |
 
 **Boot-bundle identical-run verdict (`daemon-endor-architecture.md` § Unified
@@ -1385,8 +1418,8 @@ time; under `u`/`v`, `fxCESU8Decode` and `fxFindCharacter` combine and traverse
 valid surrogate pairs as one code point. Astral pattern literals are likewise
 split into surrogates only outside Unicode mode. Unicode properties, V-mode
 string sets, named captures, and inline modifiers are all part of the executed
-surface. The crate is `#![forbid(unsafe_code)]` and Miri-clean
-(`cargo +nightly miri test -p ironhorse-regexp --lib`).
+surface. The crate is `#![forbid(unsafe_code)]` and has ordinary unit tests.
+CI does not currently run Miri or establish Miri-clean status.
 
 ### The JavaScript RegExp surface (stage-3b, child 9)
 
