@@ -3,6 +3,7 @@
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { createHash } from 'node:crypto';
 import {
   chmod,
   lstat,
@@ -20,6 +21,7 @@ import process from 'node:process';
 import { inspect } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
+import { makeApplicationRegistry } from './application-registry.js';
 import { makeThixotropeDaemon } from './daemon.js';
 import { makeIronhorseEngine } from './ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
@@ -239,6 +241,7 @@ export const serveThixotrope = async (
       await save(configPath, config);
     }
     let inventory;
+    let applications;
     if (
       !daemon
         .inspectWorkers()
@@ -248,6 +251,9 @@ export const serveThixotrope = async (
         `(globalThis.inventory ??= (${makeObservableInventory.toString()})())`,
       );
       await E(inventory).disconnectEphemeral();
+      applications = await workspace.evaluate(
+        `(globalThis.apps ??= (${makeApplicationRegistry.toString()})(vats, inventory))`,
+      );
     }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
     await rm(socketPath, { force: true });
@@ -282,6 +288,26 @@ export const serveThixotrope = async (
         setImmediate(requestStop);
         return 'Stopping supervisor';
       },
+      install: async (name, bundle, grants) => {
+        if (requested) throw Error('Supervisor is stopping');
+        if (typeof bundle !== 'string') throw Error('Expected module bundle');
+        // Keep decoding and forwarding below the current guest crank budget.
+        // This is a conservative admission profile, not a JS source-size limit.
+        if (
+          new TextEncoder().encode(JSON.stringify([name, bundle, grants]))
+            .length >
+          16 * 1024
+        )
+          throw Error(
+            'Installation payload exceeds the current 16 KiB profile',
+          );
+        const digest = createHash('sha256').update(bundle).digest('hex');
+        await E(applications).install(name, bundle, digest, grants);
+        return (await E(applications).list()).find(
+          entry => entry.name === name,
+        );
+      },
+      applications: () => E(applications).list(),
       inventoryStatus: () => E(inventory).subscriptionCounts(),
     };
     server.on('connection', socket => {

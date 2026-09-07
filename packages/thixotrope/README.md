@@ -129,6 +129,45 @@ These are coarse measurements, not a latency benchmark or isolated fsync timings
 The idle sleep delay is 30 seconds; `stop`, SIGINT, and SIGTERM park workers before exit.
 Quarantined workspaces remain inspectable with `status`; this version offers no repair command.
 
+### Persistent applications
+
+Install a JavaScript module exporting `make(powers)` into a fresh guest vat:
+
+```sh
+yarn workspace @endo/thixotrope thix install ./private-state counter ./examples/counter.js
+yarn workspace @endo/thixotrope thix applications ./private-state
+```
+
+Module paths resolve from the CLI process's working directory.
+The Yarn workspace command runs inside `packages/thixotrope`.
+The module belongs to a JavaScript package with a `package.json`.
+The CLI bundles its static module graph locally; application code runs in the guest.
+The initial installation profile limits the serialized request to 16 KiB, rejecting
+larger bundles before sending them into the workspace crank.
+Use the guest-provided `E`, `Far`, and `harden` rather than bundling those libraries.
+The guest has its usual `E`, `Far`, and `harden` globals, with no ambient Node powers.
+Append `powerName=inventoryKey` arguments to grant selected inventory capabilities to `make`.
+This first profile accepts remotable capabilities as grants; copy data and promises are
+rejected before forwarding, so a small request cannot hide a large copied grant.
+The inventory itself and the worker controller are not implicitly granted.
+
+From `attach`, call `E(E(apps).get('counter')).incr()`.
+`apps.list()` reports each installation's SHA-256 bundle digest, grants, and status.
+The registry retains the factory's result, including a pending result promise.
+Its code and captured powers survive restart without reading the original module again.
+The digest identifies the exact bundle bytes, not a publisher or a signature.
+Repeating a name with the same bundle and grant mapping reuses its original result;
+changing its code or grants requires a different name or explicit `apps.remove(name)`.
+Inventory changes after installation do not change previously captured powers.
+
+Failed installations remain inspectable and do not automatically run `make` again.
+A crash during host-side worker allocation or acquisition of its evaluator can reject that installation under the
+existing at-most-once host-resource policy; remove its record before deliberately retrying.
+`apps.remove(name)` releases the registry's reference, including a pending installation;
+it does not cancel work or revoke references already held elsewhere.
+Unused application vats become eligible for ordinary vat collection.
+This initial version provides installation, not live code upgrades.
+
 
 ## Ironhorse demos and CI tests
 
