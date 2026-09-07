@@ -213,7 +213,19 @@ The host enforces only:
    `/mnt/` (normalization, no `..`, no collision with reserved paths such as
    `/workspace` and `/claude-config`).
 4. **Host layout** — the host picks the 9P **host mount point** directory; the
-   guest never supplies it.
+   guest never supplies it. Bridge keys are content hashes over (client
+   identity, cap identity, inner path), constrained to a filename-safe
+   alphabet, so nothing a guest writes reaches a host path.
+
+Inherited exposure worth stating plainly: the attach mountpoint base defaults
+to `CLAUDE_SANDBOX_MOUNT_DIR` or `os.tmpdir()`, the same default the workspace
+mount already uses.
+On a shared host that makes an attached tree readable by any local user who
+can traverse the mountpoint — a property of this package's existing default
+rather than something attach introduces, but one a multi-user deployment
+should override.
+The 9P **socket**, which carries the cap's full authority, is separate and
+already lands under `XDG_RUNTIME_DIR` (see `@endo/9p-server`).
 
 Anti-escape concerns are about **smuggled or fake caps** and **guest-chosen
 host paths**, not about rejecting `provideHostPath` output against an ACL.
