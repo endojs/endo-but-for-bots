@@ -1002,8 +1002,10 @@ export const makeContainerMountRegistrar = ({
               name: 'listContainerMounts',
               description:
                 'List the runtime container binds under /mnt/ for this ' +
-                'session’s sandbox: inner path, mode, source pet name, and ' +
-                'how many sessions reference each bind.',
+                'session’s sandbox: inner path, mode, and how many sessions ' +
+                'reference each bind. A bind this session attached also ' +
+                'carries the pet name it was attached under; one attached by ' +
+                'another session does not.',
               parameters: { type: 'object', properties: {}, required: [] },
             },
           }),
