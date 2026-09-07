@@ -15803,7 +15803,12 @@ impl Interp {
                         Payload::Reference(_)
                             if obj.kind == Kind::Symbol && !self.symbol_proto.is_null() =>
                         {
-                            self.instance_get(self.symbol_proto, id)
+                            dispatch_result!(
+                                self.ordinary_get(code, self.symbol_proto, id, obj),
+                                pc,
+                                self,
+                                return_depth
+                            )
                         }
                         // A proxy `p.k` routes through the `get` trap
                         // (ECMA-262 10.5.8), never the ordinary store.
@@ -15831,23 +15836,43 @@ impl Interp {
                         // A primitive string boxes to `%String.prototype%`
                         // (XS's `fxCoerceToString`/string behavior): `.length`
                         // is the UTF-16 code-unit count; any other name
-                        // resolves the inherited method up the prototype chain.
-                        Payload::String(off) => self.string_property_get(off, id),
+                        // resolves up the prototype chain.
+                        Payload::String(off) => dispatch_result!(
+                            self.string_property_get(code, off, id, obj),
+                            pc,
+                            self,
+                            return_depth
+                        ),
                         // A primitive number boxes to `%Number.prototype%`
                         // (`(42).toString(2)`): resolve the inherited method.
                         Payload::Integer(_) | Payload::Number(_)
                             if !self.number_proto.is_null() =>
                         {
-                            self.instance_get(self.number_proto, id)
+                            dispatch_result!(
+                                self.ordinary_get(code, self.number_proto, id, obj),
+                                pc,
+                                self,
+                                return_depth
+                            )
                         }
                         // A primitive bigint boxes to `%BigInt.prototype%`.
                         Payload::BigInt(_) if !self.bigint_proto.is_null() => {
-                            self.instance_get(self.bigint_proto, id)
+                            dispatch_result!(
+                                self.ordinary_get(code, self.bigint_proto, id, obj),
+                                pc,
+                                self,
+                                return_depth
+                            )
                         }
                         // A primitive boolean boxes to `%Boolean.prototype%`
                         // (`true.toString()`): resolve the inherited method.
                         Payload::Boolean(_) if !self.boolean_proto.is_null() => {
-                            self.instance_get(self.boolean_proto, id)
+                            dispatch_result!(
+                                self.ordinary_get(code, self.boolean_proto, id, obj),
+                                pc,
+                                self,
+                                return_depth
+                            )
                         }
                         // `null.f` / `undefined.f`: `mxToInstance(mxStack)` throws
                         // before the lookup (`fxToInstance`). Reading a property
@@ -46898,7 +46923,7 @@ impl Interp {
             if id == crate::value::XS_NO_ID {
                 return Ok(self.string_index_get(off, index));
             }
-            return Ok(self.string_property_get(off, id));
+            return self.string_property_get(code, off, id, obj);
         }
         // A primitive bigint, number, boolean or symbol boxes to its wrapper
         // prototype for a computed property read just as it does for the static
@@ -46930,7 +46955,12 @@ impl Interp {
             } else {
                 id
             };
-            return Ok(self.instance_get(boxed_proto, id));
+            // The full `[[Get]]`, not a slot read: an accessor's property slot
+            // holds `undefined`, so a getter installed on the wrapper
+            // prototype would otherwise be invisible to a primitive receiver.
+            // `obj` stays the receiver, so `this` inside the getter is the
+            // primitive, as OrdinaryGet requires.
+            return self.ordinary_get(code, boxed_proto, id, obj);
         }
         // `null[k]` / `undefined[k]`: `fxToInstance` throws (review F007).
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
@@ -51365,16 +51395,26 @@ impl Interp {
     /// Read a **named** property `id` of a primitive string (XS's string
     /// behavior boxing to `%String.prototype%`): `.length` is the UTF-16
     /// code-unit count (an unmetered accessor, like `arr.length`); any other
-    /// name resolves the inherited method up the `%String.prototype%` chain.
-    fn string_property_get(&self, off: crate::value::ChunkOffset, id: u16) -> Slot {
+    /// name is the full `[[Get]]` up the `%String.prototype%` chain, with the
+    /// primitive `receiver` as the accessor's `this` (see [`Interp::
+    /// ordinary_get`]). A getter that throws returns `Err`, which the callers
+    /// route to the enclosing `catch`.
+    fn string_property_get(
+        &mut self,
+        code: &[u8],
+        off: crate::value::ChunkOffset,
+        id: u16,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
         if Some(id) == self.length_id {
             // `length` is O(1) over UTF-16 storage: half the stored byte payload.
-            return Slot::integer(self.str_len(off) as i32);
+            return Ok(Slot::integer(self.str_len(off) as i32));
         }
-        if self.string_proto.is_null() {
-            return Slot::undefined();
+        let proto = self.string_proto;
+        if proto.is_null() {
+            return Ok(Slot::undefined());
         }
-        self.instance_get(self.string_proto, id)
+        self.ordinary_get(code, proto, id, receiver)
     }
 
     /// Read a computed index of a primitive string (`str[i]`): the one-unit
