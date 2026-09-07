@@ -1485,7 +1485,7 @@ export const makePodmanDriver = ({
    * @param {PodmanSliceContext} slice
    * @returns {Promise<SlicePolicyAttestation>}
    */
-  const policy = async slice => {
+  const reportPolicy = async slice => {
     await null;
     if (slice.policy === null) {
       throw makeError(X`this slice was not created under a policy`);
@@ -1733,7 +1733,7 @@ export const makePodmanDriver = ({
     name: /** @type {const} */ ('podman'),
     probe,
     prepareSlice,
-    policy,
+    policy: reportPolicy,
     spawn,
     teardown,
   });

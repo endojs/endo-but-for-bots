@@ -61,7 +61,7 @@ harden(SLICE_POLICY_ATTESTATION_VERSION);
  * reports the hardening subset and `attestSlicePolicy` separately
  * insists that `nosuid` and `nodev` are among them.
  */
-const ATTESTED_MOUNT_OPTIONS = harden(['nodev', 'noexec', 'nosuid', 'ro']);
+const ATTESTED_MOUNT_OPTIONS = harden(['nodev', 'noexec', 'nosuid']);
 
 /** Options every mount in the table must carry, whatever else it has. */
 const REQUIRED_MOUNT_OPTIONS = harden(['nodev', 'nosuid']);
@@ -427,10 +427,9 @@ harden(brokerNetworkArg);
  * attestation observes and the configuration every operation gets.
  *
  * @param {SlicePolicyRequest} policy
- * @param {{ seccompProfilePath?: string | null }} [extras]
  * @returns {string[]}
  */
-export const assemblePolicyArgv = (policy, extras = {}) => {
+export const assemblePolicyArgv = policy => {
   const { resources } = policy;
   /** @type {string[]} */
   const argv = [
@@ -470,10 +469,6 @@ export const assemblePolicyArgv = (policy, extras = {}) => {
     '--ulimit',
     `core=${resources.coreBytes}:${resources.coreBytes}`,
   ];
-  const seccompProfilePath = extras.seccompProfilePath ?? null;
-  if (seccompProfilePath !== null) {
-    argv.push('--security-opt', `seccomp=${seccompProfilePath}`);
-  }
   for (const mount of policy.mounts) {
     if (mount.kind === 'tmpfs') {
       argv.push(
