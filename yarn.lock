@@ -2410,6 +2410,7 @@ __metadata:
     "@anthropic-ai/sdk": "npm:^0.122.0"
     "@endo/cli": "workspace:^"
     "@endo/conversation-tree": "workspace:^"
+    "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-stream": "workspace:^"
