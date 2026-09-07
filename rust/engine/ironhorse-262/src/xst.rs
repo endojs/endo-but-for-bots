@@ -637,7 +637,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     Verdict::RunSkip(
                         "oracle-xs-typedarray-sort-post-coercion-detach".into(),
                     )
-                } else if oracle_eval_frames_strict_script(run) {
+                } else if oracle_eval_frames_script_declarations(run) {
                     // The oracle shim compiles every source with the `eval`
                     // builtin's flags, so a *strict* Script's top-level
                     // `var`/function declarations are eval-local there rather
@@ -648,7 +648,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // Script goal. Keep that exact framing gap from becoming a
                     // false over-acceptance (README § "Script goal vs. the
                     // oracle's eval framing").
-                    Verdict::RunSkip("oracle-xs-strict-script-eval-framing".into())
+                    Verdict::RunSkip("oracle-xs-script-decl-eval-framing".into())
                 } else if let Some(skip) = oracle_unresolved_name_skip(run) {
                     // The oracle rejected the source only because it could not
                     // resolve a host intrinsic ironhorse has: the same
@@ -1105,7 +1105,7 @@ fn oracle_fails_const_assignment_test(run: &DualRun) -> bool {
 /// *attribution*, not that ironhorse's Script-goal answer is right; that is
 /// established independently by the spec, the node cross-check, and the pins
 /// in `ironhorse-vm/tests/hardened_js_boundary.rs`.
-fn oracle_eval_frames_strict_script(run: &DualRun) -> bool {
+fn oracle_eval_frames_script_declarations(run: &DualRun) -> bool {
     run.oracle_parsed
         && !run.oracle_error.is_empty()
         && ironhorse_compile::declares_top_level_var_or_function(&run.source)
@@ -2795,7 +2795,7 @@ mod tests {
     }
 
     #[test]
-    fn oracle_strict_script_eval_framing_is_a_precise_exclusion() {
+    fn oracle_script_declaration_eval_framing_is_a_precise_exclusion() {
         // The strict variant of `language/statements/variable/S12.2_A11.js`
         // in miniature: a strict Script's `var` must be a global-object
         // property. The shim frames the source as a strict eval (a frame
@@ -2808,22 +2808,22 @@ mod tests {
         let source = format!("\"use strict\";\n{harness}{body}");
         let run = dual_run(&source).expect("oracle machine");
         assert_eq!(run.agreement, Agreement::IronhorseOnlyComplete, "{:?}", run.oracle_error);
-        assert!(oracle_eval_frames_strict_script(&run));
+        assert!(oracle_eval_frames_script_declarations(&run));
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
-            Verdict::RunSkip("oracle-xs-strict-script-eval-framing".into())
+            Verdict::RunSkip("oracle-xs-script-decl-eval-framing".into())
         );
         assert_eq!(
             crate::report::classify(
                 crate::report::Verdict::RunSkip,
-                "oracle-xs-strict-script-eval-framing"
+                "oracle-xs-script-decl-eval-framing"
             ),
             crate::report::Category::Infrastructure
         );
 
         // The sloppy twin agrees on both engines: nothing to exclude.
         let sloppy = dual_run(&format!("{harness}{body}")).expect("oracle machine");
-        assert!(!oracle_eval_frames_strict_script(&sloppy));
+        assert!(!oracle_eval_frames_script_declarations(&sloppy));
         assert_eq!(evaluate_positive(&Config::default(), &sloppy, false), Verdict::Covered);
 
         // The same mechanism surfacing as a plain ReferenceError rather than a
@@ -2840,17 +2840,17 @@ mod tests {
             "expected the eval-framed oracle to lose the binding, got {:?}",
             indirect.oracle_error
         );
-        assert!(oracle_eval_frames_strict_script(&indirect));
+        assert!(oracle_eval_frames_script_declarations(&indirect));
         assert_eq!(
             evaluate_positive(&Config::default(), &indirect, false),
-            Verdict::RunSkip("oracle-xs-strict-script-eval-framing".into())
+            Verdict::RunSkip("oracle-xs-script-decl-eval-framing".into())
         );
 
         // A strict program with no top-level `var`/function declaration is not
         // this class, whatever the oracle's Test262Error says.
         let mut other = synthetic_ironhorse_only_complete(true, "Test262Error: #1");
         other.source = "\"use strict\";\nlet v = 1; if (v !== 2) { throw new Test262Error('#1'); }".to_string();
-        assert!(!oracle_eval_frames_strict_script(&other));
+        assert!(!oracle_eval_frames_script_declarations(&other));
         assert!(matches!(
             evaluate_positive(&Config::default(), &other, false),
             Verdict::Fail(_)
@@ -2866,7 +2866,7 @@ mod tests {
         assert!(ironhorse_compile::script_goal_deviates(&unreproduced.source));
         assert_eq!(constructor_name(&unreproduced.oracle_error), "Test262Error");
         assert_eq!(crate::ironhorse_eval_goal_error(&unreproduced.source), None);
-        assert!(!oracle_eval_frames_strict_script(&unreproduced));
+        assert!(!oracle_eval_frames_script_declarations(&unreproduced));
         assert!(matches!(
             evaluate_positive(&Config::default(), &unreproduced, false),
             Verdict::Fail(_)
@@ -2887,7 +2887,7 @@ mod tests {
             crate::ironhorse_eval_goal_error(&mismatched.source).as_deref(),
             Some("Test262Error: #2")
         );
-        assert!(!oracle_eval_frames_strict_script(&mismatched));
+        assert!(!oracle_eval_frames_script_declarations(&mismatched));
         assert!(matches!(
             evaluate_positive(&Config::default(), &mismatched, false),
             Verdict::Fail(_)
@@ -2895,7 +2895,7 @@ mod tests {
         // And a non-assertion oracle error on the deviating class stays gating.
         let mut wrong = synthetic_ironhorse_only_complete(true, "TypeError: boom");
         wrong.source = "\"use strict\";\nvar v = 1;".to_string();
-        assert!(!oracle_eval_frames_strict_script(&wrong));
+        assert!(!oracle_eval_frames_script_declarations(&wrong));
         assert!(matches!(
             evaluate_positive(&Config::default(), &wrong, false),
             Verdict::Fail(_)

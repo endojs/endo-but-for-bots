@@ -953,14 +953,10 @@ pub enum Goal {
 /// The differential runner uses this to bound the class of programs whose
 /// disagreement with the eval-framed `xs-oracle` shim can be the goal framing.
 pub fn declares_top_level_var_or_function(source: &str) -> bool {
-    let tree = match crate::scoper::scope_program(source, false) {
-        Ok(tree) => tree,
-        Err(_) => return false,
+    let Ok(tree) = crate::scoper::scope_program(source, false) else {
+        return false;
     };
-    tree.scopes[tree.root]
-        .declares
-        .iter()
-        .any(|d| matches!(d.token, Token::Var | Token::Define))
+    root_declares_var_or_function(&tree.scopes[tree.root])
 }
 
 /// Whether `source` is a program whose [`Goal::Script`] **bytecode** deviates
@@ -973,11 +969,20 @@ pub fn declares_top_level_var_or_function(source: &str) -> bool {
 /// bytecode is identical under both goals yet its global bindings still differ
 /// in configurability.
 pub fn script_goal_deviates(source: &str) -> bool {
-    let strict = match crate::scoper::scope_program(source, false) {
-        Ok(tree) => tree.scopes[tree.root].flags & crate::ast::flags::STRICT != 0,
-        Err(_) => return false,
+    // One parse+scope pass answers both halves; scoping twice would double the
+    // cost of every call for nothing.
+    let Ok(tree) = crate::scoper::scope_program(source, false) else {
+        return false;
     };
-    strict && declares_top_level_var_or_function(source)
+    let root = &tree.scopes[tree.root];
+    root.flags & crate::ast::flags::STRICT != 0 && root_declares_var_or_function(root)
+}
+
+/// Whether a program scope holds a `var`/function declaration. Shared by
+/// [`declares_top_level_var_or_function`] and [`script_goal_deviates`] so
+/// neither has to re-scope to ask the other's question.
+fn root_declares_var_or_function(root: &crate::scoper::Scope) -> bool {
+    root.declares.iter().any(|d| matches!(d.token, Token::Var | Token::Define))
 }
 
 /// The public entry: compile `source` as a top-level **Script**

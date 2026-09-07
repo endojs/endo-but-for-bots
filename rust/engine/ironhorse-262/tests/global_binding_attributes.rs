@@ -47,6 +47,14 @@ fn reading_a_property_through_undefined_or_null_throws() {
     for source in [
         "var r='no'; try { undefined.enumerable } catch (e) { r = e.constructor.name } r",
         "var r='no'; try { null.foo } catch (e) { r = e.constructor.name } r",
+        // The computed form obeys the same rule, so both opcode paths raise.
+        // Fixing only the static `o.k` form would leave these silent.
+        "var r='no'; try { undefined[0] } catch (e) { r = e.constructor.name } r",
+        "var r='no'; try { null[Symbol.iterator] } catch (e) { r = e.constructor.name } r",
+        "var k='x'; var r='no'; try { undefined[k] } catch (e) { r = e.constructor.name } r",
+        // Optional chaining still short-circuits rather than throwing.
+        "var r='no'; try { undefined?.x; r = 'ok' } catch (e) { r = e.constructor.name } r",
+        "var r='no'; try { null?.[0]; r = 'ok' } catch (e) { r = e.constructor.name } r",
         // The helper shape itself: a missing property's descriptor is
         // `undefined`, so reading through it aborts.
         "var r='no'; try { Object.getOwnPropertyDescriptor({a:1},'nope').enumerable } \
@@ -60,9 +68,13 @@ fn reading_a_property_through_undefined_or_null_throws() {
         "'abc'.length",
         "(42).toString(2)",
         "(1n).toString()",
-        // And an ordinary object read is untouched.
+        "'abc'[1]",
+        // And ordinary object reads are untouched, static and computed.
         "var o = {a: 1}; o.a",
         "var o = {a: 1}; typeof o.missing",
+        "var o = {a: 1}; o['a']",
+        "var a = [1,2,3]; a[1]",
+        "var o = {}; typeof o[0]",
     ] {
         assert_result_agrees(source);
     }
