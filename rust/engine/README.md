@@ -3254,16 +3254,26 @@ same way; the merge keeps the mainline's factored `run_crank` helper. Ten furthe
 `run(&compiled[1].0)` sites in that file carry the same shape and pass only
 because their crank pairs happen to intern the same names.
 
-One gap in that same match remains: `Symbol.prototype.description` answers
-`undefined` rather than the symbol's description string — the accessor is simply
-absent from `%Symbol.prototype%` (symbol boxing itself works). Note that
-`Symbol().description` *agrees* with the oracle at `undefined` by coincidence,
-because a missing accessor and a genuinely absent description look identical, so
-a test must use a symbol that has a description.
+Both gaps once listed here are now closed, both on the mainline. Boolean boxing
+went first (`fix(ironhorse-vm): box a boolean primitive to
+%Boolean.prototype%`), on the static and computed read paths.
+`Symbol.prototype.description` followed (`fix(ironhorse-vm): coerce a Symbol's
+description, and stop reaching through it`), which landed the accessor together
+with the constructor's `ToString(description)` — so `Symbol(1).description` is
+`"1"`, not a number and not `undefined`.
 
-Boolean boxing was listed here too and is now fixed on the mainline
-(`fix(ironhorse-vm): box a boolean primitive to %Boolean.prototype%`), on both
-the static and computed read paths.
+The differential coverage is `symbol_description_accessor.rs`, in both
+`ironhorse-vm/tests` and `ironhorse-262/tests`. Its cases deliberately use a
+symbol that HAS a description, because `Symbol().description` *agrees* with the
+oracle at `undefined` by coincidence — a missing accessor and a genuinely
+absent description look identical, so a suite written around that case alone is
+green while the bug is entire. One divergence is recorded rather than fixed:
+`%Symbol.prototype%`'s own-key ORDER puts `description` after the methods where
+XS builds it first, because the install loop runs `proto_methods` before
+`proto_accessors`. The key SET agrees. That ordering is an engine-wide class —
+`Error.prototype` reads `toString,stack,constructor,name,message` against XS's
+`toString,name,message,stack,constructor` — and reordering the shared loop
+would move five other prototypes at once.
 
 **Differential-harness expectations (knowingly updated).** The runner executes
 the Script goal, so strict-variant runs of official cases with top-level `var`s
