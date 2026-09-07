@@ -24,7 +24,13 @@ import { SettingsPanel } from './SettingsPanel.js';
 const useControllerState = controller => {
   const [, setTick] = useState(0);
   // Mount-once: the controller instance is stable for this mount.
-  useEffect(() => controller.subscribe(() => setTick(t => t + 1)), []);
+  useEffect(() => {
+    const unsubscribe = controller.subscribe(() => setTick(t => t + 1));
+    // Initial CapTP reads can finish between render and effect installation.
+    // Re-read after subscribing so that notification gap cannot strand loading.
+    setTick(t => t + 1);
+    return unsubscribe;
+  }, []);
   return controller.getState();
 };
 

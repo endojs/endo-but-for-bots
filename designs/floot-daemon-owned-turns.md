@@ -14,6 +14,7 @@ Implemented on the session facet:
 - **`startTurn(input) -> FlootTurn`** replaces **`converse(input) -> replyReader`**.
 - **`FlootTurn`**: `getStatus()`, `watch()` (disposable view stream), `cancel()`,
   `whenFinished()`.
+- **`getCurrentTurn() -> { input, turn } | null`** recovers the outstanding UI turn.
 - Drain loop lives in `packages/floot/src/session-turn.js` on the daemon.
 - Chat observes via `watch()`; **Stop** calls **`Turn.cancel()`** only.
 
@@ -57,13 +58,51 @@ Turn authority stays on the daemon:
 4. **`cancel()`** aborts the signal and calls the producer's **`close()`** —
    `runTurn` returns without settling its writer once its signal aborts, so
    nothing else would release the local drain.
-   A cancellation the backend could not confirm arrives after that close, and is
-   recorded on the status rather than swallowed as a clean stop.
+   The public view stays open in phase `cancelling` until the run promise settles.
+   A failed backend cancellation produces an `abort` terminal event for every
+   remaining viewer, rather than changing status after a clean `end`.
 
-`whenFinished()` settles when the turn has emitted its last event.
-It deliberately does not wait out a backend still unwinding a cancellation: the
-session's own `turnChain` already serializes that against the next turn, which
-is where the barrier matters.
+`whenFinished()` settles only after both the reply drain and execution settle.
+Its final status is immutable in time: backend teardown cannot revise it later.
+`cancel()` acknowledges the request promptly; callers use `whenFinished()` or
+continue observing `watch()` to learn the outcome.
+
+## Session ownership and reconnect
+
+A session holds one outstanding UI turn in `session-turn-slot.js`.
+`getCurrentTurn()` returns its input and handle, including during cancellation,
+so a fresh browser can recover observation and cancellation authority.
+The input is a string or `null` for a streamed prompt; discovery never reveals the
+original caller's input capability.
+A competing `startTurn` is rejected while that slot is occupied.
+UI submissions queue locally, and mail still serializes on the agent's turn chain.
+The slot releases its reference at completion; holders may retain completed handles.
+There is no completed-turn archive or new durable turn identity.
+Daemon restart recovery continues to use committed conversation history.
+
+Chat scopes its observation cache by factory capability identity and session ID.
+It recovers the daemon handle on opening a session and waits for recovery before
+submitting new input.
+A view attachment owns its subscription and releases it exactly once, independently
+of session selection or history reads.
+Deleting an active session detaches immediately while the factory performs teardown;
+late events cannot change the next session's state.
+Queued input for a deleted session is discarded rather than sent to a different one.
+
+## Backend catalog
+
+Hosted provisioning receives the session's fully assembled tool snapshot, including
+subagent and account tools when their capabilities were endowed.
+The provider loop uses the same registry; hosted sessions intentionally pin their
+snapshot at provisioning for continuity and authority checks.
+
+## Validation
+
+Tests cover snapshot continuity, independent viewers, delayed cancellation failure,
+execution completion after stream termination, slot retention, and factory-level
+recovery and history persistence after a view disconnect.
+Chat component tests exercise active and non-active deletion, last-session deletion,
+late events, cancellation reporting, and recovery of a turn absent from browser memory.
 
 ## Prompt
 

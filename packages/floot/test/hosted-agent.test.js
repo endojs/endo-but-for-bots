@@ -336,3 +336,48 @@ test('failed provider tool loops do not revive partial history', async t => {
   );
   t.deepEqual(await revived.getHistory(), []);
 });
+
+test('hosted provisioning receives the session delegation and account catalog', async t => {
+  const powers = makeFakePowers();
+  /** @type {{ names: string[] } | undefined} */
+  let supplied;
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    {
+      provideHostedClient: async snapshot => {
+        supplied = snapshot;
+        // A backend may invoke an endowed tool during provisioning. Every
+        // closure in that catalog must already have initialized session state.
+        const report = await snapshot.execute('accountStatus', harden({}));
+        t.regex(report, /0 input and 0 output tokens/);
+        return harden({});
+      },
+    },
+    'test prompt',
+    {
+      spawner: harden({}),
+      accountOracle: harden({
+        getPlan: () =>
+          harden({ title: 'Test', source: 'declared', observedAt: '' }),
+        getRateLimits: () =>
+          harden({ windows: [], source: 'unavailable', observedAt: '' }),
+        getRateCard: () =>
+          harden({ rates: [], source: 'unavailable', observedAt: '' }),
+      }),
+    },
+  );
+  t.teardown(() => agent.shutdown());
+  if (!supplied) throw Error('Hosted catalog was not supplied');
+  for (const name of [
+    'spawnSubagent',
+    'askSubagent',
+    'stopSubagent',
+    'accountStatus',
+  ]) {
+    t.true(
+      supplied.names.includes(name),
+      `${name} is available to hosted agents`,
+    );
+  }
+});

@@ -114,7 +114,7 @@ const drainReplyReader = async (reader, status, emit) => {
 
   for await (const raw of iterateReader(reader, { buffer: 8 })) {
     const event = /** @type {any} */ (raw);
-    emit(event);
+    if (event.type !== 'end' && event.type !== 'abort') emit(event);
     if (event.type === 'delta') {
       status.streamingText += event.text;
     } else if (event.type === 'final') {
@@ -215,20 +215,17 @@ export const makeSessionTurn = ({ run }) => {
       ? harden({ type: /** @type {const} */ ('abort'), reason: status.error })
       : harden({ type: /** @type {const} */ ('end') });
 
-  (async () => {
+  const running = (async () => {
     try {
       await run(writer, controller.signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (controller.signal.aborted) {
-        // A cancelled turn ends without settling its writer, so this is the
-        // only place a failure during teardown can be seen. A hosted backend
-        // that could not confirm the cancellation quarantines its session;
-        // record that rather than let the stop read as clean.
-        if (!status.error) status.error = message;
-        return;
-      }
+      status.error = message;
       writer.abort(message);
+    } finally {
+      // A successful run may return without emitting a terminal event (for
+      // example a queued turn cancelled before dispatch). Never strand a drain.
+      writer.end();
     }
   })();
 
@@ -240,10 +237,16 @@ export const makeSessionTurn = ({ run }) => {
     } catch (error) {
       status.error = error instanceof Error ? error.message : String(error);
     } finally {
+      // Even a drain failure must not bypass execution teardown.
+      await running;
       status.done = true;
-      // `cancel()` closes the channel out from under the drain, so the reply
-      // events stop without a terminal one. Views still have to end.
-      if (!terminal) emit(syntheticTerminal());
+      // Stream exhaustion is not execution completion. In particular, a
+      // hosted interrupt may still fail after cancel closes the local channel.
+      // Publish exactly one terminal outcome, once teardown has settled.
+      if (cancelled && !status.error) status.phase = 'cancelled';
+      emit(
+        status.error ? syntheticTerminal() : terminal || syntheticTerminal(),
+      );
       views.clear();
       finish();
     }
@@ -290,6 +293,8 @@ export const makeSessionTurn = ({ run }) => {
       cancelled = true;
       // Abort before closing, so the turn's own teardown — a hosted backend's
       // interrupt, a provider stream — starts while its writer is still live.
+      status.phase = 'cancelling';
+      emit(harden({ type: 'phase', phase: status.phase }));
       controller.abort();
       // An aborted turn returns without settling its writer, so nothing else
       // would release the drain above.
@@ -297,8 +302,7 @@ export const makeSessionTurn = ({ run }) => {
     },
     /**
      * Settles once the turn has emitted its last event and `getStatus()` is
-     * final. A cancellation the backend is still unwinding does not hold this
-     * open; the session's own turn chain serializes that against the next turn.
+     * final, including confirmation or failure of backend cancellation.
      */
     async whenFinished() {
       await finished;

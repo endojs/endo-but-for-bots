@@ -177,19 +177,65 @@ test('cancel aborts the run and ends every view', async t => {
   });
 });
 
-test('a cancellation the backend could not confirm is reported, not swallowed', async t => {
+test('cancellation remains observable until backend teardown settles', async t => {
+  t.timeout(2000);
   const driven = makeDrivenTurn();
+  const events = [];
+  const view = await E(driven.turn).watch();
+  const collected = (async () => {
+    for await (const event of iterateReader(view)) events.push(event);
+  })();
+  let finished = false;
+  const completion = E(driven.turn)
+    .whenFinished()
+    .then(() => {
+      finished = true;
+    });
   await E(driven.turn).cancel();
+  await new Promise(resolve => setImmediate(resolve));
+  t.false(finished);
+  t.false(events.some(event => event.type === 'end' || event.type === 'abort'));
+  t.like(await E(driven.turn).getStatus(), { done: false, error: null });
   driven.fail(Error('Hosted turn cancellation failed: backend wedged'));
-  await E(driven.turn).whenFinished();
-  // The rejection lands after the drain has ended, so it reaches the status
-  // rather than the view — a stop that quarantined the session must not read
-  // as a clean one.
-  await null;
-  t.like(await E(driven.turn).getStatus(), {
+  await completion;
+  await collected;
+  t.deepEqual(events.at(-1), {
+    type: 'abort',
+    reason: 'Hosted turn cancellation failed: backend wedged',
+  });
+  const finalStatus = await E(driven.turn).getStatus();
+  t.like(finalStatus, {
     done: true,
     error: 'Hosted turn cancellation failed: backend wedged',
   });
+  await E(driven.turn).cancel();
+  t.deepEqual(await E(driven.turn).getStatus(), finalStatus);
+});
+
+test('writer termination does not outrun the execution barrier', async t => {
+  t.timeout(2000);
+  const driven = makeDrivenTurn();
+  const events = collect(await E(driven.turn).watch());
+  driven.writer().delta('buffered output');
+  driven.writer().end();
+  const pending = await untilStatus(
+    driven.turn,
+    status => status.messages.length === 1,
+  );
+  t.false(pending.done);
+  driven.fail(Error('commit failed after output'));
+  await E(driven.turn).whenFinished();
+  t.deepEqual((await events).at(-1), {
+    type: 'abort',
+    reason: 'commit failed after output',
+  });
+});
+
+test('a run returning without a terminal event still finishes', async t => {
+  t.timeout(2000);
+  const turn = makeSessionTurn({ run: async () => {} });
+  await E(turn).whenFinished();
+  t.true((await E(turn).getStatus()).done);
 });
 
 test('a turn that failed outright aborts its views', async t => {

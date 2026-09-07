@@ -46,7 +46,7 @@ import {
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
 import { runHostedTurn } from './src/hosted-turn.js';
-import { makeSessionTurn } from './src/session-turn.js';
+import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
@@ -163,6 +163,7 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
 const FlootSessionInterface = M.interface('FlootSession', {
   getInfo: M.callWhen().returns(M.record()),
   startTurn: M.call(M.any()).returns(M.remotable()),
+  getCurrentTurn: M.callWhen().returns(M.or(M.null(), M.record())),
   getHistory: M.callWhen().returns(M.any()),
   getUsage: M.callWhen().returns(M.any()),
   getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
@@ -512,7 +513,7 @@ const provisionPresetObjects = async (
  *
  * @param {any} powers - Guest powers (petstore for conversation history)
  * @param {Promise<object> | object | undefined} _context
- * @param {ProviderConstructorConfig | InjectedProviderConfig | LateProviderConfig | ClaudeClientConfig | { hostedClient: any }} providerConfig
+ * @param {ProviderConstructorConfig | InjectedProviderConfig | LateProviderConfig | ClaudeClientConfig | { hostedClient: any } | { provideHostedClient: (snapshot: any) => Promise<any> }} providerConfig
  * @param {string} [systemPrompt]
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
@@ -552,11 +553,13 @@ export const makeStreamingAgent = async (
   } = {},
 ) => {
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
-  const hostedClient = /** @type {any} */ (providerConfig).hostedClient;
+  let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
+  const provideHostedClient = /** @type {any} */ (providerConfig)
+    .provideHostedClient;
   const provideProvider = /** @type {any} */ (providerConfig).provideProvider;
   /** @type {any} */
   const staticProvider =
-    claudeClient || hostedClient || provideProvider
+    claudeClient || hostedClient || provideHostedClient || provideProvider
       ? null
       : /** @type {any} */ (providerConfig).provider ||
         createStreamingProvider({
@@ -1457,6 +1460,12 @@ export const makeStreamingAgent = async (
 
   const getUsage = async () => harden({ ...(await loadUsage()) });
 
+  if (provideHostedClient) {
+    // Provision from the same capability-gated catalog as the provider loop,
+    // after delegation and account tools have been installed.
+    hostedClient = await provideHostedClient(await toolRegistry.snapshot());
+  }
+
   return harden({
     converse,
     getHistory,
@@ -1926,20 +1935,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
           }
-          const snapshot = await makeFlootToolRegistry(sessionGuest).snapshot();
-          const toolSet = makeEndoToolSet(snapshot);
-          const session = await E(backend.factory).create(
-            harden({
-              sessionId: id,
-              model: entry.modelId || '',
-              reasoningEffort: entry.reasoningEffort || '',
-              systemPrompt: sessionPrompt,
-            }),
-            toolSet,
-          );
-          backendAdmins.set(id, session.admin);
           agentConfig = {
-            hostedClient: makeSendOnlyClient(session.run),
+            provideHostedClient: async snapshot => {
+              const session = await E(backend.factory).create(
+                harden({
+                  sessionId: id,
+                  model: entry.modelId || '',
+                  reasoningEffort: entry.reasoningEffort || '',
+                  systemPrompt: sessionPrompt,
+                }),
+                makeEndoToolSet(snapshot),
+              );
+              backendAdmins.set(id, session.admin);
+              return makeSendOnlyClient(session.run);
+            },
           };
         } else if (entry?.model === CLAUDE_CLI_MODEL_ID) {
           agentConfig = {
@@ -2018,6 +2027,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const getFacet = id => {
     let facet = facets.get(id);
     if (!facet) {
+      const turns = makeSessionTurnSlot(async (input, writer, signal) => {
+        await assertSessionReady(id);
+        const agent = await getAgent(id);
+        await agent.converse(input, writer, undefined, signal);
+      });
       facet = makeExo('FlootSession', FlootSessionInterface, {
         async getInfo() {
           const entry = await assertSessionReady(id);
@@ -2050,13 +2064,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
          * @returns {object} a FlootTurn
          */
         startTurn(input) {
-          return makeSessionTurn({
-            run: async (writer, signal) => {
-              await assertSessionReady(id);
-              const agent = await getAgent(id);
-              await agent.converse(input, writer, undefined, signal);
-            },
-          });
+          return turns.start(input);
+        },
+        async getCurrentTurn() {
+          await assertSessionReady(id);
+          return turns.getCurrent();
         },
         async getHistory() {
           await assertSessionReady(id);
@@ -2117,7 +2129,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           });
         },
         help() {
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn } or null; one UI turn may be outstanding; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -2902,7 +2914,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(). Session facets expose startTurn() -> FlootTurn, getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(). Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn } | null, getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
