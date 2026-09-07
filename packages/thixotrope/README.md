@@ -145,7 +145,9 @@ commands against the same state directory concurrently. Use a matching engine
 build and bootstrap for its stored images; upgrade migration of live guest code
 is outside this demo. Async generators and `Array.fromAsync` suspensions remain
 refused by the engine's persistence gate. The bootstrap omits the unfinished
-optional Iterator-helper profile. The loopback netlayer is a testing transport;
+optional Iterator-helper profile and uses SES's minimal override-taming profile.
+This keeps the array iterator as a frozen native data property, as required by
+Ironhorse's current typed-array copy path. The loopback netlayer is a testing transport;
 a fixed public listener, service installation, and remote authentication UX are
 not part of this CLI.
 
