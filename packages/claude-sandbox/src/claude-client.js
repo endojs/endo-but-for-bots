@@ -590,10 +590,10 @@ export const makeClaudeClient = ({
         releaseTeardown = resolve;
       });
       recreating = true;
+      /** @type {Awaited<typeof prior> | undefined} */
+      let resolved;
       try {
         try {
-          /** @type {Awaited<typeof prior> | undefined} */
-          let resolved;
           try {
             resolved = await prior;
           } catch {
@@ -639,8 +639,21 @@ export const makeClaudeClient = ({
         // release — re-provisioning now would mint a container, 9P mounts,
         // and a credential grant that nothing will ever tear down. The
         // teardown this recreate just performed doubles as the terminate's
-        // missing cleanup, so simply stop here.
+        // missing cleanup, so stop here.
         if (terminated) {
+          // With one exception: a recreate leaves the workspace Mount pet
+          // name registered on purpose, because the re-provision registers
+          // the same name again. Nothing is going to re-provision now, so
+          // reclaim it here — otherwise the terminated session leaves a live
+          // host-rooted Mount formula behind, which is exactly what
+          // `terminate()`'s own `removeMount` exists to prevent.
+          if (resolved?.removeMount) {
+            try {
+              await resolved.removeMount();
+            } catch {
+              // best-effort; the name may already be gone
+            }
+          }
           return;
         }
         // Immediate recreate (design decision: apply on attach, not on the

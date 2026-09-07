@@ -420,6 +420,7 @@ test('initialPrompt is fired and drained at construction', async t => {
 test('terminate() racing a mount recreate never re-provisions', async t => {
   t.timeout(10_000);
   let provisionCount = 0;
+  let removeMountCount = 0;
   let releaseDispose;
   const disposeGate = new Promise(r => {
     releaseDispose = r;
@@ -456,7 +457,12 @@ test('terminate() racing a mount recreate never re-provisions', async t => {
     makeStdoutIterable,
     provision: async () => {
       provisionCount += 1;
-      return { slice: makeSlice() };
+      return {
+        slice: makeSlice(),
+        removeMount: async () => {
+          removeMountCount += 1;
+        },
+      };
     },
   });
   await drain(await client.send('one'));
@@ -478,6 +484,11 @@ test('terminate() racing a mount recreate never re-provisions', async t => {
   await t.throwsAsync(() => client.send('after'), {
     message: /is terminated/,
   });
+  // A recreate leaves the workspace Mount pet name registered because the
+  // re-provision re-registers it. Nothing re-provisioned here, so the stopped
+  // recreate has to reclaim the name itself, or the terminated session leaves
+  // a live host-rooted Mount formula behind.
+  t.is(removeMountCount, 1);
 });
 
 test('a send racing a mount recreate waits for the teardown gate', async t => {
