@@ -10,6 +10,10 @@
 //! masked the defect in the most-tested shape. XS's `fxToInstance` throws
 //! `TypeError: cannot coerce null to object` / `… undefined to object`;
 //! the messages below are the pinned oracle's `String(e)`.
+//!
+//! The same receiver sites had a second, sharper failure with a `Symbol`
+//! receiver — a value that carries a `Payload::Reference` without being an
+//! object — which the symbol pins at the end of this file cover.
 
 use ironhorse_vm::{run_program_with_symbols, RunOutcome};
 
@@ -141,8 +145,9 @@ fn a_computed_read_on_a_symbol_does_not_reach_its_description_slot() {
     // A symbol value carries `Payload::Reference(desc)`, so before the kind
     // match `property_at_get` treated the description slot as the receiver:
     // `sym['toString']` missed `%Symbol.prototype%` entirely, and a symbol
-    // built from an object (its argument is stored raw, without `ToString`)
-    // handed out that object's own properties.
+    // built from an object handed out that object's own properties — the
+    // argument was stored raw, without the `ToString` the constructor now
+    // performs (see `a_symbol_does_not_expose_the_object_handed_to_it`).
     for (source, expected) in [
         ("var s=Symbol('x'); typeof s['toString']", "function"),
         ("var s=Symbol('x'); s['toString']()", "Symbol(x)"),
@@ -245,6 +250,98 @@ fn an_uncaught_nullish_access_escapes_with_the_xs_rendering() {
         out.halt.thrown_rendering(),
         Some("TypeError: cannot coerce null to object")
     );
+}
+
+/// A `Symbol` value is not an object, however much its representation looks
+/// like one: it carries `Payload::Reference(desc)`, its DESCRIPTION slot. Every
+/// receiver site that matched `Payload::Reference` without a kind guard read and
+/// wrote that slot as if it were the symbol's instance — so an object passed to
+/// `Symbol()` stayed reachable, for reading AND writing, through the resulting
+/// symbol. That is an ocap confinement break: a symbol is a value routinely
+/// treated as opaque and handed around freely.
+///
+/// The root fix is the missing `ToString(description)` (ECMA-262 20.4.1.1
+/// step 3, XS's `fx_Symbol`): the symbol never holds an object reference in the
+/// first place. The kind guards close the shape as well, so a future
+/// representation change cannot silently reopen it. Both are pinned here — the
+/// programs agree with the pinned XS oracle (see the F007 section of
+/// `ironhorse-262/tests/error_model_oracle_sweep.rs`).
+#[test]
+fn a_symbol_does_not_expose_the_object_handed_to_it() {
+    // The write side: a computed and a static assignment. Before the fix the
+    // description's setter RAN, with the guest's value.
+    let out = run("var leak=0; var o={set x(v){leak=v}}; var s=Symbol(o); s['x']=42; leak");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "0", "sym[k] = v must not reach the description");
+    let out = run("var leak=0; var o={set x(v){leak=v}}; var s=Symbol(o); s.x=42; leak");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "0", "sym.k = v must not reach the description");
+    // The read side: a computed read resolved against the description.
+    let out = run("var o={x:5}; var s=Symbol(o); var k='x'; String(s[k])");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "undefined");
+    // `in` over a symbol answered from the description's chain.
+    assert_throws_type_error("'x' in Symbol({x:5})", "in: not an object");
+    // for-in over a symbol handed out the description's keys.
+    let out = run("var r=''; for (var k in Symbol({x:5,y:6})) { r+=k } r+':done'");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, ":done", "a symbol enumerates nothing");
+}
+
+#[test]
+fn a_symbols_description_is_coerced_at_construction() {
+    // `ToString(description)` runs where XS runs it — so the descriptive
+    // string is the coerced text, not the empty stand-in a stored object gave.
+    let out = run("Symbol({}).toString()");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "Symbol([object Object])");
+    let out = run("Symbol(5).toString()+':'+Symbol(null).toString()+':'+Symbol().toString()");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "Symbol(5):Symbol(null):Symbol()");
+    // It runs guest code exactly once, in string-hint order, at construction.
+    let out = run(
+        "var log=[]; var o={valueOf(){log.push('vo');return 'V'},\
+                            toString(){log.push('ts');return 'T'}}; \
+         var s=Symbol(o); log.join()+':'+s.toString()",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "ts:Symbol(T)");
+    // …and its abrupt completion propagates, before any symbol exists.
+    let out = run(
+        "var m={}; var r=0; try { Symbol({toString(){throw m}}) } catch(e){ r=(e===m) } r",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "true");
+    // A `undefined` description stays `undefined` (step 2), not "undefined".
+    let out = run("Symbol(undefined).toString()+':'+String(Symbol(undefined).description)");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "Symbol():undefined");
+}
+
+#[test]
+fn symbol_prototype_description_is_a_real_accessor() {
+    let out = run("var s=Symbol('x'); String(s.description)+':'+String(s['description'])");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "x:x");
+    // Registry and well-known symbols carry theirs too, as does a wrapper.
+    let out = run(
+        "String(Symbol.for('k').description)+':'+String(Symbol.iterator.description)\
+         +':'+String(Object(Symbol('q')).description)",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "k:Symbol.iterator:q");
+    // A real `{get, set: undefined, enumerable: false, configurable: true}`
+    // accessor, so reflection sees what XS's does.
+    let out = run(
+        "var d=Object.getOwnPropertyDescriptor(Symbol.prototype,'description'); \
+         d.get.name+':'+d.get.length+':'+String(d.set)+':'+d.enumerable+':'+d.configurable",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "get description:0:undefined:false:true");
+    // Brand-checked like its `toString`/`valueOf` siblings.
+    let out = run("var r=0; try{ Symbol.prototype.description }catch(e){ r=e instanceof TypeError } r");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "true");
 }
 
 #[test]
