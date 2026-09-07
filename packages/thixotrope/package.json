@@ -42,7 +42,8 @@
     "demo:ironhorse": "node scripts/ironhorse-demo.mjs counter",
     "test:ironhorse": "ava --config ava.ironhorse.config.mjs",
     "demo:ironhorse:counter": "node scripts/ironhorse-demo.mjs counter",
-    "demo:ironhorse:promise": "node scripts/ironhorse-demo.mjs promise"
+    "demo:ironhorse:promise": "node scripts/ironhorse-demo.mjs promise",
+    "thix": "node bin/thix.js"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -51,13 +52,13 @@
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/immutable-arraybuffer": "workspace:^",
+    "@endo/init": "workspace:^",
     "@endo/ocapn": "workspace:^",
     "@endo/stream": "workspace:^",
     "@noble/hashes": "^2.4.0"
   },
   "devDependencies": {
     "@endo/compartment-mapper": "workspace:^",
-    "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
@@ -72,7 +73,8 @@
     "./*.map",
     "LICENSE*",
     "SECURITY*",
-    "src"
+    "src",
+    "bin"
   ],
   "publishConfig": {
     "access": "public"
@@ -81,5 +83,8 @@
     "lockdown": "../../ava-endo-lockdown.config.mjs",
     "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
     "endo": "../../ava-endo-shims-only.config.mjs"
+  },
+  "bin": {
+    "thix": "./bin/thix.js"
   }
 }
