@@ -10,8 +10,8 @@ stage-4b async-function surface child. Dual-run: `language/statements/async-
 function total=60 covered=6 divergent=0`, `language/expressions/await total=21
 covered=6 divergent=0`, `built-ins/AsyncFunction total=16 covered=1 divergent=0`,
 `built-ins/Promise total=474 covered=9 divergent=0`. Corpus bar
-`stage4_async_await_corpus_is_bit_exact_against_oracle` (14 programs); Miri
-`async_await_suspend_resume_is_miri_clean`.
+`stage4_async_await_corpus_is_bit_exact_against_oracle` (14 programs); ordinary unit test
+`async_await_suspend_resume_preserves_script_completion` (not a Miri run).
 
 **Still folded** (each an honest named skip, never a wrong value): `await` inside
 a live `try` (`await:await-in-try`); async generators
@@ -136,7 +136,7 @@ awaited promise — the exact infrastructure `Promise.prototype.finally`
   a `then`-chain feeding an awaited result; try/catch across await (or its named
   skip); an async arrow (if the compiler emits `START_ASYNC` in it — it reuses the
   same machinery).
-- Miri-clean test over the async suspend/resume + result-promise settle path
+- Ordinary unit test over the async suspend/resume + result-promise settle path
   (`TMPDIR="${TMPDIR:-$HOME/tmp}"` — a machine-local writable dir that,
   unlike `/tmp` on hosts that mount it `noexec`, can hold the test binary).
 - Dual-run `language/expressions/await`, `language/statements/async-function`
