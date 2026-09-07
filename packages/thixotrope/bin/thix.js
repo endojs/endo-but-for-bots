@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { connectLocalControl } from '../src/local-control.js';
+import { showInventory } from '../src/inventory-view.js';
 import { serveThixotrope } from '../src/supervisor.js';
 
 const [command, directory = './.thix'] = process.argv.slice(2);
@@ -30,13 +31,16 @@ try {
       process.removeListener('SIGTERM', stop);
     }
   } else if (
+    command === 'inventory' ||
     command === 'attach' ||
     command === 'status' ||
     command === 'stop'
   ) {
     const client = await connectLocalControl(join(statePath, 'control.sock'));
     try {
-      if (command === 'attach') {
+      if (command === 'inventory') {
+        await showInventory(client);
+      } else if (command === 'attach') {
         const terminal = createInterface({
           input: process.stdin,
           output: process.stdout,
@@ -83,7 +87,9 @@ try {
       client.close();
     }
   } else {
-    console.log('Usage: thix serve|attach|status|stop [state-directory]');
+    console.log(
+      'Usage: thix serve|attach|inventory|status|stop [state-directory]',
+    );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
 } catch (error) {
