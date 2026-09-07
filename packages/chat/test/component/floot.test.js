@@ -30,6 +30,29 @@ globalThis.cancelAnimationFrame = id => clearTimeout(id);
 testWindow.confirm = () => true;
 const waitFor = predicate => waitForDOM(predicate, 10, 2000);
 
+/**
+ * A queried element that must be there, so an assertion about it fails on what
+ * it says rather than on a null dereference.
+ *
+ * @param {Element | null} element
+ * @param {string} what
+ * @returns {Element}
+ */
+const must = (element, what) => {
+  if (!element) throw Error(`Missing ${what}`);
+  return element;
+};
+
+/**
+ * @param {Element} parent
+ * @param {string} selector
+ * @returns {HTMLTextAreaElement}
+ */
+const textareaIn = (parent, selector) =>
+  /** @type {HTMLTextAreaElement} */ (
+    must(parent.querySelector(selector), selector)
+  );
+
 /** @param {ExecutionContext} t
  * @param {number} [count]
  * @param {boolean} [recover]
@@ -128,9 +151,10 @@ const setup = async (
   );
   // Wait for Preact's mount subscription before sending input.
   await tick(50);
+  // Scoped to the compose bar's own input: a queued message being edited puts
+  // another textarea earlier in the document.
   const send = async text => {
-    const input = parent.querySelector('textarea');
-    if (!input) throw Error('Missing compose input');
+    const input = textareaIn(parent, 'textarea.floot-input');
     input.value = text;
     input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
     await tick();
@@ -142,12 +166,40 @@ const setup = async (
     parent
       .querySelectorAll('button[aria-label="Delete"]')
       [index].dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  const buttonLabelled = label =>
+    [...parent.querySelectorAll('button')].find(
+      candidate => candidate.textContent.trim() === label,
+    );
+  const click = label => {
+    const button = buttonLabelled(label);
+    if (!button) throw Error(`Missing "${label}" button`);
+    button.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  };
   return {
     parent,
     turns,
     deleted,
     cancelledTurns,
     makeTurn,
+    buttonLabelled,
+    click,
+    // Rewrite the queued message currently open for editing. `save()` closes
+    // over the draft of the render that installed it, so Enter must come from a
+    // render that has already seen the input event. `tick` is not a budget bet
+    // here: Preact schedules re-renders on a microtask, which always drains
+    // before a timer, so one macrotask boundary is enough by construction.
+    retype: async text => {
+      const input = textareaIn(parent, 'textarea.floot-pending-input');
+      input.value = text;
+      input.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+      await tick();
+      input.dispatchEvent(
+        new testWindow.KeyboardEvent('keydown', {
+          key: 'Enter',
+          bubbles: true,
+        }),
+      );
+    },
     setCurrent: reader => {
       currentOverride = reader;
     },
@@ -587,3 +639,231 @@ test.serial(
     t.truthy(parent.querySelector('[aria-label="Stop"]'));
   },
 );
+
+// ── Queued submissions ───────────────────────────────────────────────────────
+
+test.serial(
+  'a message sent mid-turn stays visible while it waits its turn',
+  async t => {
+    const { parent, turns, send, buttonLabelled } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    await send('second question');
+    await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+    t.true(
+      parent.textContent.includes('second question'),
+      'the queued message renders in the transcript rather than vanishing',
+    );
+    // Position and muting carry "not sent yet"; a badge on every queued line
+    // would just be noise.
+    t.false(
+      parent.textContent.includes('Pending'),
+      'no badge: position and muting carry it',
+    );
+    for (const label of ['Send now', 'Edit', 'Delete']) {
+      t.truthy(buttonLabelled(label), `offers ${label}`);
+    }
+    t.is(turns.length, 1, 'it has not started its own turn yet');
+
+    // Finish the first turn; the queued message hands off to the turn it starts
+    // and stays visible across the swap.
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 2);
+    t.is(turns[1].text, 'second question');
+    t.true(parent.textContent.includes('second question'));
+    await waitFor(() => !parent.querySelector('.floot-msg-row.pending'));
+    t.falsy(
+      buttonLabelled('Send now'),
+      'a running message is no longer queued',
+    );
+  },
+);
+
+test.serial('Send now cuts the running turn short', async t => {
+  const { parent, turns, cancelledTurns, send, click } = await setup(t);
+  await send('first');
+  await waitFor(() => turns.length === 1);
+  await send('jump the queue');
+  await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+  click('Send now');
+  await waitFor(() => cancelledTurns.length === 1);
+  t.is(cancelledTurns[0], turns[0].ref, 'the turn ahead of it is cancelled');
+  // A turn the user stopped ends cleanly, so its queued message runs next.
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(() => turns.length === 2);
+  t.is(turns[1].text, 'jump the queue');
+});
+
+test.serial(
+  'only the message at the head of the queue can jump it',
+  async t => {
+    const { parent, turns, cancelledTurns, send, buttonLabelled } =
+      await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    await send('queued A');
+    await send('queued B');
+    await waitFor(
+      () => parent.querySelectorAll('.floot-msg-row.pending').length === 2,
+    );
+    // Every entry runs the message it was scheduled with, so a "Send now" on B
+    // would cancel the turn in front of A — throwing away that reply — and
+    // still leave B waiting. The control belongs to the head alone.
+    t.is(
+      parent.querySelectorAll('button.floot-pending-action').length,
+      2 * 2 + 1,
+      'Edit and Delete on both, Send now on the head only',
+    );
+    t.truthy(buttonLabelled('Send now'));
+    t.is(
+      buttonLabelled('Send now')
+        ?.closest('.floot-msg-row')
+        ?.textContent.includes('queued A'),
+      true,
+      'the head is the one that offers it',
+    );
+
+    buttonLabelled('Send now')?.dispatchEvent(
+      new testWindow.Event('click', { bubbles: true }),
+    );
+    await waitFor(() => cancelledTurns.length === 1);
+    t.is(cancelledTurns[0], turns[0].ref);
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 2);
+    t.is(turns[1].text, 'queued A', 'the head runs, in order');
+  },
+);
+
+test.serial('editing a queued message is what actually runs', async t => {
+  const { parent, turns, send, click, retype } = await setup(t);
+  await send('first');
+  await waitFor(() => turns.length === 1);
+  await send('original wording');
+  await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+  click('Edit');
+  await waitFor(() => parent.querySelector('textarea.floot-pending-input'));
+  await retype('rewritten before it ran');
+  await waitFor(() => parent.textContent.includes('rewritten before it ran'));
+  t.false(parent.textContent.includes('original wording'));
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(() => turns.length === 2);
+  t.is(
+    turns[1].text,
+    'rewritten before it ran',
+    'the turn runs the edit, not the text that was typed',
+  );
+});
+
+test.serial(
+  'an empty edit keeps the queued message rather than dropping it',
+  async t => {
+    const { parent, turns, send, click, retype } = await setup(t);
+    await send('first');
+    await waitFor(() => turns.length === 1);
+    await send('do not lose me');
+    await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+    click('Edit');
+    await waitFor(() => parent.querySelector('textarea.floot-pending-input'));
+    // Deleting has its own button; losing a message by clearing the box would
+    // be a surprising way to lose one.
+    await retype('   ');
+    await waitFor(() => !parent.querySelector('textarea.floot-pending-input'));
+    t.true(parent.textContent.includes('do not lose me'));
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 2);
+    t.is(turns[1].text, 'do not lose me');
+  },
+);
+
+test.serial('deleting a queued message skips its turn entirely', async t => {
+  const { parent, turns, send, click } = await setup(t);
+  await send('first');
+  await waitFor(() => turns.length === 1);
+  await send('never mind');
+  await waitFor(() => parent.querySelector('.floot-msg-row.pending'));
+  click('Delete');
+  await waitFor(() => !parent.querySelector('.floot-msg-row.pending'));
+  t.false(parent.textContent.includes('never mind'));
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(() => parent.querySelector('[aria-label="Send"]'));
+  t.is(
+    turns.length,
+    1,
+    'the scheduled chain entry finds nothing and skips its turn',
+  );
+  // Dropping one must not poison the queue for what comes after it.
+  await send('but this one runs');
+  await waitFor(() => turns.length === 2);
+  t.is(turns[1].text, 'but this one runs');
+});
+
+// ── Agent actions ────────────────────────────────────────────────────────────
+
+test.serial("a turn's tool calls collapse into one group", async t => {
+  const { parent, turns, send } = await setup(t);
+  await send('run some tools');
+  await waitFor(() => turns.length === 1);
+  const { channel } = turns[0];
+  channel.push(
+    harden({
+      type: 'tool_call',
+      id: 'a',
+      name: 'exec',
+      args: JSON.stringify({ code: 'const x = 1;' }),
+    }),
+  );
+  channel.push(harden({ type: 'tool_result', id: 'a', result: '1' }));
+  channel.push(
+    harden({ type: 'tool_call', id: 'b', name: 'exec', args: '{"code":"2"}' }),
+  );
+  channel.push(harden({ type: 'tool_result', id: 'b', result: '2' }));
+  channel.push(
+    harden({ type: 'tool_call', id: 'c', name: 'list', args: '{}' }),
+  );
+  channel.push(harden({ type: 'tool_result', id: 'c', result: '[]' }));
+  await waitFor(() => parent.querySelector('.floot-actions'));
+
+  t.is(
+    parent.querySelectorAll('.floot-actions').length,
+    1,
+    'one group for the run between two replies',
+  );
+  const head = must(
+    parent.querySelector('.floot-actions-head'),
+    'action group header',
+  );
+  t.true(head.textContent.includes('3 actions'));
+  t.true(head.textContent.includes('exec ×2, list'));
+  t.is(head.getAttribute('aria-expanded'), 'false', 'closed by default');
+  t.is(
+    parent.querySelectorAll('.floot-action').length,
+    0,
+    'the raw JSON stays out of the way until asked for',
+  );
+
+  head.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => parent.querySelectorAll('.floot-action').length === 3);
+  // Each action is one entry pairing its call with its result, still collapsed.
+  t.is(
+    must(parent.querySelector('.floot-action-name'), 'action name').textContent,
+    'exec',
+  );
+  t.falsy(parent.querySelector('.floot-action-body'));
+
+  must(
+    parent.querySelector('.floot-action-head'),
+    'action header',
+  ).dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => parent.querySelector('.floot-action-body'));
+  const body = must(
+    parent.querySelector('.floot-action-body'),
+    'expanded action body',
+  );
+  t.true(body.textContent.includes('javascript'), 'exec unwraps to its source');
+  t.true(body.textContent.includes('const x = 1;'));
+  t.truthy(
+    body.querySelector('.floot-tok-keyword'),
+    'the JavaScript is syntax-highlighted',
+  );
+});
+
