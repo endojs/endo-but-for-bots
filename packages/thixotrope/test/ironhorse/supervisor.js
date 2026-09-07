@@ -15,6 +15,7 @@ import {
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { bundleApplication } from '../../src/bundle-application.js';
 import { connectLocalControl } from '../../src/local-control.js';
 
 /** @import { ExecutionContext } from 'ava' */
@@ -560,5 +561,203 @@ test.serial(
 
     await admin.call('stop');
     t.is((await supervisor.exited)[0], 0);
+  },
+);
+
+test.serial(
+  'installed modules retain code, powers and their root across supervisor restart',
+  async t => {
+    t.timeout(120_000);
+    const path = await mkdtemp('/tmp/thix-install-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const first = await start(t, path);
+    const admin = await connect(t, path);
+    const file = join(path, 'application.js');
+    await writeFile(
+      join(path, 'package.json'),
+      JSON.stringify({ name: 'test-application', type: 'module' }),
+    );
+    await writeFile(
+      file,
+      `export const make = powers => { let count = 0n; return Far('App', { incr: () => ++count, read: () => count, granted: () => E(powers.counter).read(), powers: () => harden(Object.keys(powers)), confined: () => typeof process + ':' + typeof require }); }; harden(make);`,
+    );
+    await admin.call(
+      'evaluate',
+      "inventory.set('counter', Far('GrantedCounter', { read: () => 42n })); undefined",
+    );
+    const { bundle, digest } = await bundleApplication(file);
+    const installed = await admin.call('install', 'counter-app', bundle, [
+      ['counter', 'counter'],
+    ]);
+    t.is(installed.digest, digest);
+    t.is(installed.status, 'ready');
+    t.is(
+      await admin.call('evaluate', "E(E(apps).get('counter-app')).incr()"),
+      '1n',
+    );
+    t.is(
+      await admin.call('evaluate', "E(E(apps).get('counter-app')).granted()"),
+      '42n',
+    );
+    t.is(
+      await admin.call('evaluate', "E(E(apps).get('counter-app')).confined()"),
+      "'undefined:undefined'",
+    );
+    t.is((await admin.call('status')).workers.length, 2);
+    await admin.call('install', 'counter-app', bundle, [
+      ['counter', 'counter'],
+    ]);
+    t.is(
+      (await admin.call('status')).workers.length,
+      2,
+      'repeat installation reuses its vat',
+    );
+    await t.throwsAsync(
+      () =>
+        admin.call('install', 'counter-app', `${bundle}\n `, [
+          ['counter', 'counter'],
+        ]),
+      { message: /different installation/ },
+    );
+    await t.throwsAsync(
+      () =>
+        admin.call('install', 'missing-grant', bundle, [['counter', 'absent']]),
+      { message: /Unknown inventory grant/ },
+    );
+    t.is((await admin.call('applications')).length, 1);
+    await admin.call('stop');
+    t.is((await first.exited)[0], 0);
+    await rm(file);
+    const second = await start(t, path);
+    const restored = await connect(t, path);
+    t.is(
+      await restored.call('evaluate', "E(E(apps).get('counter-app')).incr()"),
+      '2n',
+    );
+    t.is(
+      await restored.call(
+        'evaluate',
+        "E(E(apps).get('counter-app')).granted()",
+      ),
+      '42n',
+    );
+    t.is((await restored.call('applications'))[0].digest, digest);
+    await restored.call('install', 'counter-app', bundle, [
+      ['counter', 'counter'],
+    ]);
+    t.is((await restored.call('status')).workers.length, 2);
+    await restored.call('stop');
+    t.is((await second.exited)[0], 0);
+  },
+);
+
+test.serial(
+  'install CLI bundles the counter example and lists its application',
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp('/tmp/thix-install-cli-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const supervisor = await start(t, path);
+    const child = spawn(
+      process.execPath,
+      [cli, 'install', path, 'counter', './examples/counter.js'],
+      {
+        cwd: fileURLToPath(new URL('../../', import.meta.url)),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const exited = once(child, 'exit');
+    t.teardown(async () => {
+      child.kill('SIGKILL');
+      await exited;
+    });
+    let output = '';
+    let diagnostic = '';
+    child.stdout.on('data', data => {
+      output += String(data);
+    });
+    child.stderr.on('data', data => {
+      diagnostic += String(data);
+    });
+    const code = (await exited)[0];
+    const check = await connect(t, path);
+    if (code !== 0) t.log(await check.call('status'));
+    t.is(code, 0, diagnostic);
+    t.is(JSON.parse(output).status, 'ready');
+    const listed = await transcript(t, path, '', 'applications');
+    t.is(listed.code, 0);
+    t.is(JSON.parse(listed.output)[0].name, 'counter');
+    const admin = await connect(t, path);
+    t.is(
+      await admin.call('evaluate', "E(E(apps).get('counter')).incr()"),
+      '1n',
+    );
+    await admin.call('stop');
+    t.is((await supervisor.exited)[0], 0);
+  },
+);
+
+test.serial(
+  'pending application factory survives restart through a direct guest answer',
+  async t => {
+    t.timeout(120_000);
+    const path = await mkdtemp('/tmp/thix-install-pending-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const first = await start(t, path);
+    const admin = await connect(t, path);
+    await admin.call(
+      'evaluate',
+      "globalThis.gateStarted = false; globalThis.gatePromise = new Promise(resolve => { globalThis.resolveGate = resolve; }); inventory.set('gate', Far('Gate', { wait: () => { gateStarted = true; return gatePromise; } })); undefined",
+    );
+    const installing = admin.call(
+      'install',
+      'pending',
+      "({ make: async powers => { await E(powers.gate).wait(); return Far('Ready', { read: () => 8n }); } })",
+      [['gate', 'gate']],
+    );
+    const handled = installing.catch(() => undefined);
+    let entered = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      if ((await admin.call('evaluate', 'gateStarted')) === 'true') {
+        entered = true;
+        break;
+      }
+    }
+    t.true(entered);
+    t.is((await admin.call('applications'))[0].status, 'pending');
+    await admin.call('stop');
+    t.is((await first.exited)[0], 0);
+    await handled;
+    const second = await start(t, path);
+    const restored = await connect(t, path);
+    await restored.call('evaluate', 'resolveGate(); undefined');
+    t.is(
+      await restored.call('evaluate', "E(E(apps).get('pending')).read()"),
+      '8n',
+    );
+    t.is((await restored.call('applications'))[0].status, 'ready');
+    await t.throwsAsync(
+      () => restored.call('install', 'oversized', ' '.repeat(16 * 1024), []),
+      { message: /16 KiB/ },
+    );
+    await restored.call(
+      'evaluate',
+      "inventory.set('large-copy', 'x'.repeat(250_000)); undefined",
+    );
+    await t.throwsAsync(
+      () =>
+        restored.call('install', 'copy-grant', '({make: () => 0})', [
+          ['data', 'large-copy'],
+        ]),
+      { message: /remotable capabilities/ },
+    );
+    t.is(
+      await restored.call('evaluate', '2 + 2'),
+      '4',
+      'oversized requests never enter the workspace',
+    );
+    await restored.call('stop');
+    t.is((await second.exited)[0], 0);
   },
 );

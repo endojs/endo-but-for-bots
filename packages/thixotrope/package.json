@@ -47,6 +47,7 @@
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
+    "@endo/compartment-mapper": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/far": "workspace:^",
@@ -58,7 +59,6 @@
     "@noble/hashes": "^2.4.0"
   },
   "devDependencies": {
-    "@endo/compartment-mapper": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",

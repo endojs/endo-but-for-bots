@@ -773,6 +773,8 @@ const buildDaemon = async ({
       help: () =>
         'ThixotropeWorkerFacade: evaluate(source, endowments) evaluates in this worker with the properties of the endowments record bound as named values; getId() returns the worker id; retire() permanently deletes the worker.',
       getId: () => workerId,
+      // Return the guest shell so pending guest answers stay guest-to-guest.
+      getEvaluator: () => provideShell(workerId),
       /**
        * @param {string} source
        * @param {Record<string, unknown>} [endowments]

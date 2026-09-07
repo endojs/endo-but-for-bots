@@ -5,11 +5,12 @@ import process from 'node:process';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
+import { bundleApplication } from '../src/bundle-application.js';
 import { connectLocalControl } from '../src/local-control.js';
 import { showInventory } from '../src/inventory-view.js';
 import { serveThixotrope } from '../src/supervisor.js';
 
-const [command, directory = './.thix'] = process.argv.slice(2);
+const [command, directory = './.thix', ...args] = process.argv.slice(2);
 const statePath = resolve(directory);
 try {
   if (command === 'serve') {
@@ -31,6 +32,8 @@ try {
       process.removeListener('SIGTERM', stop);
     }
   } else if (
+    command === 'install' ||
+    command === 'applications' ||
     command === 'inventory' ||
     command === 'attach' ||
     command === 'status' ||
@@ -38,7 +41,26 @@ try {
   ) {
     const client = await connectLocalControl(join(statePath, 'control.sock'));
     try {
-      if (command === 'inventory') {
+      if (command === 'install') {
+        const [name, modulePath, ...grantArgs] = args;
+        if (!name || !modulePath)
+          throw Error(
+            'Usage: thix install state-directory name module.js [power=inventory-key ...]',
+          );
+        const grants = grantArgs.map(grant => {
+          const separator = grant.indexOf('=');
+          if (separator < 1) throw Error('Expected power=inventory-key');
+          return [grant.slice(0, separator), grant.slice(separator + 1)];
+        });
+        const { bundle } = await bundleApplication(modulePath);
+        console.log(
+          JSON.stringify(
+            await client.call('install', name, bundle, grants),
+            null,
+            2,
+          ),
+        );
+      } else if (command === 'inventory') {
         await showInventory(client);
       } else if (command === 'attach') {
         const terminal = createInterface({
@@ -79,7 +101,9 @@ try {
       } else {
         const result = await client.call(command);
         console.log(
-          command === 'status' ? JSON.stringify(result, null, 2) : result,
+          command === 'status' || command === 'applications'
+            ? JSON.stringify(result, null, 2)
+            : result,
         );
         if (command === 'stop') await client.closed;
       }
@@ -88,7 +112,7 @@ try {
     }
   } else {
     console.log(
-      'Usage: thix serve|attach|inventory|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|applications|inventory|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
