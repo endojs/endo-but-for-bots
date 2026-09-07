@@ -20,7 +20,17 @@ path = "src/lib.rs"
 # literal through the same ported parser.
 ironhorse-regexp = { path = "../ironhorse-regexp" }
 
-[dev-dependencies]
-# The conformance oracle (XS at the pin), used only by the whole-corpus
-# parse-smoke integration test to certify accept/reject agreement.
-xs-oracle = { path = "../xs-oracle" }
+# Cargo does not support optional dev-dependencies. This optional dependency
+# is enabled only for the explicitly gated oracle integration tests below.
+xs-oracle = { path = "../xs-oracle", optional = true }
+
+[features]
+parity = ["dep:xs-oracle"]
+
+[[test]]
+name = "corpus_parse_smoke"
+required-features = ["parity"]
+
+[[test]]
+name = "coder_byte_identity"
+required-features = ["parity"]

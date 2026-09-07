@@ -729,13 +729,9 @@ jobs:
   # (ironhorse-vm, ironhorse-snapshot — including the store seam's
   # metamorphic determinism and checkpoint acceptance suites) plus the
   # daemon-side SQLite heap-store backend in the root workspace. The
-  # oracle-linked engine crates (xs-oracle, ironhorse-compile,
-  # ironhorse-regexp, ironhorse-262, ironhorse-fuzz) are excluded from
-  # TESTING here — their dev-dependencies compile the Moddable XS C
-  # sources — and run in test-ironhorse-oracle below, which provisions
-  # the submodule (the deferred-work checklist's oracle-suites item).
-  # (ironhorse-compile still builds here as a library dependency of the
-  # tested crates — dev-dependencies of dependencies do not build.)
+  # compiler and regexp default targets also run here without C. Their
+  # parity-feature targets and the oracle-dependent harness crates run
+  # in test-ironhorse-oracle below with the pinned XS submodule.
   #
   # On pull requests the expensive steps self-skip unless the PR
   # touches these crates or their inputs (the engine workspace, the
@@ -794,7 +790,7 @@ jobs:
       - name: Test ironhorse engine crates (rust/engine workspace)
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
-        run: cargo test -p ironhorse-vm -p ironhorse-snapshot
+        run: cargo test --locked -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp
 
       - name: Test SQLite heap-store backend (root workspace)
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
@@ -900,7 +896,7 @@ jobs:
         # spawn threads of that size themselves.
         env:
           RUST_MIN_STACK: '33554432'
-        run: cargo test -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz
+        run: cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity
   test-ocapn-python:
     name: test-ocapn-python
 
