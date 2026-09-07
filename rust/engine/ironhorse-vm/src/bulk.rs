@@ -21,7 +21,7 @@
 //! [`CollectionData::for_each_entry_mut_chunk_remap`] for the full
 //! collector's CHUNK-offset rewrite, which by contract never changes
 //! which SLOTS a value references (slots do not move; only the chunk
-//! arena compacts) — and the debug parity assertion in the page
+//! arena compacts) — and the store-integrity parity check in the page
 //! projection would catch a violation.
 //!
 //! Neither type implements `Clone`: a bare clone would carry entries
@@ -32,19 +32,21 @@
 use crate::value::{Slot, SlotIndex, SLOTS_PER_PAGE};
 
 /// Per-page reference counts for BULK side-table-held references
-/// (`page -> live reference count`), plus nothing else: the nonzero
+/// (`page -> live reference count`) and a lifetime poison latch: the nonzero
 /// key set IS the collector's bulk root-page set. Owned by the
 /// interpreter beside the tables; threaded into every counted
 /// mutation.
 #[derive(Debug, Default)]
 pub(crate) struct SideRefCounts {
     counts: std::collections::HashMap<u32, u32>,
+    poisoned: std::cell::Cell<bool>,
 }
 
 impl SideRefCounts {
     pub(crate) fn new() -> SideRefCounts {
         SideRefCounts {
             counts: std::collections::HashMap::new(),
+            poisoned: std::cell::Cell::new(false),
         }
     }
 
@@ -62,7 +64,12 @@ impl SideRefCounts {
     fn add_slot(&mut self, s: &Slot) {
         s.each_ref_slot(|r| {
             if let Some(page) = Self::page_of(r) {
-                *self.counts.entry(page).or_insert(0) += 1;
+                let n = self.counts.entry(page).or_insert(0);
+                if let Some(next) = n.checked_add(1) {
+                    *n = next;
+                } else {
+                    self.poison();
+                }
             }
         });
     }
@@ -72,20 +79,28 @@ impl SideRefCounts {
             if let Some(page) = Self::page_of(r) {
                 match self.counts.get_mut(&page) {
                     Some(n) if *n > 1 => *n -= 1,
-                    Some(_) => {
+                    Some(1) => {
                         self.counts.remove(&page);
                     }
-                    None => {
+                    _ => {
                         // A decrement without a matching increment is
                         // exactly the corruption class this module
-                        // exists to prevent; fail loudly in debug,
-                        // saturate in release (the parity assertion
-                        // in the page projection is the second net).
-                        debug_assert!(false, "side-ref undercount on page {page}");
+                        // exists to prevent. Refuse collection and
+                        // checkpointing in every build profile, even
+                        // if later mutations restore the page set.
+                        self.poison();
                     }
                 }
             }
         });
+    }
+
+    pub(crate) fn poison(&self) {
+        self.poisoned.set(true);
+    }
+
+    pub(crate) fn is_poisoned(&self) -> bool {
+        self.poisoned.get()
     }
 
     /// OR the counted pages into a page bitmap (the partial
@@ -261,7 +276,7 @@ impl ArrayData {
     /// every value WITHOUT a refs delta, sound because chunk
     /// compaction never changes which SLOTS a value references
     /// (slots do not move). Do not use for anything else — the debug
-    /// parity assertion in the page projection is watching, and the
+    /// parity check in the page projection is watching, and the
     /// attributed count is not maintained here, so the callback must not
     /// change any item's `flag`.
     pub(crate) fn for_each_value_mut_chunk_remap(&mut self, mut f: impl FnMut(&mut Slot)) {
@@ -497,6 +512,26 @@ mod tests {
 
     fn refslot(idx: u32) -> Slot {
         Slot::of(Kind::Reference, Payload::Reference(SlotIndex(idx)))
+    }
+
+    #[test]
+    fn side_ref_undercount_latches_poison_after_counts_recover() {
+        let mut refs = SideRefCounts::new();
+        refs.remove_slot(&refslot(10));
+        assert!(refs.is_poisoned());
+        refs.add_slot(&refslot(10));
+        refs.remove_slot(&refslot(10));
+        assert!(refs.pages_sorted().is_empty());
+        assert!(refs.is_poisoned(), "balanced later writes cannot unpoison");
+    }
+
+    #[test]
+    fn side_ref_overflow_latches_poison_without_wrapping() {
+        let mut refs = SideRefCounts::new();
+        refs.counts.insert(0, u32::MAX);
+        refs.add_slot(&refslot(10));
+        assert_eq!(refs.counts[&0], u32::MAX);
+        assert!(refs.is_poisoned());
     }
 
     #[test]

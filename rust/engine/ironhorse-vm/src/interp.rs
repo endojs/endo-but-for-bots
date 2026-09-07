@@ -13370,6 +13370,7 @@ impl Interp {
             && self.array_iterator_proxy_get_context.is_none()
             && self.exception.kind == Kind::Undefined
             && !self.id_space_exhausted
+            && !self.side_refs.is_poisoned()
             // The native-recursion budget is released by every guarded entry
             // on return; a machine holding a charge at a boundary was unwound
             // by a panic, and a resumed twin (which starts at zero) would
@@ -59335,6 +59336,107 @@ mod tests {
     }
 
     #[test]
+    fn side_ref_undercount_blocks_quiescence_and_page_freeing() {
+        let mut interp = Interp::new();
+        assert!(interp.is_quiescent());
+        let array = interp.new_array_unmetered();
+        let value = interp.new_object();
+        interp.arrays.get_mut(&array).unwrap().insert_item(
+            0,
+            Slot::of(Kind::Reference, Payload::Reference(value)),
+            &mut interp.side_refs,
+        );
+        // Simulate a missed counted mutation. Removing the remaining
+        // entry detects the missing count without a debug-only panic.
+        interp.side_refs = SideRefCounts::new();
+        interp
+            .arrays
+            .get_mut(&array)
+            .unwrap()
+            .remove_item(&0, &mut interp.side_refs);
+        assert!(!interp.is_quiescent());
+        assert_eq!(
+            interp.free_pages(&[value.0 / crate::value::SLOTS_PER_PAGE]),
+            0
+        );
+        assert!(!interp.slots.is_free_index(value));
+        interp.collect_garbage();
+        assert!(
+            !interp.is_quiescent(),
+            "full GC cannot erase the poison latch"
+        );
+    }
+
+    #[cfg(any(debug_assertions, feature = "store-integrity"))]
+    #[test]
+    fn side_ref_parity_mismatch_refuses_reclamation_including_release() {
+        let mut interp = Interp::new();
+        let array = interp.new_array_unmetered();
+        // Use a new page that no intrinsic/tail table already roots:
+        // otherwise a tail reference could mask a missing bulk page bit.
+        let next_page = interp
+            .slots
+            .capacity()
+            .div_ceil(crate::value::SLOTS_PER_PAGE);
+        let mut value = interp.new_object();
+        while value.0 / crate::value::SLOTS_PER_PAGE < next_page {
+            value = interp.new_object();
+        }
+        interp.arrays.get_mut(&array).unwrap().insert_item(
+            0,
+            Slot::of(Kind::Reference, Payload::Reference(value)),
+            &mut interp.side_refs,
+        );
+        assert!(interp.is_quiescent());
+        assert!(interp.side_table_ref_page_bits()[next_page as usize]);
+        interp.side_refs = SideRefCounts::new();
+        let bits = interp.side_table_ref_page_bits();
+        assert!(bits.iter().all(|hit| *hit), "no page can be reclaimed");
+        assert!(!interp.is_quiescent(), "checkpoint gate refuses corruption");
+        assert_eq!(interp.free_pages(&[next_page]), 0);
+        assert!(!interp.slots.is_free_index(value));
+        // Repairing the bitmap does not permit this machine to persist.
+        interp
+            .arrays
+            .get_mut(&array)
+            .unwrap()
+            .remove_item(&0, &mut SideRefCounts::new());
+        interp.side_table_ref_page_bits();
+        assert!(!interp.is_quiescent());
+    }
+
+    #[test]
+    fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
+        let mut interp = Interp::new();
+        let next_page = interp
+            .slots
+            .capacity()
+            .div_ceil(crate::value::SLOTS_PER_PAGE);
+        let mut array = interp.new_array_unmetered();
+        while array.0 / crate::value::SLOTS_PER_PAGE < next_page {
+            array = interp.new_array_unmetered();
+        }
+        // The intrinsic prototype's page is also rooted by tail tables,
+        // masking a missing bulk count in the union of page bits.
+        interp.arrays.get_mut(&array).unwrap().insert_item(
+            0,
+            Slot::of(Kind::Reference, Payload::Reference(interp.object_proto)),
+            &mut interp.side_refs,
+        );
+        let before = interp.side_table_ref_page_bits();
+        interp.side_refs = SideRefCounts::new();
+        assert_eq!(interp.side_table_ref_page_bits(), before);
+        assert!(interp.is_quiescent());
+        assert!(interp.free_pages(&[next_page]) > 0);
+        assert!(interp.slots.is_free_index(array));
+        assert!(
+            !interp.is_quiescent(),
+            "pruning detected the masked undercount"
+        );
+        assert_eq!(interp.free_pages(&[0]), 0, "later reclamation is refused");
+    }
+
+    #[test]
     fn legacy_date_prototype_snapshot_row_is_migrated_away() {
         let mut interp = Interp::new();
         let date_proto = interp.date_proto;
@@ -62479,6 +62581,11 @@ impl Interp {
     /// manifest's `free_len`), exactly like a sweep.
     pub fn free_pages(&mut self, pages: &[u32]) -> u32 {
         use crate::value::{SlotIndex, SLOTS_PER_PAGE};
+        // A counted-reference failure is permanent for this machine.
+        // No caller may free from a projection known to be corrupt.
+        if self.side_refs.is_poisoned() {
+            return 0;
+        }
         let mut freed: Vec<SlotIndex> = Vec::new();
         let mut sorted: Vec<u32> = pages.to_vec();
         sorted.sort_unstable();
@@ -62609,14 +62716,13 @@ impl Interp {
     /// One flag per [`crate::value::SLOTS_PER_PAGE`]-slot page of the
     /// arena: whether any side-table value references a slot on it —
     /// the page-granular projection the summary-driven partial
-    /// collector roots from. Same enumeration as
-    /// [`Self::side_table_ref_slots`] (both are thin projections of
-    /// [`Self::each_side_table_ref`], so they cannot drift; parity is
-    /// also locked by test), but a bitmap store per reference instead
-    /// of an index-vector build plus per-entry set inserts — same
-    /// O(live entries) walk, roughly an order of magnitude less
-    /// constant on wide heaps. Out-of-arena indices (including the
-    /// null sentinel) fall outside the bitmap and are skipped.
+    /// collector roots from. Bulk tables use standing page counts;
+    /// the remaining tables are enumerated directly. In debug builds
+    /// and with `store-integrity`, a full enumeration verifies the
+    /// projection. A mismatch or counted-state underflow/overflow
+    /// permanently prevents quiescence and page freeing, and returns
+    /// all pages as roots. Out-of-arena indices (including the null
+    /// sentinel) fall outside the bitmap and are skipped.
     pub fn side_table_ref_page_bits(&self) -> Vec<bool> {
         let pages = self.slots.capacity().div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
         let mut bits = vec![false; pages];
@@ -62634,11 +62740,11 @@ impl Interp {
             }
         });
         self.side_refs.or_into_bits(&mut bits);
-        // Parity net (debug builds): the standing counts must agree
+        // Parity net: the standing counts must agree
         // with a fresh enumeration of every side table — a missed
         // counted mutation shows up HERE, before the collector can
         // free a live page or pin a dead one.
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "store-integrity"))]
         {
             let mut walked = vec![false; pages];
             self.each_side_table_ref(&mut |r| {
@@ -62648,17 +62754,22 @@ impl Interp {
                     }
                 }
             });
-            debug_assert_eq!(
-                bits, walked,
-                "counted bulk pages diverge from the side-table enumeration"
-            );
+            if bits != walked {
+                self.side_refs.poison();
+            }
+        }
+        // Preserve the bitmap API conservatively. Store callers check
+        // quiescence after this projection and return a refusal; other
+        // callers receive no reclaimable pages, and free_pages is gated.
+        if self.side_refs.is_poisoned() {
+            bits.fill(true);
         }
         bits
     }
 
     /// Visit every slot index held in a side-table VALUE — the full
     /// enumeration behind [`Self::side_table_ref_slots`] and the
-    /// debug parity net. Composes the tail walk with a walk of the
+    /// store-integrity parity net. Composes the tail walk with a walk of the
     /// two BULK tables, so the tail body is shared with the counted
     /// page projection and cannot drift from it.
     fn each_side_table_ref(&self, visit: &mut dyn FnMut(crate::value::SlotIndex)) {

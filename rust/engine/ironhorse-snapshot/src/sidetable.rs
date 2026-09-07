@@ -135,7 +135,9 @@
 //! - `side_refs` — the counted-accessor page projection over the two bulk
 //!   rows (`Arrays`/`Collections`); a derived cache the restore path
 //!   rebuilds in lockstep by routing every insert through the counted
-//!   accessors.
+//!   accessors. Its corruption poison latch is transient: quiescence
+//!   requires it clear, so a poisoned machine can never persist and
+//!   restore cannot silently erase a known integrity failure.
 
 /// Whether a side table is carried by the current snapshot image
 /// ([`crate::image`]), and if not, why it is safe to defer.
@@ -1080,6 +1082,9 @@ mod tests {
         /// tests on a ledger row: each is a transient the module docs
         /// classify, and each must stay in the predicate.
         const NON_EMPTINESS_CONJUNCTS: &[&str] = &[
+            // Counted references need not be empty, but a poisoned
+            // projection must never be checkpointed.
+            "side_refs",
             // The crank-lifecycle latch, the first conjunct.
             "last_crank_completed",
             // The Proxy-trap context, refused if leaked.
