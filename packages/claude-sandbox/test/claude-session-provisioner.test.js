@@ -7,9 +7,17 @@ import { makeClaudeSessionProvisioner } from '../src/claude-session-provisioner.
 
 const keyFor = names => names.join('/');
 
-test('provisions and removes one isolated client per Floot session', async t => {
+/**
+ * A recording host: pet names live in a map keyed by their joined path, and
+ * the calls a provisioner makes beyond `has`/`lookup`/`remove` are logged.
+ */
+const makeRecordingHost = () => {
   /** @type {Map<string, unknown>} */
   const names = new Map();
+  /** @type {string[][]} */
+  const directories = [];
+  /** @type {Array<{ path: string[], reason: string }>} */
+  const cancelled = [];
   const hostAgent = harden({
     async has(...path) {
       return names.has(keyFor(path));
@@ -20,49 +28,62 @@ test('provisions and removes one isolated client per Floot session', async t => 
     async remove(...path) {
       names.delete(keyFor(path));
     },
+    async makeDirectory(path) {
+      directories.push([...path]);
+      names.set(keyFor(path), harden({ kind: 'directory' }));
+    },
+    async cancel(path, reason) {
+      cancelled.push({ path: [...path], reason: reason.message });
+    },
   });
+  return { hostAgent, names, directories, cancelled };
+};
+
+const baseConfig = harden({
+  clientBase: 'claude-client',
+  credentialsName: 'claude-creds',
+  workspaceBaseDir: '/workspaces',
+  rootfs: 'oci:test',
+});
+
+test('provisions and removes one isolated client per Floot session', async t => {
+  const { hostAgent, names, directories } = makeRecordingHost();
   const filesystemCalls = [];
   const provisionCalls = [];
   const removedDirectories = [];
-  const provisioner = makeClaudeSessionProvisioner(
-    hostAgent,
-    {
-      flootDir: 'floot',
-      clientBase: 'claude-client',
-      credentialsName: 'claude-creds',
-      workspaceBaseDir: '/workspaces',
-      rootfs: 'oci:test',
+  const provisioner = makeClaudeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem(name, directory) {
+      filesystemCalls.push({ name, directory });
+      names.set(name, harden({}));
     },
-    {
-      async makeFilesystem(name, directory) {
-        filesystemCalls.push({ name, directory });
-        names.set(name, harden({}));
-      },
-      async provisionSession(_host, spec, options) {
-        provisionCalls.push({ spec, options });
-        names.set(keyFor(options.resultName), harden({ client: spec.name }));
-        for (const name of options.removeNames) {
-          names.delete(keyFor(Array.isArray(name) ? name : [name]));
-        }
-        return harden({
-          client: names.get(keyFor(options.resultName)),
-          sessionId: 'sandbox-session',
-          hostMountPoint: '/mount',
-          rootfsLabel: 'test',
-        });
-      },
-      async removeDirectory(directory, options) {
-        removedDirectories.push({ directory, options });
-      },
+    async provisionSession(_host, spec, options = {}) {
+      provisionCalls.push({ spec, options });
+      const resultName = /** @type {string[]} */ (options.resultName);
+      names.set(keyFor(resultName), harden({ client: spec.name }));
+      for (const name of options.removeNames || []) {
+        names.delete(keyFor(Array.isArray(name) ? name : [name]));
+      }
+      return harden({
+        client: names.get(keyFor(resultName)),
+        sessionId: 'sandbox-session',
+        hostMountPoint: '/mount',
+        rootfsLabel: 'test',
+      });
     },
-  );
+    async removeDirectory(directory, options) {
+      removedDirectories.push({ directory, options });
+    },
+  });
 
+  t.is(await E(provisioner).lookup('session-a'), undefined);
   const [first, second] = await Promise.all([
     E(provisioner).provision('session-a'),
     E(provisioner).provision('session-a'),
   ]);
   t.is(first, 'claude-client-session-a');
   t.is(second, first);
+  // The sessions directory is created on first use.
+  t.deepEqual(directories, [['claude-sandbox', 'sessions']]);
   // Two filesystems: the user-facing workspace and the dedicated persistent
   // Claude config dir (a sibling of the workspace base by default).
   t.deepEqual(filesystemCalls, [
@@ -77,18 +98,21 @@ test('provisions and removes one isolated client per Floot session', async t => 
   ]);
   t.is(provisionCalls.length, 1);
   t.deepEqual(provisionCalls[0].options.resultName, [
-    'floot',
-    'controller-profile',
+    'claude-sandbox',
+    'sessions',
     'claude-client-session-a',
   ]);
   // The config filesystem is forwarded so the client can mount it and detect a
   // pre-restart transcript.
   t.is(provisionCalls[0].spec.configFilesystemName, 'claude-config-session-a');
   t.is(provisionCalls[0].spec.configHostDir, '/claude-configs/session-a');
-  t.true(names.has('floot/controller-profile/claude-client-session-a'));
+  t.true(names.has('claude-sandbox/sessions/claude-client-session-a'));
+  t.deepEqual(await E(provisioner).lookup('session-a'), {
+    client: 'claude-client-session-a',
+  });
 
   await E(provisioner).remove('session-a');
-  t.false(names.has('floot/controller-profile/claude-client-session-a'));
+  t.false(names.has('claude-sandbox/sessions/claude-client-session-a'));
   // Both the workspace and the (always-private) config dir are deleted.
   t.deepEqual(removedDirectories, [
     {
@@ -102,44 +126,64 @@ test('provisions and removes one isolated client per Floot session', async t => 
   ]);
 });
 
-test('forwards the MCP tool-bridge mount options to the session provisioner', async t => {
-  /** @type {Map<string, unknown>} */
-  const names = new Map();
-  const hostAgent = harden({
-    async has(...path) {
-      return names.has(keyFor(path));
+/**
+ * A `provisionSession` stand-in that only records the client under its
+ * result name.
+ *
+ * @param {Map<string, unknown>} names
+ * @param {Array<{ spec: any, options: any }>} [provisionCalls]
+ */
+const makeFakeProvisionSession =
+  (names, provisionCalls = []) =>
+  async (_host, spec, options = {}) => {
+    provisionCalls.push({ spec, options });
+    const resultName = /** @type {string[]} */ (options.resultName);
+    names.set(keyFor(resultName), harden({ client: spec.name }));
+    return harden({
+      client: spec.name,
+      sessionId: 'sandbox-session',
+      hostMountPoint: '/mount',
+      rootfsLabel: 'test',
+    });
+  };
+
+test('cancel stops a provisioned client without deleting it', async t => {
+  const { hostAgent, names, cancelled } = makeRecordingHost();
+  const provisioner = makeClaudeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem(name) {
+      names.set(name, harden({}));
     },
-    async lookup(...path) {
-      return names.get(keyFor(path));
-    },
-    async remove(...path) {
-      names.delete(keyFor(path));
-    },
+    provisionSession: makeFakeProvisionSession(names),
   });
+  // Nothing to stop before provisioning: cancel is a no-op, not an error.
+  await E(provisioner).cancel('session-b');
+  t.deepEqual(cancelled, []);
+
+  await E(provisioner).provision('session-b');
+  await E(provisioner).cancel('session-b');
+  t.deepEqual(cancelled, [
+    {
+      path: ['claude-sandbox', 'sessions', 'claude-client-session-b'],
+      reason: 'Claude session session-b stopped',
+    },
+  ]);
+  // The formula is still there for the next lookup to reincarnate.
+  t.true(names.has('claude-sandbox/sessions/claude-client-session-b'));
+});
+
+test('forwards the MCP tool-bridge mount options to the session provisioner', async t => {
+  const { hostAgent, names } = makeRecordingHost();
+  /** @type {Array<{ spec: any, options: any }>} */
   const provisionCalls = [];
-  const provisioner = makeClaudeSessionProvisioner(
-    hostAgent,
-    {
-      flootDir: 'floot',
-      clientBase: 'claude-client',
-      credentialsName: 'claude-creds',
-      workspaceBaseDir: '/workspaces',
-      rootfs: 'oci:test',
+  const provisioner = makeClaudeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem(name) {
+      names.set(name, harden({}));
     },
-    {
-      async makeFilesystem(name) {
-        names.set(name, harden({}));
-      },
-      async provisionSession(_host, spec, options) {
-        provisionCalls.push({ spec, options });
-        names.set(keyFor(options.resultName), harden({ client: spec.name }));
-        return harden({ client: spec.name });
-      },
-    },
-  );
+    provisionSession: makeFakeProvisionSession(names, provisionCalls),
+  });
 
   const mcp = {
-    socketDir: '/tmp/floot-mcp/session-b',
+    socketDir: '/tmp/claude-mcp/session-b',
     innerDir: '/endo-mcp',
     configPath: '/endo-mcp/mcp.json',
   };
@@ -149,44 +193,19 @@ test('forwards the MCP tool-bridge mount options to the session provisioner', as
 });
 
 test('a workspaceDir override roots the filesystem at a shared worktree', async t => {
-  /** @type {Map<string, unknown>} */
-  const names = new Map();
-  const hostAgent = harden({
-    async has(...path) {
-      return names.has(keyFor(path));
-    },
-    async lookup(...path) {
-      return names.get(keyFor(path));
-    },
-    async remove(...path) {
-      names.delete(keyFor(path));
-    },
-  });
+  const { hostAgent, names } = makeRecordingHost();
   const filesystemCalls = [];
   const removedDirectories = [];
-  const provisioner = makeClaudeSessionProvisioner(
-    hostAgent,
-    {
-      flootDir: 'floot',
-      clientBase: 'claude-client',
-      credentialsName: 'claude-creds',
-      workspaceBaseDir: '/workspaces',
-      rootfs: 'oci:test',
+  const provisioner = makeClaudeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem(name, directory) {
+      filesystemCalls.push({ name, directory });
+      names.set(name, harden({}));
     },
-    {
-      async makeFilesystem(name, directory) {
-        filesystemCalls.push({ name, directory });
-        names.set(name, harden({}));
-      },
-      async provisionSession(_host, spec, options) {
-        names.set(keyFor(options.resultName), harden({ client: spec.name }));
-        return harden({ client: spec.name });
-      },
-      async removeDirectory(directory, options) {
-        removedDirectories.push({ directory, options });
-      },
+    provisionSession: makeFakeProvisionSession(names),
+    async removeDirectory(directory, options) {
+      removedDirectories.push({ directory, options });
     },
-  );
+  });
 
   await E(provisioner).provision(
     'session-c',
@@ -222,26 +241,19 @@ test('a workspaceDir override roots the filesystem at a shared worktree', async 
 
 test('rejects session ids that could escape its namespace', async t => {
   const hostAgent = harden({});
-  const provisioner = makeClaudeSessionProvisioner(
-    hostAgent,
-    {
-      flootDir: 'floot',
-      clientBase: 'claude-client',
-      credentialsName: 'claude-creds',
-      workspaceBaseDir: '/workspaces',
-      rootfs: 'oci:test',
+  const provisioner = makeClaudeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem() {
+      return undefined;
     },
-    {
-      async makeFilesystem() {
-        return undefined;
-      },
-      async provisionSession() {
-        throw Error('must not provision');
-      },
+    async provisionSession() {
+      throw Error('must not provision');
     },
-  );
+  });
 
   await t.throwsAsync(() => E(provisioner).provision('../escape'), {
+    message: /Invalid Floot session id/,
+  });
+  await t.throwsAsync(() => E(provisioner).lookup('Not Valid'), {
     message: /Invalid Floot session id/,
   });
 });

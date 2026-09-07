@@ -2,9 +2,11 @@
 /* global process */
 // endo run --UNCONFINED setup-hosted.js --powers @agent
 //
-// Single-machine hosted provisioning: mint ClaudeCredentials and a bounded
-// provisioner that creates one ClaudeClient per Floot session without inbox
-// forms. Intended for ENDO_EXTRA alongside setup-host.js and setup-peer.js.
+// Single-machine hosted provisioning: mint ClaudeCredentials and the
+// `claude-backend` hosted backend factory that creates one isolated
+// ClaudeClient per Floot session (with its Endo tools bridged in over MCP),
+// without inbox forms. Intended for ENDO_EXTRA alongside setup-host.js and
+// setup-peer.js, after floot-factory-setup.js.
 //
 // Reads (first match wins):
 //   ENDO_CLAUDE_OAUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN — Claude subscription
@@ -16,18 +18,23 @@
 //     when the token prefix is not conclusive
 //   ENDO_CLAUDE_CREDS_NAME (default claude-creds)
 //   ENDO_CLAUDE_CLIENT_NAME (default claude-client)
-//   ENDO_CLAUDE_PROVISIONER_NAME (default claude-session-provisioner)
+//   ENDO_CLAUDE_BACKEND_NAME (default claude-backend) — the name Floot's
+//     factory discovers the backend under, in its controller profile
 //   ENDO_CLAUDE_WORKSPACE_DIR — base host path for per-session workspaces
+//   ENDO_CLAUDE_CONFIG_DIR — base host path for per-session Claude config dirs
+//   ENDO_CLAUDE_MCP_DIR — base host path for per-session MCP sockets
 //   CLAUDE_SANDBOX_IMAGE / ENDO_CLAUDE_SANDBOX_IMAGE — OCI rootfs
 //
-// Idempotent: skips caps that already exist.
+// Idempotent: credentials and the workspace directory are reused; the backend
+// caplet — the one formula whose module path is tied to a release checkout —
+// is re-created on every run and re-bound into the Floot profile.
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
-import { makeError, X, q } from '@endo/errors';
+import { Fail, makeError, X, q } from '@endo/errors';
 
 import { toCurrentSpecifier } from './src/current-specifier.js';
 
@@ -37,9 +44,12 @@ const credentialsModuleSpecifier = toCurrentSpecifier(
   new URL('./src/claude-credentials-module.js', import.meta.url).href,
 );
 
-const sessionProvisionerModuleSpecifier = toCurrentSpecifier(
-  new URL('./src/claude-session-provisioner.js', import.meta.url).href,
+const backendModuleSpecifier = toCurrentSpecifier(
+  new URL('./src/claude-backend-module.js', import.meta.url).href,
 );
+
+// Kept in sync with setup-host.js and the provisioner's sessions directory.
+const SANDBOX_DIR = 'claude-sandbox';
 
 const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken']);
 
@@ -146,8 +156,8 @@ export const main = async hostAgent => {
     env.ENDO_CLAUDE_CREDS_NAME || env.CLAUDE_CREDS_NAME || 'claude-creds';
   const clientName =
     env.ENDO_CLAUDE_CLIENT_NAME || env.CLAUDE_CLIENT_NAME || 'claude-client';
-  const provisionerName =
-    env.ENDO_CLAUDE_PROVISIONER_NAME || 'claude-session-provisioner';
+  const backendName =
+    env.ENDO_CLAUDE_BACKEND_NAME || env.CLAUDE_BACKEND_NAME || 'claude-backend';
   const workspaceDir =
     env.ENDO_CLAUDE_WORKSPACE_DIR ||
     env.CLAUDE_SANDBOX_WORKSPACE_DIR ||
@@ -156,6 +166,11 @@ export const main = async hostAgent => {
       '/claude-workspace',
     ) ||
     path.join(os.homedir(), 'claude-workspace');
+  const configDir =
+    env.ENDO_CLAUDE_CONFIG_DIR ||
+    path.join(path.dirname(workspaceDir), 'claude-configs');
+  const mcpDir =
+    env.ENDO_CLAUDE_MCP_DIR || path.join(os.tmpdir(), 'claude-mcp');
   const rootfs =
     env.CLAUDE_SANDBOX_IMAGE ||
     env.ENDO_CLAUDE_SANDBOX_IMAGE ||
@@ -173,11 +188,8 @@ export const main = async hostAgent => {
     env.ANTHROPIC_API_KEY ||
     env.FLOOT_AUTH_TOKEN ||
     '';
-  if (!apiKey) {
-    throw new Error(
-      'ENDO_CLAUDE_OAUTH_TOKEN (or ENDO_FLOOT_AUTH_TOKEN / ANTHROPIC_API_KEY / FLOOT_AUTH_TOKEN) is required.',
-    );
-  }
+  apiKey ||
+    Fail`ENDO_CLAUDE_OAUTH_TOKEN (or ENDO_FLOOT_AUTH_TOKEN / ANTHROPIC_API_KEY / FLOOT_AUTH_TOKEN) is required.`;
   const credsKind =
     env.ENDO_CLAUDE_CREDS_KIND ||
     env.CLAUDE_CREDS_KIND ||
@@ -185,11 +197,12 @@ export const main = async hostAgent => {
     inferCredentialKind(apiKey) ||
     'apiKey';
 
-  if (!(await E(hostAgent).has('claude-sandbox', 'sandbox-factory'))) {
-    throw new Error(
-      'claude-sandbox/sandbox-factory is missing — run setup-host.js first.',
-    );
-  }
+  const hasSandboxFactory = await E(hostAgent).has(
+    'claude-sandbox',
+    'sandbox-factory',
+  );
+  hasSandboxFactory ||
+    Fail`claude-sandbox/sandbox-factory is missing — run setup-host.js first.`;
 
   await provisionCredentials(hostAgent, {
     name: credsName,
@@ -197,17 +210,57 @@ export const main = async hostAgent => {
     kind: credsKind,
   });
   await mkdir(workspaceDir, { recursive: true });
+  await mkdir(configDir, { recursive: true });
+  await mkdir(mcpDir, { recursive: true });
+
+  // The hosted backend factory. It runs with `@agent` host powers (it mints
+  // per-session client formulas, registers their mounts, and cancels them on
+  // stop), but Floot only ever receives the guarded factory facet. Re-created
+  // on every run: it is a pinned unconfined caplet whose module path is tied
+  // to a release checkout, and it holds no durable state of its own — sessions
+  // are formulas under `claude-sandbox/sessions`, and the per-session MCP
+  // listeners are rebuilt whenever Floot revives a session.
+  const backendPath = [SANDBOX_DIR, 'backend'];
+  if (await E(hostAgent).has(...backendPath)) {
+    await E(hostAgent).remove(...backendPath);
+  }
+  await E(hostAgent).makeUnconfined('@main', backendModuleSpecifier, {
+    powersName: '@agent',
+    resultName: backendPath,
+    env: harden({
+      CLAUDE_CLIENT_NAME: clientName,
+      CLAUDE_CREDS_NAME: credsName,
+      CLAUDE_WORKSPACE_BASE_DIR: workspaceDir,
+      CLAUDE_CONFIG_BASE_DIR: configDir,
+      CLAUDE_MCP_DIR: mcpDir,
+      CLAUDE_SANDBOX_IMAGE: rootfs,
+    }),
+  });
+  console.log(
+    `Minted the Claude hosted backend at "${backendPath.join('/')}".`,
+  );
 
   const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
   if (await E(hostAgent).has(flootDir, 'controller-profile')) {
-    // Bind the host-global static asset server into the factory's own profile so
-    // its bounded per-session `publishWorkspace` tool can serve new-project
-    // workspaces. The factory (agent.js) resolves `asset-server` from its own
-    // powers (controller-profile), not the host root, so — like the provisioner
-    // below — it must be copied in. We run after endo-fs-asset-server/setup.js in
-    // ENDO_EXTRA, which re-mints `asset-server` against the current release each
-    // start, so re-copying here (remove + copy) keeps the factory pointed at the
-    // fresh capability across restarts and release pruning.
+    // Floot's factory discovers hosted backends by name in its own profile
+    // (controller-profile), not at the host root, so the factory facet must be
+    // copied in. Re-copying (remove + copy) keeps it pointed at the backend
+    // minted above across restarts and release pruning.
+    const flootBackendPath = [flootDir, 'controller-profile', backendName];
+    if (await E(hostAgent).has(...flootBackendPath)) {
+      await E(hostAgent).remove(...flootBackendPath);
+    }
+    await E(hostAgent).copy(backendPath, flootBackendPath);
+    console.log(
+      `Bound "${backendName}" into "${flootDir}/controller-profile".`,
+    );
+
+    // Bind the host-global static asset server into the factory's own profile
+    // so its bounded per-session `publishWorkspace` tool can serve new-project
+    // workspaces. Like the backend above, the factory resolves it from its own
+    // powers. We run after the asset server's setup in ENDO_EXTRA, which
+    // re-mints `asset-server` against the current release each start, so
+    // re-copying here keeps the factory pointed at the fresh capability.
     const assetServerName = env.ENDO_FLOOT_ASSET_SERVER || 'asset-server';
     if (await E(hostAgent).has(assetServerName)) {
       const flootAssetPath = [flootDir, 'controller-profile', assetServerName];
@@ -219,57 +272,33 @@ export const main = async hostAgent => {
         `Bound "${assetServerName}" into "${flootDir}/controller-profile".`,
       );
     } else {
-      console.warn(
-        `Asset server "${assetServerName}" is absent; new-project publishing will be disabled.`,
+      console.log(
+        `Asset server "${assetServerName}" is absent; new-project publishing stays disabled.`,
       );
     }
 
-    const flootProvisionerPath = [
-      flootDir,
-      'controller-profile',
-      provisionerName,
-    ];
-    if (await E(hostAgent).has(...flootProvisionerPath)) {
-      await E(hostAgent).remove(...flootProvisionerPath);
-    }
-    if (await E(hostAgent).has(provisionerName)) {
-      await E(hostAgent).remove(provisionerName);
-    }
-    await E(hostAgent).makeUnconfined(
-      '@main',
-      sessionProvisionerModuleSpecifier,
-      {
-        powersName: '@agent',
-        resultName: provisionerName,
-        env: harden({
-          FLOOT_DIR: flootDir,
-          CLAUDE_CLIENT_NAME: clientName,
-          CLAUDE_CREDS_NAME: credsName,
-          CLAUDE_WORKSPACE_BASE_DIR: workspaceDir,
-          CLAUDE_SANDBOX_IMAGE: rootfs,
-        }),
-      },
+    // Remove the legacy credential-in-profile bindings an earlier deployment
+    // may have left: Floot refuses a bare ClaudeClient and no longer looks for
+    // a provisioner; both are now behind the backend factory.
+    const legacyPaths = [clientName, 'claude-session-provisioner'].map(
+      legacyName => [flootDir, 'controller-profile', legacyName],
     );
-    await E(hostAgent).copy([provisionerName], flootProvisionerPath);
-
-    // Remove the legacy shared binding. The root name is retained so existing
-    // single-session/manual users are not disrupted, but hosted Floot now
-    // always asks the provisioner for an isolated per-session client.
-    const legacyClientPath = [flootDir, 'controller-profile', clientName];
-    if (await E(hostAgent).has(...legacyClientPath)) {
-      await E(hostAgent).remove(...legacyClientPath);
-    }
-    console.log(
-      `Bound "${provisionerName}" into "${flootDir}/controller-profile".`,
+    const legacyPresent = await Promise.all(
+      legacyPaths.map(legacyPath => E(hostAgent).has(...legacyPath)),
+    );
+    await Promise.all(
+      legacyPaths
+        .filter((_, index) => legacyPresent[index])
+        .map(legacyPath => E(hostAgent).remove(...legacyPath)),
     );
   } else {
     console.warn(
-      `Floot controller profile "${flootDir}/controller-profile" is absent; skipping Claude provisioner binding.`,
+      `Floot controller profile "${flootDir}/controller-profile" is absent; skipping the "${backendName}" binding.`,
     );
   }
 
   console.log(
-    `Hosted Claude sandbox ready. Floot sessions pinned to claude-cli will provision "${clientName}-<session-id>".`,
+    `Hosted Claude sandbox ready. Floot sessions on backend "claude" will provision "${clientName}-<session-id>" under "${SANDBOX_DIR}/sessions".`,
   );
 };
 harden(main);
