@@ -244,3 +244,40 @@ fn a_boxed_primitive_reads_an_inherited_index_off_its_wrapper_prototype() {
     // A named read off the wrapper prototype is unaffected.
     assert_result("(5).toString()", "5");
 }
+
+/// Every Proxy trap is looked up EXACTLY ONCE per operation, whichever
+/// spelling the key arrives in.
+///
+/// The index arms resolve the trap themselves so that an untrapped proxy can
+/// forward without building a key. Delegating the trapped case back to the
+/// id-keyed entry point re-ran `proxy_trap`, so a handler whose trap is an
+/// accessor ran its getter twice and the lookup metered twice —
+/// `getOwnPropertyDescriptor` and `deleteProperty` both did, while the named
+/// spelling of the very same operation looked up once.
+#[test]
+fn a_proxy_trap_is_looked_up_once_per_operation_for_either_key_spelling() {
+    // The handler is a Proxy over a real handler that DOES define the traps,
+    // so each look-up is both observable and successful.
+    let counter = "\
+        var looks = []; \
+        var real = { \
+          getOwnPropertyDescriptor: function (t, k) { return undefined; }, \
+          deleteProperty: function (t, k) { return true; }, \
+          has: function (t, k) { return false; } \
+        }; \
+        var handler = new Proxy(real, { get: function (t, k) { looks.push(k); return t[k]; } }); \
+        var p = new Proxy({}, handler); ";
+    for (expr, trap) in [
+        ("Object.getOwnPropertyDescriptor(p, 'x')", "getOwnPropertyDescriptor"),
+        ("Object.getOwnPropertyDescriptor(p, 0)", "getOwnPropertyDescriptor"),
+        ("Reflect.getOwnPropertyDescriptor(p, 0)", "getOwnPropertyDescriptor"),
+        ("delete p.x", "deleteProperty"),
+        ("delete p[0]", "deleteProperty"),
+        ("Reflect.deleteProperty(p, 0)", "deleteProperty"),
+        ("'x' in p", "has"),
+        ("0 in p", "has"),
+        ("Reflect.has(p, 0)", "has"),
+    ] {
+        assert_result(&format!("{counter} {expr}; looks.join(',')"), trap);
+    }
+}
