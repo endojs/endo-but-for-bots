@@ -2,7 +2,7 @@
 
 A process containing one Ironhorse machine and one SQLite heap store. It has no
 XS runtime dependency. The host adapter and runnable two-guest-vat demo are in
-[`packages/thixotrope`](../../packages/thixotrope/README.md#ironhorse-mvp).
+[`packages/thixotrope`](../../packages/thixotrope/README.md#ironhorse-demos-and-ci-tests).
 
 ```
 cargo build --release -p thixotrope-ironhorse-worker

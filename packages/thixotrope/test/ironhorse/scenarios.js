@@ -224,6 +224,10 @@ test.serial('SES confinement remains intact across SQLite restore', async t => {
   const source = `[
     typeof process, typeof require, typeof thixotropeDispatch, typeof thixotropeTakeOutbound,
     Object.isFrozen(Object.prototype), Object.isFrozen(Function.prototype),
+    Object.isFrozen(Array.prototype),
+    (() => { const d = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+      return [typeof d.value, d.writable, d.configurable, typeof d.get]; })(),
+    Array.from(new Uint8Array([1, 2, 3])),
     (() => { try { ({}).constructor.constructor('return globalThis')(); return false; } catch (_) { return true; } })()
   ]`;
   const expected = [
@@ -233,6 +237,9 @@ test.serial('SES confinement remains intact across SQLite restore', async t => {
     'undefined',
     true,
     true,
+    true,
+    ['function', false, false, 'undefined'],
+    [1, 2, 3],
     true,
   ];
   t.deepEqual(await f.daemon.getWorker(f.guestId).evaluate(source), expected);

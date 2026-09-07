@@ -19,6 +19,9 @@ fs.writeFileSync(
   `
 ${polyfills}
 delete globalThis.harden;
+// Materialize this lazy symbol-keyed intrinsic before SES removes it.
+// Later scope lookups must not install it onto a frozen Array.prototype.
+void Array.prototype[Symbol.unscopables];
 // Ironhorse advertises Iterator before its lazy helper objects are implemented.
 // Use the pre-helper iterator profile, including the shared prototype, rather
 // than leave half of the proposal reachable through iterator instances.
@@ -30,7 +33,9 @@ globalThis.Iterator = undefined;
 // reporting is disabled; diagnostics do not confer an external I/O capability.
 globalThis.console = { log() {}, info() {}, warn() {}, error() {}, debug() {}, trace() {} };
 ${ses}
-lockdown({ errorTaming: 'safe', reporting: 'none' });
+// Keep Array.prototype[Symbol.iterator] as a frozen native data property.
+// Ironhorse's typed-array copy profile refuses accessor-based iterator overrides.
+lockdown({ errorTaming: 'safe', reporting: 'none', overrideTaming: 'min' });
 (() => {
   let outbound = [];
   globalThis.thixotropeSend = json => outbound.push(JSON.parse(json));
