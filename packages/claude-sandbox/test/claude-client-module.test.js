@@ -395,26 +395,7 @@ test('an emptied extra set also recreates, dropping the binds', async t => {
   t.is(host.sliceFactoryCalls[1].mounts[0].innerPath, '/workspace');
 });
 
-test('terminate() unmounts runtime-attached extra handles', async t => {
-  const host = makeMockHost();
-  const client = make(host.powers, undefined, { env: baseEnv() });
-  let extraUnmounts = 0;
-  const handle = Far('FakeFs9pMountHandle', {
-    async unmount() {
-      extraUnmounts += 1;
-    },
-  });
-  await client.setExtraMounts(
-    harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'rw', handle }]),
-  );
-
-  // Terminate before any provision still releases the handed-in bridge.
-  await client.terminate();
-  t.is(extraUnmounts, 1);
-  t.is(host.sliceFactoryCalls.length, 0);
-});
-
-test('a recreate does not unmount the extras it keeps', async t => {
+test('neither a recreate nor terminate unmounts a registrar-owned bridge', async t => {
   const host = makeMockHost();
   const client = make(host.powers, undefined, { env: baseEnv() });
   let extraUnmounts = 0;
@@ -432,12 +413,79 @@ test('a recreate does not unmount the extras it keeps', async t => {
   await client.setExtraMounts(harden([extra]));
   await drain(await client.send('hello'));
 
-  // Replacing the set with the same bind recreates the slice but must not
-  // release the registrar-owned 9P bridge behind it.
+  // Replacing the set with the same bind recreates the slice.
   await client.setExtraMounts(harden([extra]));
   t.is(host.sliceFactoryCalls.length, 2);
   t.is(extraUnmounts, 0);
 
+  // Dropping the bind from the set does not release it either: only the
+  // attach registrar can, because releasing a bridge also drops its daemon
+  // Mount pet name and the provider's cache entry for it.
+  await client.setExtraMounts(harden([]));
+  t.is(host.sliceFactoryCalls.length, 3);
+  t.is(extraUnmounts, 0);
+
+  // And neither does terminate. Unmounting the handle from here would leave
+  // the provider serving a Mount cap over an empty directory on the next
+  // replay, which the container would bind without complaint.
+  await client.setExtraMounts(harden([extra]));
   await client.terminate();
-  t.is(extraUnmounts, 1);
+  t.is(extraUnmounts, 0);
+});
+
+test('setExtraMounts rejects a malformed bind rather than widening it', async t => {
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+
+  // A mode that is neither "ro" nor "rw" must fail CLOSED. The earlier
+  // version coerced anything but "ro" to "rw", so a typo widened the bind.
+  await t.throwsAsync(
+    () =>
+      client.setExtraMounts(
+        harden([{ cap: harden({}), innerPath: '/mnt/x', mode: 'readonly' }]),
+      ),
+    { message: /expected "ro" or "rw"/ },
+  );
+  await t.throwsAsync(
+    () =>
+      client.setExtraMounts(
+        harden([{ cap: harden({}), innerPath: '', mode: 'rw' }]),
+      ),
+    { message: /non-empty innerPath/ },
+  );
+  await t.throwsAsync(
+    () => client.setExtraMounts(harden([{ innerPath: '/mnt/x', mode: 'rw' }])),
+    { message: /no capability to bind/ },
+  );
+  // A refused set leaves nothing behind.
+  t.deepEqual((await client.status()).extraMounts, []);
+  t.is(host.sliceFactoryCalls.length, 0);
+});
+
+test('an attach the first provision picks up costs no recreate', async t => {
+  const host = makeMockHost();
+  const client = make(host.powers, undefined, { env: baseEnv() });
+
+  // An attach and a first turn issued in the same tick: the provision reads
+  // the bind set at the moment it runs, so it goes in WITH the new bind.
+  // Tearing that slice down to mint an identical one would kill the first
+  // turn for nothing, so the recreate has to notice and stand down.
+  const applied = client.setExtraMounts(
+    harden([{ cap: harden({}), innerPath: '/mnt/race', mode: 'rw' }]),
+  );
+  const turn = client.send('hello');
+  await applied;
+  await drain(await turn);
+
+  t.is(host.sliceFactoryCalls.length, 1);
+  t.false(host.isDisposed());
+  t.deepEqual(
+    host.sliceFactoryCalls[0].mounts.map(mount => mount.innerPath),
+    ['/workspace', '/mnt/race'],
+  );
+  // The client is still usable afterwards — the stood-down recreate has to
+  // put the provision back, not leave it undefined.
+  await drain(await client.send('again'));
+  t.is(host.sliceFactoryCalls.length, 1);
+  t.is(host.spawnCalls.length, 2);
 });

@@ -223,11 +223,23 @@ export const makeContainerMountBridge = (
         // A cached bridge that does not match the request (a swallowed
         // release left it behind, or the attach's mode changed) must not be
         // served: its kernel mount and Mount cap enforce the WRONG mode.
-        // Tear it down and mint afresh.
+        // Tear it down and mint afresh — but only if the teardown actually
+        // succeeded. The new mount would land on the SAME deterministic
+        // mountpoint, so minting over a mount that is still attached stacks
+        // two of them and leaks the one underneath, along with its bridge
+        // server and socket. Keep the cache entry so a later release can
+        // still find it, and say what happened.
         bridges.delete(key);
-        await E(existing.handle)
-          .unmount()
-          .catch(() => {});
+        try {
+          await E(existing.handle).unmount();
+        } catch (error) {
+          bridges.set(key, existing);
+          throw makeError(
+            X`attach: could not release the stale bridge at ${q(key)} before re-minting it; the mountpoint is still in use: ${q(
+              error instanceof Error ? error.message : String(error),
+            )}`,
+          );
+        }
       }
       const readOnly = mode === 'ro';
       const cap = await E(hostAgent).lookupById(capId);
@@ -269,9 +281,22 @@ export const makeContainerMountBridge = (
       const bridge = bridges.get(key);
       bridges.delete(key);
       if (bridge) {
-        await E(bridge.handle)
-          .unmount()
-          .catch(() => {});
+        try {
+          await E(bridge.handle).unmount();
+        } catch (error) {
+          // The caller has already dropped whatever referenced this bridge,
+          // so refusing here would only strand it silently. Drop the pet
+          // name anyway — but a mount that outlived its release is a live
+          // export of someone's capability, so name the mountpoint an
+          // operator has to reap by hand.
+          console.error(
+            `[claude-sandbox] could not unmount the container mount bridge at ${path.join(
+              mountBaseDir,
+              mountNameFor(key),
+            )}; it is still serving and must be released by hand:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
       }
       if (await E(hostAgent).has(mountNameFor(key))) {
         await E(hostAgent).remove(mountNameFor(key));
