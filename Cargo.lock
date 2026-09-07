@@ -4838,6 +4838,7 @@ dependencies = [
  "ironhorse-snapshot",
  "ironhorse-store-sqlite",
  "ironhorse-vm",
+ "rustix",
  "serde_json",
 ]
 
