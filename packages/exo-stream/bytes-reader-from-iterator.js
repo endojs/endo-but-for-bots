@@ -2,11 +2,12 @@
 
 import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';
-import { mapReader } from '@endo/stream';
 
+import { asyncIterate } from './async-iterate.js';
 import { PassableBytesReaderInterface } from './type-guards.js';
 import { makeReaderPump } from './reader-pump.js';
 
+/** @import { Passable } from '@endo/pass-style' */
 /** @import { Pattern } from '@endo/patterns' */
 /** @import { SomehowAsyncIterable, PassableBytesReader, MakeBytesReaderOptions } from './types.js' */
 
@@ -40,16 +41,34 @@ import { makeReaderPump } from './reader-pump.js';
  * @returns {PassableBytesReader}
  */
 export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
-  const { buffer = 0, readReturnPattern } = options;
+  const { buffer = 0, readReturnPattern, cancelPending } = options;
 
-  // Encode bytes to base64 strings
-  const base64Iterator = mapReader(
-    // @ts-expect-error mapReader types aren't perfect with iterables
-    bytesIterator,
-    encodeBase64,
-  );
+  // Forward cleanup explicitly. A generator-based map closes itself when a
+  // cancelled pull completes or rejects, so a subsequent return() would never
+  // reach the byte source.
+  const iterator = asyncIterate(bytesIterator);
+  /**
+   * @param {IteratorResult<Uint8Array, Passable>} result
+   * @returns {IteratorResult<string, Passable>}
+   */
+  const encodeResult = result =>
+    result.done
+      ? result
+      : harden({ done: false, value: encodeBase64(result.value) });
+  const base64Iterator = harden({
+    async next() {
+      const result = await iterator.next();
+      return encodeResult(result);
+    },
+    /** @param {undefined} [value] */
+    async return(value) {
+      await null;
+      if (iterator.return) return encodeResult(await iterator.return(value));
+      return harden({ done: /** @type {const} */ (true), value });
+    },
+  });
 
-  const pump = makeReaderPump(base64Iterator, { buffer });
+  const pump = makeReaderPump(base64Iterator, { buffer, cancelPending });
 
   // @ts-expect-error Exo pump types use Passable where template expects specific subtype
   return makeExo('PassableBytesReader', PassableBytesReaderInterface, {
