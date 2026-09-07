@@ -40,10 +40,10 @@ other sessions.
   including proxy and credential variables.
   That is the whole of what the transport enforces: `@endo/sandbox` layers a
   spawn's environment over the slice's own, and the policy attestation does not
-  yet cover the slice environment, so an operator's `makeSlice` must place no
+  cover the slice environment, so an operator's `makeSlice` must place no
   credential or proxy setting there.
-  Attesting the slice environment belongs with the sandbox enforcement work
-  below.
+  The sandbox enforcement work below landed without it, so attesting the slice
+  environment remains open.
 - No host device, home, daemon socket, Podman/Docker socket, credential store,
   or path belonging to another session is mounted.
 - The attestation reports `devices: "none"`, `hostSockets: "none"`,
@@ -112,9 +112,18 @@ other sessions.
 Provisioning fails when any required control is unavailable.
 The attestation must include the exact operator-approved image digest and the
 logical Floot session ID.
-The current `@endo/sandbox` Podman driver's `network: "private"` and `limits`
-fields do not establish this contract, so they must not be used as an
-attestation until effective enforcement and inspection land.
+The `@endo/sandbox` Podman driver's `network: "private"` and `limits` fields
+still do not establish this contract and must never be used as an attestation:
+`private` is NAT rather than filtered isolation, and `limits` is a per-process
+rlimit table no cgroup sees.
+The driver's `network: "broker-only"` slice policy is the one that does.
+It proves the isolation, identity, namespace, mount-table, and ceiling half of
+this section from effective container and kernel state and reports it as
+`SlicePolicyAttestationV1`; an operator's `makeSlice` composes
+`HostedAgentPolicyV1` from that plus the broker's and the pinned app-server's
+attestations for their own halves.
+See `packages/sandbox/README.md` § "Slice policy and attestation" for what each
+control is proved from and what it deliberately leaves uncovered.
 
 ## Lifecycle
 
