@@ -112,7 +112,9 @@ fn count(hay: &str, needle: &str) -> usize {
 fn halt_throw_carries_the_thrown_value() {
     let halt = fn_body("pub enum Halt {");
     assert!(
-        halt.contains("Throw {") && halt.contains("value: Slot") && halt.contains("rendered: String"),
+        halt.contains("Throw {")
+            && halt.contains("value: Slot")
+            && halt.contains("rendered: String"),
         "Halt::Throw must carry the thrown Slot alongside its rendering; a bare \
          `Throw(String)` is what let 29 inline sites bypass raise_js"
     );
@@ -170,7 +172,9 @@ fn halt_throw_is_constructed_only_where_the_jump_chain_was_unwound() {
     // it, and only `RunOutcome::host_coerced` — the verb the differential
     // runners call — folds that into the oracle's abort shape. So `run`
     // must construct NO synthetic throw, and `host_coerced` exactly one.
-    let run_body = strip_comments(fn_body("    pub fn run(&mut self, code: &[u8]) -> RunOutcome {"));
+    let run_body = strip_comments(fn_body(
+        "    pub fn run(&mut self, code: &[u8]) -> RunOutcome {",
+    ));
     assert_eq!(
         count(&run_body, "Halt::synthetic_throw("),
         0,

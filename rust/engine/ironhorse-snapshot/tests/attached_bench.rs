@@ -132,8 +132,18 @@ fn attached_vs_detached_hot_crank() {
         })
         .collect();
 
-    let (d, r, f) = (median(detached_ms), median(resident_ms), median(faulting_ms));
+    let (d, r, f) = (
+        median(detached_ms),
+        median(resident_ms),
+        median(faulting_ms),
+    );
     println!("detached hot crank median:          {d:.3} ms");
-    println!("attached-resident hot crank median: {r:.3} ms  (x{:.3} of detached)", r / d);
-    println!("attached-faulting hot crank median: {f:.3} ms  (x{:.3} of detached)", f / d);
+    println!(
+        "attached-resident hot crank median: {r:.3} ms  (x{:.3} of detached)",
+        r / d
+    );
+    println!(
+        "attached-faulting hot crank median: {f:.3} ms  (x{:.3} of detached)",
+        f / d
+    );
 }

@@ -29,7 +29,9 @@
 use crate::ast::{flags, Item, Node, Value};
 use crate::parser::{ParseError, ParseErrorKind, Parser, STATEMENT_COST};
 use crate::token::{classify_word, Token};
-use crate::token_flags::{has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME};
+use crate::token_flags::{
+    has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME,
+};
 
 type PResult<T> = Result<T, ParseError>;
 
@@ -193,7 +195,8 @@ impl Parser {
     /// mode. Returns `true` while the prologue continues.
     fn consume_directive(&mut self) -> PResult<bool> {
         let is_use_strict = match self.stack.last() {
-            Some(Item::Node(stmt)) if stmt.token == Token::Statement => match stmt.children.first() {
+            Some(Item::Node(stmt)) if stmt.token == Token::Statement => match stmt.children.first()
+            {
                 Some(Item::Node(expr)) if expr.token == Token::String => {
                     // `mxStringEscapeFlag` is bit 0 of the String node.
                     let escaped = expr.flags & 1 != 0;
@@ -362,7 +365,10 @@ impl Parser {
                 }
                 let has_binding = is_await_using
                     && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
-                    && matches!(self.ahead2_token(), Token::Identifier | Token::Await | Token::Yield);
+                    && matches!(
+                        self.ahead2_token(),
+                        Token::Identifier | Token::Await | Token::Yield
+                    );
                 if has_binding {
                     self.get_next_token()?;
                     self.cur.token = Token::Using;
@@ -401,7 +407,8 @@ impl Parser {
         }
         let sym = self.cur.symbol.clone().unwrap_or_default();
         let escaped = self.cur.escaped;
-        if sym == "async" && !escaped && !self.ahead_crlf() && self.ahead_token() == Token::Function {
+        if sym == "async" && !escaped && !self.ahead_crlf() && self.ahead_token() == Token::Function
+        {
             self.get_next_token()?;
             return self.function_statement(block_it, flags::ASYNC, line);
         }
@@ -423,7 +430,10 @@ impl Parser {
         if sym == "using"
             && !escaped
             && !self.ahead_crlf()
-            && matches!(self.ahead_token(), Token::Identifier | Token::Await | Token::Yield)
+            && matches!(
+                self.ahead_token(),
+                Token::Identifier | Token::Await | Token::Yield
+            )
         {
             self.cur.token = Token::Using;
             if block_it <= 0 {
@@ -744,7 +754,10 @@ impl Parser {
             && self.cur.symbol.as_deref() == Some("using")
             && !self.cur.escaped
             && !self.ahead_crlf()
-            && matches!(self.ahead_token(), Token::Identifier | Token::Await | Token::Yield)
+            && matches!(
+                self.ahead_token(),
+                Token::Identifier | Token::Await | Token::Yield
+            )
         {
             self.look_ahead_twice()?;
             if self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("of")
@@ -764,7 +777,10 @@ impl Parser {
                 && self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("using")
                 && !self.ahead.as_ref().is_some_and(|s| s.escaped)
                 && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
-                && matches!(self.ahead2_token(), Token::Identifier | Token::Await | Token::Yield);
+                && matches!(
+                    self.ahead2_token(),
+                    Token::Identifier | Token::Await | Token::Yield
+                );
             if is_await_using {
                 self.get_next_token()?;
                 self.cur.token = Token::Using;
@@ -1005,7 +1021,10 @@ impl Parser {
         self.match_token(Token::Spread)?;
         self.binding(token, 0)?;
         if flag != 0
-            && matches!(self.top_token(), Some(Token::ArrayBinding) | Some(Token::ObjectBinding))
+            && matches!(
+                self.top_token(),
+                Some(Token::ArrayBinding) | Some(Token::ObjectBinding)
+            )
         {
             return Err(self.error("invalid rest"));
         }
@@ -1061,8 +1080,11 @@ impl Parser {
             };
             let Some(inner) = inner else { break };
             match item_token(&inner) {
-                Some(Token::Access) | Some(Token::Member) | Some(Token::MemberAt)
-                | Some(Token::PrivateMember) | Some(Token::Undefined) => {
+                Some(Token::Access)
+                | Some(Token::Member)
+                | Some(Token::MemberAt)
+                | Some(Token::PrivateMember)
+                | Some(Token::Undefined) => {
                     item = inner;
                     break;
                 }
@@ -1079,7 +1101,9 @@ impl Parser {
         };
         match tok {
             Token::Binding => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 let target = std::mem::replace(&mut node.children[0], Item::Null);
                 match self.binding_from_expression(target, token)? {
                     Some(b) => node.children[0] = b,
@@ -1088,7 +1112,9 @@ impl Parser {
                 Ok(Some(Item::Node(node)))
             }
             Token::ArrayBinding | Token::ObjectBinding => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 if let Some(Item::List(list)) = node.children.get_mut(0) {
                     let items = std::mem::take(list);
                     let mut out = Vec::with_capacity(items.len());
@@ -1103,7 +1129,9 @@ impl Parser {
                 Ok(Some(Item::Node(node)))
             }
             Token::PropertyBinding | Token::PropertyBindingAt | Token::RestBinding => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 let idx = node.children.len() - 1;
                 let inner = std::mem::replace(&mut node.children[idx], Item::Null);
                 match self.binding_from_expression(inner, token)? {
@@ -1134,11 +1162,19 @@ impl Parser {
                     }
                     _ => (String::new(), 0),
                 };
-                Ok(Some(self.new_inherited_node(token, line, vec![Item::Symbol(sym)])))
+                Ok(Some(self.new_inherited_node(
+                    token,
+                    line,
+                    vec![Item::Symbol(sym)],
+                )))
             }
-            Token::Member | Token::MemberAt | Token::PrivateMember | Token::Undefined => Ok(Some(item)),
+            Token::Member | Token::MemberAt | Token::PrivateMember | Token::Undefined => {
+                Ok(Some(item))
+            }
             Token::Assign => {
-                let Item::Node(mut node) = item else { unreachable!() };
+                let Item::Node(mut node) = item else {
+                    unreachable!()
+                };
                 let reference = std::mem::replace(&mut node.children[0], Item::Null);
                 let binding = match self.binding_from_expression(reference, token)? {
                     Some(b) => b,
@@ -1192,11 +1228,19 @@ impl Parser {
 
     /// `fxArrayBindingFromExpression` — the array-literal → `ArrayBinding`
     /// conversion for an owned array `Item`.
-    fn array_binding_from_expression_node(&mut self, item: Item, token: Token) -> PResult<Option<Item>> {
-        let Item::Node(node) = item else { return Ok(None) };
+    fn array_binding_from_expression_node(
+        &mut self,
+        item: Item,
+        token: Token,
+    ) -> PResult<Option<Item>> {
+        let Item::Node(node) = item else {
+            return Ok(None);
+        };
         let line = node.line;
         let elision = node.flags & flags::ELISION != 0;
-        let Some(Item::List(items)) = node.children.into_iter().next() else { return Ok(None) };
+        let Some(Item::List(items)) = node.children.into_iter().next() else {
+            return Ok(None);
+        };
         let n = items.len();
         let mut out = Vec::with_capacity(n);
         for (i, it) in items.into_iter().enumerate() {
@@ -1225,14 +1269,26 @@ impl Parser {
                 },
             }
         }
-        Ok(Some(self.new_inherited_node(Token::ArrayBinding, line, vec![Item::List(out)])))
+        Ok(Some(self.new_inherited_node(
+            Token::ArrayBinding,
+            line,
+            vec![Item::List(out)],
+        )))
     }
 
     /// `fxObjectBindingFromExpression`.
-    fn object_binding_from_expression_node(&mut self, item: Item, token: Token) -> PResult<Option<Item>> {
-        let Item::Node(node) = item else { return Ok(None) };
+    fn object_binding_from_expression_node(
+        &mut self,
+        item: Item,
+        token: Token,
+    ) -> PResult<Option<Item>> {
+        let Item::Node(node) = item else {
+            return Ok(None);
+        };
         let line = node.line;
-        let Some(Item::List(props)) = node.children.into_iter().next() else { return Ok(None) };
+        let Some(Item::List(props)) = node.children.into_iter().next() else {
+            return Ok(None);
+        };
         let n = props.len();
         let mut out = Vec::with_capacity(n);
         let mut obj_flags = 0u32;
@@ -1240,7 +1296,9 @@ impl Parser {
             match item_token(&prop) {
                 None => return Ok(None),
                 Some(Token::Property) => {
-                    let Item::Node(mut p) = prop else { unreachable!() };
+                    let Item::Node(mut p) = prop else {
+                        unreachable!()
+                    };
                     let value = std::mem::replace(&mut p.children[1], Item::Null);
                     let binding = match self.binding_from_expression(value, token)? {
                         Some(b) => b,
@@ -1251,7 +1309,9 @@ impl Parser {
                     out.push(Item::Node(p));
                 }
                 Some(Token::PropertyAt) => {
-                    let Item::Node(mut p) = prop else { unreachable!() };
+                    let Item::Node(mut p) = prop else {
+                        unreachable!()
+                    };
                     let value = std::mem::replace(&mut p.children[1], Item::Null);
                     let binding = match self.binding_from_expression(value, token)? {
                         Some(b) => b,
@@ -1322,11 +1382,19 @@ impl Parser {
     }
 
     /// `fxRestBindingFromExpression` — a spread element → `RestBinding`.
-    fn rest_binding_from_expression(&mut self, item: Item, token: Token, flag: u32, has_next: bool) -> PResult<Option<Item>> {
+    fn rest_binding_from_expression(
+        &mut self,
+        item: Item,
+        token: Token,
+        flag: u32,
+        has_next: bool,
+    ) -> PResult<Option<Item>> {
         if has_next {
             return Ok(None);
         }
-        let Item::Node(node) = item else { return Ok(None) };
+        let Item::Node(node) = item else {
+            return Ok(None);
+        };
         let line = node.line;
         let expr = match node.children.into_iter().next() {
             Some(e) => e,
@@ -1343,7 +1411,11 @@ impl Parser {
             }
             _ => {}
         }
-        Ok(Some(self.new_inherited_node(Token::RestBinding, line, vec![binding])))
+        Ok(Some(self.new_inherited_node(
+            Token::RestBinding,
+            line,
+            vec![binding],
+        )))
     }
 
     // ============ strict-binding early errors ============
@@ -1356,7 +1428,9 @@ impl Parser {
     }
 
     fn check_strict_binding(&mut self, item: &Item) -> PResult<()> {
-        let Item::Node(node) = item else { return Ok(()) };
+        let Item::Node(node) = item else {
+            return Ok(());
+        };
         match node.token {
             Token::Access | Token::Arg | Token::Const | Token::Let | Token::Using | Token::Var => {
                 if let Some(Item::Symbol(s)) = node.children.first() {
@@ -1388,9 +1462,17 @@ impl Parser {
     // ================= functions =================
 
     /// `fxFunctionExpression`.
-    pub(crate) fn function_expression(&mut self, line: u32, symbol_out: Option<&mut Option<String>>, flag: u32) -> PResult<()> {
+    pub(crate) fn function_expression(
+        &mut self,
+        line: u32,
+        symbol_out: Option<&mut Option<String>>,
+        flag: u32,
+    ) -> PResult<()> {
         let saved = self.flags;
-        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT)) | flags::FUNCTION | flags::TARGET | flag;
+        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT))
+            | flags::FUNCTION
+            | flags::TARGET
+            | flag;
         let want_symbol = symbol_out.is_some();
         let name = self.function_name(saved, want_symbol, symbol_out)?;
         self.parameters_binding()?;
@@ -1399,7 +1481,12 @@ impl Parser {
         self.push_node_struct(1, Token::Body, line)?;
         self.push_node_struct(3, Token::Function, line)?;
         let root_flags = self.flags
-            & (flags::STRICT | flags::NOT_SIMPLE_PARAMETERS | flags::TARGET | flags::ARGUMENTS | flags::EVAL | flag);
+            & (flags::STRICT
+                | flags::NOT_SIMPLE_PARAMETERS
+                | flags::TARGET
+                | flags::ARGUMENTS
+                | flags::EVAL
+                | flag);
         self.set_root_flags(root_flags);
         if saved & flags::STRICT == 0 && self.flags & flags::STRICT != 0 {
             self.check_strict_function()?;
@@ -1411,9 +1498,17 @@ impl Parser {
     }
 
     /// `fxGeneratorExpression`.
-    pub(crate) fn generator_expression(&mut self, line: u32, symbol_out: Option<&mut Option<String>>, flag: u32) -> PResult<()> {
+    pub(crate) fn generator_expression(
+        &mut self,
+        line: u32,
+        symbol_out: Option<&mut Option<String>>,
+        flag: u32,
+    ) -> PResult<()> {
         let saved = self.flags;
-        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT)) | flags::GENERATOR | flags::TARGET | flag;
+        self.flags = (saved & (flags::PARSER_FLAGS | flags::STRICT))
+            | flags::GENERATOR
+            | flags::TARGET
+            | flag;
         let want_symbol = symbol_out.is_some();
         // Generator name context differs slightly (no generator-yield
         // escape hatch), but the shared helper is faithful for the corpus.
@@ -1426,7 +1521,12 @@ impl Parser {
         self.push_node_struct(1, Token::Body, line)?;
         self.push_node_struct(3, Token::Generator, line)?;
         let root_flags = self.flags
-            & (flags::STRICT | flags::NOT_SIMPLE_PARAMETERS | flags::GENERATOR | flags::ARGUMENTS | flags::EVAL | flag);
+            & (flags::STRICT
+                | flags::NOT_SIMPLE_PARAMETERS
+                | flags::GENERATOR
+                | flags::ARGUMENTS
+                | flags::EVAL
+                | flag);
         self.set_root_flags(root_flags);
         if saved & flags::STRICT == 0 && self.flags & flags::STRICT != 0 {
             self.check_strict_function()?;
@@ -1437,9 +1537,16 @@ impl Parser {
 
     /// The optional function name (`fxFunctionExpression` head). Pushes the
     /// name symbol or `NULL`.
-    fn function_name(&mut self, saved: u32, want_symbol: bool, symbol_out: Option<&mut Option<String>>) -> PResult<()> {
+    fn function_name(
+        &mut self,
+        saved: u32,
+        want_symbol: bool,
+        symbol_out: Option<&mut Option<String>>,
+    ) -> PResult<()> {
         let is_name = self.cur.token == Token::Identifier
-            || (saved & flags::GENERATOR != 0 && saved & flags::STRICT == 0 && self.cur.token == Token::Yield)
+            || (saved & flags::GENERATOR != 0
+                && saved & flags::STRICT == 0
+                && self.cur.token == Token::Yield)
             || (!want_symbol && self.cur.token == Token::Await);
         if is_name {
             let sym = self.cur.symbol.clone().unwrap_or_default();
@@ -1456,8 +1563,14 @@ impl Parser {
     }
 
     /// The optional generator name (`fxGeneratorExpression` head).
-    fn function_name_generator(&mut self, _saved: u32, want_symbol: bool, symbol_out: Option<&mut Option<String>>) -> PResult<()> {
-        let is_name = self.cur.token == Token::Identifier || (!want_symbol && self.cur.token == Token::Await);
+    fn function_name_generator(
+        &mut self,
+        _saved: u32,
+        want_symbol: bool,
+        symbol_out: Option<&mut Option<String>>,
+    ) -> PResult<()> {
+        let is_name =
+            self.cur.token == Token::Identifier || (!want_symbol && self.cur.token == Token::Await);
         if is_name {
             let sym = self.cur.symbol.clone().unwrap_or_default();
             self.push_symbol(sym.clone());
@@ -1514,7 +1627,12 @@ impl Parser {
         }
         self.push_node_struct(3, Token::Function, line)?;
         let root_flags = self.flags
-            & (flags::STRICT | flags::FIELD | flags::NOT_SIMPLE_PARAMETERS | flags::ARROW | flags::SUPER | flag);
+            & (flags::STRICT
+                | flags::FIELD
+                | flags::NOT_SIMPLE_PARAMETERS
+                | flags::ARROW
+                | flags::SUPER
+                | flag);
         self.set_root_flags(root_flags);
         if saved & flags::STRICT == 0 && self.flags & flags::STRICT != 0 {
             self.check_strict_function()?;
@@ -1530,7 +1648,11 @@ impl Parser {
     /// init-function surgery is folded to the coder (module doc), so the
     /// `constructorInit` / `instanceInit` slots are left null and members
     /// stay in the `items` list in source order.
-    pub(crate) fn class_expression(&mut self, line: u32, symbol_out: Option<&mut Option<String>>) -> PResult<()> {
+    pub(crate) fn class_expression(
+        &mut self,
+        line: u32,
+        symbol_out: Option<&mut Option<String>>,
+    ) -> PResult<()> {
         let saved = self.flags;
         let mut heritage_flag = false;
         let mut constructor: Option<Item> = None;
@@ -1623,7 +1745,9 @@ impl Parser {
                     constructor = Some(self.pop());
                 } else if self.cur.token == Token::LeftParenthesis {
                     let mut method_flag = async_flag;
-                    if a_token1 == Token::PrivateProperty && a_symbol.as_deref() == Some("#constructor") {
+                    if a_token1 == Token::PrivateProperty
+                        && a_symbol.as_deref() == Some("#constructor")
+                    {
                         return Err(self.error("invalid method: #constructor"));
                     }
                     if static_flag && a_symbol.as_deref() == Some("prototype") {
@@ -1645,11 +1769,14 @@ impl Parser {
                         self.function_expression(prop_line, None, flags::SUPER | method_flag)?;
                     }
                     self.push_node_struct(2, a_token1, prop_line)?;
-                    let keep = method_flag & (flags::STATIC | flags::GETTER | flags::SETTER | flags::METHOD);
+                    let keep = method_flag
+                        & (flags::STATIC | flags::GETTER | flags::SETTER | flags::METHOD);
                     self.set_top_flags(keep);
                     count += 1;
                 } else {
-                    if a_token1 == Token::PrivateProperty && a_symbol.as_deref() == Some("#constructor") {
+                    if a_token1 == Token::PrivateProperty
+                        && a_symbol.as_deref() == Some("#constructor")
+                    {
                         return Err(self.error("invalid field: #constructor"));
                     }
                     if a_symbol.as_deref() == Some("constructor") {
@@ -1715,32 +1842,118 @@ impl Parser {
     /// `constructor(){}`), matching the shape `fxClassExpression` builds.
     fn synthesize_default_constructor(&mut self, heritage_flag: bool, line: u32) {
         let strict = self.flags & flags::INHERITED;
-        let empty_params = || Item::Node(Box::new(Node::new(Token::ParamsBinding, line, strict, vec![Item::List(Vec::new())], Value::None)));
+        let empty_params = || {
+            Item::Node(Box::new(Node::new(
+                Token::ParamsBinding,
+                line,
+                strict,
+                vec![Item::List(Vec::new())],
+                Value::None,
+            )))
+        };
         // name
         let name = Item::Null;
         let (params, body, fflags);
         if heritage_flag {
             // params: (...args)
-            let arg = Item::Node(Box::new(Node::new(Token::Arg, line, strict, vec![Item::Symbol("args".to_string()), Item::Null], Value::None)));
-            let rest = Item::Node(Box::new(Node::new(Token::RestBinding, line, strict, vec![arg], Value::None)));
-            params = Item::Node(Box::new(Node::new(Token::ParamsBinding, line, strict, vec![Item::List(vec![rest])], Value::None)));
+            let arg = Item::Node(Box::new(Node::new(
+                Token::Arg,
+                line,
+                strict,
+                vec![Item::Symbol("args".to_string()), Item::Null],
+                Value::None,
+            )));
+            let rest = Item::Node(Box::new(Node::new(
+                Token::RestBinding,
+                line,
+                strict,
+                vec![arg],
+                Value::None,
+            )));
+            params = Item::Node(Box::new(Node::new(
+                Token::ParamsBinding,
+                line,
+                strict,
+                vec![Item::List(vec![rest])],
+                Value::None,
+            )));
             // body: super(...args)
-            let access = Item::Node(Box::new(Node::new(Token::Access, line, strict, vec![Item::Symbol("args".to_string())], Value::None)));
-            let spread = Item::Node(Box::new(Node::new(Token::Spread, line, strict, vec![access], Value::None)));
-            let mut sup_params = Node::new(Token::Params, line, strict, vec![Item::List(vec![spread])], Value::None);
+            let access = Item::Node(Box::new(Node::new(
+                Token::Access,
+                line,
+                strict,
+                vec![Item::Symbol("args".to_string())],
+                Value::None,
+            )));
+            let spread = Item::Node(Box::new(Node::new(
+                Token::Spread,
+                line,
+                strict,
+                vec![access],
+                Value::None,
+            )));
+            let mut sup_params = Node::new(
+                Token::Params,
+                line,
+                strict,
+                vec![Item::List(vec![spread])],
+                Value::None,
+            );
             sup_params.flags |= flags::SPREAD;
-            let sup = Item::Node(Box::new(Node::new(Token::Super, line, strict, vec![Item::Node(Box::new(sup_params))], Value::None)));
-            let stmt = Item::Node(Box::new(Node::new(Token::Statement, line, strict, vec![sup], Value::None)));
-            body = Item::Node(Box::new(Node::new(Token::Body, line, strict, vec![stmt], Value::None)));
+            let sup = Item::Node(Box::new(Node::new(
+                Token::Super,
+                line,
+                strict,
+                vec![Item::Node(Box::new(sup_params))],
+                Value::None,
+            )));
+            let stmt = Item::Node(Box::new(Node::new(
+                Token::Statement,
+                line,
+                strict,
+                vec![sup],
+                Value::None,
+            )));
+            body = Item::Node(Box::new(Node::new(
+                Token::Body,
+                line,
+                strict,
+                vec![stmt],
+                Value::None,
+            )));
             fflags = flags::STRICT | flags::DERIVED | flags::METHOD | flags::TARGET | flags::SUPER;
         } else {
             params = empty_params();
-            let undef = Item::Node(Box::new(Node::new(Token::Undefined, line, strict, Vec::new(), Value::None)));
-            let stmt = Item::Node(Box::new(Node::new(Token::Statement, line, strict, vec![undef], Value::None)));
-            body = Item::Node(Box::new(Node::new(Token::Body, line, strict, vec![stmt], Value::None)));
+            let undef = Item::Node(Box::new(Node::new(
+                Token::Undefined,
+                line,
+                strict,
+                Vec::new(),
+                Value::None,
+            )));
+            let stmt = Item::Node(Box::new(Node::new(
+                Token::Statement,
+                line,
+                strict,
+                vec![undef],
+                Value::None,
+            )));
+            body = Item::Node(Box::new(Node::new(
+                Token::Body,
+                line,
+                strict,
+                vec![stmt],
+                Value::None,
+            )));
             fflags = flags::STRICT | flags::BASE | flags::METHOD | flags::TARGET;
         }
-        let func = Item::Node(Box::new(Node::new(Token::Function, line, fflags, vec![name, params, body], Value::None)));
+        let func = Item::Node(Box::new(Node::new(
+            Token::Function,
+            line,
+            fflags,
+            vec![name, params, body],
+            Value::None,
+        )));
         self.push(func);
     }
 
@@ -1955,7 +2168,13 @@ impl Parser {
         match node.token {
             Token::Const | Token::Let | Token::Var => {
                 if let Some(Item::Symbol(s)) = node.children.first() {
-                    let spec = Item::Node(Box::new(Node::new(Token::Specifier, node.line, self.flags & flags::INHERITED, vec![Item::Symbol(s.clone()), Item::Null], Value::None)));
+                    let spec = Item::Node(Box::new(Node::new(
+                        Token::Specifier,
+                        node.line,
+                        self.flags & flags::INHERITED,
+                        vec![Item::Symbol(s.clone()), Item::Null],
+                        Value::None,
+                    )));
                     out.push(spec);
                 }
             }

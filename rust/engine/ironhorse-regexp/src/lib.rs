@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(r.outcome.captures[1], (-1, -1)); // left group unset
         assert_eq!(r.outcome.captures[2], (0, 1)); // right group matched "y"
         assert_eq!(r.outcome.names, vec![2]); // slot 0 → capture 2
-        // The other branch: "x" matches the left group.
+                                              // The other branch: "x" matches the left group.
         let r2 = run("(?<a>x)|(?<a>y)", "", "x", 0).expect("compiles");
         assert_eq!(r2.outcome.names, vec![1]);
         assert_eq!(r2.outcome.captures[1], (0, 1));
@@ -420,7 +420,7 @@ mod tests {
         // `(?i:...)` folds only inside the group.
         assert!(caps("(?i:a)b", "", "Ab").0);
         assert!(!caps("(?i:a)b", "", "AB").0); // the trailing `b` stays case-sensitive
-        // `(?-i:...)` removes folding inside an `i` pattern.
+                                               // `(?-i:...)` removes folding inside an `i` pattern.
         assert!(caps("a(?-i:b)", "i", "Ab").0);
         assert!(!caps("a(?-i:b)", "i", "AB").0);
         // `(?s:.)` makes `.` match a newline only inside the group.
@@ -492,15 +492,30 @@ mod tests {
             assert!(!accepts(r"\P{Bar}", flags), "unknown \\P property /{flags}");
             // A valid general-category property compiles in every mode.
             assert!(accepts(r"\p{L}", flags), "valid \\p{{L}} /{flags}");
-            assert!(accepts(r"[\p{Nd}]", flags), "valid class \\p{{Nd}} /{flags}");
+            assert!(
+                accepts(r"[\p{Nd}]", flags),
+                "valid class \\p{{Nd}} /{flags}"
+            );
         }
         // In non-Unicode mode a property escape is a real charset, not the two
         // literal characters `p{L}` — it must match a letter and reject `p`.
-        assert!(caps(r"\p{L}", "", "A").0, "\\p{{L}} matches a letter (non-u)");
-        assert!(!caps(r"\p{L}", "", "5").0, "\\p{{L}} rejects a digit (non-u)");
-        assert!(!caps(r"\p{L}", "", "{").0, "\\p{{L}} is not literal p{{L}} (non-u)");
+        assert!(
+            caps(r"\p{L}", "", "A").0,
+            "\\p{{L}} matches a letter (non-u)"
+        );
+        assert!(
+            !caps(r"\p{L}", "", "5").0,
+            "\\p{{L}} rejects a digit (non-u)"
+        );
+        assert!(
+            !caps(r"\p{L}", "", "{").0,
+            "\\p{{L}} is not literal p{{L}} (non-u)"
+        );
         // The v-mode string-property table stays gated on `v`.
-        assert!(!accepts(r"\p{Emoji_Keycap_Sequence}", ""), "string prop only in v");
+        assert!(
+            !accepts(r"\p{Emoji_Keycap_Sequence}", ""),
+            "string prop only in v"
+        );
     }
 
     #[test]
@@ -568,9 +583,18 @@ mod tests {
         // to repeat). Locking XS's stricter reality, not the spec's.
         for flags in ["", "u", "v"] {
             assert!(!accepts(r"(?=x)*", flags), "quantified lookahead /{flags}");
-            assert!(!accepts(r"(?!x)+", flags), "quantified neg-lookahead /{flags}");
-            assert!(!accepts(r"(?<=x)*", flags), "quantified lookbehind /{flags}");
-            assert!(!accepts(r"(?<!x)?", flags), "quantified neg-lookbehind /{flags}");
+            assert!(
+                !accepts(r"(?!x)+", flags),
+                "quantified neg-lookahead /{flags}"
+            );
+            assert!(
+                !accepts(r"(?<=x)*", flags),
+                "quantified lookbehind /{flags}"
+            );
+            assert!(
+                !accepts(r"(?<!x)?", flags),
+                "quantified neg-lookbehind /{flags}"
+            );
         }
         assert!(!accepts(r"\b*", ""), "quantified word boundary");
         // A bare, unquantified assertion is of course fine.

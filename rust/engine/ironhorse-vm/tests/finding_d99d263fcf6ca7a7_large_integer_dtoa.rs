@@ -51,7 +51,11 @@ fn large_integer_result_renders_shortest_round_tripping_decimal() {
     let a: f64 = 327155712.0;
     let inner = (a * (729808896.0_f64 % 603979776.0)) % 729808896.0;
     let value = a * inner;
-    assert_eq!(value.to_bits(), FINDING_VALUE.to_bits(), "program value is 819*2^46");
+    assert_eq!(
+        value.to_bits(),
+        FINDING_VALUE.to_bits(),
+        "program value is 819*2^46"
+    );
 
     // The port renders the ECMA-262 shortest decimal, exactly as V8 does.
     assert_eq!(

@@ -47,9 +47,12 @@ fn parse_computrons_are_deterministic_per_build() {
     );
 
     for src in PROGRAMS {
-        let first = parse_computrons(src, false)
-            .unwrap_or_else(|| panic!("program should parse: {src:?}"));
-        assert!(first > 0, "a non-empty program must spend parse computrons: {src:?}");
+        let first =
+            parse_computrons(src, false).unwrap_or_else(|| panic!("program should parse: {src:?}"));
+        assert!(
+            first > 0,
+            "a non-empty program must spend parse computrons: {src:?}"
+        );
         // Repeat many times: the value must be identical every time on
         // this build. Any variance is nondeterminism the meter forbids.
         for rep in 0..64 {

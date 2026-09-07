@@ -2095,9 +2095,7 @@ mod tests {
     /// must suppress the false divergence.
     #[test]
     fn finding_66facfd52ae8c673_large_integer_dtoa_agrees() {
-        let data: &[u8] = include_bytes!(
-            "../tests/fixtures/finding-66facfd52ae8c673.input.bin"
-        );
+        let data: &[u8] = include_bytes!("../tests/fixtures/finding-66facfd52ae8c673.input.bin");
         assert_eq!(
             data.len(),
             3,
@@ -2160,7 +2158,11 @@ mod tests {
         let prog = gen_program(data);
         // Confirm we are still exercising the finding: the generated program
         // is the large-magnitude division chain whose value overflows 2^53.
-        assert!(prog.contains('/'), "finding program is a division chain: {}", prog);
+        assert!(
+            prog.contains('/'),
+            "finding program is a division chain: {}",
+            prog
+        );
         match differential_check(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 314f811064b8febb must not diverge: {:?}", d),
@@ -2202,15 +2204,17 @@ mod tests {
     /// the identical Number.
     #[test]
     fn finding_67a52af412f03a7b_large_integer_dtoa_agrees() {
-        let data = include_bytes!(
-            "../../ironhorse-vm/tests/fixtures/finding-67a52af412f03a7b-input.bin"
-        );
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-67a52af412f03a7b-input.bin");
         let program = gen_program(data);
         assert_eq!(program, "(226492416 * 226492416)");
         match differential_check(&program) {
             Ok(()) => {}
             Err(divergence) => {
-                panic!("finding 67a52af412f03a7b must not diverge: {:?}", divergence)
+                panic!(
+                    "finding 67a52af412f03a7b must not diverge: {:?}",
+                    divergence
+                )
             }
         }
     }
@@ -2383,7 +2387,11 @@ mod tests {
         let prog = gen_stage3b_regexp_program(data);
         // Confirm we are still exercising the finding: a RegExp `.source`
         // accessor whose rendered pattern overflows the old 1023-byte buffer.
-        assert!(prog.ends_with(".source"), "finding program is a RegExp.source: {}", prog);
+        assert!(
+            prog.ends_with(".source"),
+            "finding program is a RegExp.source: {}",
+            prog
+        );
         match differential_check_with_symbols(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding a136f9038a1001fb must not diverge: {:?}", d),
@@ -2404,8 +2412,7 @@ mod tests {
     fn finding_ab889c8f6184c60d_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // e31b5a31b37ce02cba6b665098b0d9844e248e95e89f252910a4ec2660412e07).
-        let data =
-            include_bytes!("../tests/fixtures/finding-ab889c8f6184c60d.input.bin");
+        let data = include_bytes!("../tests/fixtures/finding-ab889c8f6184c60d.input.bin");
         let prog = gen_stage3b_regexp_program(data);
         // Confirm we are still exercising the finding: a RegExp `.source`
         // accessor whose rendered pattern overflows the old 1023-byte buffer.
@@ -2432,8 +2439,7 @@ mod tests {
     fn finding_2276f4edebdcb3bb_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 4f0d6ca037b3a7536fa8e0595f92fd251fbd6aa459d916652f87a3e9f7ad111e).
-        let data =
-            include_bytes!("../tests/fixtures/finding-2276f4edebdcb3bb.input.bin");
+        let data = include_bytes!("../tests/fixtures/finding-2276f4edebdcb3bb.input.bin");
         let program = gen_stage3b_regexp_program(data);
         assert!(
             program.ends_with(".source"),
@@ -2459,8 +2465,7 @@ mod tests {
     fn finding_6f0b586a80019097_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 7637ee2cbd7ed3fbb4ceb06ff0e8fc37f4e64308a503b6f8bb388e2fbf965497).
-        let data =
-            include_bytes!("../tests/fixtures/finding-6f0b586a80019097.input.bin");
+        let data = include_bytes!("../tests/fixtures/finding-6f0b586a80019097.input.bin");
         let program = gen_stage3b_regexp_program(data);
         assert!(
             program.ends_with(".source"),
@@ -2507,7 +2512,11 @@ mod tests {
         let prog = gen_stage3b_regexp_program(data);
         // Confirm we are still exercising the finding: a RegExp.toString()
         // whose rendered source overflows the old 1023-byte buffer.
-        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
+        assert!(
+            prog.contains(".toString()"),
+            "finding program is a RegExp.toString(): {}",
+            prog
+        );
         match differential_check_with_symbols(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 493390fc03979205 must not diverge: {:?}", d),
@@ -2532,7 +2541,11 @@ mod tests {
         let prog = gen_stage3b_regexp_program(data);
         // Confirm we are still exercising the finding: a RegExp.toString()
         // whose rendered source overflows the old 1023-byte buffer.
-        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
+        assert!(
+            prog.contains(".toString()"),
+            "finding program is a RegExp.toString(): {}",
+            prog
+        );
         match differential_check_with_symbols(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 3ea435c58b4c588e must not diverge: {:?}", d),
@@ -2558,8 +2571,16 @@ mod tests {
         let prog = gen_stage3b_regexp_program(data);
         // Confirm we are still exercising the finding: a RegExp `.source`
         // whose rendered value overflows the old 1024-byte buffer.
-        assert!(prog.ends_with(".source"), "finding program is a RegExp.source: {}", prog);
-        assert!(prog.len() > 1024, "finding program overflows the old buffer: {}", prog.len());
+        assert!(
+            prog.ends_with(".source"),
+            "finding program is a RegExp.source: {}",
+            prog
+        );
+        assert!(
+            prog.len() > 1024,
+            "finding program overflows the old buffer: {}",
+            prog.len()
+        );
         match differential_check_with_symbols(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 91afec2d990bc402 must not diverge: {:?}", d),

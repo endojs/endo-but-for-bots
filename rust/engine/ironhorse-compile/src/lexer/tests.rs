@@ -14,7 +14,11 @@ fn w(s: &str) -> Vec<u16> {
 
 /// The token kinds of `source`, dropping the trailing EOF.
 fn kinds(source: &str) -> Vec<Token> {
-    let mut v: Vec<Token> = tokenize(source).expect("lex ok").into_iter().map(|l| l.token).collect();
+    let mut v: Vec<Token> = tokenize(source)
+        .expect("lex ok")
+        .into_iter()
+        .map(|l| l.token)
+        .collect();
     assert_eq!(v.pop(), Some(Token::Eof), "stream ends in EOF");
     v
 }
@@ -50,7 +54,10 @@ fn punctuators_maximal_munch() {
 #[test]
 fn optional_chain_vs_number() {
     // `?.` is a chain, but `?.5` is question-mark then `.5`.
-    assert_eq!(kinds("a?.b"), vec![Token::Identifier, Token::Chain, Token::Identifier]);
+    assert_eq!(
+        kinds("a?.b"),
+        vec![Token::Identifier, Token::Chain, Token::Identifier]
+    );
     assert_eq!(
         kinds("a?.5"),
         vec![Token::Identifier, Token::QuestionMark, Token::Number]
@@ -59,9 +66,15 @@ fn optional_chain_vs_number() {
 
 #[test]
 fn keywords_and_contextual() {
-    assert_eq!(kinds("if else return"), vec![Token::If, Token::Else, Token::Return]);
+    assert_eq!(
+        kinds("if else return"),
+        vec![Token::If, Token::Else, Token::Return]
+    );
     // `let` and `static` are keywords only in strict mode.
-    assert_eq!(kinds("let static"), vec![Token::Identifier, Token::Identifier]);
+    assert_eq!(
+        kinds("let static"),
+        vec![Token::Identifier, Token::Identifier]
+    );
     let mut lexer = Lexer::new("let yield await");
     lexer.set_strict(true);
     lexer.set_generator(true);
@@ -178,10 +191,16 @@ fn separator_errors() {
 #[test]
 fn strings_and_escapes() {
     let toks = tokenize(r#" "a\n\t\x41B\u{1F600}" "#).unwrap();
-    assert_eq!(toks[0].string.as_deref(), Some(w("a\n\tAB\u{1F600}").as_slice()));
+    assert_eq!(
+        toks[0].string.as_deref(),
+        Some(w("a\n\tAB\u{1F600}").as_slice())
+    );
     assert!(toks[0].escaped);
     // Raw keeps the escapes verbatim.
-    assert_eq!(toks[0].raw.as_deref(), Some(w(r"a\n\t\x41B\u{1F600}").as_slice()));
+    assert_eq!(
+        toks[0].raw.as_deref(),
+        Some(w(r"a\n\t\x41B\u{1F600}").as_slice())
+    );
 }
 
 #[test]

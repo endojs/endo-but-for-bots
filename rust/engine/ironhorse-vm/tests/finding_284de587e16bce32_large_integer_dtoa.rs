@@ -61,7 +61,11 @@ fn large_integer_result_renders_shortest_round_tripping_decimal() {
     let inner = (-2.0_f64) - ((780140544.0_f64 - 1.0) * (1.0 + 1.0));
     assert_eq!(inner, -1560281088.0, "inner subexpression is -1560281088");
     let value = inner * inner;
-    assert_eq!(value.to_bits(), FINDING_VALUE.to_bits(), "program value is 8649*2^48");
+    assert_eq!(
+        value.to_bits(),
+        FINDING_VALUE.to_bits(),
+        "program value is 8649*2^48"
+    );
 
     // The port renders the ECMA-262 shortest decimal, exactly as V8/Node does.
     assert_eq!(

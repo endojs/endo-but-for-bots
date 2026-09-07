@@ -34,7 +34,12 @@ fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
     let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
+    (
+        outcome.completed,
+        format!("{:?}", outcome.halt),
+        outcome.result,
+        outcome.computrons,
+    )
 }
 
 fn twin(
@@ -69,16 +74,13 @@ fn twin(
     expected
 }
 
-fn assert_memory_and_file(
-    name: &str,
-    first: &str,
-    observations: &[&str],
-    expected: &[&str],
-) {
+fn assert_memory_and_file(name: &str, first: &str, observations: &[&str], expected: &[&str]) {
     let mut memory = MemoryStore::new();
     let seen = twin(first, observations, &mut memory);
     assert_eq!(
-        seen.iter().map(|(_, _, value, _)| value.as_str()).collect::<Vec<_>>(),
+        seen.iter()
+            .map(|(_, _, value, _)| value.as_str())
+            .collect::<Vec<_>>(),
         expected,
     );
 
@@ -116,10 +118,8 @@ fn constructor_links_survive_resume() {
         "ih-functions-constructor",
         "var F = 0; var held = 0; var t = 0; \
          F = function (x) { this.x = x; }; held = F.prototype; t = 7; t",
-        &[
-            "var F; var held; var t; var o = 0; \
-             o = new F(42); t = o.x + ':' + (o instanceof F) + ':' + (F.prototype === held); t",
-        ],
+        &["var F; var held; var t; var o = 0; \
+             o = new F(42); t = o.x + ':' + (o instanceof F) + ':' + (F.prototype === held); t"],
         &["42:true:true"],
     );
 }
@@ -155,7 +155,10 @@ fn lazy_resume_keeps_cross_crank_callability() {
             .expect("begin"),
     );
     let mut resumed = resume_from_store_lazy(store, &sig()).expect("lazy resume");
-    assert_eq!(crank(resumed.machine_mut(), "var f; var t; t = f(41); t").2, "42");
+    assert_eq!(
+        crank(resumed.machine_mut(), "var f; var t; t = f(41); t").2,
+        "42"
+    );
 }
 
 #[test]

@@ -72,7 +72,9 @@ fn proxy_revocable_shape_and_revocation() {
 fn get_trap() {
     agrees("new Proxy({}, { get: function (t, k) { return k + '!'; } }).foo");
     agrees("new Proxy({ x: 5 }, {})['x']"); // trap absent -> forward to target
-    agrees("var seen; new Proxy({}, { get: function (t, k, r) { seen = k; return 1; } }).bar; seen");
+    agrees(
+        "var seen; new Proxy({}, { get: function (t, k, r) { seen = k; return 1; } }).bar; seen",
+    );
 }
 
 #[test]
@@ -230,7 +232,9 @@ fn get_invariant_non_writable_non_configurable() {
 
 #[test]
 fn trap_not_callable_throws() {
-    agrees("var e; try { new Proxy({}, { get: 5 }).x; } catch (x) { e = x instanceof TypeError; } e");
+    agrees(
+        "var e; try { new Proxy({}, { get: 5 }).x; } catch (x) { e = x instanceof TypeError; } e",
+    );
 }
 
 // -------------------------------------------------------------------------

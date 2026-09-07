@@ -52,7 +52,11 @@ fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
 /// Run crank 1 and the observation cranks uninterrupted, and the same
 /// cranks across a checkpoint/resume split on `store`; assert the
 /// observations agree pairwise and return the continuous ones.
-fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
+fn twin(
+    crank1: &str,
+    observations: &[&str],
+    store: &mut dyn HeapStore,
+) -> Vec<(bool, String, String, u64)> {
     let (b1, n1) = compile(crank1);
 
     let mut cont = Interp::new();
@@ -72,7 +76,10 @@ fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(
         .iter()
         .map(|s| crank(session.machine_mut(), s))
         .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
+    assert_eq!(
+        continuous, resumed,
+        "resumed observes exactly as uninterrupted"
+    );
     checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
     validate_store(store, &sig()).expect("post-crank store validates");
     continuous
@@ -85,7 +92,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     let got: Vec<&str> = seen.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();

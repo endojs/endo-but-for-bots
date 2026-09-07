@@ -79,7 +79,9 @@ fn sqlite_on_disk_lazy_resume_faults_only_the_working_set() {
 
 #[test]
 fn sqlite_on_disk_twins_agree_after_a_boundary_collection() {
-    with_disk_stores("boundary-collection", |fresh| boundary_collection_twins(fresh));
+    with_disk_stores("boundary-collection", |fresh| {
+        boundary_collection_twins(fresh)
+    });
 }
 
 #[test]

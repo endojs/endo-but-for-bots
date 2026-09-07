@@ -213,7 +213,10 @@ mod tests {
 
     #[test]
     fn rejects_truncated() {
-        assert_eq!(AtomReader::parse(&[0, 0, 0]).err(), Some(AtomError::Truncated));
+        assert_eq!(
+            AtomReader::parse(&[0, 0, 0]).err(),
+            Some(AtomError::Truncated)
+        );
         // Envelope claims 100 bytes but only 8 present.
         let mut buf = Vec::new();
         buf.extend_from_slice(&100u32.to_be_bytes());

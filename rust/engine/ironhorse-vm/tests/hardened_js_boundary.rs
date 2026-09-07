@@ -72,7 +72,10 @@ fn a_harden_that_throws_midway_leaves_no_stale_visited_mark() {
          r = inner.secret + ':' + Object.isFrozen(inner); r",
     );
     assert_eq!(first, "caught", "the aborted harden is a catchable throw");
-    assert_eq!(second, "1:true", "harden after an aborted walk still freezes");
+    assert_eq!(
+        second, "1:true",
+        "harden after an aborted walk still freezes"
+    );
 }
 
 // ---- F057: frozen global bindings by bare name -------------------------
@@ -155,8 +158,15 @@ fn an_undeclared_sloppy_assignment_does_not_mint_a_binding_on_a_sealed_global() 
 #[test]
 fn a_strict_scripts_top_level_declarations_are_global_properties() {
     assert_eq!(eval("'use strict'; var g = 1; globalThis.g"), "1");
-    assert_eq!(eval("var g = 1; globalThis.g"), "1", "the sloppy twin agrees");
-    assert_eq!(eval("'use strict'; function f() {} typeof globalThis.f"), "function");
+    assert_eq!(
+        eval("var g = 1; globalThis.g"),
+        "1",
+        "the sloppy twin agrees"
+    );
+    assert_eq!(
+        eval("'use strict'; function f() {} typeof globalThis.f"),
+        "function"
+    );
     // One binding, not two: the bare name and the property are the same cell.
     assert_eq!(eval("'use strict'; var g = 1; g = 2; globalThis.g"), "2");
     assert_eq!(eval("'use strict'; var g = 1; globalThis.g = 3; g"), "3");
@@ -184,7 +194,9 @@ fn a_frozen_global_blocks_a_strict_scripts_own_top_level_assignment() {
 fn a_script_declared_global_is_non_configurable() {
     for src in ["'use strict'; var g = 1;", "var g = 1;"] {
         assert_eq!(
-            eval(&format!("{src} Object.getOwnPropertyDescriptor(globalThis,'g').configurable")),
+            eval(&format!(
+                "{src} Object.getOwnPropertyDescriptor(globalThis,'g').configurable"
+            )),
             "false",
             "{src}",
         );
@@ -216,7 +228,10 @@ fn a_strict_scripts_top_level_lexicals_stay_lexical() {
         ),
         "undefined,undefined,undefined,3",
     );
-    assert_eq!(eval("'use strict'; let a = 1; Object.freeze(globalThis); a = 2; a"), "2");
+    assert_eq!(
+        eval("'use strict'; let a = 1; Object.freeze(globalThis); a = 2; a"),
+        "2"
+    );
 }
 
 // ---- F058: exotic objects freeze and stay frozen -----------------------
@@ -299,11 +314,17 @@ fn a_name_keyed_endowment_is_not_a_binding() {
     let machine = Machine::new();
     let mut c = machine.new_compartment();
     c.define_global("endowed", ironhorse_vm::Slot::integer(7));
-    assert!(c.global("endowed").is_some(), "recorded on the lookup surface");
+    assert!(
+        c.global("endowed").is_some(),
+        "recorded on the lookup surface"
+    );
     let (bytecode, symbols) = compile("var r = typeof endowed; r");
     let outcome = c.evaluate_with_symbols(&bytecode, &symbols);
     assert!(outcome.completed, "{:?}", outcome.halt);
-    assert_eq!(outcome.result, "undefined", "name-keyed endowments are inert");
+    assert_eq!(
+        outcome.result, "undefined",
+        "name-keyed endowments are inert"
+    );
 }
 
 // ---- F061: `with` over a Proxy or accessor -----------------------------

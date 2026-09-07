@@ -104,7 +104,9 @@ fn weakmap_get_or_insert_returns_existing_or_inserts() {
 #[test]
 fn weakmap_get_or_insert_computed_calls_callback_only_on_absence() {
     // Absent: call the callback once, insert and return its result.
-    agrees("var k = {}; var m = new WeakMap(); m.getOrInsertComputed(k, function () { return 'v'; })");
+    agrees(
+        "var k = {}; var m = new WeakMap(); m.getOrInsertComputed(k, function () { return 'v'; })",
+    );
     agrees("var k = {}; var m = new WeakMap(); m.getOrInsertComputed(k, function () { return 'v'; }); m.get(k)");
     // Present: the callback is NOT evaluated; the existing value is returned.
     agrees("var k = {}; var calls = 0; var m = new WeakMap([[k, 'x']]); m.getOrInsertComputed(k, function () { calls++; return 'y'; }); calls + ':' + m.get(k)");
@@ -132,11 +134,15 @@ fn map_group_by_is_present_and_buckets_by_same_value_zero() {
     // Callback receives (value, index) and `this` is undefined.
     agrees("var s = ''; Map.groupBy(['a', 'b'], function (v, i) { s += v + i; }); s");
     // -0 and +0 bucket together under the canonical +0 key.
-    agrees("var m = Map.groupBy([-0, +0], function (v) { return v; }); m.size + ':' + m.get(0).length");
+    agrees(
+        "var m = Map.groupBy([-0, +0], function (v) { return v; }); m.size + ':' + m.get(0).length",
+    );
     // Empty iterable: an empty Map, callback never called.
     agrees("var m = Map.groupBy([], function () { throw 'no'; }); m.size");
     // A string iterates by code point.
-    agrees("var m = Map.groupBy('aabc', function (c) { return c; }); m.get('a').length + ':' + m.size");
+    agrees(
+        "var m = Map.groupBy('aabc', function (c) { return c; }); m.get('a').length + ':' + m.size",
+    );
     // A callback throw propagates.
     agrees("var t = false; try { Map.groupBy([1], function () { throw 7; }); } catch (e) { t = (e === 7); } t");
     // A non-callable callbackfn throws a (catchable) TypeError.

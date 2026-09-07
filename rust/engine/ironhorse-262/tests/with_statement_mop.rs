@@ -367,7 +367,9 @@ fn array_unscopables_key_order() {
     // from the oracle on every enumeration below while leaving every `with`
     // case above passing — the blocklist's *behaviour* does not pin its
     // *shape*, so both need gating.
-    exact("var a = []; for (var k in Array.prototype[Symbol.unscopables]) { a.push(k); } a.join(',')");
+    exact(
+        "var a = []; for (var k in Array.prototype[Symbol.unscopables]) { a.push(k); } a.join(',')",
+    );
     exact("JSON.stringify(Array.prototype[Symbol.unscopables])");
 }
 

@@ -445,12 +445,18 @@ pub fn run_goal(root: &Item, goal: Goal) -> Result<ScopeTree, ParseError> {
         Item::Node(n) => n.as_ref(),
         _ => return Err(err(1, "invalid root")),
     };
-    let mut s = Scoper { goal, ..Scoper::default() };
+    let mut s = Scoper {
+        goal,
+        ..Scoper::default()
+    };
     // fxParserHoist
     s.hoist_dispatch(root_node)?;
     // fxParserBind
     s.bind_dispatch(root_node)?;
-    let root_scope = *s.node_scope.get(&node_ptr(root_node)).ok_or_else(|| err(root_node.line, "no root scope"))?;
+    let root_scope = *s
+        .node_scope
+        .get(&node_ptr(root_node))
+        .ok_or_else(|| err(root_node.line, "no root scope"))?;
     Ok(ScopeTree {
         goal: s.goal,
         scopes: s.scopes,
@@ -557,7 +563,11 @@ fn node_ptr(n: &Node) -> usize {
 }
 
 fn err(line: u32, msg: &str) -> ParseError {
-    ParseError { line, kind: crate::parser::ParseErrorKind::Syntax, message: msg.to_string() }
+    ParseError {
+        line,
+        kind: crate::parser::ParseErrorKind::Syntax,
+        message: msg.to_string(),
+    }
 }
 
 /// Whether a `delete` operand's reference target is a private member (so
@@ -741,7 +751,8 @@ impl Scoper {
         let d = self.declare_ref(class_scope, class_id);
         let symbol = d.symbol.clone()?;
         let line = d.line;
-        self.scope_lookup(fi, &symbol, line, false, false).map(|(_, id)| id)
+        self.scope_lookup(fi, &symbol, line, false, false)
+            .map(|(_, id)| id)
     }
 
     /// Build a fresh declare with a scope-stable id, without inserting it.
@@ -792,14 +803,25 @@ impl Scoper {
     /// `fxScopeGetDeclareNode` — linear symbol lookup, returning the id.
     fn scope_get_declare(&self, si: usize, symbol: &Sym) -> Option<u32> {
         let sc = &self.scopes[si];
-        sc.declares.iter().find(|d| d.symbol.as_ref() == Some(symbol)).map(|d| d.id)
+        sc.declares
+            .iter()
+            .find(|d| d.symbol.as_ref() == Some(symbol))
+            .map(|d| d.id)
     }
 
     fn declare_mut(&mut self, si: usize, id: u32) -> &mut Declare {
-        self.scopes[si].declares.iter_mut().find(|d| d.id == id).expect("declare id present")
+        self.scopes[si]
+            .declares
+            .iter_mut()
+            .find(|d| d.id == id)
+            .expect("declare id present")
     }
     fn declare_ref(&self, si: usize, id: u32) -> &Declare {
-        self.scopes[si].declares.iter().find(|d| d.id == id).expect("declare id present")
+        self.scopes[si]
+            .declares
+            .iter()
+            .find(|d| d.id == id)
+            .expect("declare id present")
     }
 
     /// Whether the eval-token program scope `si` hoists its `var`/function
@@ -824,7 +846,11 @@ impl Scoper {
             Token::Eval,
             "the hoist decision is only defined for an eval-token program scope",
         );
-        debug_assert_ne!(self.goal, Goal::Module, "a module never scopes an eval-token program");
+        debug_assert_ne!(
+            self.goal,
+            Goal::Module,
+            "a module never scopes an eval-token program"
+        );
         self.scopes[si].flags & SCOPE_STRICT == 0 || self.goal == Goal::Script
     }
 
@@ -963,10 +989,12 @@ impl Scoper {
                     // eval can create variables that override closures
                     None
                 } else if let Some(parent) = self.scopes[si].parent {
-                    let resolved = self.scope_lookup(parent, symbol, sym_line, is_private_member, true);
+                    let resolved =
+                        self.scope_lookup(parent, symbol, sym_line, is_private_member, true);
                     if let Some((rscope, rid)) = resolved {
                         let rline = self.declare_ref(rscope, rid).line;
-                        let mut alias = self.new_declare(si, Token::NoToken, Some(symbol.clone()), rline);
+                        let mut alias =
+                            self.new_declare(si, Token::NoToken, Some(symbol.clone()), rline);
                         alias.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
                         alias.alias = Some((rscope, rid));
                         let aid = self.scope_add_declare(si, alias);
@@ -1048,7 +1076,9 @@ impl Scoper {
             Token::Call | Token::New => self.hoist_call(node),
             Token::Catch => self.hoist_catch(node),
             Token::Coalesce => self.hoist_coalesce(node),
-            Token::Arg | Token::Var | Token::Let | Token::Const | Token::Using => self.hoist_declare(node),
+            Token::Arg | Token::Var | Token::Let | Token::Const | Token::Using => {
+                self.hoist_declare(node)
+            }
             Token::Define => self.hoist_define(node),
             Token::For => self.hoist_for(node),
             Token::ForIn | Token::ForOf | Token::ForAwaitOf => self.hoist_for_in_of(node),
@@ -1075,7 +1105,8 @@ impl Scoper {
         let mut symbol_scope = None;
         if let Some(sym) = &symbol {
             let ss = self.scope_new(node, Token::Block);
-            let mut d = self.new_declare(ss, Token::Const, Some(Sym::Named(sym.clone())), node.line);
+            let mut d =
+                self.new_declare(ss, Token::Const, Some(Sym::Named(sym.clone())), node.line);
             d.flags |= dflags::CLOSURE;
             self.scope_add_declare(ss, d);
             symbol_scope = Some(ss);
@@ -1095,8 +1126,7 @@ impl Scoper {
         if let Some(Item::List(items)) = node.children.get(2) {
             for item in items {
                 let Item::Node(m) = item else { continue };
-                let is_accessor =
-                    m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
+                let is_accessor = m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
                 let mut access = MemberAccess::default();
                 match m.token {
                     Token::PropertyAt if !is_accessor => {
@@ -1175,8 +1205,7 @@ impl Scoper {
                     self.hoist_item(item)?;
                     continue;
                 };
-                let is_accessor =
-                    m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
+                let is_accessor = m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
                 let is_static = m.flags & flags::STATIC != 0;
                 let is_public_method = is_accessor && m.token != Token::PrivateProperty;
                 if is_public_method {
@@ -1228,7 +1257,8 @@ impl Scoper {
         // `constructorInit` before `instanceInit`.
         if class_has_constructor_init_member(node) {
             let ci = self.hoist_field_init_scope(&static_ci_values, true)?;
-            self.class_field_init_static_hoist.insert(node_ptr(node), ci);
+            self.class_field_init_static_hoist
+                .insert(node_ptr(node), ci);
         }
         if engage {
             let fi = self.hoist_field_init_scope(&inst_data_values, false)?;
@@ -1265,7 +1295,11 @@ impl Scoper {
 
     fn hoist_program(&mut self, node: &Node) -> Result<(), ParseError> {
         // XS: XS_TOKEN_EVAL when parser->flags has mxEvalFlag, else PROGRAM.
-        let token = if self.node_flags(node) & SCOPE_EVAL != 0 { Token::Eval } else { Token::Program };
+        let token = if self.node_flags(node) & SCOPE_EVAL != 0 {
+            Token::Eval
+        } else {
+            Token::Program
+        };
         let si = self.scope_new(node, token);
         self.function_scope = Some(si);
         self.body_scope = Some(si);
@@ -1405,7 +1439,8 @@ impl Scoper {
             }
             self.fx_scope_hoisted(statement_scope);
             self.fx_scope_hoisted(scope);
-            self.node_scope.insert(node_ptr(node), (scope, Some(statement_scope)));
+            self.node_scope
+                .insert(node_ptr(node), (scope, Some(statement_scope)));
             // duplicate: a statementScope declare that also names a
             // parameter is a redeclaration error.
             let names: Vec<(Option<Sym>, u32)> = self.scopes[statement_scope]
@@ -1426,7 +1461,8 @@ impl Scoper {
                 self.hoist_item(stmt)?;
             }
             self.fx_scope_hoisted(statement_scope);
-            self.node_scope.insert(node_ptr(node), (statement_scope, None));
+            self.node_scope
+                .insert(node_ptr(node), (statement_scope, None));
         }
         Ok(())
     }
@@ -1464,7 +1500,11 @@ impl Scoper {
             if let Some(id) = self.scope_get_declare(function_scope, &symbol) {
                 let dtok = self.declare_ref(function_scope, id).token;
                 let fnf = self.scope_node_flags(function_scope);
-                let dup_ctx = flags::ARROW | flags::ASYNC | flags::METHOD | flags::NOT_SIMPLE_PARAMETERS | flags::STRICT;
+                let dup_ctx = flags::ARROW
+                    | flags::ASYNC
+                    | flags::METHOD
+                    | flags::NOT_SIMPLE_PARAMETERS
+                    | flags::STRICT;
                 if dtok == Token::Arg && (fnf & dup_ctx != 0) {
                     return Err(err(node.line, "duplicate argument"));
                 }
@@ -1472,7 +1512,10 @@ impl Scoper {
                 let d = self.new_declare(function_scope, Token::Arg, Some(symbol), node.line);
                 self.scope_add_declare(function_scope, d);
             }
-        } else if node.token == Token::Const || node.token == Token::Let || node.token == Token::Using {
+        } else if node.token == Token::Const
+            || node.token == Token::Let
+            || node.token == Token::Using
+        {
             let body_scope = self.body_scope.unwrap();
             let mut existing = self.scope_get_declare(scope, &symbol);
             if existing.is_none() && scope == body_scope {
@@ -1513,7 +1556,10 @@ impl Scoper {
         while scope != body_scope {
             if let Some(id) = self.scope_get_declare(scope, symbol) {
                 let dtok = self.declare_ref(scope, id).token;
-                if matches!(dtok, Token::Const | Token::Let | Token::Using | Token::Define) {
+                if matches!(
+                    dtok,
+                    Token::Const | Token::Let | Token::Using | Token::Define
+                ) {
                     conflict = Some(id);
                     break;
                 }
@@ -1580,7 +1626,12 @@ impl Scoper {
                     have = self.scope_get_declare(function_scope, &symbol).is_some();
                 }
                 if !have {
-                    let d = self.new_declare(body_scope, Token::Define, Some(symbol.clone()), node.line);
+                    let d = self.new_declare(
+                        body_scope,
+                        Token::Define,
+                        Some(symbol.clone()),
+                        node.line,
+                    );
                     self.scope_add_declare(body_scope, d);
                 }
             }
@@ -1641,7 +1692,12 @@ impl Scoper {
     fn inject_arguments(&mut self, si: usize, node: &Node) -> bool {
         let nf = self.node_flags(node);
         if (nf & (flags::ARGUMENTS | SCOPE_EVAL) != 0) && (nf & flags::ARROW == 0) {
-            let d = self.new_declare(si, Token::Var, Some(Sym::Named("arguments".to_string())), node.line);
+            let d = self.new_declare(
+                si,
+                Token::Var,
+                Some(Sym::Named("arguments".to_string())),
+                node.line,
+            );
             self.scope_add_declare(si, d);
             true
         } else {
@@ -1714,7 +1770,9 @@ impl Scoper {
         // time (and its untagged form already rejected in the parser), so
         // this never mis-fires on a tagged template's cooked slot.
         if node.flags & flags::STRING_LEGACY != 0 {
-            let strict = self.scope.map_or(false, |si| self.scopes[si].flags & SCOPE_STRICT != 0);
+            let strict = self
+                .scope
+                .map_or(false, |si| self.scopes[si].flags & SCOPE_STRICT != 0);
             if strict {
                 return Err(err(node.line, "invalid escape sequence"));
             }
@@ -1742,7 +1800,11 @@ impl Scoper {
                 // TRANSFER still carries the module specifier.
                 let mut d = self.new_declare(scope, Token::Let, None, node.line);
                 d.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
-                d.import_spec = Some(ImportSpec { from, symbol: None, with });
+                d.import_spec = Some(ImportSpec {
+                    from,
+                    symbol: None,
+                    with,
+                });
                 self.scope_add_declare(scope, d);
                 return Ok(());
             }
@@ -1763,7 +1825,11 @@ impl Scoper {
             }
             let mut d = self.new_declare(scope, Token::Let, Some(sym), spec.line);
             d.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
-            d.import_spec = Some(ImportSpec { from: from.clone(), symbol: imported, with });
+            d.import_spec = Some(ImportSpec {
+                from: from.clone(),
+                symbol: imported,
+                with,
+            });
             self.scope_add_declare(scope, d);
         }
         Ok(())
@@ -1791,8 +1857,11 @@ impl Scoper {
                         let export_name = child_sym(&spec, 1).or_else(|| imported.clone());
                         let mut d = self.new_declare(scope, Token::Let, None, node.line);
                         d.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
-                        d.import_spec =
-                            Some(ImportSpec { from: from.clone(), symbol: imported, with });
+                        d.import_spec = Some(ImportSpec {
+                            from: from.clone(),
+                            symbol: imported,
+                            with,
+                        });
                         d.export_specs.push(ExportSpec { name: export_name });
                         self.scope_add_declare(scope, d);
                     }
@@ -1801,7 +1870,11 @@ impl Scoper {
                     // `export * from "m"` with no specifiers list.
                     let mut d = self.new_declare(scope, Token::Let, None, node.line);
                     d.flags |= dflags::CLOSURE | dflags::USE_CLOSURE;
-                    d.import_spec = Some(ImportSpec { from, symbol: None, with });
+                    d.import_spec = Some(ImportSpec {
+                        from,
+                        symbol: None,
+                        with,
+                    });
                     self.scope_add_declare(scope, d);
                 }
             }
@@ -1890,7 +1963,11 @@ impl Scoper {
     }
 
     fn record_access(&mut self, symbol: &str, line: u32, resolved: Option<(usize, u32)>) {
-        self.accesses.push(AccessRecord { symbol: symbol.to_string(), line, resolved });
+        self.accesses.push(AccessRecord {
+            symbol: symbol.to_string(),
+            line,
+            resolved,
+        });
     }
 
     /// `fxNodeDispatchBind`.
@@ -1905,7 +1982,9 @@ impl Scoper {
             Token::Block | Token::Body => self.bind_block(node),
             Token::Function | Token::Generator => self.bind_function(node),
             Token::Access => self.bind_access(node),
-            Token::Arg | Token::Var | Token::Let | Token::Const | Token::Using => self.bind_declare_node(node),
+            Token::Arg | Token::Var | Token::Let | Token::Const | Token::Using => {
+                self.bind_declare_node(node)
+            }
             Token::Define => self.bind_define(node),
             Token::Assign => self.bind_assign(node),
             Token::Binding => self.bind_binding(node),
@@ -1984,8 +2063,7 @@ impl Scoper {
                     self.bind_item(item)?;
                     continue;
                 };
-                let is_accessor =
-                    m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
+                let is_accessor = m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
                 let is_static = m.flags & flags::STATIC != 0;
                 let is_public_method = is_accessor && m.token != Token::PrivateProperty;
                 if is_public_method {
@@ -2043,8 +2121,11 @@ impl Scoper {
                 .class_field_init_static_hoist
                 .get(&node_ptr(node))
                 .expect("static field function scope hoisted");
-            let ordered: Vec<&Node> =
-                static_methods.iter().chain(static_data.iter()).copied().collect();
+            let ordered: Vec<&Node> = static_methods
+                .iter()
+                .chain(static_data.iter())
+                .copied()
+                .collect();
             self.bind_field_init_scope(ci, si, &ordered)?;
             self.class_field_init_static.insert(node_ptr(node), ci);
         }
@@ -2053,8 +2134,11 @@ impl Scoper {
                 .class_field_init_hoist
                 .get(&node_ptr(node))
                 .expect("instance field function scope hoisted");
-            let ordered: Vec<&Node> =
-                inst_methods.iter().chain(inst_data.iter()).copied().collect();
+            let ordered: Vec<&Node> = inst_methods
+                .iter()
+                .chain(inst_data.iter())
+                .copied()
+                .collect();
             self.bind_field_init_scope(fi, si, &ordered)?;
             self.class_field_init_inst.insert(node_ptr(node), fi);
         }
@@ -2095,9 +2179,12 @@ impl Scoper {
                 }
                 continue;
             }
-            let access = self.class_member_access.get(&node_ptr(m)).copied().unwrap_or_default();
-            let is_accessor =
-                m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
+            let access = self
+                .class_member_access
+                .get(&node_ptr(m))
+                .copied()
+                .unwrap_or_default();
+            let is_accessor = m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
             let mut fi_slot = MemberAccess::default();
             match m.token {
                 Token::PropertyAt => {
@@ -2154,7 +2241,10 @@ impl Scoper {
     }
 
     fn scope_of(&self, node: &Node) -> (usize, Option<usize>) {
-        *self.node_scope.get(&node_ptr(node)).expect("scope for node")
+        *self
+            .node_scope
+            .get(&node_ptr(node))
+            .expect("scope for node")
     }
 
     fn bind_program(&mut self, node: &Node) -> Result<(), ParseError> {
@@ -2236,7 +2326,8 @@ impl Scoper {
     fn bind_access(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
+            let resolved =
+                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
             self.record_access(&sym, node.line, resolved);
             self.resolutions.insert(node_ptr(node), resolved);
         }
@@ -2277,7 +2368,8 @@ impl Scoper {
         }
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, true, false);
+            let resolved =
+                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, true, false);
             if resolved.is_none() {
                 return Err(err(node.line, "invalid private identifier"));
             }
@@ -2294,7 +2386,8 @@ impl Scoper {
     fn bind_declare_node(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
+            let resolved =
+                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
             // `self->declaration = declaration` — record that this declaration
             // binds (drives `fxScopeCodeStoreAll` eligibility).
             if let Some((rscope, rid)) = resolved {
@@ -2309,7 +2402,8 @@ impl Scoper {
     fn bind_define(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
+            let resolved =
+                self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
             if let Some((rscope, rid)) = resolved {
                 self.declare_mut(rscope, rid).bound = true;
             }
@@ -2640,7 +2734,8 @@ impl Scoper {
             if let Some(&(rscope, rid)) = self.class_instance_init.get(&cnode) {
                 if let Some(sym) = self.declare_ref(rscope, rid).symbol.clone() {
                     let scope = self.scope.unwrap();
-                    if let Some(resolved) = self.scope_lookup(scope, &sym, node.line, false, false) {
+                    if let Some(resolved) = self.scope_lookup(scope, &sym, node.line, false, false)
+                    {
                         self.super_instance_init.insert(node_ptr(node), resolved);
                     }
                 }

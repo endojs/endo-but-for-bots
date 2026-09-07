@@ -77,9 +77,7 @@ fn assignment_rejects_nonwritable_length_even_when_unchanged() {
         "'use strict'; var a=[]; Object.defineProperty(a,'length',{writable:false}); \
          try { a.length=0; false } catch (e) { e instanceof TypeError }",
     );
-    agrees(
-        "var a=[]; Object.defineProperty(a,'length',{writable:false}); a.length=0; a.length",
-    );
+    agrees("var a=[]; Object.defineProperty(a,'length',{writable:false}); a.length=0; a.length");
 }
 
 #[test]

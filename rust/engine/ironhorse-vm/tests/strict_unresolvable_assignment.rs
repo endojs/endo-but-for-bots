@@ -149,7 +149,10 @@ fn typeof_an_undeclared_name_still_answers_undefined() {
     // ECMA-262 13.5.3.1 step 3.a: an unresolvable reference short-circuits
     // `typeof` to `"undefined"`. This is a *read*, so the new store-side
     // guard must not disturb it — and it must stay true in strict code.
-    assert_eq!(run("'use strict'; typeof nope").expect("completes"), "undefined");
+    assert_eq!(
+        run("'use strict'; typeof nope").expect("completes"),
+        "undefined"
+    );
     assert_eq!(run("typeof nope").expect("completes"), "undefined");
 }
 
@@ -157,11 +160,16 @@ fn typeof_an_undeclared_name_still_answers_undefined() {
 fn a_resolvable_name_still_assigns_in_strict_code() {
     // Every shape of resolvable binding must be untouched: a frame local, a
     // `let`, a top-level `var`, and an existing own global property.
-    assert_eq!(run("'use strict'; var v = 1; v = 2; v").expect("completes"), "2");
-    assert_eq!(run("'use strict'; let l = 1; l = 2; l").expect("completes"), "2");
     assert_eq!(
-        run("'use strict'; function f() { var v = 1; v = 2; return v } f()")
-            .expect("completes"),
+        run("'use strict'; var v = 1; v = 2; v").expect("completes"),
+        "2"
+    );
+    assert_eq!(
+        run("'use strict'; let l = 1; l = 2; l").expect("completes"),
+        "2"
+    );
+    assert_eq!(
+        run("'use strict'; function f() { var v = 1; v = 2; return v } f()").expect("completes"),
         "2"
     );
     assert_eq!(
@@ -219,7 +227,11 @@ fn an_inherited_only_name_is_resolvable_for_both_the_read_and_the_store() {
         ("", "valueOf", true),
         ("globalThis.own = 1;", "own", true),
         ("", "genuinelyUndeclared", false),
-        ("Object.prototype.qq = 1; delete Object.prototype.qq;", "qq", false),
+        (
+            "Object.prototype.qq = 1; delete Object.prototype.qq;",
+            "qq",
+            false,
+        ),
     ] {
         let read = read_resolves(prelude, name);
         assert_eq!(

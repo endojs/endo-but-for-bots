@@ -57,9 +57,7 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
             ironhorse_compile::compile_atoms_with(&source, strict)
         }));
         match compiled {
-            Ok(Ok((bytecode, symbols))) => {
-                Ok(ironhorse_vm::CompiledSource { bytecode, symbols })
-            }
+            Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource { bytecode, symbols }),
             Ok(Err(e)) => {
                 match e.kind {
                     ironhorse_compile::parser::ParseErrorKind::Unsupported => {
@@ -73,9 +71,9 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
                     _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
                 }
             }
-            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(panic_message(
-                payload.as_ref(),
-            ))),
+            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
+                panic_message(payload.as_ref()),
+            )),
         }
     }
 }
@@ -106,7 +104,9 @@ fn interp_with_source_bridge(names: &[String]) -> ironhorse_vm::Interp {
 /// or null-prototype completion is the abort the oracle reports.
 fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
     let names = ironhorse_vm::parse_symbols(symbols);
-    interp_with_source_bridge(&names).run(bytecode).host_coerced()
+    interp_with_source_bridge(&names)
+        .run(bytecode)
+        .host_coerced()
 }
 
 pub mod compile_diff;
@@ -636,7 +636,10 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
         _ => return Halt::Decode("ironhorse-only: compile produced no bytecode".into()),
     };
     let names = ironhorse_vm::parse_symbols(&symbols);
-    interp_with_source_bridge(&names).run(&bytecode).host_coerced().halt
+    interp_with_source_bridge(&names)
+        .run(&bytecode)
+        .host_coerced()
+        .halt
 }
 
 /// Run `source` on ironhorse under the **oracle's own framing** and return the

@@ -468,7 +468,11 @@ fn dump_number(v: f64) -> String {
     if v.is_nan() {
         "NaN".to_string()
     } else if v.is_infinite() {
-        if v < 0.0 { "-Infinity".to_string() } else { "Infinity".to_string() }
+        if v < 0.0 {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        }
     } else if v == v.trunc() && v.abs() < 1e15 {
         format!("{}", v as i64)
     } else {

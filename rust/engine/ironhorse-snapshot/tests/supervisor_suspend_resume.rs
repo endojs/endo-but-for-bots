@@ -238,10 +238,16 @@ fn supervisor_suspend_resume_preserves_result_and_meter() {
 
     sup.suspend(w);
     assert!(sup.is_suspended(w), "worker is suspended (machine dropped)");
-    assert!(!sup.live.contains_key(&w), "no live machine survives suspend");
+    assert!(
+        !sup.live.contains_key(&w),
+        "no live machine survives suspend"
+    );
 
     sup.resume(w);
-    assert!(!sup.is_suspended(w), "worker is resident again after resume");
+    assert!(
+        !sup.is_suspended(w),
+        "worker is resident again after resume"
+    );
 
     let b = sup.deliver(w, &PROG_B);
     assert_eq!(
@@ -259,7 +265,6 @@ fn supervisor_suspend_resume_preserves_result_and_meter() {
         b.computrons > a.computrons,
         "meter continued (resumed total exceeds crank A alone)"
     );
-
 }
 
 /// The suspended blob is content-addressed and durable: the supervisor holds
@@ -288,7 +293,6 @@ fn supervisor_suspend_writes_content_addressed_blob() {
     // And the worker resumes from precisely that stored blob.
     sup.resume(w);
     assert!(sup.live.contains_key(&w), "resumed from the stored blob");
-
 }
 
 /// Multiple workers suspend and resume independently under one supervisor,
@@ -326,5 +330,4 @@ fn supervisor_suspends_multiple_workers_independently() {
     assert_eq!(ba.computrons, ra.computrons);
     assert_eq!(bb.result, rb.result, "worker B crank matches its reference");
     assert_eq!(bb.computrons, rb.computrons);
-
 }

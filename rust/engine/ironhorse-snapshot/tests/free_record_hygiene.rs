@@ -61,7 +61,10 @@ fn post_gc_machine() -> Interp {
         stats.chunk_bytes_after < stats.chunk_bytes_before,
         "the fixture must compact chunks out from under the freed strings: {stats:?}"
     );
-    assert!(stats.slots_reclaimed > 0, "and free their slot records: {stats:?}");
+    assert!(
+        stats.slots_reclaimed > 0,
+        "and free their slot records: {stats:?}"
+    );
     m
 }
 
@@ -70,7 +73,9 @@ fn post_gc_machine() -> Interp {
 fn a_post_gc_snapshot_with_stale_freed_records_round_trips_the_blob_path() {
     let m = post_gc_machine();
     let live_probe = "var keep; var t; t = keep + '!'; t";
-    let bytes = m.write_snapshot(&sig()).expect("the writer serializes as-is");
+    let bytes = m
+        .write_snapshot(&sig())
+        .expect("the writer serializes as-is");
     let mut m2 = from_snapshot_bytes(&bytes, &sig())
         .expect("freed records are opaque: the read gate must accept an honest post-GC image");
     assert_eq!(crank(&mut m2, live_probe), "kept!");

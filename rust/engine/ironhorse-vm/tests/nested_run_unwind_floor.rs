@@ -44,10 +44,8 @@ fn run(source: &str) -> RunOutcome {
 
 #[test]
 fn an_uncaught_generator_throw_reaches_the_drivers_catch() {
-    let out = run(
-        "function* g() { throw 1; } var it = g(); var r = 0; \
-         try { it.next(); } catch (e) { r = e; } r",
-    );
+    let out = run("function* g() { throw 1; } var it = g(); var r = 0; \
+         try { it.next(); } catch (e) { r = e; } r");
     assert!(
         out.completed,
         "the driver's catch must catch the generator's throw (XS \
@@ -65,11 +63,9 @@ fn an_uncaught_generator_throw_reaches_the_drivers_catch() {
 fn a_nested_generator_throw_reaches_the_drivers_catch() {
     // The same root cause one level deeper, where it used to surface as
     // a stack underflow rather than a wrong exception.
-    let out = run(
-        "function* inner() { throw 1; } \
+    let out = run("function* inner() { throw 1; } \
          function* outer() { var i = inner(); i.next(); yield 0; } \
-         var o = outer(); var r = 0; try { o.next(); } catch (e) { r = e; } r",
-    );
+         var o = outer(); var r = 0; try { o.next(); } catch (e) { r = e; } r");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "1");
 }
@@ -79,10 +75,8 @@ fn a_generators_own_handler_still_catches() {
     // The handlers the resume rebases onto the live chain sit above the
     // run's `jumps_base`, so the body's own `try` catches first — an
     // unwind that skipped them would break this. Agrees with XS.
-    let out = run(
-        "function* g() { try { throw 1; } catch (e) { yield e; } } \
-         var it = g(); it.next().value",
-    );
+    let out = run("function* g() { try { throw 1; } catch (e) { yield e; } } \
+         var it = g(); it.next().value");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "1");
 }

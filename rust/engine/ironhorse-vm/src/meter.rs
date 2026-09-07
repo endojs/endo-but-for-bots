@@ -286,7 +286,11 @@ impl Meter {
     /// wrapping the index to `u64::MAX` rather than a case that occurs.
     #[inline]
     pub fn untick_raw(&mut self, n: u64) {
-        debug_assert!(self.index >= n, "untick_raw({n}) below the index {}", self.index);
+        debug_assert!(
+            self.index >= n,
+            "untick_raw({n}) below the index {}",
+            self.index
+        );
         self.index = self.index.saturating_sub(n);
     }
 
@@ -431,7 +435,10 @@ mod tests {
         let out = m.check(&mut |_| true);
         assert_eq!(out, MeterCheck::Continue);
         assert_eq!(m.index, 0, "wrap guard resets meterIndex to 0");
-        assert_eq!(m.count, m.interval, "wrap guard resets meterCount to interval");
+        assert_eq!(
+            m.count, m.interval,
+            "wrap guard resets meterCount to interval"
+        );
     }
 
     #[test]

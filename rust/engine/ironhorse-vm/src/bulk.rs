@@ -106,7 +106,6 @@ impl SideRefCounts {
         v.sort_unstable();
         v
     }
-
 }
 
 /// An Array instance's internal state (kept in `Interp::arrays`): the
@@ -392,7 +391,9 @@ impl CollectionData {
     /// tombstone here is a logic error.
     pub(crate) fn set_entry_value(&mut self, at: usize, value: Slot, refs: &mut SideRefCounts) {
         refs.add_slot(&value);
-        let entry = self.entries[at].as_mut().expect("set_entry_value on tombstone");
+        let entry = self.entries[at]
+            .as_mut()
+            .expect("set_entry_value on tombstone");
         let old = std::mem::replace(&mut entry.1, value);
         refs.remove_slot(&old);
     }
@@ -504,8 +505,8 @@ mod tests {
         let mut a = ArrayData::default();
         a.insert_item(0, refslot(10), &mut refs); // page 0
         a.insert_item(1, refslot(300), &mut refs); // page 1
-        // Displacement: the page-0 ref is decremented when index 0 is
-        // overwritten with a page-2 ref.
+                                                   // Displacement: the page-0 ref is decremented when index 0 is
+                                                   // overwritten with a page-2 ref.
         a.insert_item(0, refslot(600), &mut refs);
         assert_eq!(refs.pages_sorted(), vec![1, 2]);
         // Whole-map replacement decrements everything displaced and

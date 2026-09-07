@@ -105,7 +105,10 @@ impl Machine {
                 let len = rng.below(200) as usize + 1;
                 let byte = (rng.next() & 0xff) as u8;
                 let off = self.heap.chunks.alloc(&vec![byte; len]);
-                let idx = self.heap.slots.alloc(Slot::of(Kind::String, Payload::String(off)));
+                let idx = self
+                    .heap
+                    .slots
+                    .alloc(Slot::of(Kind::String, Payload::String(off)));
                 self.live.push(idx);
             }
             // Mutate a random live slot in place.
@@ -268,20 +271,26 @@ fn incremental_batch(
     let (mut lp, mut le) = store.leaf_hashes().unwrap_or_default();
     let mut lf = prior_frees.clone();
     let mut edges_all = store.page_edges().unwrap_or_default();
-    lp.resize(ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize, [0u8; 32]);
+    lp.resize(
+        ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize,
+        [0u8; 32],
+    );
     le.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
     lf.resize(
         ironhorse_snapshot::store::free_seg_count(manifest.free_len) as usize,
         [0u8; 32],
     );
     for (i, bytes) in &slot_pages {
-        lp[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_PAGE, *i, bytes);
+        lp[*i as usize] =
+            ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_PAGE, *i, bytes);
     }
     for (i, bytes) in &chunk_extents {
-        le[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_EXT, *i, bytes);
+        le[*i as usize] =
+            ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_EXT, *i, bytes);
     }
     for (i, bytes) in &free_segs {
-        lf[*i as usize] = ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_FREE, *i, bytes);
+        lf[*i as usize] =
+            ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_FREE, *i, bytes);
     }
     edges_all.resize(
         ironhorse_snapshot::store::slot_page_count(manifest.slot_count) as usize,
@@ -291,7 +300,11 @@ fn incremental_batch(
         edges_all[*i as usize] = targets.clone();
     }
     manifest.root = ironhorse_snapshot::store::compute_root(
-        &ironhorse_snapshot::store::leaf_hash(ironhorse_snapshot::store::LEAF_SMALL, 0, &small_bytes),
+        &ironhorse_snapshot::store::leaf_hash(
+            ironhorse_snapshot::store::LEAF_SMALL,
+            0,
+            &small_bytes,
+        ),
         &lp,
         &le,
         &lf,
@@ -401,7 +414,10 @@ fn randomized_fault_schedules_reify_identically() {
     }
     let image = m.image(&[]);
     let store = Rc::new(RefCell::new(MemoryStore::new()));
-    store.borrow_mut().commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .borrow_mut()
+        .commit(&image_to_batch(&image, 1, ""))
+        .unwrap();
     let manifest = store.borrow().manifest().unwrap();
 
     struct Src(Rc<RefCell<MemoryStore>>);
@@ -426,8 +442,7 @@ fn randomized_fault_schedules_reify_identically() {
             source.clone(),
             manifest.chunk_len,
         );
-        let chunks =
-            ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
+        let chunks = ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
 
         // Random partial touches in random order…
         let pages = slot_page_count(manifest.slot_count);
@@ -725,7 +740,10 @@ fn edge_summary_flip_at_rest_fails_closed() {
         assert!(refused, "edge-section flip at byte {pos} must fail closed");
         tried += 1;
     }
-    assert!(tried >= 4, "the sweep must cover a real section, got {tried}");
+    assert!(
+        tried >= 4,
+        "the sweep must cover a real section, got {tried}"
+    );
 }
 
 /// Review wave 4, H1-a: a lazy arena that has grown PAST its backed row
@@ -772,7 +790,10 @@ fn evict_refuses_a_page_holding_records_past_the_backed_rows() {
     // Fully backed and clean: page 0 evicts, as it always has. (The
     // guard must not cost the RAM win on a quiescent resumed arena.)
     slots.touch_page(0);
-    assert!(slots.evict_page(0), "a fully backed clean page still evicts");
+    assert!(
+        slots.evict_page(0),
+        "a fully backed clean page still evicts"
+    );
     slots.touch_page(0);
 
     // Now grow past the backing WITHOUT advancing it — the appended
@@ -849,7 +870,10 @@ fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
         }),
         ("stack Reference", {
             let mut i = honest.clone();
-            i.stack = vec![Slot::of(Kind::Reference, Payload::Reference(SlotIndex(n + 900_000)))];
+            i.stack = vec![Slot::of(
+                Kind::Reference,
+                Payload::Reference(SlotIndex(n + 900_000)),
+            )];
             i
         }),
         ("registry descriptor", {
@@ -880,7 +904,9 @@ fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
     }];
     let mut batch = image_to_batch(&poisoned, 1, "");
     ironhorse_snapshot::store::reseal_batch(&mut batch);
-    store.commit(&batch).expect("a crafted batch commits — the store is not the gate");
+    store
+        .commit(&batch)
+        .expect("a crafted batch commits — the store is not the gate");
     match validate_store(&store, &sig()) {
         Err(_) => {}
         Ok(_) => panic!("validate_store must refuse a crafted side-table index"),

@@ -403,9 +403,7 @@ fn apply_array_like_arg_array() {
         "function f() { return String(arguments[0]) + '/' + arguments.length; } \
          f.apply(null, {length: 2})",
     );
-    agrees(
-        "function f(a,b){return String(a)+':'+b}var args=[,2];f.apply(null,args)",
-    );
+    agrees("function f(a,b){return String(a)+':'+b}var args=[,2];f.apply(null,args)");
     agrees(
         "function f(a){return a}var old=Array.prototype[0];Array.prototype[0]=6; \
          var args=new Array(1),r=f.apply(null,args); \

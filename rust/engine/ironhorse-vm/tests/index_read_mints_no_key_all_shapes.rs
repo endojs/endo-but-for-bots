@@ -88,5 +88,9 @@ fn p_super_get() {
          class C extends B { m() { for (var i = 0; i < 70000; i++) { if (super[i] !== undefined) n++; } return n; } } \
          (new C()).m()",
     );
-    assert!(out.completed, "STILL MINTS -> halt {:?}: super[i]", out.halt);
+    assert!(
+        out.completed,
+        "STILL MINTS -> halt {:?}: super[i]",
+        out.halt
+    );
 }

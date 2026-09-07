@@ -110,7 +110,10 @@ fn shrinking_length_stops_at_a_non_configurable_element() {
         "TE 3",
     );
     // A shrink with nothing in the way still works.
-    assert_result("var a = [1, 2, 3]; a.length = 1; a.length + ',' + a.join(',')", "1,1");
+    assert_result(
+        "var a = [1, 2, 3]; a.length = 1; a.length + ',' + a.join(',')",
+        "1,1",
+    );
 }
 
 /// Each of these took the generic MOP path only because promotion had broken
@@ -118,10 +121,19 @@ fn shrinking_length_stops_at_a_non_configurable_element() {
 #[test]
 fn a_dense_mutator_does_not_erase_or_relocate_element_attributes() {
     let hide = "var a = [1, 2, 3]; Object.defineProperty(a, '0', {enumerable: false});";
-    assert_result(&format!("{hide} a.reverse(); Object.keys(a).join('|')"), "1|2");
+    assert_result(
+        &format!("{hide} a.reverse(); Object.keys(a).join('|')"),
+        "1|2",
+    );
     assert_result(&format!("{hide} a.shift(); Object.keys(a).join('|')"), "1");
-    assert_result(&format!("{hide} a.unshift(9); Object.keys(a).join('|')"), "1|2|3");
-    assert_result(&format!("{hide} a.splice(0, 1); Object.keys(a).join('|')"), "1");
+    assert_result(
+        &format!("{hide} a.unshift(9); Object.keys(a).join('|')"),
+        "1|2|3",
+    );
+    assert_result(
+        &format!("{hide} a.splice(0, 1); Object.keys(a).join('|')"),
+        "1",
+    );
     assert_result(
         "var a = [1, 2, 3, 4]; Object.defineProperty(a, '0', {enumerable: false}); \
          a.copyWithin(0, 2); Object.keys(a).join('|')",
@@ -154,6 +166,9 @@ fn an_ordinary_array_still_takes_the_dense_paths() {
         "0|2|3",
     );
     assert_result("var a = [3, 1, 2]; a.sort(); a.join('|')", "1|2|3");
-    assert_result("var a = [1, 2, 3, 4]; a.copyWithin(0, 2); a.join('|')", "3|4|3|4");
+    assert_result(
+        "var a = [1, 2, 3, 4]; a.copyWithin(0, 2); a.join('|')",
+        "3|4|3|4",
+    );
     assert_result("var a = [1, 2, 3]; a.splice(1, 1); a.join('|')", "1|3");
 }

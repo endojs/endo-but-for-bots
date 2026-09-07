@@ -57,7 +57,11 @@ fn continuous(crank1: &str, observations: &[&str]) -> Vec<(bool, String, String,
     observations.iter().map(|s| crank(&mut m, s)).collect()
 }
 
-fn store_twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
+fn store_twin(
+    crank1: &str,
+    observations: &[&str],
+    store: &mut dyn HeapStore,
+) -> Vec<(bool, String, String, u64)> {
     let (b1, n1) = compile(crank1);
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
@@ -85,7 +89,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes uninterrupted: {}", got.1);
     }
     let got: Vec<&str> = cont.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let (b1, n1) = compile(crank1);
     let mut m = Interp::new();
@@ -97,7 +104,11 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
     assert_eq!(blob, cont, "blob twin agrees");
 
     let mut mem = MemoryStore::new();
-    assert_eq!(store_twin(crank1, observations, &mut mem), cont, "store twin agrees");
+    assert_eq!(
+        store_twin(crank1, observations, &mut mem),
+        cont,
+        "store twin agrees"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -180,7 +191,15 @@ fn a_resumed_primitive_boolean_still_boxes_to_boolean_prototype() {
             "var t; t = String('abc'.length); t",
         ],
         &[
-            "true", "false", "true", "true", "true", "101010", "1", "Symbol(t)", "3",
+            "true",
+            "false",
+            "true",
+            "true",
+            "true",
+            "101010",
+            "1",
+            "Symbol(t)",
+            "3",
         ],
     );
 }

@@ -243,7 +243,10 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
     if !oracle.compiled {
         return Err(Divergence {
             source,
-            detail: format!("ironhorse compiled a pattern the pin rejected ({})", oracle.error),
+            detail: format!(
+                "ironhorse compiled a pattern the pin rejected ({})",
+                oracle.error
+            ),
         });
     }
 
@@ -251,7 +254,10 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
     if outcome.matched != oracle.matched {
         return Err(Divergence {
             source,
-            detail: format!("matched ironhorse={} pin={}", outcome.matched, oracle.matched),
+            detail: format!(
+                "matched ironhorse={} pin={}",
+                outcome.matched, oracle.matched
+            ),
         });
     }
     for i in 0..oracle.captures.len() {
@@ -259,7 +265,10 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
         if mine != oracle.captures[i] {
             return Err(Divergence {
                 source,
-                detail: format!("capture[{}] ironhorse={:?} pin={:?}", i, mine, oracle.captures[i]),
+                detail: format!(
+                    "capture[{}] ironhorse={:?} pin={:?}",
+                    i, mine, oracle.captures[i]
+                ),
             });
         }
     }
@@ -310,7 +319,11 @@ mod tests {
                 Err(d) => panic!("regexp differential divergence: {:?}", d),
             }
         }
-        assert!(checked > 2000, "sweep should check most seeds, got {}", checked);
+        assert!(
+            checked > 2000,
+            "sweep should check most seeds, got {}",
+            checked
+        );
         assert!(matched_any, "sweep should include real matches");
         assert!(used_group, "sweep should exercise capturing groups");
     }

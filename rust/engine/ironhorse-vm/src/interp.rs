@@ -3712,31 +3712,61 @@ struct TemporalZonedRecord {
 
 impl TemporalDurationRecord {
     fn fields(self) -> [i64; 10] {
-        [self.years, self.months, self.weeks, self.days, self.hours,
-         self.minutes, self.seconds, self.milliseconds, self.microseconds,
-         self.nanoseconds]
+        [
+            self.years,
+            self.months,
+            self.weeks,
+            self.days,
+            self.hours,
+            self.minutes,
+            self.seconds,
+            self.milliseconds,
+            self.microseconds,
+            self.nanoseconds,
+        ]
     }
 
     fn sign(self) -> i64 {
-        self.fields().into_iter().find(|&v| v != 0).map(i64::signum).unwrap_or(0)
+        self.fields()
+            .into_iter()
+            .find(|&v| v != 0)
+            .map(i64::signum)
+            .unwrap_or(0)
     }
 
     fn negated(self) -> Option<Self> {
         let mut f = self.fields();
-        for v in &mut f { *v = v.checked_neg()?; }
+        for v in &mut f {
+            *v = v.checked_neg()?;
+        }
         Some(Self::from_fields(f))
     }
 
     fn from_fields(f: [i64; 10]) -> Self {
-        Self { years:f[0], months:f[1], weeks:f[2], days:f[3], hours:f[4],
-            minutes:f[5], seconds:f[6], milliseconds:f[7], microseconds:f[8], nanoseconds:f[9] }
+        Self {
+            years: f[0],
+            months: f[1],
+            weeks: f[2],
+            days: f[3],
+            hours: f[4],
+            minutes: f[5],
+            seconds: f[6],
+            milliseconds: f[7],
+            microseconds: f[8],
+            nanoseconds: f[9],
+        }
     }
 
     fn time_nanoseconds(self, allow_days: bool) -> Option<i128> {
-        if self.years != 0 || self.months != 0 || self.weeks != 0 || (!allow_days && self.days != 0) {
+        if self.years != 0 || self.months != 0 || self.weeks != 0 || (!allow_days && self.days != 0)
+        {
             return None;
         }
-        let mut n = if allow_days { self.days as i128 * 86_400 } else { 0 };
+        let mut n = if allow_days {
+            self.days as i128 * 86_400
+        } else {
+            0
+        };
         n = n.checked_add(self.hours as i128 * 3_600)?;
         n = n.checked_add(self.minutes as i128 * 60)?;
         n = n.checked_add(self.seconds as i128)?;
@@ -3958,9 +3988,7 @@ impl Native {
             Native::Proxy => 2,
             // `%GeneratorFunction%`/`%AsyncFunction%`/`%AsyncGeneratorFunction%`
             // each have `length` 1 (their sole formal is `...args`).
-            Native::GeneratorFunction
-            | Native::AsyncFunction
-            | Native::AsyncGeneratorFunction => 1,
+            Native::GeneratorFunction | Native::AsyncFunction | Native::AsyncGeneratorFunction => 1,
             Native::TypedArray(_) => 3,
             Native::DataView => 1,
             Native::Date => 7,
@@ -4304,7 +4332,11 @@ macro_rules! dispatch_result {
 /// (`null.f`, `undefined[k]`, `null.f = v`): `TypeError: cannot coerce null
 /// to object` / `… undefined to object`. The oracle's `String(e)` verbatim.
 fn cannot_coerce_to_object(kind: Kind) -> String {
-    let what = if kind == Kind::Null { "null" } else { "undefined" };
+    let what = if kind == Kind::Null {
+        "null"
+    } else {
+        "undefined"
+    };
     format!("cannot coerce {what} to object")
 }
 
@@ -4947,8 +4979,7 @@ pub struct Interp {
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
-    disposable_stacks:
-        std::collections::HashMap<crate::value::SlotIndex, DisposableStackData>,
+    disposable_stacks: std::collections::HashMap<crate::value::SlotIndex, DisposableStackData>,
     /// Per-instance Map/Set/WeakMap/WeakSet data (XS's exotic collection
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
@@ -6437,9 +6468,7 @@ impl Interp {
                 | Native::BigInt
                 | Native::Number
                 | Native::String
-                | Native::Date => {
-                    self.slots.alloc(Slot::instance(object_proto))
-                }
+                | Native::Date => self.slots.alloc(Slot::instance(object_proto)),
                 Native::DisposableStack | Native::AsyncDisposableStack => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
@@ -6625,11 +6654,8 @@ impl Interp {
             .into_iter()
             .enumerate()
             {
-                let method = self.alloc_named_method(
-                    NativeMethod::IteratorHelper(op as u8),
-                    name,
-                    arity,
-                );
+                let method =
+                    self.alloc_named_method(NativeMethod::IteratorHelper(op as u8), name, arity);
                 self.proto_methods.push((self.iterator_proto, name, method));
             }
         }
@@ -6709,11 +6735,7 @@ impl Interp {
             ("map", 1, NativeMethod::TypedArrayMap),
             ("filter", 1, NativeMethod::TypedArrayFilter),
             ("sort", 1, NativeMethod::TypedArraySort),
-            (
-                "toLocaleString",
-                0,
-                NativeMethod::TypedArrayToLocaleString,
-            ),
+            ("toLocaleString", 0, NativeMethod::TypedArrayToLocaleString),
         ] {
             let mf = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((typed_array_proto, name, mf));
@@ -6724,8 +6746,7 @@ impl Interp {
             ("entries", NativeMethod::TypedArrayEntries),
         ] {
             let method = self.alloc_named_method(method, name, 0);
-            self.proto_methods
-                .push((typed_array_proto, name, method));
+            self.proto_methods.push((typed_array_proto, name, method));
         }
         for (operation, (name, arity)) in [
             ("forEach", 1u32),
@@ -6747,8 +6768,7 @@ impl Interp {
                 name,
                 arity,
             );
-            self.proto_methods
-                .push((typed_array_proto, name, method));
+            self.proto_methods.push((typed_array_proto, name, method));
         }
         // `%TypedArray%.prototype.toString%` is the exact same function object
         // as `%Array.prototype.toString%`, not a separately minted native.
@@ -6809,13 +6829,9 @@ impl Interp {
         // `%RegExpStringIteratorPrototype%`: a distinct iterator prototype
         // whose `next` lazily drives the cloned matcher captured by
         // `RegExp.prototype[@@matchAll]`.
-        self.regexp_string_iterator_proto =
-            self.slots.alloc(Slot::instance(self.iterator_proto));
-        let regexp_string_next = self.alloc_named_method(
-            NativeMethod::RegExpStringIteratorNext,
-            "next",
-            0,
-        );
+        self.regexp_string_iterator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+        let regexp_string_next =
+            self.alloc_named_method(NativeMethod::RegExpStringIteratorNext, "next", 0);
         self.proto_methods.push((
             self.regexp_string_iterator_proto,
             "next",
@@ -6830,8 +6846,7 @@ impl Interp {
             self.proto_methods.push((array_ctor, "of", of));
             let from = self.alloc_named_method(NativeMethod::ArrayFrom, "from", 1);
             self.proto_methods.push((array_ctor, "from", from));
-            let from_async =
-                self.alloc_named_method(NativeMethod::ArrayFromAsync, "fromAsync", 1);
+            let from_async = self.alloc_named_method(NativeMethod::ArrayFromAsync, "fromAsync", 1);
             self.proto_methods
                 .push((array_ctor, "fromAsync", from_async));
         }
@@ -6952,7 +6967,10 @@ impl Interp {
             if cache == 2 {
                 for (m_name, m) in [
                     ("getOrInsert", NativeMethod::WeakMapGetOrInsert),
-                    ("getOrInsertComputed", NativeMethod::WeakMapGetOrInsertComputed),
+                    (
+                        "getOrInsertComputed",
+                        NativeMethod::WeakMapGetOrInsertComputed,
+                    ),
                 ] {
                     let mf = self.alloc_named_method(m, m_name, 2);
                     self.proto_methods.push((proto, m_name, mf));
@@ -7176,11 +7194,8 @@ impl Interp {
             self.proto_methods.push((async_generator_proto, name, mf));
         }
         self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
-        self.iterator_identity = self.alloc_named_method(
-            NativeMethod::AsyncIteratorIdentity,
-            "[Symbol.iterator]",
-            0,
-        );
+        self.iterator_identity =
+            self.alloc_named_method(NativeMethod::AsyncIteratorIdentity, "[Symbol.iterator]", 0);
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         // `%AsyncGenerator%` (the common prototype of async-generator
         // functions) exposes `%AsyncGeneratorPrototype%` through its own
@@ -7228,7 +7243,11 @@ impl Interp {
                 self.function_proto,
                 generator_function_proto,
             ),
-            (Native::AsyncFunction, function_ctor, self.async_function_proto),
+            (
+                Native::AsyncFunction,
+                function_ctor,
+                self.async_function_proto,
+            ),
             (
                 Native::AsyncGeneratorFunction,
                 self.function_proto,
@@ -7303,36 +7322,18 @@ impl Interp {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.regexp_proto, name, mf));
         }
-        self.regexp_replace_method = self.alloc_named_method(
-            NativeMethod::RegExpReplace,
-            "[Symbol.replace]",
-            2,
-        );
-        self.regexp_match_method = self.alloc_named_method(
-            NativeMethod::RegExpMatch,
-            "[Symbol.match]",
-            1,
-        );
-        self.regexp_match_all_method = self.alloc_named_method(
-            NativeMethod::RegExpMatchAll,
-            "[Symbol.matchAll]",
-            1,
-        );
-        self.regexp_search_method = self.alloc_named_method(
-            NativeMethod::RegExpSearch,
-            "[Symbol.search]",
-            1,
-        );
-        self.regexp_split_method = self.alloc_named_method(
-            NativeMethod::RegExpSplit,
-            "[Symbol.split]",
-            2,
-        );
-        let _ = self.alloc_named_method(
-            NativeMethod::RegExpSpeciesGetter,
-            "get [Symbol.species]",
-            0,
-        );
+        self.regexp_replace_method =
+            self.alloc_named_method(NativeMethod::RegExpReplace, "[Symbol.replace]", 2);
+        self.regexp_match_method =
+            self.alloc_named_method(NativeMethod::RegExpMatch, "[Symbol.match]", 1);
+        self.regexp_match_all_method =
+            self.alloc_named_method(NativeMethod::RegExpMatchAll, "[Symbol.matchAll]", 1);
+        self.regexp_search_method =
+            self.alloc_named_method(NativeMethod::RegExpSearch, "[Symbol.search]", 1);
+        self.regexp_split_method =
+            self.alloc_named_method(NativeMethod::RegExpSplit, "[Symbol.split]", 2);
+        let _ =
+            self.alloc_named_method(NativeMethod::RegExpSpeciesGetter, "get [Symbol.species]", 0);
         for (native, methods) in [
             (
                 Native::DisposableStack,
@@ -7550,11 +7551,8 @@ impl Interp {
         // property is installed lazily when that well-known key is first used;
         // eagerly interning the key would turn an otherwise-empty persisted
         // symbol-key table into non-canonical state for legacy migrations.
-        self.function_has_instance_method = self.alloc_named_method(
-            NativeMethod::FunctionHasInstance,
-            "[Symbol.hasInstance]",
-            1,
-        );
+        self.function_has_instance_method =
+            self.alloc_named_method(NativeMethod::FunctionHasInstance, "[Symbol.hasInstance]", 1);
         // The wrapper prototypes carry valueOf + toString over the primitive.
         for native in [Native::Boolean, Native::Number, Native::String] {
             if let Some(&c) = self.intrinsics.get(native.display_name()) {
@@ -7590,10 +7588,8 @@ impl Interp {
             }
             let as_int_n = self.alloc_named_method(NativeMethod::BigIntAsIntN, "asIntN", 2);
             self.proto_methods.push((bigint_ctor, "asIntN", as_int_n));
-            let as_uint_n =
-                self.alloc_named_method(NativeMethod::BigIntAsUintN, "asUintN", 2);
-            self.proto_methods
-                .push((bigint_ctor, "asUintN", as_uint_n));
+            let as_uint_n = self.alloc_named_method(NativeMethod::BigIntAsUintN, "asUintN", 2);
+            self.proto_methods.push((bigint_ctor, "asUintN", as_uint_n));
         }
         self.create_math();
         self.create_string_proto();
@@ -7689,15 +7685,18 @@ impl Interp {
         self.locale_proto = locale_proto;
         self.ctor_prototype.insert(locale, locale_proto);
         self.proto_methods.push((locale, "prototype", locale_proto));
-        self.proto_methods.push((locale_proto, "constructor", locale));
+        self.proto_methods
+            .push((locale_proto, "constructor", locale));
         self.proto_methods.push((intl, "Locale", locale));
 
         let collator = self.alloc_named_native(Native::Collator);
         let collator_proto = self.slots.alloc(Slot::instance(self.object_proto));
         self.collator_proto = collator_proto;
         self.ctor_prototype.insert(collator, collator_proto);
-        self.proto_methods.push((collator, "prototype", collator_proto));
-        self.proto_methods.push((collator_proto, "constructor", collator));
+        self.proto_methods
+            .push((collator, "prototype", collator_proto));
+        self.proto_methods
+            .push((collator_proto, "constructor", collator));
         self.proto_methods.push((intl, "Collator", collator));
 
         for (name, method) in [
@@ -7744,11 +7743,8 @@ impl Interp {
         self.segments_proto = segments_proto;
         let segment_iterator_proto = self.slots.alloc(Slot::instance(self.object_proto));
         self.segment_iterator_proto = segment_iterator_proto;
-        self.segments_iterator_method = self.alloc_named_method(
-            NativeMethod::SegmentsIterator,
-            "[Symbol.iterator]",
-            0,
-        );
+        self.segments_iterator_method =
+            self.alloc_named_method(NativeMethod::SegmentsIterator, "[Symbol.iterator]", 0);
         self.segment_iterator_identity = self.alloc_named_method(
             NativeMethod::SegmentIteratorSymbolIterator,
             "[Symbol.iterator]",
@@ -7779,9 +7775,20 @@ impl Interp {
         self.proto_methods
             .push((intl, "NumberFormat", number_format));
 
-        for ctor in [locale, collator, list_format, plural_rules, segmenter, date_time_format, number_format] {
-            let f =
-                self.alloc_named_method(NativeMethod::IntlSupportedLocalesOf, "supportedLocalesOf", 1);
+        for ctor in [
+            locale,
+            collator,
+            list_format,
+            plural_rules,
+            segmenter,
+            date_time_format,
+            number_format,
+        ] {
+            let f = self.alloc_named_method(
+                NativeMethod::IntlSupportedLocalesOf,
+                "supportedLocalesOf",
+                1,
+            );
             self.proto_methods.push((ctor, "supportedLocalesOf", f));
         }
         for (name, method) in [
@@ -7798,7 +7805,11 @@ impl Interp {
         for (name, method, arity) in [
             ("format", NativeMethod::ListFormatFormat, 1),
             ("formatToParts", NativeMethod::ListFormatFormatToParts, 1),
-            ("resolvedOptions", NativeMethod::ListFormatResolvedOptions, 0),
+            (
+                "resolvedOptions",
+                NativeMethod::ListFormatResolvedOptions,
+                0,
+            ),
         ] {
             let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((list_format_proto, name, f));
@@ -7806,7 +7817,11 @@ impl Interp {
         for (name, method, arity) in [
             ("select", NativeMethod::PluralRulesSelect, 1),
             ("selectRange", NativeMethod::PluralRulesSelectRange, 2),
-            ("resolvedOptions", NativeMethod::PluralRulesResolvedOptions, 0),
+            (
+                "resolvedOptions",
+                NativeMethod::PluralRulesResolvedOptions,
+                0,
+            ),
         ] {
             let f = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((plural_rules_proto, name, f));
@@ -7880,8 +7895,11 @@ impl Interp {
         }
         // Keep the profile version observable to regression tooling without
         // depending on a host database.
-        self.proto_data
-            .push((intl, "__ironhorseDataVersion", INTL_DATA_VERSION.to_string()));
+        self.proto_data.push((
+            intl,
+            "__ironhorseDataVersion",
+            INTL_DATA_VERSION.to_string(),
+        ));
     }
 
     /// Build the first Temporal intrinsic family.  The namespace and its
@@ -7902,10 +7920,19 @@ impl Interp {
         self.proto_methods.push((temporal, "Instant", instant));
         for (name, method) in [
             ("from", NativeMethod::TemporalInstantFrom),
-            ("fromEpochMilliseconds", NativeMethod::TemporalInstantFromEpochMilliseconds),
-            ("fromEpochNanoseconds", NativeMethod::TemporalInstantFromEpochNanoseconds),
+            (
+                "fromEpochMilliseconds",
+                NativeMethod::TemporalInstantFromEpochMilliseconds,
+            ),
+            (
+                "fromEpochNanoseconds",
+                NativeMethod::TemporalInstantFromEpochNanoseconds,
+            ),
             ("compare", NativeMethod::TemporalInstantCompare),
-        ] { let f = self.alloc_method(method); self.proto_methods.push((instant, name, f)); }
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((instant, name, f));
+        }
         for (name, method) in [
             ("add", NativeMethod::TemporalInstantAdd),
             ("subtract", NativeMethod::TemporalInstantSubtract),
@@ -7916,7 +7943,10 @@ impl Interp {
             ("toString", NativeMethod::TemporalInstantToString),
             ("toJSON", NativeMethod::TemporalInstantToJSON),
             ("valueOf", NativeMethod::TemporalInstantValueOf),
-        ] { let f = self.alloc_method(method); self.proto_methods.push((ip, name, f)); }
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((ip, name, f));
+        }
 
         let duration = self.alloc_named_native(Native::TemporalDuration);
         let dp = self.slots.alloc(Slot::instance(self.object_proto));
@@ -7928,7 +7958,10 @@ impl Interp {
         for (name, method) in [
             ("from", NativeMethod::TemporalDurationFrom),
             ("compare", NativeMethod::TemporalDurationCompare),
-        ] { let f = self.alloc_method(method); self.proto_methods.push((duration, name, f)); }
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((duration, name, f));
+        }
         for (name, method) in [
             ("with", NativeMethod::TemporalDurationWith),
             ("negated", NativeMethod::TemporalDurationNegated),
@@ -7940,7 +7973,10 @@ impl Interp {
             ("toString", NativeMethod::TemporalDurationToString),
             ("toJSON", NativeMethod::TemporalDurationToJSON),
             ("valueOf", NativeMethod::TemporalDurationValueOf),
-        ] { let f = self.alloc_method(method); self.proto_methods.push((dp, name, f)); }
+        ] {
+            let f = self.alloc_method(method);
+            self.proto_methods.push((dp, name, f));
+        }
 
         // ISO plain Temporal families.  They deliberately share a record and
         // method dispatcher: calendar arithmetic is one set of algorithms,
@@ -7952,32 +7988,47 @@ impl Interp {
             self.ctor_prototype.insert(ctor, proto);
             self.proto_methods.push((ctor, "prototype", proto));
             self.proto_methods.push((proto, "constructor", ctor));
-            self.proto_methods.push((temporal, TEMPORAL_PLAIN_NAMES[kind as usize], ctor));
+            self.proto_methods
+                .push((temporal, TEMPORAL_PLAIN_NAMES[kind as usize], ctor));
 
             let from = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 0), "from", 1);
             self.proto_methods.push((ctor, "from", from));
             if kind < 5 {
-                let compare = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 1), "compare", 2);
+                let compare =
+                    self.alloc_named_method(NativeMethod::TemporalPlain(kind, 1), "compare", 2);
                 self.proto_methods.push((ctor, "compare", compare));
                 for (name, op, arity) in [
-                    ("with", 2, 1), ("add", 3, 1), ("subtract", 4, 1),
-                    ("until", 5, 1), ("since", 6, 1), ("equals", 7, 1),
-                    ("toString", 8, 0), ("toJSON", 9, 0), ("valueOf", 10, 0),
+                    ("with", 2, 1),
+                    ("add", 3, 1),
+                    ("subtract", 4, 1),
+                    ("until", 5, 1),
+                    ("since", 6, 1),
+                    ("equals", 7, 1),
+                    ("toString", 8, 0),
+                    ("toJSON", 9, 0),
+                    ("valueOf", 10, 0),
                 ] {
-                    let f = self.alloc_named_method(NativeMethod::TemporalPlain(kind, op), name, arity);
+                    let f =
+                        self.alloc_named_method(NativeMethod::TemporalPlain(kind, op), name, arity);
                     self.proto_methods.push((proto, name, f));
                 }
                 if kind == 2 {
                     for (name, op) in [("toPlainDate", 11), ("toPlainTime", 12)] {
-                        let f = self.alloc_named_method(NativeMethod::TemporalPlain(kind, op), name, 0);
+                        let f =
+                            self.alloc_named_method(NativeMethod::TemporalPlain(kind, op), name, 0);
                         self.proto_methods.push((proto, name, f));
                     }
                 } else if kind == 0 || kind == 1 {
-                    let f = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 13), "toPlainDateTime", 1);
+                    let f = self.alloc_named_method(
+                        NativeMethod::TemporalPlain(kind, 13),
+                        "toPlainDateTime",
+                        1,
+                    );
                     self.proto_methods.push((proto, "toPlainDateTime", f));
                 }
             } else {
-                let to_string = self.alloc_named_method(NativeMethod::TemporalPlain(kind, 8), "toString", 0);
+                let to_string =
+                    self.alloc_named_method(NativeMethod::TemporalPlain(kind, 8), "toString", 0);
                 self.proto_methods.push((proto, "toString", to_string));
             }
         }
@@ -7997,13 +8048,25 @@ impl Interp {
             self.proto_methods.push((zoned, name, f));
         }
         for (name, op, arity) in [
-            ("with", 2u8, 1u32), ("add", 3, 1), ("subtract", 4, 1),
-            ("until", 5, 1), ("since", 6, 1), ("round", 7, 1), ("equals", 8, 1),
-            ("startOfDay", 9, 0), ("getTimeZoneTransition", 10, 1),
-            ("toInstant", 11, 0), ("toPlainDate", 12, 0), ("toPlainTime", 13, 0),
-            ("toPlainDateTime", 14, 0), ("withPlainTime", 15, 0),
-            ("withTimeZone", 16, 1), ("withCalendar", 17, 1),
-            ("toString", 18, 0), ("toJSON", 19, 0), ("toLocaleString", 20, 0),
+            ("with", 2u8, 1u32),
+            ("add", 3, 1),
+            ("subtract", 4, 1),
+            ("until", 5, 1),
+            ("since", 6, 1),
+            ("round", 7, 1),
+            ("equals", 8, 1),
+            ("startOfDay", 9, 0),
+            ("getTimeZoneTransition", 10, 1),
+            ("toInstant", 11, 0),
+            ("toPlainDate", 12, 0),
+            ("toPlainTime", 13, 0),
+            ("toPlainDateTime", 14, 0),
+            ("withPlainTime", 15, 0),
+            ("withTimeZone", 16, 1),
+            ("withCalendar", 17, 1),
+            ("toString", 18, 0),
+            ("toJSON", 19, 0),
+            ("toLocaleString", 20, 0),
             ("valueOf", 21, 0),
         ] {
             let f = self.alloc_named_method(NativeMethod::TemporalZoned(op), name, arity);
@@ -8018,8 +8081,12 @@ impl Interp {
         self.temporal_now_object = now;
         self.proto_methods.push((temporal, "Now", now));
         for (name, op) in [
-            ("instant", 0u8), ("timeZoneId", 1), ("zonedDateTimeISO", 2),
-            ("plainDateISO", 3), ("plainDateTimeISO", 4), ("plainTimeISO", 5),
+            ("instant", 0u8),
+            ("timeZoneId", 1),
+            ("zonedDateTimeISO", 2),
+            ("plainDateISO", 3),
+            ("plainDateTimeISO", 4),
+            ("plainTimeISO", 5),
         ] {
             let f = self.alloc_named_method(NativeMethod::TemporalNow(op), name, 0);
             self.proto_methods.push((now, name, f));
@@ -8183,8 +8250,7 @@ impl Interp {
             "detachArrayBuffer",
             1,
         );
-        self.proto_methods
-            .push((host, "detachArrayBuffer", detach));
+        self.proto_methods.push((host, "detachArrayBuffer", detach));
         self.intrinsics.insert("$262", host);
     }
 
@@ -8275,11 +8341,8 @@ impl Interp {
         if !self.number_proto.is_null() {
             let mf = self.alloc_method(NativeMethod::NumberToString);
             self.proto_methods.push((self.number_proto, "toString", mf));
-            let to_locale_string = self.alloc_named_method(
-                NativeMethod::NumberToLocaleString,
-                "toLocaleString",
-                0,
-            );
+            let to_locale_string =
+                self.alloc_named_method(NativeMethod::NumberToLocaleString, "toLocaleString", 0);
             self.proto_methods
                 .push((self.number_proto, "toLocaleString", to_locale_string));
         }
@@ -8308,50 +8371,70 @@ impl Interp {
     /// local-time operations therefore use UTC, matching the engine's existing
     /// deterministic Intl/Temporal host profile.
     fn create_date(&mut self) {
-        let Some(&ctor) = self.intrinsics.get("Date") else { return };
-        let Some(proto) = self.prototype_of(ctor) else { return };
+        let Some(&ctor) = self.intrinsics.get("Date") else {
+            return;
+        };
+        let Some(proto) = self.prototype_of(ctor) else {
+            return;
+        };
         self.date_proto = proto;
-        for (name, op, arity) in [
-            ("parse", 0u8, 1u32), ("UTC", 1, 7), ("now", 2, 0),
-        ] {
+        for (name, op, arity) in [("parse", 0u8, 1u32), ("UTC", 1, 7), ("now", 2, 0)] {
             let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
             self.proto_methods.push((ctor, name, f));
         }
         for (name, op, arity) in [
-            ("getTime", 10u8, 0u32), ("valueOf", 11, 0),
-            ("getFullYear", 12, 0), ("getUTCFullYear", 12, 0),
-            ("getMonth", 13, 0), ("getUTCMonth", 13, 0),
-            ("getDate", 14, 0), ("getUTCDate", 14, 0),
-            ("getDay", 15, 0), ("getUTCDay", 15, 0),
-            ("getHours", 16, 0), ("getUTCHours", 16, 0),
-            ("getMinutes", 17, 0), ("getUTCMinutes", 17, 0),
-            ("getSeconds", 18, 0), ("getUTCSeconds", 18, 0),
-            ("getMilliseconds", 19, 0), ("getUTCMilliseconds", 19, 0),
+            ("getTime", 10u8, 0u32),
+            ("valueOf", 11, 0),
+            ("getFullYear", 12, 0),
+            ("getUTCFullYear", 12, 0),
+            ("getMonth", 13, 0),
+            ("getUTCMonth", 13, 0),
+            ("getDate", 14, 0),
+            ("getUTCDate", 14, 0),
+            ("getDay", 15, 0),
+            ("getUTCDay", 15, 0),
+            ("getHours", 16, 0),
+            ("getUTCHours", 16, 0),
+            ("getMinutes", 17, 0),
+            ("getUTCMinutes", 17, 0),
+            ("getSeconds", 18, 0),
+            ("getUTCSeconds", 18, 0),
+            ("getMilliseconds", 19, 0),
+            ("getUTCMilliseconds", 19, 0),
             ("getTimezoneOffset", 20, 0),
-            ("toISOString", 21, 0), ("toUTCString", 22, 0),
-            ("toGMTString", 22, 0), ("toString", 23, 0),
-            ("toDateString", 24, 0), ("toTimeString", 25, 0),
-            ("toLocaleString", 23, 0), ("toLocaleDateString", 24, 0),
+            ("toISOString", 21, 0),
+            ("toUTCString", 22, 0),
+            ("toGMTString", 22, 0),
+            ("toString", 23, 0),
+            ("toDateString", 24, 0),
+            ("toTimeString", 25, 0),
+            ("toLocaleString", 23, 0),
+            ("toLocaleDateString", 24, 0),
             ("toLocaleTimeString", 25, 0),
-            ("setTime", 26, 1), ("toJSON", 27, 1),
-            ("setMilliseconds", 28, 1), ("setUTCMilliseconds", 28, 1),
-            ("setSeconds", 29, 2), ("setUTCSeconds", 29, 2),
-            ("setMinutes", 30, 3), ("setUTCMinutes", 30, 3),
-            ("setHours", 31, 4), ("setUTCHours", 31, 4),
-            ("setDate", 32, 1), ("setUTCDate", 32, 1),
-            ("setMonth", 33, 2), ("setUTCMonth", 33, 2),
-            ("setFullYear", 34, 3), ("setUTCFullYear", 34, 3),
+            ("setTime", 26, 1),
+            ("toJSON", 27, 1),
+            ("setMilliseconds", 28, 1),
+            ("setUTCMilliseconds", 28, 1),
+            ("setSeconds", 29, 2),
+            ("setUTCSeconds", 29, 2),
+            ("setMinutes", 30, 3),
+            ("setUTCMinutes", 30, 3),
+            ("setHours", 31, 4),
+            ("setUTCHours", 31, 4),
+            ("setDate", 32, 1),
+            ("setUTCDate", 32, 1),
+            ("setMonth", 33, 2),
+            ("setUTCMonth", 33, 2),
+            ("setFullYear", 34, 3),
+            ("setUTCFullYear", 34, 3),
         ] {
             let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
             self.proto_methods.push((proto, name, f));
         }
         // The symbol-key id is minted lazily, but this identity belongs to the
         // realm's boot graph so snapshots can rederive it at the same slot.
-        self.date_to_primitive_method = self.alloc_named_method(
-            NativeMethod::DateToPrimitive,
-            "[Symbol.toPrimitive]",
-            1,
-        );
+        self.date_to_primitive_method =
+            self.alloc_named_method(NativeMethod::DateToPrimitive, "[Symbol.toPrimitive]", 1);
     }
 
     /// Register the modeled `String.prototype` methods (`xsString.c`) on
@@ -8772,9 +8855,8 @@ impl Interp {
     /// — so this cannot perturb top-level behavior. Called after the eval
     /// bridge relinks a unit's symbols.
     fn refresh_special_ids_from_symbols(&mut self) {
-        let id_of = |ids: &std::collections::HashMap<String, u16>, want: &str| {
-            ids.get(want).copied()
-        };
+        let id_of =
+            |ids: &std::collections::HashMap<String, u16>, want: &str| ids.get(want).copied();
         macro_rules! fill {
             ($field:expr, $name:literal) => {
                 if $field.is_none() {
@@ -8951,8 +9033,8 @@ impl Interp {
                 // sees a callable). Standard intrinsic globals are writable
                 // and configurable but non-enumerable. Not metered — a
                 // pre-existing global.
-                let property = self
-                    .create_global_property(id, (Kind::Reference, Payload::Reference(func)));
+                let property =
+                    self.create_global_property(id, (Kind::Reference, Payload::Reference(func)));
                 self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
             } else if let Some(v) = value_global(name) {
                 // The primitive value globals `undefined`/`NaN`/`Infinity`
@@ -9015,7 +9097,9 @@ impl Interp {
         .iter()
         .any(|n| self.symbol_ids.contains_key(*n));
         if set_methods_used {
-            for name in ["size", "has", "keys", "values", "next", "done", "value", "return"] {
+            for name in [
+                "size", "has", "keys", "values", "next", "done", "value", "return",
+            ] {
                 self.intern_key(name);
             }
             // The set methods drive a native collection's `keys()`/`values()`
@@ -9034,8 +9118,8 @@ impl Interp {
             }
         }
         let iterator_helpers_used = [
-            "map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
-            "forEach", "some", "every", "find",
+            "map", "filter", "take", "drop", "flatMap", "reduce", "toArray", "forEach", "some",
+            "every", "find",
         ]
         .iter()
         .any(|name| self.symbol_ids.contains_key(*name));
@@ -9129,8 +9213,8 @@ impl Interp {
         let typed_array_ctor = self.functions.iter().find_map(|(&function, info)| {
             (info.native == Some(Native::TypedArrayBase)).then_some(function)
         });
-        let typed_array_proto = typed_array_ctor
-            .and_then(|constructor| self.ctor_prototype.get(&constructor).copied());
+        let typed_array_proto =
+            typed_array_ctor.and_then(|constructor| self.ctor_prototype.get(&constructor).copied());
         let names_typed_array = TYPED_ARRAY_TYPES
             .iter()
             .any(|ty| self.symbol_ids.contains_key(ty.name));
@@ -9235,7 +9319,11 @@ impl Interp {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
                 if keep(pid) && (full || self.find_property(*proto, pid).is_none()) {
                     let off = self.alloc_str_text(value.as_bytes());
-                    self.set_own_unmetered(*proto, pid, Slot::of(Kind::String, Payload::String(off)));
+                    self.set_own_unmetered(
+                        *proto,
+                        pid,
+                        Slot::of(Kind::String, Payload::String(off)),
+                    );
                 }
             }
         }
@@ -9274,12 +9362,9 @@ impl Interp {
             // earlier link already installed it does not re-install — a guest
             // redefinition of `format` survives.
             let guard_is_kept = if guard == "TypedArray" {
-                TYPED_ARRAY_TYPES.iter().any(|ty| {
-                    self.symbol_ids
-                        .get(ty.name)
-                        .copied()
-                        .is_some_and(&keep)
-                })
+                TYPED_ARRAY_TYPES
+                    .iter()
+                    .any(|ty| self.symbol_ids.get(ty.name).copied().is_some_and(&keep))
             } else {
                 self.symbol_ids.get(guard).copied().is_some_and(&keep)
             };
@@ -9293,9 +9378,7 @@ impl Interp {
                     proto,
                     pid,
                     Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
-                    setter.map(|function| {
-                        Slot::of(Kind::Reference, Payload::Reference(function))
-                    }),
+                    setter.map(|function| Slot::of(Kind::Reference, Payload::Reference(function))),
                 );
             }
         }
@@ -9389,8 +9472,7 @@ impl Interp {
                     .flatten()
             });
             let typed_array_tag_getter = self.functions.iter().find_map(|(&function, info)| {
-                (info.method == Some(NativeMethod::TypedArrayToStringTagGetter))
-                    .then_some(function)
+                (info.method == Some(NativeMethod::TypedArrayToStringTagGetter)).then_some(function)
             });
             if let (Some(proto), Some(getter)) = (typed_array_proto, typed_array_tag_getter) {
                 self.set_own_accessor_unmetered(
@@ -9418,10 +9500,7 @@ impl Interp {
                 (self.promise_proto, "Promise"),
                 (self.map_iterator_proto, "Map Iterator"),
                 (self.set_iterator_proto, "Set Iterator"),
-                (
-                    self.regexp_string_iterator_proto,
-                    "RegExp String Iterator",
-                ),
+                (self.regexp_string_iterator_proto, "RegExp String Iterator"),
                 (self.async_generator_proto, "AsyncGenerator"),
                 // The generator-family constructor prototypes each carry a
                 // `Symbol.toStringTag` string (ES2024 25.2.3.1 / 25.3.3.1 /
@@ -9438,7 +9517,10 @@ impl Interp {
                 // (endojs/endo-but-for-bots#1046).
                 (self.generator_proto, "Generator"),
                 (self.generator_function_proto, "GeneratorFunction"),
-                (self.async_generator_function_proto, "AsyncGeneratorFunction"),
+                (
+                    self.async_generator_function_proto,
+                    "AsyncGeneratorFunction",
+                ),
             ] {
                 if proto.is_null() {
                     continue;
@@ -9545,9 +9627,7 @@ impl Interp {
                 if let Some((_, _, values)) = self
                     .proto_methods
                     .iter()
-                    .find(|(holder, name, _)| {
-                        *holder == typed_array_proto && *name == "values"
-                    })
+                    .find(|(holder, name, _)| *holder == typed_array_proto && *name == "values")
                     .copied()
                 {
                     self.set_own_unmetered_with_flag(
@@ -9571,10 +9651,7 @@ impl Interp {
             // function. Locate the already-created boot methods directly so
             // the aliases exist even when the source never spells those
             // string keys (a Symbol.iterator-only test).
-            for (proto, method_name) in [
-                (self.map_proto, "entries"),
-                (self.set_proto, "values"),
-            ] {
+            for (proto, method_name) in [(self.map_proto, "entries"), (self.set_proto, "values")] {
                 if let Some((_, _, function)) = self
                     .proto_methods
                     .iter()
@@ -9615,11 +9692,7 @@ impl Interp {
         }
         for (native, string_name, symbol_name) in [
             (Native::DisposableStack, "dispose", "dispose"),
-            (
-                Native::AsyncDisposableStack,
-                "disposeAsync",
-                "asyncDispose",
-            ),
+            (Native::AsyncDisposableStack, "disposeAsync", "asyncDispose"),
         ] {
             let Some(proto) = self
                 .intrinsics
@@ -9752,12 +9825,12 @@ impl Interp {
         let mut pc = 0usize;
         while pc < code.len() {
             let op = Opcode::from_u8(code[pc]).ok_or(RelinkError::MalformedBytecode)?;
-            let ilen = crate::opcode::instruction_len(code, pc)
-                .ok_or(RelinkError::MalformedBytecode)?;
+            let ilen =
+                crate::opcode::instruction_len(code, pc).ok_or(RelinkError::MalformedBytecode)?;
             let cache_get = previous == Some(Opcode::XS_CODE_TEMPLATE_CACHE)
                 && op == Opcode::XS_CODE_GET_PROPERTY;
-            let cache_set = previous == Some(Opcode::XS_CODE_TEMPLATE)
-                && op == Opcode::XS_CODE_SET_PROPERTY;
+            let cache_set =
+                previous == Some(Opcode::XS_CODE_TEMPLATE) && op == Opcode::XS_CODE_SET_PROPERTY;
             if cache_get || cache_set {
                 let a = *code.get(pc + 1).ok_or(RelinkError::MalformedBytecode)?;
                 let b = *code.get(pc + 2).ok_or(RelinkError::MalformedBytecode)?;
@@ -9790,9 +9863,7 @@ impl Interp {
                 if !self.symbol_ids.contains_key(&candidate) {
                     break candidate;
                 }
-                nonce = nonce
-                    .checked_add(1)
-                    .ok_or(RelinkError::TableFull)?;
+                nonce = nonce.checked_add(1).ok_or(RelinkError::TableFull)?;
             };
             sites.insert(old, self.append_name_key(&name));
         }
@@ -10365,10 +10436,7 @@ impl Interp {
     /// order, followed by data constants in their declaration order. The VM's
     /// native-function allocation order is an implementation detail and must
     /// not leak through `[[OwnPropertyKeys]]`.
-    fn intrinsic_own_string_order(
-        &self,
-        inst: crate::value::SlotIndex,
-    ) -> Option<Vec<u16>> {
+    fn intrinsic_own_string_order(&self, inst: crate::value::SlotIndex) -> Option<Vec<u16>> {
         if !self.intrinsics.values().any(|owner| *owner == inst) {
             return None;
         }
@@ -10379,17 +10447,19 @@ impl Interp {
                 (*owner == inst && !matches!(*name, "length" | "name" | "prototype"))
                     .then_some(*name)
             })
-            .chain(self.proto_accessors.iter().filter_map(
-                |(owner, key, _, _, _)| match key {
-                    ProtoAccessorKey::String(name)
-                        if *owner == inst
-                            && !matches!(*name, "length" | "name" | "prototype") =>
-                    {
-                        Some(*name)
-                    }
-                    _ => None,
-                },
-            ))
+            .chain(
+                self.proto_accessors
+                    .iter()
+                    .filter_map(|(owner, key, _, _, _)| match key {
+                        ProtoAccessorKey::String(name)
+                            if *owner == inst
+                                && !matches!(*name, "length" | "name" | "prototype") =>
+                        {
+                            Some(*name)
+                        }
+                        _ => None,
+                    }),
+            )
             .collect();
         // `sort_by_cached_key`, not `sort_unstable_by_key`: the key allocates a
         // String and the unstable form re-evaluates it on every comparison.
@@ -10910,13 +10980,12 @@ impl Interp {
         match key {
             ProtoAccessorKey::String(name) => self.symbol_ids.get(name).copied(),
             ProtoAccessorKey::WellKnownSymbol(name) => {
-                let descriptor = self.well_known_symbols.iter().find_map(|(candidate, value)| {
-                    (*candidate == name).then_some(value.value)
-                })?;
+                let descriptor = self
+                    .well_known_symbols
+                    .iter()
+                    .find_map(|(candidate, value)| (*candidate == name).then_some(value.value))?;
                 match descriptor {
-                    Payload::Reference(descriptor) => {
-                        self.symbol_key_ids.get(&descriptor).copied()
-                    }
+                    Payload::Reference(descriptor) => self.symbol_key_ids.get(&descriptor).copied(),
                     _ => None,
                 }
             }
@@ -10990,9 +11059,8 @@ impl Interp {
                 (proto, pid),
                 AccessorData {
                     get: Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
-                    set: setter.map(|function| {
-                        Slot::of(Kind::Reference, Payload::Reference(function))
-                    }),
+                    set: setter
+                        .map(|function| Slot::of(Kind::Reference, Payload::Reference(function))),
                 },
             );
         }
@@ -11011,7 +11079,12 @@ impl Interp {
             .error_data
             .iter()
             .map(|(owner, info)| {
-                (owner.0, info.name, info.message.clone(), info.frames.clone())
+                (
+                    owner.0,
+                    info.name,
+                    info.message.clone(),
+                    info.frames.clone(),
+                )
             })
             .collect();
         out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
@@ -11204,7 +11277,8 @@ impl Interp {
     /// slots were already bounds-checked with the heap.
     pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) {
         for (owner, value) in rows {
-            self.wrapper_data.insert(crate::value::SlotIndex(owner), value);
+            self.wrapper_data
+                .insert(crate::value::SlotIndex(owner), value);
         }
     }
 
@@ -11289,7 +11363,8 @@ impl Interp {
     /// Reinstate the arguments-exotic brand set.
     pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) {
         for owner in owners {
-            self.arguments_objects.insert(crate::value::SlotIndex(owner));
+            self.arguments_objects
+                .insert(crate::value::SlotIndex(owner));
         }
     }
 
@@ -11403,7 +11478,10 @@ impl Interp {
             let (Some(iterator_id), Some(values)) = (iterator_id, values) else {
                 continue;
             };
-            if self.ordinary_get_own_descriptor(owner, iterator_id).is_none() {
+            if self
+                .ordinary_get_own_descriptor(owner, iterator_id)
+                .is_none()
+            {
                 self.set_own_unmetered_with_flag(
                     owner,
                     iterator_id,
@@ -11584,11 +11662,7 @@ impl Interp {
             return false;
         }
 
-        self.code_segments = state
-            .segments
-            .into_iter()
-            .map(std::rc::Rc::new)
-            .collect();
+        self.code_segments = state.segments.into_iter().map(std::rc::Rc::new).collect();
         self.func_segments.clear();
         for row in state.functions {
             let owner = crate::value::SlotIndex(row.owner);
@@ -12016,8 +12090,10 @@ impl Interp {
             if (state == GeneratorState::Completed) != frame.is_none() {
                 return false;
             }
-            self.generators
-                .insert(crate::value::SlotIndex(row.owner), GeneratorData { state, frame });
+            self.generators.insert(
+                crate::value::SlotIndex(row.owner),
+                GeneratorData { state, frame },
+            );
         }
         true
     }
@@ -12112,9 +12188,7 @@ impl Interp {
                                 ReactionKind::User => (0, 0, 0),
                                 ReactionKind::FinallyReturn => (1, 0, 0),
                                 ReactionKind::Combine(ci, elem) => (2, comb_map[&ci], elem),
-                                ReactionKind::CombineDirect(ci, elem) => {
-                                    (12, comb_map[&ci], elem)
-                                }
+                                ReactionKind::CombineDirect(ci, elem) => (12, comb_map[&ci], elem),
                                 ReactionKind::AsyncAwait(i) => (3, i.0, 0),
                                 ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
                                 ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
@@ -12123,9 +12197,7 @@ impl Interp {
                                 ReactionKind::FromAsyncElem(fa) => (8, fa, 0),
                                 ReactionKind::FromAsyncMap(fa) => (9, fa, 0),
                                 ReactionKind::FromAsyncClose(fa) => (10, fa, 0),
-                                ReactionKind::FinallyAwait(rejected) => {
-                                    (11, rejected as u32, 0)
-                                }
+                                ReactionKind::FinallyAwait(rejected) => (11, rejected as u32, 0),
                             };
                             PromiseReactionRow {
                                 on_fulfilled: r.on_fulfilled,
@@ -12198,10 +12270,7 @@ impl Interp {
         // after retained function state has restored.
         let mut results_lengths = Vec::with_capacity(snap.combinators.len());
         for c in &snap.combinators {
-            if c.kind > 3
-                || c.resolve.kind != Kind::Reference
-                || c.reject.kind != Kind::Reference
-            {
+            if c.kind > 3 || c.resolve.kind != Kind::Reference || c.reject.kind != Kind::Reference {
                 return false;
             }
             match self.arrays.get(&crate::value::SlotIndex(c.results)) {
@@ -12260,10 +12329,7 @@ impl Interp {
                 .iter()
                 .map(|r| {
                     let kind = match r.kind {
-                        0 if capability_ok(&r.resolve, &r.reject)
-                            && r.a == 0
-                            && r.b == 0 =>
-                        {
+                        0 if capability_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
                             ReactionKind::User
                         }
                         1 if capability_ok(&r.resolve, &r.reject)
@@ -12365,10 +12431,7 @@ impl Interp {
             if row.guard == u32::MAX - 1 || row.guard == u32::MAX - 2 {
                 let home = crate::value::SlotIndex(row.promise);
                 let required: &[&str] = if row.guard == u32::MAX - 1 {
-                    &[
-                        "[[PromiseFinallyHandler]]",
-                        "[[PromiseFinallyConstructor]]",
-                    ]
+                    &["[[PromiseFinallyHandler]]", "[[PromiseFinallyConstructor]]"]
                 } else {
                     &["[[PromiseFinallyValue]]"]
                 };
@@ -12422,8 +12485,12 @@ impl Interp {
                 if row.reject
                     || row.promise == row.function
                     || !runtime_homes.insert(row.promise)
-                    || resolve_id.and_then(|id| self.find_property(home, id)).is_none()
-                    || reject_id.and_then(|id| self.find_property(home, id)).is_none()
+                    || resolve_id
+                        .and_then(|id| self.find_property(home, id))
+                        .is_none()
+                    || reject_id
+                        .and_then(|id| self.find_property(home, id))
+                        .is_none()
                 {
                     return false;
                 }
@@ -12772,7 +12839,10 @@ impl Interp {
             }
         }
         for (_, r) in &t.segment_iterators {
-            match t.segments.binary_search_by_key(&r.segments_inst.0, |(o, _)| *o) {
+            match t
+                .segments
+                .binary_search_by_key(&r.segments_inst.0, |(o, _)| *o)
+            {
                 Ok(k) => {
                     if r.pos > t.segments[k].1.segments.len() {
                         return false;
@@ -12860,8 +12930,7 @@ impl Interp {
             }
             match r.kind {
                 5..=7 => {
-                    let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable))
-                    else {
+                    let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable)) else {
                         return false;
                     };
                     if r.index as usize > c.entries().len() {
@@ -12878,8 +12947,7 @@ impl Interp {
                         return false;
                     }
                     if r.enum_keys.iter().any(|&(id, _)| {
-                        id != crate::value::XS_NO_ID
-                            && id as usize > self.symbol_names.len()
+                        id != crate::value::XS_NO_ID && id as usize > self.symbol_names.len()
                     }) {
                         return false;
                     }
@@ -12974,7 +13042,8 @@ impl Interp {
             prev = Some(id);
         }
         for &(id, desc) in pairs {
-            self.symbol_key_ids.insert(crate::value::SlotIndex(desc), id);
+            self.symbol_key_ids
+                .insert(crate::value::SlotIndex(desc), id);
         }
         self.next_symbol_key_id = next;
         // `restore_snapshot_state` can rebuild only string-keyed boot
@@ -13114,10 +13183,7 @@ impl Interp {
             return;
         }
         let value = if let Some(function) = self.intrinsics.get(name).copied() {
-            Some(Slot::of(
-                Kind::Reference,
-                Payload::Reference(function),
-            ))
+            Some(Slot::of(Kind::Reference, Payload::Reference(function)))
         } else if let Some(value) = value_global(name) {
             Some(value)
         } else if name == "globalThis" {
@@ -13474,11 +13540,7 @@ impl Interp {
     /// and `variable_env` already binds `id`. EvalDeclarationInstantiation
     /// rejects a `var`/function declaration at that collision, while parameter
     /// and older variable layers below `variable_env` remain valid targets.
-    fn has_lexical_binding_before(
-        &self,
-        variable_env: crate::value::SlotIndex,
-        id: u16,
-    ) -> bool {
+    fn has_lexical_binding_before(&self, variable_env: crate::value::SlotIndex, id: u16) -> bool {
         let mut env = match self.env.value {
             Payload::Reference(env) => env,
             _ => return false,
@@ -13502,11 +13564,7 @@ impl Interp {
     /// boundary. Reusing a parameter/body cell is required for `eval('var a =
     /// ...')`; walking beyond the second boundary would incorrectly reuse a
     /// binding captured from an outer function.
-    fn has_function_var_binding(
-        &self,
-        variable_env: crate::value::SlotIndex,
-        id: u16,
-    ) -> bool {
+    fn has_function_var_binding(&self, variable_env: crate::value::SlotIndex, id: u16) -> bool {
         let mut env = variable_env;
         let mut null_boundaries = 0usize;
         while !env.is_null() {
@@ -13896,9 +13954,10 @@ impl Interp {
         // interned key id it maps to. Both must already exist: a program that
         // set `[Symbol.toStringTag]` interned the key when it wrote the
         // property, so a missing entry means no such property can exist.
-        let descriptor = self.well_known_symbols.iter().find_map(|(name, value)| {
-            (*name == "toStringTag").then_some(value.value)
-        })?;
+        let descriptor = self
+            .well_known_symbols
+            .iter()
+            .find_map(|(name, value)| (*name == "toStringTag").then_some(value.value))?;
         let descriptor = match descriptor {
             Payload::Reference(d) => d,
             _ => return None,
@@ -14241,9 +14300,7 @@ impl Interp {
             // before it halts. Bound live slots too: a bounded wedge is
             // memory as much as time, and no real ≤21-byte fuzz input
             // legitimately reaches a million live slots.
-            if self.step_limit != u64::MAX
-                && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING
-            {
+            if self.step_limit != u64::MAX && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING {
                 return Halt::StepLimit(self.n_dispatched);
             }
             // Property-key id-space poison latch (wave-6 Remaining item):
@@ -14419,9 +14476,7 @@ impl Interp {
                         // expose that method through the storage prototype;
                         // reify the required own property now that storage and
                         // language prototypes are distinct.
-                        if let Some(iterator_id) =
-                            self.well_known_symbol_property_id("iterator")
-                        {
+                        if let Some(iterator_id) = self.well_known_symbol_property_id("iterator") {
                             let values = self
                                 .proto_methods
                                 .iter()
@@ -14461,18 +14516,14 @@ impl Interp {
                         // names map only their last occurrence.
                         if op == XS_CODE_ARGUMENTS_SLOPPY {
                             let formal_count = code[pc + 1] as usize;
-                            let cells = self.sloppy_argument_cells(
-                                code,
-                                pc + size as usize,
-                                formal_count,
-                            );
+                            let cells =
+                                self.sloppy_argument_cells(code, pc + size as usize, formal_count);
                             for (index, cell) in cells.into_iter().enumerate() {
                                 let Some(cell) = cell else { continue };
                                 if index >= self.arrays[&array].length as usize {
                                     continue;
                                 }
-                                let mut mapped =
-                                    Slot::of(Kind::Closure, Payload::Reference(cell));
+                                let mut mapped = Slot::of(Kind::Closure, Payload::Reference(cell));
                                 mapped.flag = self.arrays[&array]
                                     .items()
                                     .get(&(index as u32))
@@ -14771,10 +14822,7 @@ impl Interp {
                         // Object.defineProperty(globalThis, ...) observes an
                         // accessor (and its abrupt completion), rather than
                         // exposing the accessor's backing placeholder slot.
-                        let global = Slot::of(
-                            Kind::Reference,
-                            Payload::Reference(self.global_obj),
-                        );
+                        let global = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
                         Some(dispatch_result!(
                             self.mop_get(code, self.global_obj, name, global),
                             pc,
@@ -14804,10 +14852,7 @@ impl Interp {
                         // the global object, so an inherited accessor runs
                         // with the `this` XS gives it and its abrupt
                         // completion is observed.
-                        let global = Slot::of(
-                            Kind::Reference,
-                            Payload::Reference(self.global_obj),
-                        );
+                        let global = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
                         Some(dispatch_result!(
                             self.mop_get(code, self.object_proto, name, global),
                             pc,
@@ -14898,10 +14943,8 @@ impl Interp {
                         // The opcode replaces the top-of-stack primitive with the
                         // wrapper reference in place (XS's `mxToInstance(mxStack)`).
                         Kind::Boolean => {
-                            let inst =
-                                self.box_primitive_to_instance(Native::Boolean, top);
-                            let head =
-                                Slot::of(Kind::Reference, Payload::Reference(inst));
+                            let inst = self.box_primitive_to_instance(Native::Boolean, top);
+                            let head = Slot::of(Kind::Reference, Payload::Reference(inst));
                             if let Some(t) = self.stack.last_mut() {
                                 *t = head;
                             } else {
@@ -14909,10 +14952,8 @@ impl Interp {
                             }
                         }
                         Kind::Integer | Kind::Number => {
-                            let inst =
-                                self.box_primitive_to_instance(Native::Number, top);
-                            let head =
-                                Slot::of(Kind::Reference, Payload::Reference(inst));
+                            let inst = self.box_primitive_to_instance(Native::Number, top);
+                            let head = Slot::of(Kind::Reference, Payload::Reference(inst));
                             if let Some(t) = self.stack.last_mut() {
                                 *t = head;
                             } else {
@@ -14997,11 +15038,21 @@ impl Interp {
                                     }
                                     EnvironmentSet::Uninitialized => {
                                         let error = self.build_error("ReferenceError", 0, 0);
-                                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                        dispatch_halt!(
+                                            self.raise_js(error),
+                                            pc,
+                                            self,
+                                            return_depth
+                                        );
                                     }
                                     EnvironmentSet::Const => {
                                         let error = self.build_error("TypeError", 0, 0);
-                                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                        dispatch_halt!(
+                                            self.raise_js(error),
+                                            pc,
+                                            self,
+                                            return_depth
+                                        );
                                     }
                                     EnvironmentSet::Missing => {}
                                 }
@@ -15083,8 +15134,7 @@ impl Interp {
                         // this arm's measured cost, and both forms stay
                         // bit-exact against the pin.
                         let own_global = self.global_props.contains_key(&name);
-                        let resolvable =
-                            own_global || self.instance_has(self.object_proto, name).0;
+                        let resolvable = own_global || self.instance_has(self.object_proto, name).0;
                         if !resolvable && self.strict {
                             // XS's `SET_VARIABLE` strict arm:
                             // `mxRunDebugID(XS_REFERENCE_ERROR, "set %s:
@@ -15123,10 +15173,7 @@ impl Interp {
                             // carry it.
                             self.meter.tick_code();
                         }
-                        let global = Slot::of(
-                            Kind::Reference,
-                            Payload::Reference(self.global_obj),
-                        );
+                        let global = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
                         let accepted = dispatch_result!(
                             self.ordinary_set(code, self.global_obj, name, value, global),
                             pc,
@@ -15216,12 +15263,7 @@ impl Interp {
                         );
                     }
                     let key = if key.kind == Kind::Reference {
-                        dispatch_result!(
-                            self.to_primitive(code, key, true),
-                            pc,
-                            self,
-                            return_depth
-                        )
+                        dispatch_result!(self.to_primitive(code, key, true), pc, self, return_depth)
                     } else {
                         key
                     };
@@ -15492,22 +15534,24 @@ impl Interp {
                         }
                         // `for (x of null)` / `[...undefined]`: `fxGetIterator`'s
                         // `mxToInstance` throws before any method lookup.
-                        _ if matches!(iterable.kind, Kind::Null | Kind::Undefined) => dispatch_halt!(
-                            self.catchable_type_error_msg(cannot_coerce_to_object(iterable.kind)),
-                            pc,
-                            self,
-                            return_depth
-                        ),
+                        _ if matches!(iterable.kind, Kind::Null | Kind::Undefined) => {
+                            dispatch_halt!(
+                                self.catchable_type_error_msg(cannot_coerce_to_object(
+                                    iterable.kind
+                                )),
+                                pc,
+                                self,
+                                return_depth
+                            )
+                        }
                         _ => {
                             // No iterator protocol at all: XS reaches the
                             // call of the absent `Symbol.iterator` method
                             // (`fxCallInstance`'s "call: not a function"),
                             // raised in-frame so an enclosing `try` in the
                             // same activation observes it.
-                            let error = self.internal_error(
-                                "TypeError",
-                                "call: not a function".into(),
-                            );
+                            let error =
+                                self.internal_error("TypeError", "call: not a function".into());
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     }
@@ -15991,11 +16035,16 @@ impl Interp {
                         Payload::Reference(inst) if self.temporal_durations.contains_key(&inst) => {
                             let d = self.temporal_durations[&inst];
                             match self.string_key_name(id).as_deref() {
-                                Some("years") => Slot::number(d.years as f64), Some("months") => Slot::number(d.months as f64),
-                                Some("weeks") => Slot::number(d.weeks as f64), Some("days") => Slot::number(d.days as f64),
-                                Some("hours") => Slot::number(d.hours as f64), Some("minutes") => Slot::number(d.minutes as f64),
-                                Some("seconds") => Slot::number(d.seconds as f64), Some("milliseconds") => Slot::number(d.milliseconds as f64),
-                                Some("microseconds") => Slot::number(d.microseconds as f64), Some("nanoseconds") => Slot::number(d.nanoseconds as f64),
+                                Some("years") => Slot::number(d.years as f64),
+                                Some("months") => Slot::number(d.months as f64),
+                                Some("weeks") => Slot::number(d.weeks as f64),
+                                Some("days") => Slot::number(d.days as f64),
+                                Some("hours") => Slot::number(d.hours as f64),
+                                Some("minutes") => Slot::number(d.minutes as f64),
+                                Some("seconds") => Slot::number(d.seconds as f64),
+                                Some("milliseconds") => Slot::number(d.milliseconds as f64),
+                                Some("microseconds") => Slot::number(d.microseconds as f64),
+                                Some("nanoseconds") => Slot::number(d.nanoseconds as f64),
                                 Some("sign") => Slot::number(d.sign() as f64),
                                 Some("blank") => Slot::boolean(d.sign() == 0),
                                 _ => self.instance_get(inst, id),
@@ -16005,21 +16054,58 @@ impl Interp {
                             let r = self.temporal_plains[&inst];
                             let key = self.string_key_name(id);
                             match key.as_deref() {
-                                Some("year") => Slot::number(r.year as f64), Some("month") => Slot::number(r.month as f64),
-                                Some("monthCode") => self.new_string_metered(format!("M{:02}",r.month).as_bytes()),
-                                Some("day") => Slot::number(r.day as f64), Some("hour") => Slot::number(r.hour as f64),
-                                Some("minute") => Slot::number(r.minute as f64), Some("second") => Slot::number(r.second as f64),
-                                Some("millisecond") => Slot::number(r.millisecond as f64), Some("microsecond") => Slot::number(r.microsecond as f64),
+                                Some("year") => Slot::number(r.year as f64),
+                                Some("month") => Slot::number(r.month as f64),
+                                Some("monthCode") => {
+                                    self.new_string_metered(format!("M{:02}", r.month).as_bytes())
+                                }
+                                Some("day") => Slot::number(r.day as f64),
+                                Some("hour") => Slot::number(r.hour as f64),
+                                Some("minute") => Slot::number(r.minute as f64),
+                                Some("second") => Slot::number(r.second as f64),
+                                Some("millisecond") => Slot::number(r.millisecond as f64),
+                                Some("microsecond") => Slot::number(r.microsecond as f64),
                                 Some("nanosecond") => Slot::number(r.nanosecond as f64),
-                                Some("calendarId") | Some("id") => self.new_string_metered(b"iso8601"),
-                                Some("era") => self.new_string_metered(if r.year <= 0 { b"bce" } else { b"ce" }),
-                                Some("eraYear") => Slot::number(if r.year <= 0 { (1-r.year) as f64 } else { r.year as f64 }),
-                                Some("dayOfWeek") => Slot::number((days_from_civil(r.year,r.month,r.day).unwrap_or(0)+3).rem_euclid(7) as f64+1.0),
-                                Some("dayOfYear") => Slot::number((days_from_civil(r.year,r.month,r.day).unwrap_or(0)-days_from_civil(r.year,1,1).unwrap_or(0)+1) as f64),
-                                Some("daysInMonth") => Slot::number((1..=31).rev().find(|&d|days_from_civil(r.year,r.month,d).is_some()).unwrap_or(0) as f64),
-                                Some("daysInYear") => Slot::number(if days_from_civil(r.year,2,29).is_some(){366.0}else{365.0}),
+                                Some("calendarId") | Some("id") => {
+                                    self.new_string_metered(b"iso8601")
+                                }
+                                Some("era") => self.new_string_metered(if r.year <= 0 {
+                                    b"bce"
+                                } else {
+                                    b"ce"
+                                }),
+                                Some("eraYear") => Slot::number(if r.year <= 0 {
+                                    (1 - r.year) as f64
+                                } else {
+                                    r.year as f64
+                                }),
+                                Some("dayOfWeek") => Slot::number(
+                                    (days_from_civil(r.year, r.month, r.day).unwrap_or(0) + 3)
+                                        .rem_euclid(7) as f64
+                                        + 1.0,
+                                ),
+                                Some("dayOfYear") => Slot::number(
+                                    (days_from_civil(r.year, r.month, r.day).unwrap_or(0)
+                                        - days_from_civil(r.year, 1, 1).unwrap_or(0)
+                                        + 1) as f64,
+                                ),
+                                Some("daysInMonth") => Slot::number(
+                                    (1..=31)
+                                        .rev()
+                                        .find(|&d| days_from_civil(r.year, r.month, d).is_some())
+                                        .unwrap_or(0) as f64,
+                                ),
+                                Some("daysInYear") => {
+                                    Slot::number(if days_from_civil(r.year, 2, 29).is_some() {
+                                        366.0
+                                    } else {
+                                        365.0
+                                    })
+                                }
                                 Some("monthsInYear") => Slot::number(12.0),
-                                Some("inLeapYear") => Slot::boolean(days_from_civil(r.year,2,29).is_some()),
+                                Some("inLeapYear") => {
+                                    Slot::boolean(days_from_civil(r.year, 2, 29).is_some())
+                                }
                                 _ => self.instance_get(inst, id),
                             }
                         }
@@ -16029,7 +16115,9 @@ impl Interp {
                             match self.string_key_name(id).as_deref() {
                                 Some("year") => Slot::number(p.year as f64),
                                 Some("month") => Slot::number(p.month as f64),
-                                Some("monthCode") => self.new_string_metered(format!("M{:02}",p.month).as_bytes()),
+                                Some("monthCode") => {
+                                    self.new_string_metered(format!("M{:02}", p.month).as_bytes())
+                                }
                                 Some("day") => Slot::number(p.day as f64),
                                 Some("hour") => Slot::number(p.hour as f64),
                                 Some("minute") => Slot::number(p.minute as f64),
@@ -16038,21 +16126,56 @@ impl Interp {
                                 Some("microsecond") => Slot::number(p.microsecond as f64),
                                 Some("nanosecond") => Slot::number(p.nanosecond as f64),
                                 Some("calendarId") => self.new_string_metered(b"iso8601"),
-                                Some("timeZoneId") => self.new_string_metered(rec.time_zone.as_bytes()),
-                                Some("offset") => self.new_string_metered(format_offset_string(rec.offset_ns).as_bytes()),
+                                Some("timeZoneId") => {
+                                    self.new_string_metered(rec.time_zone.as_bytes())
+                                }
+                                Some("offset") => self.new_string_metered(
+                                    format_offset_string(rec.offset_ns).as_bytes(),
+                                ),
                                 Some("offsetNanoseconds") => Slot::number(rec.offset_ns as f64),
-                                Some("epochMilliseconds") => Slot::number(rec.epoch_nanoseconds.div_euclid(1_000_000) as f64),
-                                Some("epochNanoseconds") => self.temporal_i128_bigint(rec.epoch_nanoseconds),
+                                Some("epochMilliseconds") => {
+                                    Slot::number(rec.epoch_nanoseconds.div_euclid(1_000_000) as f64)
+                                }
+                                Some("epochNanoseconds") => {
+                                    self.temporal_i128_bigint(rec.epoch_nanoseconds)
+                                }
                                 Some("hoursInDay") => Slot::number(24.0),
-                                Some("dayOfWeek") => Slot::number((days_from_civil(p.year,p.month,p.day).unwrap_or(0)+3).rem_euclid(7) as f64+1.0),
-                                Some("dayOfYear") => Slot::number((days_from_civil(p.year,p.month,p.day).unwrap_or(0)-days_from_civil(p.year,1,1).unwrap_or(0)+1) as f64),
-                                Some("weekOfYear") => { let (w,_)=iso_week_of_year(p.year,p.month,p.day); Slot::number(w as f64) }
-                                Some("yearOfWeek") => { let (_,y)=iso_week_of_year(p.year,p.month,p.day); Slot::number(y as f64) }
+                                Some("dayOfWeek") => Slot::number(
+                                    (days_from_civil(p.year, p.month, p.day).unwrap_or(0) + 3)
+                                        .rem_euclid(7) as f64
+                                        + 1.0,
+                                ),
+                                Some("dayOfYear") => Slot::number(
+                                    (days_from_civil(p.year, p.month, p.day).unwrap_or(0)
+                                        - days_from_civil(p.year, 1, 1).unwrap_or(0)
+                                        + 1) as f64,
+                                ),
+                                Some("weekOfYear") => {
+                                    let (w, _) = iso_week_of_year(p.year, p.month, p.day);
+                                    Slot::number(w as f64)
+                                }
+                                Some("yearOfWeek") => {
+                                    let (_, y) = iso_week_of_year(p.year, p.month, p.day);
+                                    Slot::number(y as f64)
+                                }
                                 Some("daysInWeek") => Slot::number(7.0),
-                                Some("daysInMonth") => Slot::number((1..=31).rev().find(|&d|days_from_civil(p.year,p.month,d).is_some()).unwrap_or(0) as f64),
-                                Some("daysInYear") => Slot::number(if days_from_civil(p.year,2,29).is_some(){366.0}else{365.0}),
+                                Some("daysInMonth") => Slot::number(
+                                    (1..=31)
+                                        .rev()
+                                        .find(|&d| days_from_civil(p.year, p.month, d).is_some())
+                                        .unwrap_or(0) as f64,
+                                ),
+                                Some("daysInYear") => {
+                                    Slot::number(if days_from_civil(p.year, 2, 29).is_some() {
+                                        366.0
+                                    } else {
+                                        365.0
+                                    })
+                                }
                                 Some("monthsInYear") => Slot::number(12.0),
-                                Some("inLeapYear") => Slot::boolean(days_from_civil(p.year,2,29).is_some()),
+                                Some("inLeapYear") => {
+                                    Slot::boolean(days_from_civil(p.year, 2, 29).is_some())
+                                }
                                 // The ISO 8601 calendar exposes no era/eraYear.
                                 Some("era") | Some("eraYear") => Slot::undefined(),
                                 _ => self.instance_get(inst, id),
@@ -16143,7 +16266,9 @@ impl Interp {
                                 .unwrap_or_default();
                             let locale = self.locales[&inst].clone();
                             if name == "numeric" {
-                                Slot::boolean(locale.unicode.get("kn").map_or(false, |v| v == "true"))
+                                Slot::boolean(
+                                    locale.unicode.get("kn").map_or(false, |v| v == "true"),
+                                )
                             } else {
                                 let (recognized, text) = match name.as_str() {
                                     "baseName" => (true, Some(locale_base_name(&locale))),
@@ -16172,10 +16297,9 @@ impl Interp {
                             if self.collators.contains_key(&inst)
                                 && self.symbol_ids.get("compare") == Some(&id) =>
                         {
-                            let existing = self
-                                .collator_compare_functions
-                                .iter()
-                                .find_map(|(function, owner)| (*owner == inst).then_some(*function));
+                            let existing = self.collator_compare_functions.iter().find_map(
+                                |(function, owner)| (*owner == inst).then_some(*function),
+                            );
                             let function = existing.unwrap_or_else(|| {
                                 let f = self.alloc_method(NativeMethod::CollatorCompare);
                                 self.collator_compare_functions.insert(f, inst);
@@ -16360,12 +16484,14 @@ impl Interp {
                                 *s = Slot::boolean(deleted);
                             }
                         }
-                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => dispatch_halt!(
-                            self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
-                            pc,
-                            self,
-                            return_depth
-                        ),
+                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
+                            dispatch_halt!(
+                                self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
+                                pc,
+                                self,
+                                return_depth
+                            )
+                        }
                         // ToObject succeeds for every other primitive. Such a
                         // temporary wrapper has no configurable own property
                         // with this identifier, so deletion succeeds.
@@ -16421,8 +16547,8 @@ impl Interp {
                                 dispatch_result!(
                                     match id {
                                         Some(id) => self.proxy_delete(code, inst, id),
-                                        None => self
-                                            .uninterned_index_proxy_delete(code, inst, index),
+                                        None =>
+                                            self.uninterned_index_proxy_delete(code, inst, index),
                                     },
                                     pc,
                                     self,
@@ -16472,12 +16598,14 @@ impl Interp {
                                 id.is_none_or(|id| self.delete_own_property(inst, id))
                             }
                         }
-                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => dispatch_halt!(
-                            self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
-                            pc,
-                            self,
-                            return_depth
-                        ),
+                        _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => {
+                            dispatch_halt!(
+                                self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
+                                pc,
+                                self,
+                                return_depth
+                            )
+                        }
                         // String wrapper index properties are non-configurable.
                         Payload::String(off) if numeric_index.is_some() => {
                             numeric_index.unwrap() as usize >= self.str_len(off)
@@ -16930,12 +17058,7 @@ impl Interp {
                             dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
                         }
                         let result = self.call_promise_function(code, f, base, argc);
-                        dispatch_result!(
-                            result,
-                            pc,
-                            self,
-                            return_depth
-                        );
+                        dispatch_result!(result, pc, self, return_depth);
                         if self.check_meter() == MeterCheck::Abort {
                             return Halt::MeterAbort;
                         }
@@ -17104,7 +17227,11 @@ impl Interp {
                             .get(base + 4..base + 4 + argc)
                             .map(|s| s.to_vec())
                             .unwrap_or_default();
-                        let this = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+                        let this = self
+                            .stack
+                            .get(base)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined);
                         self.stack.truncate(base);
                         let result = if has_target {
                             let nt = Slot::of(Kind::Reference, Payload::Reference(px));
@@ -17366,14 +17493,12 @@ impl Interp {
                         Payload::Reference(env) => Some(env),
                         _ => None,
                     });
-                    let arrow = self
-                        .stack
-                        .len()
-                        .checked_sub(2)
-                        .and_then(|index| match self.stack[index].value {
+                    let arrow = self.stack.len().checked_sub(2).and_then(|index| {
+                        match self.stack[index].value {
                             Payload::Reference(function) => Some(function),
                             _ => None,
-                        });
+                        }
+                    });
                     let (Some(env), Some(arrow)) = (env, arrow) else {
                         return Halt::EngineInvariant("store_arrow:frame");
                     };
@@ -17385,10 +17510,8 @@ impl Interp {
                     self.functions.entry(arrow).or_default().home = home;
                     if self.cur_target {
                         let id = self.intern_key_unmetered("new.target");
-                        let target = Slot::of(
-                            Kind::Reference,
-                            Payload::Reference(self.target_func),
-                        );
+                        let target =
+                            Slot::of(Kind::Reference, Payload::Reference(self.target_func));
                         self.append_environment_capture(env, id, target);
                     }
                     let id = self.intern_key_unmetered("this");
@@ -17637,12 +17760,8 @@ impl Interp {
                 }
                 XS_CODE_BIT_NOT => {
                     let raw = self.pop();
-                    let a = dispatch_result!(
-                        self.to_number_value(code, raw),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    let a =
+                        dispatch_result!(self.to_number_value(code, raw), pc, self, return_depth);
                     if let Payload::BigInt(off) = a.value {
                         let result = self.bigint_bit_not(off);
                         self.push(result);
@@ -17680,51 +17799,27 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_STRICT_EQUAL => {
-                    dispatch_result!(
-                        self.equality(code, true, false),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    dispatch_result!(self.equality(code, true, false), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_STRICT_NOT_EQUAL => {
-                    dispatch_result!(
-                        self.equality(code, true, true),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    dispatch_result!(self.equality(code, true, true), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_EQUAL => {
-                    dispatch_result!(
-                        self.equality(code, false, false),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    dispatch_result!(self.equality(code, false, false), pc, self, return_depth);
                     pc += size as usize;
                 }
                 XS_CODE_NOT_EQUAL => {
-                    dispatch_result!(
-                        self.equality(code, false, true),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    dispatch_result!(self.equality(code, false, true), pc, self, return_depth);
                     pc += size as usize;
                 }
 
                 // ---- unary ------------------------------------------
                 XS_CODE_MINUS => {
                     let raw = self.pop();
-                    let a = dispatch_result!(
-                        self.to_number_value(code, raw),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    let a =
+                        dispatch_result!(self.to_number_value(code, raw), pc, self, return_depth);
                     // `-aBigInt` (XS_CODE_MINUS general path →
                     // `fxToNumericNumberUnary(the, a, gxTypeBigInt._neg)`):
                     // `fxBigInt_neg` copies the magnitude into a fresh chunk
@@ -17742,12 +17837,8 @@ impl Interp {
                 }
                 XS_CODE_PLUS => {
                     let raw = self.pop();
-                    let a = dispatch_result!(
-                        self.to_number_value(code, raw),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    let a =
+                        dispatch_result!(self.to_number_value(code, raw), pc, self, return_depth);
                     // Unary plus performs ToNumber rather than ToNumeric, so
                     // a BigInt is a catchable TypeError. Preserve XS's integer
                     // fast kind for every other integral conversion.
@@ -18083,8 +18174,12 @@ impl Interp {
                 // substitutions and other compiler-emitted string contexts.
                 XS_CODE_TO_STRING => {
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
-                    let primitive =
-                        dispatch_result!(self.to_primitive(code, top, true), pc, self, return_depth);
+                    let primitive = dispatch_result!(
+                        self.to_primitive(code, top, true),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     if primitive.kind == Kind::Symbol {
                         return Halt::Unsupported("to_string:symbol");
                     }
@@ -18167,27 +18262,15 @@ impl Interp {
                     }
                     let left = self.stack[n - 2];
                     let right = self.stack[n - 1];
-                    let a = dispatch_result!(
-                        self.to_number_value(code, left),
-                        pc,
-                        self,
-                        return_depth
-                    );
-                    let b = dispatch_result!(
-                        self.to_number_value(code, right),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    let a =
+                        dispatch_result!(self.to_number_value(code, left), pc, self, return_depth);
+                    let b =
+                        dispatch_result!(self.to_number_value(code, right), pc, self, return_depth);
                     self.stack.truncate(n - 2);
                     match (a.kind, b.kind) {
                         (Kind::BigInt, Kind::BigInt) => {
-                            let result = dispatch_result!(
-                                self.bigint_pow(a, b),
-                                pc,
-                                self,
-                                return_depth
-                            );
+                            let result =
+                                dispatch_result!(self.bigint_pow(a, b), pc, self, return_depth);
                             self.push(result);
                         }
                         (Kind::BigInt, _) | (_, Kind::BigInt) => {
@@ -18250,12 +18333,8 @@ impl Interp {
                     // The spec checks that the RHS is an object before
                     // coercing the LHS. In particular, an object key's
                     // `@@toPrimitive` must not run for `key in null`.
-                    let key = dispatch_result!(
-                        self.to_property_key(code, key),
-                        pc,
-                        self,
-                        return_depth
-                    );
+                    let key =
+                        dispatch_result!(self.to_property_key(code, key), pc, self, return_depth);
                     // `k in p`: the proxy `has` trap (ECMA-262 10.5.7). No index /
                     // boot-default gate applies — a proxy honors any string key.
                     if self.proxies.contains_key(&objref) {
@@ -18303,22 +18382,28 @@ impl Interp {
                     // `(XS_NO_ID, index)`; uninterned, it stays an index here
                     // and mints nothing, so `for (i…) i in o` cannot walk the
                     // id space into its saturation guard.
-                    let read_key = if let (Kind::String, Payload::String(off)) =
-                        (key.kind, key.value)
-                    {
-                        let name = self.str_text(off);
-                        match string_to_index(&name).filter(|_| !self.symbol_ids.contains_key(&name))
-                        {
-                            Some(index) => ReadKey::Index(index),
-                            None => ReadKey::Id(dispatch_result!(
-                                self.to_property_id(code, key), pc, self, return_depth
-                            )),
-                        }
-                    } else {
-                        ReadKey::Id(dispatch_result!(
-                            self.to_property_id(code, key), pc, self, return_depth
-                        ))
-                    };
+                    let read_key =
+                        if let (Kind::String, Payload::String(off)) = (key.kind, key.value) {
+                            let name = self.str_text(off);
+                            match string_to_index(&name)
+                                .filter(|_| !self.symbol_ids.contains_key(&name))
+                            {
+                                Some(index) => ReadKey::Index(index),
+                                None => ReadKey::Id(dispatch_result!(
+                                    self.to_property_id(code, key),
+                                    pc,
+                                    self,
+                                    return_depth
+                                )),
+                            }
+                        } else {
+                            ReadKey::Id(dispatch_result!(
+                                self.to_property_id(code, key),
+                                pc,
+                                self,
+                                return_depth
+                            ))
+                        };
                     // Answer with the metered chain walk: `fxRunIn` calls
                     // `fxHasAt` once and does not re-enter per level, so the
                     // per-level cost is the same `fxOrdinaryHasProperty` frame
@@ -18908,7 +18993,13 @@ impl Interp {
                     // the body (a named skip) propagates out as the async call's
                     // own skip.
                     dispatch_result!(
-                        self.step_async(code, inst, ResumeStatus::NoStatus, Slot::undefined(), true),
+                        self.step_async(
+                            code,
+                            inst,
+                            ResumeStatus::NoStatus,
+                            Slot::undefined(),
+                            true
+                        ),
                         pc,
                         self,
                         return_depth
@@ -19235,10 +19326,14 @@ impl Interp {
                     let selector_index = self.local_operand(op, code, pc);
                     let exception_index = selector_index.saturating_sub(1);
                     let current = self.exception;
-                    let selector = self.get_local(selector_index).unwrap_or_else(Slot::undefined);
+                    let selector = self
+                        .get_local(selector_index)
+                        .unwrap_or_else(Slot::undefined);
                     let has_prior = matches!(selector.value, Payload::Integer(0));
                     if has_prior {
-                        let prior = self.get_local(exception_index).unwrap_or_else(Slot::undefined);
+                        let prior = self
+                            .get_local(exception_index)
+                            .unwrap_or_else(Slot::undefined);
                         let suppressed = self.build_suppressed_error(current, prior, None);
                         self.set_local(exception_index, suppressed);
                     } else {
@@ -19468,7 +19563,6 @@ impl Interp {
     /// chains instances to. Gated on the program naming `prototype` (like the
     /// `prototype.constructor` back-reference), unmetered on both sides.
     fn install_own_function_prototype(&mut self, f: crate::value::SlotIndex) {
-
         if let (Some(pid), Some(&proto)) = (self.prototype_key_id, self.ctor_prototype.get(&f)) {
             self.set_own_unmetered_with_flag(
                 f,
@@ -20203,7 +20297,9 @@ impl Interp {
         let vid = self
             .value_id
             .or_else(|| self.symbol_ids.get("value").copied());
-        let did = self.done_id.or_else(|| self.symbol_ids.get("done").copied());
+        let did = self
+            .done_id
+            .or_else(|| self.symbol_ids.get("done").copied());
         if let Some(vid) = vid {
             self.set_own_unmetered(result, vid, value);
         }
@@ -20436,7 +20532,9 @@ impl Interp {
         status: GenStatus,
     ) -> Result<Slot, Halt> {
         if !self.async_generators.contains_key(&gen) {
-            return Err(Halt::EngineInvariant("async-generator:not-an-async-generator"));
+            return Err(Halt::EngineInvariant(
+                "async-generator:not-an-async-generator",
+            ));
         }
         let (promise, resolve, reject) = self.new_promise_capability();
         self.async_generators
@@ -20514,12 +20612,7 @@ impl Interp {
                         )
                     }
                     GenStatus::Throw => {
-                        self.settle_active_async_generator_request(
-                            code,
-                            gen,
-                            request.value,
-                            true,
-                        )?;
+                        self.settle_active_async_generator_request(code, gen, request.value, true)?;
                     }
                 },
                 AsyncGeneratorState::SuspendedStart if request.status != GenStatus::Next => {
@@ -20716,21 +20809,13 @@ impl Interp {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
-                self.schedule_native_await(
-                    code,
-                    value,
-                    ReactionKind::AsyncGeneratorYield(gen),
-                )
+                self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorYield(gen))
             }
             Halt::Await(value) => {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
-                self.schedule_native_await(
-                    code,
-                    value,
-                    ReactionKind::AsyncGeneratorAwait(gen),
-                )
+                self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorAwait(gen))
             }
             Halt::Return => {
                 // A boundary `END` already ran `leave_call` (driver restored),
@@ -20757,11 +20842,7 @@ impl Interp {
                 let data = self.async_generators.get_mut(&gen).unwrap();
                 data.state = AsyncGeneratorState::Completed;
                 data.frame = None;
-                self.schedule_native_await(
-                    code,
-                    value,
-                    ReactionKind::AsyncGeneratorReturn(gen),
-                )
+                self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorReturn(gen))
             }
             Halt::Throw { value: reason, .. } => {
                 while self.call_stack.len() >= return_depth {
@@ -21119,9 +21200,7 @@ impl Interp {
             Some(d) => *d,
             None => return Err(Halt::EngineInvariant("async:bad-resolving-fn")),
         };
-        if !is_promise_resolving_guard(data.guard)
-            || data.guard >= self.promise_guards.len()
-        {
+        if !is_promise_resolving_guard(data.guard) || data.guard >= self.promise_guards.len() {
             return Err(Halt::EngineInvariant("async:non-resolver-as-resolver"));
         }
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
@@ -21175,13 +21254,11 @@ impl Interp {
     ) -> Result<(), Halt> {
         let function = if rejected { reject } else { resolve };
         let native_resolver = match function.value {
-            Payload::Reference(f) if function.kind == Kind::Reference => self
-                .promise_functions
-                .get(&f)
-                .is_some_and(|data| {
-                    is_promise_resolving_guard(data.guard)
-                        && data.guard < self.promise_guards.len()
-                }),
+            Payload::Reference(f) if function.kind == Kind::Reference => {
+                self.promise_functions.get(&f).is_some_and(|data| {
+                    is_promise_resolving_guard(data.guard) && data.guard < self.promise_guards.len()
+                })
+            }
             _ => false,
         };
         if native_resolver {
@@ -21238,7 +21315,8 @@ impl Interp {
         // consumes this latch in `enter_call`; native construction must do the
         // same so `Object` can select the derived prototype and the one-shot
         // target cannot leak into a later construct.
-        let pending_native_new_target = has_target.then(|| self.pending_new_target.take()).flatten();
+        let pending_native_new_target =
+            has_target.then(|| self.pending_new_target.take()).flatten();
         let derived_native_construct = pending_native_new_target.is_some();
         let new_target = if has_target {
             pending_native_new_target.or_else(|| {
@@ -21503,7 +21581,9 @@ impl Interp {
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
                 let data = self.build_date_time_format(code, locale_arg, options_arg)?;
-                let inst = self.slots.alloc(Slot::instance(self.date_time_format_proto));
+                let inst = self
+                    .slots
+                    .alloc(Slot::instance(self.date_time_format_proto));
                 self.date_time_formats.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -21519,34 +21599,48 @@ impl Interp {
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             Native::TemporalInstant => {
-                if !has_target { return Err(self.catchable_type_error()); }
-                let ns = self.temporal_bigint_to_i128(arg(0))
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
+                let ns = self
+                    .temporal_bigint_to_i128(arg(0))
                     .ok_or_else(|| self.catchable_type_error())?;
                 self.temporal_new_instant(ns)?
             }
             Native::TemporalDuration => {
-                if !has_target { return Err(self.catchable_type_error()); }
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
                 let values: Vec<Slot> = (0..10).map(arg).collect();
                 let mut fields = [0i64; 10];
                 for (i, field) in fields.iter_mut().enumerate() {
                     let value = values[i];
-                    if value.kind == Kind::Undefined { continue; }
+                    if value.kind == Kind::Undefined {
+                        continue;
+                    }
                     *field = self.temporal_integer(value)?;
                 }
                 let record = TemporalDurationRecord::from_fields(fields);
-                if !temporal_duration_sign_valid(record) { return Err(self.catchable_range_error()); }
+                if !temporal_duration_sign_valid(record) {
+                    return Err(self.catchable_range_error());
+                }
                 self.temporal_new_duration(record)?
             }
             Native::TemporalPlain(kind) => {
-                if !has_target { return Err(self.catchable_type_error()); }
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
                 let values = (0..10).map(arg).collect::<Vec<_>>();
                 self.temporal_plain_construct(kind, &values, code)?
             }
             Native::TemporalZonedDateTime => {
                 // `new Temporal.ZonedDateTime(epochNanoseconds, timeZone[, calendar])`.
-                if !has_target { return Err(self.catchable_type_error()); }
+                if !has_target {
+                    return Err(self.catchable_type_error());
+                }
                 let (epoch_arg, tz_value, cal) = (arg(0), arg(1), arg(2));
-                let ns = self.temporal_bigint_to_i128(epoch_arg)
+                let ns = self
+                    .temporal_bigint_to_i128(epoch_arg)
                     .ok_or_else(|| self.catchable_type_error())?;
                 if tz_value.kind != Kind::String {
                     // The constructor requires a *string* time-zone identifier
@@ -21554,11 +21648,13 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 let tz_text = self.value_to_string(code, tz_value)?;
-                let (time_zone, offset_ns) =
-                    resolve_zoned_time_zone(&tz_text).ok_or_else(|| self.catchable_range_error())?;
+                let (time_zone, offset_ns) = resolve_zoned_time_zone(&tz_text)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 if cal.kind != Kind::Undefined {
                     let id = self.value_to_string(code, cal)?;
-                    if id.to_ascii_lowercase() != "iso8601" { return Err(self.catchable_range_error()); }
+                    if id.to_ascii_lowercase() != "iso8601" {
+                        return Err(self.catchable_range_error());
+                    }
                 }
                 self.temporal_new_zoned(ns, time_zone, offset_ns)?
             }
@@ -21579,21 +21675,37 @@ impl Interp {
                             } else {
                                 let primitive = self.to_primitive_default(code, value)?;
                                 if primitive.kind == Kind::String {
-                                    let text = match primitive.value { Payload::String(o) => self.str_text(o), _ => String::new() };
+                                    let text = match primitive.value {
+                                        Payload::String(o) => self.str_text(o),
+                                        _ => String::new(),
+                                    };
                                     parse_date_string(&text).unwrap_or(f64::NAN)
                                 } else {
                                     time_clip(self.to_number_f64(code, primitive)?)
                                 }
                             }
                         } else if value.kind == Kind::String {
-                            let text = match value.value { Payload::String(o) => self.str_text(o), _ => String::new() };
+                            let text = match value.value {
+                                Payload::String(o) => self.str_text(o),
+                                _ => String::new(),
+                            };
                             parse_date_string(&text).unwrap_or(f64::NAN)
                         } else {
                             time_clip(self.to_number_f64(code, value)?)
                         }
                     } else {
                         let mut values = [0.0; 7];
-                        let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
+                        let inputs: Vec<Slot> = (0..7)
+                            .map(|i| {
+                                if i < argc {
+                                    arg(i)
+                                } else if i == 2 {
+                                    Slot::integer(1)
+                                } else {
+                                    Slot::integer(0)
+                                }
+                            })
+                            .collect();
                         for (value, v) in values.iter_mut().zip(inputs) {
                             *value = self.to_number_f64(code, v)?;
                         }
@@ -21790,11 +21902,9 @@ impl Interp {
                     self.meter.tick_builtin();
                     let inst = self.new_object();
                     let proto = match new_target {
-                        Some(target) => self.get_prototype_from_constructor(
-                            code,
-                            target,
-                            self.object_proto,
-                        )?,
+                        Some(target) => {
+                            self.get_prototype_from_constructor(code, target, self.object_proto)?
+                        }
                         None => self.object_proto,
                     };
                     self.slots.get_mut(inst).value = Payload::Reference(proto);
@@ -22006,10 +22116,8 @@ impl Interp {
                 self.meter.tick_slot_alloc(); // size
                 self.meter.tick_chunk_new(MAP_MIN_TABLE_LENGTH as u64 * 8);
                 let inst = self.slots.alloc(Slot::instance(proto));
-                self.collections.insert(
-                    inst,
-                    CollectionData::new(kind, MAP_MIN_TABLE_LENGTH),
-                );
+                self.collections
+                    .insert(inst, CollectionData::new(kind, MAP_MIN_TABLE_LENGTH));
                 if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
                     self.populate_collection_from_dense_array(code, inst, a)?;
                 }
@@ -22043,10 +22151,7 @@ impl Interp {
                 self.meter.tick_slot_alloc(); // instance
                 self.meter.tick_slot_alloc(); // weak list
                 let inst = self.slots.alloc(Slot::instance(proto));
-                self.collections.insert(
-                    inst,
-                    CollectionData::new(kind, 0),
-                );
+                self.collections.insert(inst, CollectionData::new(kind, 0));
                 if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
                     self.populate_collection_from_dense_array(code, inst, a)?;
                 }
@@ -22108,9 +22213,7 @@ impl Interp {
             // general ToNumber self-names an honest skip.
             Native::SharedArrayBuffer if has_target => {
                 if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Halt::Unsupported(
-                        "native-call:SharedArrayBuffer:growable",
-                    ));
+                    return Err(Halt::Unsupported("native-call:SharedArrayBuffer:growable"));
                 }
                 let a = arg(0);
                 let byte_length: u32 = match a.kind {
@@ -22395,10 +22498,7 @@ impl Interp {
                             .get("Array")
                             .copied()
                             .expect("Array intrinsic");
-                        let array_ctor = Slot::of(
-                            Kind::Reference,
-                            Payload::Reference(array_ctor),
-                        );
+                        let array_ctor = Slot::of(Kind::Reference, Payload::Reference(array_ctor));
                         let collect_base = self.stack.len();
                         self.push(array_ctor);
                         self.push(Slot::undefined());
@@ -22649,9 +22749,7 @@ impl Interp {
                                 if source.kind == Kind::Undefined {
                                     String::new()
                                 } else {
-                                    String::from_utf16_lossy(
-                                        &self.to_string_units(code, source)?,
-                                    )
+                                    String::from_utf16_lossy(&self.to_string_units(code, source)?)
                                 }
                             } else {
                                 self.regexps[&r].source.clone()
@@ -22708,11 +22806,8 @@ impl Interp {
                     let regexp = self.build_regexp(pattern, flags)?;
                     if has_target {
                         let target = new_target.expect("a RegExp construct has a new.target");
-                        let proto = self.get_prototype_from_constructor(
-                            code,
-                            target,
-                            self.regexp_proto,
-                        )?;
+                        let proto =
+                            self.get_prototype_from_constructor(code, target, self.regexp_proto)?;
                         let Payload::Reference(instance) = regexp.value else {
                             unreachable!("build_regexp returns an object")
                         };
@@ -22852,11 +22947,7 @@ impl Interp {
         Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
     }
 
-    fn intl_option_bool(
-        &self,
-        options: crate::value::SlotIndex,
-        name: &str,
-    ) -> Option<bool> {
+    fn intl_option_bool(&self, options: crate::value::SlotIndex, name: &str) -> Option<bool> {
         let id = *self.symbol_ids.get(name)?;
         let value = self.instance_get(options, id);
         (value.kind != Kind::Undefined).then(|| self.truthy(&value))
@@ -22892,11 +22983,17 @@ impl Interp {
             ("hourCycle", "hc", &["h11", "h12", "h23", "h24"][..]),
             ("caseFirst", "kf", &["upper", "lower", "false"][..]),
             ("numberingSystem", "nu", &[][..]),
-            ("firstDayOfWeek", "fw", &["mon", "tue", "wed", "thu", "fri", "sat", "sun"][..]),
+            (
+                "firstDayOfWeek",
+                "fw",
+                &["mon", "tue", "wed", "thu", "fri", "sat", "sun"][..],
+            ),
         ] {
             if let Some(value) = self.intl_option_string(code, options, option)? {
                 let value = value.to_ascii_lowercase();
-                if !valid_unicode_type(&value) || (!allowed.is_empty() && !allowed.contains(&value.as_str())) {
+                if !valid_unicode_type(&value)
+                    || (!allowed.is_empty() && !allowed.contains(&value.as_str()))
+                {
                     return Err(self.catchable_range_error());
                 }
                 locale.unicode.insert(key.to_string(), value);
@@ -23030,11 +23127,7 @@ impl Interp {
     /// data; every other request falls back to `en`. The returned tag preserves
     /// the requested region/script (its base name, extensions dropped), matching
     /// ResolveLocale's lookup result for the tested locales.
-    fn intl_resolve_locale(
-        &mut self,
-        code: &[u8],
-        locale_arg: Slot,
-    ) -> Result<String, Halt> {
+    fn intl_resolve_locale(&mut self, code: &[u8], locale_arg: Slot) -> Result<String, Halt> {
         let requested = self.intl_first_locale(code, locale_arg)?;
         match requested {
             Some(raw) => {
@@ -23152,9 +23245,12 @@ impl Interp {
         let mut hour_cycle = ext.get("hc").cloned();
         if let Some(opts) = options {
             hour12 = self.intl_option_bool(opts, "hour12");
-            if let Some(hc) =
-                self.intl_get_option_enum_opt(code, opts, "hourCycle", &["h11", "h12", "h23", "h24"])?
-            {
+            if let Some(hc) = self.intl_get_option_enum_opt(
+                code,
+                opts,
+                "hourCycle",
+                &["h11", "h12", "h23", "h24"],
+            )? {
                 hour_cycle = Some(hc);
             }
         }
@@ -23231,7 +23327,13 @@ impl Interp {
             }
             // formatMatcher is read and validated but does not steer the frozen
             // pattern set.
-            self.intl_get_option_enum(code, opts, "formatMatcher", &["basic", "best fit"], "best fit")?;
+            self.intl_get_option_enum(
+                code,
+                opts,
+                "formatMatcher",
+                &["basic", "best fit"],
+                "best fit",
+            )?;
         }
         // A dateStyle/timeStyle cannot combine with explicit components.
         if (date_style.is_some() || time_style.is_some()) && any_component {
@@ -23245,8 +23347,7 @@ impl Interp {
             components.push(("day", "numeric".to_string()));
         }
         // The resolved hour cycle only surfaces when an hour is formatted.
-        let formats_hour =
-            components.iter().any(|(k, _)| *k == "hour") || time_style.is_some();
+        let formats_hour = components.iter().any(|(k, _)| *k == "hour") || time_style.is_some();
         // Resolve the hour cycle: an explicit `hour12` wins (h12/h11 for true,
         // h23 for false), then an explicit `hourCycle`, then the locale
         // default. The frozen profile uses h12 everywhere except Japanese,
@@ -23410,13 +23511,19 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays
+                .get_mut(&arr)
+                .unwrap()
+                .insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
     }
 
-    fn date_time_range_parts_array(&mut self, parts: &[(&'static str, String, &'static str)]) -> Slot {
+    fn date_time_range_parts_array(
+        &mut self,
+        parts: &[(&'static str, String, &'static str)],
+    ) -> Slot {
         let arr = self.new_array();
         for (i, (ty, value, source)) in parts.iter().enumerate() {
             let obj = self.slots.alloc(Slot::instance(self.object_proto));
@@ -23429,7 +23536,10 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays
+                .get_mut(&arr)
+                .unwrap()
+                .insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -23476,9 +23586,7 @@ impl Interp {
             .unwrap_or(crate::value::XS_NO_ID);
         let intrinsic_array_iterator = self.arrays.contains_key(&obj)
             && iterator_id != crate::value::XS_NO_ID
-            && self
-                .ordinary_get_own_descriptor(obj, iterator_id)
-                .is_none();
+            && self.ordinary_get_own_descriptor(obj, iterator_id).is_none();
         let custom = if iterator_id == crate::value::XS_NO_ID || intrinsic_array_iterator {
             Slot::undefined()
         } else {
@@ -23592,22 +23700,10 @@ impl Interp {
         data.minimum_integer_digits = self
             .intl_get_number_option(code, options, "minimumIntegerDigits", 1.0, 21.0, Some(1))?
             .unwrap_or(1);
-        let mnfd = self.intl_get_number_option(
-            code,
-            options,
-            "minimumFractionDigits",
-            0.0,
-            100.0,
-            None,
-        )?;
-        let mxfd = self.intl_get_number_option(
-            code,
-            options,
-            "maximumFractionDigits",
-            0.0,
-            100.0,
-            None,
-        )?;
+        let mnfd =
+            self.intl_get_number_option(code, options, "minimumFractionDigits", 0.0, 100.0, None)?;
+        let mxfd =
+            self.intl_get_number_option(code, options, "maximumFractionDigits", 0.0, 100.0, None)?;
         let mnsd = self.intl_get_number_option(
             code,
             options,
@@ -23639,8 +23735,15 @@ impl Interp {
             options,
             "roundingMode",
             &[
-                "ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand",
-                "halfTrunc", "halfEven",
+                "ceil",
+                "floor",
+                "expand",
+                "trunc",
+                "halfCeil",
+                "halfFloor",
+                "halfExpand",
+                "halfTrunc",
+                "halfEven",
             ],
             "halfExpand",
         )?;
@@ -23870,12 +23973,20 @@ impl Interp {
         }
 
         let compact_display = match options {
-            Some(o) => self.intl_get_option_enum(code, o, "compactDisplay", &["short", "long"], "short")?,
+            Some(o) => {
+                self.intl_get_option_enum(code, o, "compactDisplay", &["short", "long"], "short")?
+            }
             None => "short".to_string(),
         };
-        let default_grouping = if notation == "compact" { "min2" } else { "auto" };
+        let default_grouping = if notation == "compact" {
+            "min2"
+        } else {
+            "auto"
+        };
         let use_grouping = match options {
-            Some(o) => self.get_string_or_boolean_option(code, o, "useGrouping", default_grouping)?,
+            Some(o) => {
+                self.get_string_or_boolean_option(code, o, "useGrouping", default_grouping)?
+            }
             None => default_grouping.to_string(),
         };
         let sign_display = match options {
@@ -23936,7 +24047,12 @@ impl Interp {
             return Ok(fallback.to_string());
         }
         if value.kind == Kind::Boolean {
-            return Ok(if self.truthy(&value) { "always" } else { "false" }.to_string());
+            return Ok(if self.truthy(&value) {
+                "always"
+            } else {
+                "false"
+            }
+            .to_string());
         }
         if !self.truthy(&value) {
             return Ok("false".to_string());
@@ -24027,10 +24143,7 @@ impl Interp {
     }
 
     /// Build the `Array<{type, value}>` a `formatToParts` call returns.
-    fn number_format_parts_array(
-        &mut self,
-        parts: Vec<crate::intl_number::Part>,
-    ) -> Slot {
+    fn number_format_parts_array(&mut self, parts: Vec<crate::intl_number::Part>) -> Slot {
         let arr = self.new_array();
         for (i, part) in parts.iter().enumerate() {
             let obj = self.slots.alloc(Slot::instance(self.object_proto));
@@ -24041,7 +24154,10 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
+            self.arrays
+                .get_mut(&arr)
+                .unwrap()
+                .insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -24366,12 +24482,7 @@ impl Interp {
     /// writable, non-enumerable, and non-configurable.
     fn install_regexp_last_index(&mut self, inst: crate::value::SlotIndex, value: Slot) {
         let id = self.regexp_last_index_id();
-        self.set_own_unmetered_with_flag(
-            inst,
-            id,
-            value,
-            XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
-        );
+        self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG);
     }
 
     fn regexp_get_last_index(
@@ -24414,11 +24525,7 @@ impl Interp {
     /// Constructor and `@@species` reads remain observable through the full
     /// object MOP; undefined constructor and nullish species select the realm
     /// intrinsic.
-    fn regexp_species_constructor(
-        &mut self,
-        code: &[u8],
-        regexp: Slot,
-    ) -> Result<Slot, Halt> {
+    fn regexp_species_constructor(&mut self, code: &[u8], regexp: Slot) -> Result<Slot, Halt> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -24478,9 +24585,7 @@ impl Interp {
         reject_nullish: bool,
     ) -> Result<Vec<u16>, Halt> {
         let flags_id = self.intern_key("flags");
-        if !self.regexps.contains_key(&inst)
-            || !self.regexp_getter_uses_default(inst, flags_id)
-        {
+        if !self.regexps.contains_key(&inst) || !self.regexp_getter_uses_default(inst, flags_id) {
             let flags = self.mop_get(code, inst, flags_id, receiver)?;
             if reject_nullish && matches!(flags.kind, Kind::Undefined | Kind::Null) {
                 return Err(self.catchable_type_error());
@@ -24864,12 +24969,7 @@ impl Interp {
     /// non-global receiver, or repeatedly collect each whole-match string.
     /// Empty global matches advance the observable `lastIndex`, including a
     /// complete surrogate pair in `u`/`v` mode.
-    fn regexp_match(
-        &mut self,
-        code: &[u8],
-        regexp: Slot,
-        input: Slot,
-    ) -> Result<Slot, Halt> {
+    fn regexp_match(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Halt> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -24893,8 +24993,7 @@ impl Interp {
         let matches = self.new_array();
         let mut count = 0u64;
         loop {
-            let result =
-                self.regexp_exec_abstract(code, regexp_inst, regexp, subject)?;
+            let result = self.regexp_exec_abstract(code, regexp_inst, regexp, subject)?;
             if result.kind == Kind::Null {
                 return if count == 0 {
                     Ok(Slot::null())
@@ -24908,32 +25007,17 @@ impl Interp {
             let zero_id = self.array_generic_index_id(0);
             let whole = self.mop_get(code, result_inst, zero_id, result)?;
             let match_string = self.to_string_slot(code, whole)?;
-            self.array_generic_create_data_property(
-                code,
-                matches,
-                count,
-                match_string,
-            )?;
+            self.array_generic_create_data_property(code, matches, count, match_string)?;
             count = count.saturating_add(1);
 
             let empty = match match_string.value {
-                Payload::String(off) if match_string.kind == Kind::String => {
-                    self.str_len(off) == 0
-                }
+                Payload::String(off) if match_string.kind == Kind::String => self.str_len(off) == 0,
                 _ => unreachable!("ToString returns a String"),
             };
             if empty {
                 let index = self.regexp_last_index_length(code, regexp_inst)?;
-                let next = Self::advance_string_index(
-                    &subject_units,
-                    index,
-                    full_unicode,
-                );
-                self.regexp_set_last_index(
-                    code,
-                    regexp_inst,
-                    Slot::number(next as f64),
-                )?;
+                let next = Self::advance_string_index(&subject_units, index, full_unicode);
+                self.regexp_set_last_index(code, regexp_inst, Slot::number(next as f64))?;
             }
         }
     }
@@ -24941,12 +25025,7 @@ impl Interp {
     /// `%RegExp.prototype%[@@search]`: search from `lastIndex = 0`, then
     /// restore the exact prior value when the matcher changed it. The result's
     /// `index` property is returned without coercion.
-    fn regexp_search(
-        &mut self,
-        code: &[u8],
-        regexp: Slot,
-        input: Slot,
-    ) -> Result<Slot, Halt> {
+    fn regexp_search(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Halt> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -24963,8 +25042,7 @@ impl Interp {
         // never spells the name and `@@search` is the only consumer.
         let index_id = self.intern_key("index");
         self.regexp_result_ids.index = Some(index_id);
-        let result =
-            self.regexp_exec_abstract(code, regexp_inst, regexp, subject)?;
+        let result = self.regexp_exec_abstract(code, regexp_inst, regexp, subject)?;
         let current = self.regexp_get_last_index(code, regexp_inst)?;
         if !self.same_value(current, previous) {
             self.regexp_set_last_index(code, regexp_inst, previous)?;
@@ -25010,12 +25088,8 @@ impl Interp {
             new_flags.push(b'y' as u16);
         }
         let flags_slot = self.new_string_units(&new_flags);
-        let splitter = self.construct_value(
-            code,
-            constructor,
-            &[regexp, flags_slot],
-            constructor,
-        )?;
+        let splitter =
+            self.construct_value(code, constructor, &[regexp, flags_slot], constructor)?;
         let splitter_inst = match splitter.value {
             Payload::Reference(inst) if splitter.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -25033,8 +25107,7 @@ impl Interp {
         let mut count = 0u64;
         if size == 0 {
             self.meter.tick_raw(REGEXP_SPLIT_EMPTY_METERING);
-            let result =
-                self.regexp_exec_abstract(code, splitter_inst, splitter, subject)?;
+            let result = self.regexp_exec_abstract(code, splitter_inst, splitter, subject)?;
             if result.kind == Kind::Null {
                 let empty = self.new_string_units(&[]);
                 self.array_generic_create_data_property(code, array, count, empty)?;
@@ -25046,19 +25119,10 @@ impl Interp {
         let mut q = 0usize;
         while q < size {
             self.meter.tick_raw(REGEXP_SPLIT_PER_STEP_METERING);
-            self.regexp_set_last_index(
-                code,
-                splitter_inst,
-                Slot::number(q as f64),
-            )?;
-            let result =
-                self.regexp_exec_abstract(code, splitter_inst, splitter, subject)?;
+            self.regexp_set_last_index(code, splitter_inst, Slot::number(q as f64))?;
+            let result = self.regexp_exec_abstract(code, splitter_inst, splitter, subject)?;
             if result.kind == Kind::Null {
-                q = Self::advance_string_index(
-                    &subject_units,
-                    q as u64,
-                    full_unicode,
-                ) as usize;
+                q = Self::advance_string_index(&subject_units, q as u64, full_unicode) as usize;
                 continue;
             }
 
@@ -25067,13 +25131,8 @@ impl Interp {
                 .regexp_last_index_length(code, splitter_inst)?
                 .min(size as u64) as usize;
             if e == p {
-                self.meter
-                    .untick_raw(REGEXP_SPLIT_EMPTY_ADVANCE_DISCOUNT);
-                q = Self::advance_string_index(
-                    &subject_units,
-                    q as u64,
-                    full_unicode,
-                ) as usize;
+                self.meter.untick_raw(REGEXP_SPLIT_EMPTY_ADVANCE_DISCOUNT);
+                q = Self::advance_string_index(&subject_units, q as u64, full_unicode) as usize;
                 continue;
             }
 
@@ -25115,12 +25174,7 @@ impl Interp {
     /// create a lazy RegExp String Iterator. The iterator records `global` and
     /// full-Unicode from the original flags string; it never probes similarly
     /// named properties on the species result.
-    fn regexp_match_all(
-        &mut self,
-        code: &[u8],
-        regexp: Slot,
-        input: Slot,
-    ) -> Result<Slot, Halt> {
+    fn regexp_match_all(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Halt> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -25133,12 +25187,8 @@ impl Interp {
         let constructor = self.regexp_species_constructor(code, regexp)?;
         let flags = self.regexp_flags_units(code, regexp_inst, regexp, false)?;
         let flags_slot = self.new_string_units(&flags);
-        let matcher = self.construct_value(
-            code,
-            constructor,
-            &[regexp, flags_slot],
-            constructor,
-        )?;
+        let matcher =
+            self.construct_value(code, constructor, &[regexp, flags_slot], constructor)?;
         let matcher_inst = match matcher.value {
             Payload::Reference(inst) if matcher.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -25158,12 +25208,7 @@ impl Interp {
         let full_unicode = flags
             .iter()
             .any(|unit| *unit == b'u' as u16 || *unit == b'v' as u16);
-        Ok(self.make_regexp_string_iterator(
-            matcher_inst,
-            &subject_units,
-            global,
-            full_unicode,
-        ))
+        Ok(self.make_regexp_string_iterator(matcher_inst, &subject_units, global, full_unicode))
     }
 
     /// Create a `%RegExpStringIterator%`. Kind 9 reuses the persisted iterator
@@ -25219,15 +25264,14 @@ impl Interp {
     /// through abstract `RegExpExec`. A non-global iterator yields once; a
     /// global empty match advances the matcher's `lastIndex` by one UTF-16 code
     /// unit or one Unicode code point so iteration cannot stall.
-    fn regexp_string_iterator_next(
-        &mut self,
-        code: &[u8],
-        receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    fn regexp_string_iterator_next(&mut self, code: &[u8], receiver: Slot) -> Result<Slot, Halt> {
         let iterator = match receiver.value {
             Payload::Reference(inst)
                 if receiver.kind == Kind::Reference
-                    && self.iterators.get(&inst).is_some_and(|state| state.kind == 9) =>
+                    && self
+                        .iterators
+                        .get(&inst)
+                        .is_some_and(|state| state.kind == 9) =>
             {
                 inst
             }
@@ -25240,12 +25284,7 @@ impl Interp {
         let subject_units = be16_to_units(&state.str_bytes);
         let subject = self.new_string_units(&subject_units);
         let matcher = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
-        let result = self.regexp_exec_abstract(
-            code,
-            state.iterable,
-            matcher,
-            subject,
-        )?;
+        let result = self.regexp_exec_abstract(code, state.iterable, matcher, subject)?;
         if result.kind == Kind::Null {
             self.iterators.get_mut(&iterator).unwrap().done = true;
             return Ok(self.regexp_string_iterator_result(Slot::undefined(), true));
@@ -25332,8 +25371,7 @@ impl Interp {
         // the matcher's runtime `names[]` array (below).
         let group_names: Vec<(String, i32)> =
             self.regexps[&inst].program.capture_group_names.clone();
-        let has_indices =
-            self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_D != 0;
+        let has_indices = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_D != 0;
         let (matched, captures, names) =
             self.regexp_match_drive(code, inst, &subject, &subject_units, &offsets)?;
         if !matched {
@@ -25396,8 +25434,7 @@ impl Interp {
                 let obj = self.new_object();
                 // ObjectCreate(null): a null [[Prototype]], stored in the
                 // instance payload exactly as `Object.create(null)` does.
-                self.slots.get_mut(obj).value =
-                    Payload::Reference(crate::value::SlotIndex::NULL);
+                self.slots.get_mut(obj).value = Payload::Reference(crate::value::SlotIndex::NULL);
                 for (slot, (name, _)) in group_names.iter().enumerate() {
                     let key = self.intern_key(name);
                     // `captureIndex = data[2*captureCount + nameIndex]`: the
@@ -25497,8 +25534,7 @@ impl Interp {
                 Slot::undefined()
             } else {
                 let obj = self.new_object();
-                self.slots.get_mut(obj).value =
-                    Payload::Reference(crate::value::SlotIndex::NULL);
+                self.slots.get_mut(obj).value = Payload::Reference(crate::value::SlotIndex::NULL);
                 for (slot, (name, _)) in group_names.iter().enumerate() {
                     let key = self.intern_key(name);
                     let cap = names.get(slot).copied().unwrap_or(-1);
@@ -25626,9 +25662,8 @@ impl Interp {
             )
         };
         let tail = pos + search_units.len();
-        let mut out = Vec::with_capacity(
-            subject_units.len() - search_units.len() + replacement_units.len(),
-        );
+        let mut out =
+            Vec::with_capacity(subject_units.len() - search_units.len() + replacement_units.len());
         out.extend_from_slice(&subject_units[..pos]);
         out.extend_from_slice(&replacement_units);
         out.extend_from_slice(&subject_units[tail..]);
@@ -25734,10 +25769,7 @@ impl Interp {
         } else {
             Some(self.to_string_units(code, replacement)?)
         };
-        let has_named_captures = !self.regexps[&inst]
-            .program
-            .capture_group_names
-            .is_empty();
+        let has_named_captures = !self.regexps[&inst].program.capture_group_names.is_empty();
         if has_named_captures {
             // A functional replacer receives the groups object directly, so
             // `groups` can be observable even when the source never names the
@@ -25778,15 +25810,13 @@ impl Interp {
             for (result, pos, match_len) in results {
                 self.meter.tick_raw(STRING_REPLACE_MATCH_METERING);
                 let capture_count = self.regexp_capture_count(result);
-                self.meter.tick_raw(
-                    STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
-                );
+                self.meter
+                    .tick_raw(STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64);
                 assembled.extend_from_slice(
                     &subject_units[next_source_position..pos.min(subject_units.len())],
                 );
-                let mut args = Vec::with_capacity(
-                    capture_count + if has_named_captures { 3 } else { 2 },
-                );
+                let mut args =
+                    Vec::with_capacity(capture_count + if has_named_captures { 3 } else { 2 });
                 for i in 0..capture_count {
                     args.push(self.array_index_slot(result, i as u32));
                 }
@@ -25816,20 +25846,12 @@ impl Interp {
         for (result, pos, match_len) in results {
             self.meter.tick_raw(STRING_REPLACE_MATCH_METERING);
             let capture_count = self.regexp_capture_count(result);
-            self.meter.tick_raw(
-                STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
-            );
+            self.meter
+                .tick_raw(STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64);
             assembled.extend_from_slice(&subject_units[next_source_position..pos]);
             let repl = repl_units.as_deref().unwrap();
             let subst_units = if repl.contains(&(b'$' as u16)) {
-                self.regexp_get_substitution(
-                    inst,
-                    result,
-                    &subject_units,
-                    pos,
-                    match_len,
-                    repl,
-                )
+                self.regexp_get_substitution(inst, result, &subject_units, pos, match_len, repl)
             } else {
                 repl.to_vec()
             };
@@ -25977,8 +25999,7 @@ impl Interp {
                 if named_captures.kind != Kind::Undefined {
                     args.push(named_captures);
                 }
-                let value =
-                    self.invoke_value(code, replacement, Slot::undefined(), &args)?;
+                let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
                 self.to_string_units(code, value)?
             } else {
                 let named = if named_captures.kind == Kind::Undefined {
@@ -26061,8 +26082,7 @@ impl Interp {
                     if i + 2 < replacement.len()
                         && (b'0' as u16..=b'9' as u16).contains(&replacement[i + 2])
                     {
-                        let two = first * 10
-                            + (replacement[i + 2] - b'0' as u16) as usize;
+                        let two = first * 10 + (replacement[i + 2] - b'0' as u16) as usize;
                         if (1..=captures.len()).contains(&two) {
                             capture = two;
                             consumed = 3;
@@ -26190,8 +26210,7 @@ impl Interp {
         repl: &[u16],
     ) -> Vec<u16> {
         let count = self.regexp_capture_count(result); // includes whole match at 0
-        let names: Vec<(String, i32)> =
-            self.regexps[&inst].program.capture_group_names.clone();
+        let names: Vec<(String, i32)> = self.regexps[&inst].program.capture_group_names.clone();
         let matched = &subject[pos..(pos + match_len).min(subject.len())];
         let mut out = Vec::with_capacity(repl.len());
         let mut i = 0;
@@ -26224,9 +26243,7 @@ impl Interp {
                     // an in-range group number, else fall back to one digit.
                     let mut group = 0usize;
                     let mut consumed = 0usize;
-                    if i + 2 < repl.len()
-                        && (b'0' as u16..=b'9' as u16).contains(&repl[i + 2])
-                    {
+                    if i + 2 < repl.len() && (b'0' as u16..=b'9' as u16).contains(&repl[i + 2]) {
                         let two = d1 * 10 + (repl[i + 2] - b'0' as u16) as usize;
                         if two >= 1 && two < count {
                             group = two;
@@ -26255,10 +26272,7 @@ impl Interp {
                     // runtime `names[]` (slot = the name's position in the
                     // slot-ordered `capture_group_names`), so a duplicate name
                     // expands to whichever alternative matched.
-                    if let Some(rel) = repl[i + 2..]
-                        .iter()
-                        .position(|&c| c == b'>' as u16)
-                    {
+                    if let Some(rel) = repl[i + 2..].iter().position(|&c| c == b'>' as u16) {
                         let name = &repl[i + 2..i + 2 + rel];
                         if let Some((name, _)) = names
                             .iter()
@@ -26344,17 +26358,9 @@ impl Interp {
             .intrinsics
             .get("RegExp")
             .expect("RegExp intrinsic is linked");
-        let constructor = Slot::of(
-            Kind::Reference,
-            Payload::Reference(regexp_constructor),
-        );
+        let constructor = Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
         let global = self.new_string_units(&[b'g' as u16]);
-        let matcher = self.construct_value(
-            code,
-            constructor,
-            &[regexp, global],
-            constructor,
-        )?;
+        let matcher = self.construct_value(code, constructor, &[regexp, global], constructor)?;
         let method = self.string_protocol_method(code, matcher, "matchAll")?;
         self.invoke_value(code, method, matcher, &[subject])
     }
@@ -26795,8 +26801,7 @@ impl Interp {
         _argc: usize,
     ) -> Result<(), Halt> {
         let data = self.promise_functions[&f];
-        if data.guard == PROMISE_FINALLY_HANDLER_GUARD
-            || data.guard == PROMISE_FINALLY_VALUE_GUARD
+        if data.guard == PROMISE_FINALLY_HANDLER_GUARD || data.guard == PROMISE_FINALLY_VALUE_GUARD
         {
             let value = self
                 .stack
@@ -26947,14 +26952,14 @@ impl Interp {
                 // completion rejects this promise with the thrown value.
                 self.meter.tick_raw(PROMISE_RESOLVE_THEN_PROBE_METERING);
                 let then = match self.then_id {
-                    Some(tid) => match self.array_from_try(|this| {
-                        this.mop_get(code, obj, tid, value)
-                    })? {
-                        Ok(then) => then,
-                        Err(thrown) => {
-                            return self.finish_promise_settlement(promise, thrown, true)
+                    Some(tid) => {
+                        match self.array_from_try(|this| this.mop_get(code, obj, tid, value))? {
+                            Ok(then) => then,
+                            Err(thrown) => {
+                                return self.finish_promise_settlement(promise, thrown, true)
+                            }
                         }
-                    },
+                    }
                     None => Slot::undefined(),
                 };
                 let intrinsic_then = matches!(then.value,
@@ -27124,9 +27129,10 @@ impl Interp {
         }
         match self.functions.get(&r) {
             Some(fi) if fi.method.is_some() => false,
-            Some(fi) if fi.native.is_some() => {
-                !matches!(fi.native, Some(Native::Eval | Native::Symbol | Native::BigInt))
-            }
+            Some(fi) if fi.native.is_some() => !matches!(
+                fi.native,
+                Some(Native::Eval | Native::Symbol | Native::BigInt)
+            ),
             Some(fi) => !fi.is_generator && self.ctor_prototype.contains_key(&r),
             None => false,
         }
@@ -27227,7 +27233,9 @@ impl Interp {
                 let data = self
                     .async_generators
                     .get_mut(&gen)
-                    .ok_or(Halt::EngineInvariant("async-generator:yield-reaction-missing"))?;
+                    .ok_or(Halt::EngineInvariant(
+                        "async-generator:yield-reaction-missing",
+                    ))?;
                 data.state = AsyncGeneratorState::Completed;
                 data.frame = None;
                 return self.finish_async_generator_request(code, gen, value, true);
@@ -27402,10 +27410,7 @@ impl Interp {
             }
         }
         match self.array_from_set_length(code, target, argc as u64)? {
-            Ok(()) => Ok(Ok(Slot::of(
-                Kind::Reference,
-                Payload::Reference(target),
-            ))),
+            Ok(()) => Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(target)))),
             Err(error) => Ok(Err(error)),
         }
     }
@@ -27438,12 +27443,11 @@ impl Interp {
             _ => return Ok(original),
         };
         let return_id = self.intern_key("return");
-        let return_method = match self.array_from_try(|this| {
-            this.mop_get(code, inst, return_id, iterator)
-        })? {
-            Ok(method) => method,
-            Err(_) => return Ok(original),
-        };
+        let return_method =
+            match self.array_from_try(|this| this.mop_get(code, inst, return_id, iterator))? {
+                Ok(method) => method,
+                Err(_) => return Ok(original),
+            };
         if return_method.kind == Kind::Undefined
             || return_method.kind == Kind::Null
             || !self.is_callable_value(return_method)
@@ -27532,8 +27536,7 @@ impl Interp {
             let can_create_compact = compact.is_none()
                 && ordinary.is_none()
                 && self.instance_extensible(target)
-                && (index < self.arrays[&target].length
-                    || self.array_length_writable(target));
+                && (index < self.arrays[&target].length || self.array_length_writable(target));
             if compact_is_default || can_create_compact {
                 self.array_set_dense(target, index, value);
                 return Ok(Ok(()));
@@ -27588,12 +27591,7 @@ impl Interp {
             return Ok(Ok(value));
         }
         self.array_from_try(|this| {
-            this.call_any(
-                code,
-                mapfn,
-                this_arg,
-                &[value, Slot::number(index as f64)],
-            )
+            this.call_any(code, mapfn, this_arg, &[value, Slot::number(index as f64)])
         })
     }
 
@@ -27652,9 +27650,9 @@ impl Interp {
         let mut iterator_method = Slot::undefined();
         match items.value {
             Payload::Reference(inst) if items.kind == Kind::Reference => {
-                iterator_method = match self.array_from_try(|this| {
-                    this.mop_get(code, inst, iterator_id, items)
-                })? {
+                iterator_method = match self
+                    .array_from_try(|this| this.mop_get(code, inst, iterator_id, items))?
+                {
                     Ok(method) => method,
                     Err(error) => return Ok(Err(error)),
                 };
@@ -27678,9 +27676,9 @@ impl Interp {
                     _ => crate::value::SlotIndex::NULL,
                 };
                 if !proto.is_null() {
-                    iterator_method = match self.array_from_try(|this| {
-                        this.mop_get(code, proto, iterator_id, items)
-                    })? {
+                    iterator_method = match self
+                        .array_from_try(|this| this.mop_get(code, proto, iterator_id, items))?
+                    {
                         Ok(method) => method,
                         Err(error) => return Ok(Err(error)),
                     };
@@ -27706,9 +27704,9 @@ impl Interp {
                 Ok(target) => Some(target),
                 Err(error) => return Ok(Err(error)),
             };
-            let iterator = match self.array_from_try(|this| {
-                this.call_any(code, iterator_method, items, &[])
-            })? {
+            let iterator = match self
+                .array_from_try(|this| this.call_any(code, iterator_method, items, &[]))?
+            {
                 Ok(iterator) => iterator,
                 Err(error) => return Ok(Err(error)),
             };
@@ -27717,13 +27715,12 @@ impl Interp {
                 _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
             };
             let next_id = self.intern_key("next");
-            next_method = match self.array_from_try(|this| {
-                this.mop_get(code, inst, next_id, iterator)
-            })? {
-                Ok(method) if self.is_callable_value(method) => method,
-                Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
-                Err(error) => return Ok(Err(error)),
-            };
+            next_method =
+                match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
+                    Ok(method) if self.is_callable_value(method) => method,
+                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                    Err(error) => return Ok(Err(error)),
+                };
             Some(iterator)
         } else {
             None
@@ -27743,9 +27740,8 @@ impl Interp {
                     _ => unreachable!(),
                 };
                 let _ = iter_inst;
-                let step = self.array_from_try(|this| {
-                    this.call_any(code, next_method, iterator, &[])
-                })?;
+                let step =
+                    self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?;
                 let step = match step {
                     Ok(step) => step,
                     // `IteratorStepValue` failures propagate directly. The
@@ -27757,24 +27753,21 @@ impl Interp {
                     Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
                     _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
                 };
-                let done = match self.array_from_try(|this| {
-                    this.mop_get(code, step_inst, done_id, step)
-                })? {
+                let done = match self
+                    .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
+                {
                     Ok(done) => done,
                     Err(error) => return Ok(Err(error)),
                 };
                 if self.truthy(&done) {
                     return match self.array_from_set_length(code, target, index)? {
-                        Ok(()) => Ok(Ok(Slot::of(
-                            Kind::Reference,
-                            Payload::Reference(target),
-                        ))),
+                        Ok(()) => Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(target)))),
                         Err(error) => Ok(Err(error)),
                     };
                 }
-                let value = match self.array_from_try(|this| {
-                    this.mop_get(code, step_inst, value_id, step)
-                })? {
+                let value = match self
+                    .array_from_try(|this| this.mop_get(code, step_inst, value_id, step))?
+                {
                     Ok(value) => value,
                     Err(error) => return Ok(Err(error)),
                 };
@@ -27808,12 +27801,11 @@ impl Interp {
             Payload::Reference(inst) => inst,
             _ => unreachable!(),
         };
-        let length_value = match self.array_from_try(|this| {
-            this.arraylike_length(code, inst, array_like)
-        })? {
-            Ok(value) => value,
-            Err(error) => return Ok(Err(error)),
-        };
+        let length_value =
+            match self.array_from_try(|this| this.arraylike_length(code, inst, array_like))? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
         let length = match self.array_from_try(|this| this.to_length_value(code, length_value))? {
             Ok(length) => length,
             Err(error) => return Ok(Err(error)),
@@ -27823,27 +27815,23 @@ impl Interp {
             Err(error) => return Ok(Err(error)),
         };
         for index in 0..length {
-            let value = match self.array_from_try(|this| {
-                this.arraylike_index(code, inst, index, array_like)
-            })? {
-                Ok(value) => value,
-                Err(error) => return Ok(Err(error)),
-            };
             let value = match self
-                .array_from_map_value(code, mapfn, mapping, this_arg, value, index)?
+                .array_from_try(|this| this.arraylike_index(code, inst, index, array_like))?
             {
                 Ok(value) => value,
                 Err(error) => return Ok(Err(error)),
             };
+            let value =
+                match self.array_from_map_value(code, mapfn, mapping, this_arg, value, index)? {
+                    Ok(value) => value,
+                    Err(error) => return Ok(Err(error)),
+                };
             if let Err(error) = self.array_from_define(code, target, index, value)? {
                 return Ok(Err(error));
             }
         }
         match self.array_from_set_length(code, target, length)? {
-            Ok(()) => Ok(Ok(Slot::of(
-                Kind::Reference,
-                Payload::Reference(target),
-            ))),
+            Ok(()) => Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(target)))),
             Err(error) => Ok(Err(error)),
         }
     }
@@ -28078,10 +28066,26 @@ impl Interp {
     /// prologue, and return the promise (the async work continues at the drain).
     fn array_from_async(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Halt> {
         let _ = argc;
-        let this_c = self.stack.get(base).copied().unwrap_or_else(Slot::undefined);
-        let items = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
-        let mapfn = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-        let this_arg = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
+        let this_c = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let items = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let mapfn = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 6)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
         self.meter.tick_builtin();
         let (promise, resolve, reject) = self.new_promise_capability();
         let id = self.from_async.len();
@@ -28164,15 +28168,15 @@ impl Interp {
                 }
             }
         }
-        let is_async_iter = if method_async.kind == Kind::Undefined || method_async.kind == Kind::Null
-        {
-            false
-        } else if !self.is_callable_value(method_async) {
-            let e = self.build_error("TypeError", 0, 0);
-            return self.from_async_reject(id, e);
-        } else {
-            true
-        };
+        let is_async_iter =
+            if method_async.kind == Kind::Undefined || method_async.kind == Kind::Null {
+                false
+            } else if !self.is_callable_value(method_async) {
+                let e = self.build_error("TypeError", 0, 0);
+                return self.from_async_reject(id, e);
+            } else {
+                true
+            };
 
         // 3.d: GetMethod(items, @@iterator) when no async iterator. A string
         // primitive is iterable through the intrinsic string iterator.
@@ -28311,12 +28315,11 @@ impl Interp {
         } else {
             0
         };
-        let target = match self
-            .from_async_make_target(code, id, c, Some(Slot::number(len as f64)))?
-        {
-            Ok(t) => t,
-            Err(e) => return self.from_async_reject(id, e),
-        };
+        let target =
+            match self.from_async_make_target(code, id, c, Some(Slot::number(len as f64)))? {
+                Ok(t) => t,
+                Err(e) => return self.from_async_reject(id, e),
+            };
         self.from_async[id].array_like = array_like;
         self.from_async[id].len = len;
         self.from_async[id].target = target;
@@ -28539,12 +28542,7 @@ impl Interp {
 
     /// Apply `mapfn` to the resolved element value (awaiting the result) or,
     /// with no mapping, define it on `A` and advance.
-    fn from_async_process_value(
-        &mut self,
-        code: &[u8],
-        id: usize,
-        v: Slot,
-    ) -> Result<(), Halt> {
+    fn from_async_process_value(&mut self, code: &[u8], id: usize, v: Slot) -> Result<(), Halt> {
         if self.from_async[id].mapping {
             let mapfn = self.from_async[id].mapfn;
             let this_arg = self.from_async[id].this_arg;
@@ -28552,11 +28550,7 @@ impl Interp {
             let kn = Slot::number(k as f64);
             match self.from_async_call(code, mapfn, this_arg, &[v, kn])? {
                 Ok(mapped) => {
-                    self.schedule_native_await(
-                        code,
-                        mapped,
-                        ReactionKind::FromAsyncMap(id as u32),
-                    )
+                    self.schedule_native_await(code, mapped, ReactionKind::FromAsyncMap(id as u32))
                 }
                 Err(e) => self.from_async_close_and_reject(code, id, e),
             }
@@ -28692,11 +28686,7 @@ impl Interp {
                     self.from_async_reject(id, err)
                 } else {
                     self.from_async[id].close_error = err;
-                    self.schedule_native_await(
-                        code,
-                        inner,
-                        ReactionKind::FromAsyncClose(id as u32),
-                    )
+                    self.schedule_native_await(code, inner, ReactionKind::FromAsyncClose(id as u32))
                 }
             }
             // A throwing `return()` on an abrupt completion is swallowed.
@@ -28715,12 +28705,7 @@ impl Interp {
     }
 
     /// Settle the result promise as fulfilled with `A` (idempotent).
-    fn from_async_resolve(
-        &mut self,
-        code: &[u8],
-        id: usize,
-        value: Slot,
-    ) -> Result<(), Halt> {
+    fn from_async_resolve(&mut self, code: &[u8], id: usize, value: Slot) -> Result<(), Halt> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28829,11 +28814,7 @@ impl Interp {
     /// and `Promise.prototype.finally`. The constructor and `@@species` reads are
     /// observable through accessors and proxies; `undefined` constructor and
     /// nullish species select the realm's intrinsic Promise constructor.
-    fn promise_species_constructor(
-        &mut self,
-        code: &[u8],
-        promise: Slot,
-    ) -> Result<Slot, Halt> {
+    fn promise_species_constructor(&mut self, code: &[u8], promise: Slot) -> Result<Slot, Halt> {
         let promise_inst = match promise.value {
             Payload::Reference(inst) if promise.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -28887,12 +28868,7 @@ impl Interp {
             }
         }
         let capability = self.new_promise_capability_for(code, constructor)?;
-        self.call_any(
-            code,
-            capability.resolve,
-            Slot::undefined(),
-            &[value],
-        )?;
+        self.call_any(code, capability.resolve, Slot::undefined(), &[value])?;
         Ok(capability.promise)
     }
 
@@ -28930,16 +28906,9 @@ impl Interp {
             return self.promise_finally(code, promise_inst, on_finally, constructor);
         }
         self.meter.tick_raw(PROMISE_FINALLY_FRAME_METERING);
-        let then_finally =
-            self.make_promise_finally_handler(on_finally, constructor, false);
-        let catch_finally =
-            self.make_promise_finally_handler(on_finally, constructor, true);
-        self.call_any(
-            code,
-            then,
-            promise,
-            &[then_finally, catch_finally],
-        )
+        let then_finally = self.make_promise_finally_handler(on_finally, constructor, false);
+        let catch_finally = self.make_promise_finally_handler(on_finally, constructor, true);
+        self.call_any(code, then, promise, &[then_finally, catch_finally])
     }
 
     /// The drain behavior of a `Promise.prototype.finally` reaction: recover the
@@ -28960,22 +28929,12 @@ impl Interp {
         if self.is_callable_value(on_finally) {
             match self.call_any_catching_throw(code, on_finally, Slot::undefined(), &[])? {
                 Ok(r) => self.await_finally_result(code, reaction, r, value, rejected),
-                Err(thrown) => self.settle_capability(
-                    code,
-                    reaction.resolve,
-                    reaction.reject,
-                    thrown,
-                    true,
-                ),
+                Err(thrown) => {
+                    self.settle_capability(code, reaction.resolve, reaction.reject, thrown, true)
+                }
             }
         } else {
-            self.settle_capability(
-                code,
-                reaction.resolve,
-                reaction.reject,
-                value,
-                rejected,
-            )
+            self.settle_capability(code, reaction.resolve, reaction.reject, value, rejected)
         }
     }
 
@@ -29000,9 +28959,9 @@ impl Interp {
         let identity = if let Payload::Reference(inst) = result.value {
             if result.kind == Kind::Reference && self.promises.contains_key(&inst) {
                 let constructor_id = self.intern_key("constructor");
-                match self.array_from_try(|this| {
-                    this.mop_get(code, inst, constructor_id, result)
-                })? {
+                match self
+                    .array_from_try(|this| this.mop_get(code, inst, constructor_id, result))?
+                {
                     Ok(observed) => self.same_value(observed, constructor),
                     Err(error) => {
                         return self.settle_capability(
@@ -29087,13 +29046,7 @@ impl Interp {
                 );
             }
             Err(error) => {
-                return self.settle_capability(
-                    code,
-                    reaction.resolve,
-                    reaction.reject,
-                    error,
-                    true,
-                )
+                return self.settle_capability(code, reaction.resolve, reaction.reject, error, true)
             }
         };
         let await_reaction = PromiseReaction {
@@ -29151,8 +29104,7 @@ impl Interp {
         // the native boundary as a value instead of synchronously resuming the
         // caller's surrounding `try` statement.
         let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome =
-            self.promise_combinator_inner(code, kind, iterable, constructor, capability);
+        let outcome = self.promise_combinator_inner(code, kind, iterable, constructor, capability);
         self.jumps = saved_jumps;
         outcome
     }
@@ -29186,9 +29138,9 @@ impl Interp {
         };
         let resolve_id = self.intern_key("resolve");
         self.install_pending_intrinsics();
-        let promise_resolve = match self.array_from_try(|this| {
-            this.mop_get(code, constructor_inst, resolve_id, constructor)
-        })? {
+        let promise_resolve = match self
+            .array_from_try(|this| this.mop_get(code, constructor_inst, resolve_id, constructor))?
+        {
             Ok(method) if self.is_callable_value(method) => method,
             Ok(_) => {
                 let error = self.build_error("TypeError", 0, 0);
@@ -29216,9 +29168,7 @@ impl Interp {
             .expect("well-known iterator symbol");
         let iterator_method = match iterable.value {
             Payload::Reference(inst) if iterable.kind == Kind::Reference => {
-                match self.array_from_try(|this| {
-                    this.mop_get(code, inst, iterator_id, iterable)
-                })? {
+                match self.array_from_try(|this| this.mop_get(code, inst, iterator_id, iterable))? {
                     Ok(method) => method,
                     Err(error) => {
                         self.settle_capability(code, resolve, reject, error, true)?;
@@ -29242,9 +29192,9 @@ impl Interp {
                 if proto.is_null() {
                     Slot::undefined()
                 } else {
-                    match self.array_from_try(|this| {
-                        this.mop_get(code, proto, iterator_id, iterable)
-                    })? {
+                    match self
+                        .array_from_try(|this| this.mop_get(code, proto, iterator_id, iterable))?
+                    {
                         Ok(method) => method,
                         Err(error) => {
                             self.settle_capability(code, resolve, reject, error, true)?;
@@ -29322,15 +29272,14 @@ impl Interp {
                     return Ok(result_promise);
                 }
             };
-            let done = match self
-                .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
-            {
-                Ok(done) => done,
-                Err(error) => {
-                    self.settle_capability(code, resolve, reject, error, true)?;
-                    return Ok(result_promise);
-                }
-            };
+            let done =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
+                    Ok(done) => done,
+                    Err(error) => {
+                        self.settle_capability(code, resolve, reject, error, true)?;
+                        return Ok(result_promise);
+                    }
+                };
             if self.truthy(&done) {
                 self.arrays.get_mut(&results).unwrap().length = index;
                 self.combinators[comb_idx].remaining -= 1;
@@ -29346,34 +29295,29 @@ impl Interp {
                 }
                 return Ok(result_promise);
             }
-            let value = match self
-                .array_from_try(|this| this.mop_get(code, step_inst, value_id, step))?
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    self.settle_capability(code, resolve, reject, error, true)?;
-                    return Ok(result_promise);
-                }
-            };
+            let value =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, value_id, step))? {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.settle_capability(code, resolve, reject, error, true)?;
+                        return Ok(result_promise);
+                    }
+                };
 
             self.meter.tick_raw(PROMISE_COMBINATOR_PER_ELEMENT_METERING);
             self.combinators[comb_idx].remaining = self.combinators[comb_idx]
                 .remaining
                 .checked_add(1)
                 .ok_or(Halt::StepLimit(self.n_dispatched))?;
-            let next_promise = match self.call_any_catching_throw(
-                code,
-                promise_resolve,
-                constructor,
-                &[value],
-            )? {
-                Ok(value) => value,
-                Err(error) => {
-                    let error = self.array_from_close(code, iterator, error)?;
-                    self.settle_capability(code, resolve, reject, error, true)?;
-                    return Ok(result_promise);
-                }
-            };
+            let next_promise =
+                match self.call_any_catching_throw(code, promise_resolve, constructor, &[value])? {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let error = self.array_from_close(code, iterator, error)?;
+                        self.settle_capability(code, resolve, reject, error, true)?;
+                        return Ok(result_promise);
+                    }
+                };
             let next_promise_inst = match next_promise.value {
                 Payload::Reference(inst) if next_promise.kind == Kind::Reference => inst,
                 _ => {
@@ -29471,7 +29415,10 @@ impl Interp {
         let completion = match kind {
             CombinatorKind::All | CombinatorKind::AllSettled => {
                 let results = self.combinators[ci].results;
-                Some((Slot::of(Kind::Reference, Payload::Reference(results)), false))
+                Some((
+                    Slot::of(Kind::Reference, Payload::Reference(results)),
+                    false,
+                ))
             }
             CombinatorKind::Race => None,
             CombinatorKind::Any => {
@@ -29556,7 +29503,12 @@ impl Interp {
                         let errs: Vec<Slot> = {
                             let data = &self.arrays[&results];
                             (0..data.length)
-                                .map(|i| data.items().get(&i).copied().unwrap_or_else(Slot::undefined))
+                                .map(|i| {
+                                    data.items()
+                                        .get(&i)
+                                        .copied()
+                                        .unwrap_or_else(Slot::undefined)
+                                })
                                 .collect()
                         };
                         let agg = self.new_aggregate_error(errs);
@@ -30055,11 +30007,7 @@ impl Interp {
     /// dense-Array path only when the observable iterator operations still
     /// resolve to the intrinsic Array iterator; sparse/custom inputs take the
     /// full protocol path.
-    fn aggregate_error_elements(
-        &mut self,
-        code: &[u8],
-        errors: Slot,
-    ) -> Result<Vec<Slot>, Halt> {
+    fn aggregate_error_elements(&mut self, code: &[u8], errors: Slot) -> Result<Vec<Slot>, Halt> {
         if let Payload::Reference(array) = errors.value {
             if errors.kind == Kind::Reference
                 && self.arrays.contains_key(&array)
@@ -30078,7 +30026,8 @@ impl Interp {
                     self.array_iterator_proto,
                     next_id,
                     NativeMethod::ArrayIteratorNext,
-                ) && !self.chain_has_descriptor(self.array_iterator_proto, return_id);
+                ) && !self
+                    .chain_has_descriptor(self.array_iterator_proto, return_id);
                 let dense = {
                     let data = &self.arrays[&array];
                     (0..data.length).all(|index| data.items().contains_key(&index))
@@ -30234,11 +30183,7 @@ impl Interp {
     /// nothing on those paths or ironhorse has an offsetting gap elsewhere in
     /// them is not settled here; they are left exactly as they metered before
     /// this constant existed, so this moves only the two sites it measured.
-    fn box_primitive_to_instance(
-        &mut self,
-        native: Native,
-        prim: Slot,
-    ) -> crate::value::SlotIndex {
+    fn box_primitive_to_instance(&mut self, native: Native, prim: Slot) -> crate::value::SlotIndex {
         let inst = self.box_primitive_wrapper(native, prim);
         self.meter.tick_builtin_some(2);
         inst
@@ -30248,11 +30193,7 @@ impl Interp {
     /// `fxNewSlot`s and the side-table payload. The entry point for a ToObject
     /// performed *inside* a built-in, where XS reaches the wrapper without the
     /// metered dispatch [`Self::box_primitive_to_instance`] models.
-    fn box_primitive_wrapper(
-        &mut self,
-        native: Native,
-        prim: Slot,
-    ) -> crate::value::SlotIndex {
+    fn box_primitive_wrapper(&mut self, native: Native, prim: Slot) -> crate::value::SlotIndex {
         // fxNewObjectInstance: one fxNewSlot for the wrapper head.
         let proto = self
             .intrinsics
@@ -30277,11 +30218,7 @@ impl Interp {
     /// shared coercion boxer stamps strict temporary wrappers non-extensible
     /// to mirror XS internals, so the explicit constructor path clears only
     /// that internal stamp before exposing the object to guest mutation.
-    fn box_object_primitive(
-        &mut self,
-        native: Native,
-        prim: Slot,
-    ) -> crate::value::SlotIndex {
+    fn box_object_primitive(&mut self, native: Native, prim: Slot) -> crate::value::SlotIndex {
         let inst = self.box_primitive_wrapper(native, prim);
         self.slots.get_mut(inst).flag &= !XS_DONT_PATCH_FLAG;
         inst
@@ -30453,8 +30390,7 @@ impl Interp {
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
         if is_proxy {
-            self.meter
-                .tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
+            self.meter.tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
         if is_bound || is_proxy || self.needs_abstract_call(target_ref, method) {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
@@ -30490,11 +30426,7 @@ impl Interp {
     /// `Ok(false)` for the in-place trampoline. Every native, native-method,
     /// and bound receiver accepts modeled array-like shapes through
     /// `CreateListFromArrayLike`.
-    fn call_dot_apply_native(
-        &mut self,
-        base: usize,
-        code: &[u8],
-    ) -> Result<bool, Halt> {
+    fn call_dot_apply_native(&mut self, base: usize, code: &[u8]) -> Result<bool, Halt> {
         let target = self
             .stack
             .get(base)
@@ -30554,8 +30486,7 @@ impl Interp {
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
         if is_proxy {
-            self.meter
-                .tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
+            self.meter.tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
         if is_bound || is_proxy || self.needs_abstract_call(target_ref, method) {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
@@ -30609,7 +30540,10 @@ impl Interp {
                 if self
                     .functions
                     .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => r,
+                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) =>
+            {
+                r
+            }
             _ => return Err(Halt::Unsupported("call:non-user-function-receiver")),
         };
         let this_arg = self
@@ -30675,7 +30609,10 @@ impl Interp {
                 if self
                     .functions
                     .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => r,
+                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) =>
+            {
+                r
+            }
             _ => return Err(Halt::Unsupported("apply:non-user-function-receiver")),
         };
         let this_arg = self
@@ -30711,8 +30648,8 @@ impl Interp {
                     let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                     // The array path's fixed setup plus the per-element read +
                     // forwarding (`mxGetID(_length)` + `mxGetIndex(i)` + copy).
-                    let meter = APPLY_ARRAY_BASE_METERING
-                        + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                    let meter =
+                        APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                     (args, meter)
                 }
             }
@@ -30937,13 +30874,19 @@ impl Interp {
             if !self.is_callable_value(disposer) {
                 return Err(self.catchable_type_error());
             }
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
             // Measured add-record residue (see the constant).
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             data.records.push(DisposalRecord {
                 resource,
                 method: disposer,
@@ -30960,12 +30903,18 @@ impl Interp {
             if !self.is_callable_value(disposer) {
                 return Err(self.catchable_type_error());
             }
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             data.records.push(DisposalRecord {
                 resource,
                 method: disposer,
@@ -30981,12 +30930,18 @@ impl Interp {
             if !self.is_callable_value(disposer) {
                 return Err(self.catchable_type_error());
             }
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             data.records.push(DisposalRecord {
                 resource: Slot::undefined(),
                 method: disposer,
@@ -30998,12 +30953,18 @@ impl Interp {
             method,
             NativeMethod::DisposableStackMove | NativeMethod::AsyncDisposableStackMove
         ) {
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+            let data = self
+                .disposable_stacks
+                .get_mut(&inst)
+                .expect("brand checked");
             data.disposed = true;
             let records = std::mem::take(&mut data.records);
             let proto = match self.slots.get(inst).value {
@@ -31022,7 +30983,10 @@ impl Interp {
             return Ok(Slot::of(Kind::Reference, Payload::Reference(moved)));
         }
 
-        let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
+        let data = self
+            .disposable_stacks
+            .get_mut(&inst)
+            .expect("brand checked");
         if data.disposed {
             if is_async {
                 let promise = self.new_promise_instance();
@@ -31051,12 +31015,9 @@ impl Interp {
             if !record.pass_resource && record.resource.kind != Kind::Undefined {
                 self.meter.tick_raw(DISPOSE_USE_RECORD_METERING);
             }
-            if let Err(error) = self.run_callback_catching_throw(
-                code,
-                record.method,
-                this_arg,
-                &args,
-            )? {
+            if let Err(error) =
+                self.run_callback_catching_throw(code, record.method, this_arg, &args)?
+            {
                 pending_error = Some(match pending_error {
                     Some(suppressed) => self.build_suppressed_error(error, suppressed, None),
                     None => error,
@@ -31080,16 +31041,25 @@ impl Interp {
     }
 
     fn temporal_bigint_to_i128(&self, value: Slot) -> Option<i128> {
-        let Payload::BigInt(off) = value.value else { return None };
+        let Payload::BigInt(off) = value.value else {
+            return None;
+        };
         let (negative, limbs) = self.read_bigint(off);
         let mut magnitude = 0u128;
         for &limb in limbs.iter().rev() {
-            magnitude = magnitude.checked_mul(1u128 << 32)?.checked_add(limb as u128)?;
+            magnitude = magnitude
+                .checked_mul(1u128 << 32)?
+                .checked_add(limb as u128)?;
         }
         if negative {
-            if magnitude == (1u128 << 127) { Some(i128::MIN) }
-            else { i128::try_from(magnitude).ok()?.checked_neg() }
-        } else { i128::try_from(magnitude).ok() }
+            if magnitude == (1u128 << 127) {
+                Some(i128::MIN)
+            } else {
+                i128::try_from(magnitude).ok()?.checked_neg()
+            }
+        } else {
+            i128::try_from(magnitude).ok()
+        }
     }
 
     fn temporal_i128_bigint(&mut self, value: i128) -> Slot {
@@ -31100,7 +31070,9 @@ impl Interp {
             limbs.push(magnitude as u32);
             magnitude >>= 32;
         }
-        if limbs.is_empty() { limbs.push(0); }
+        if limbs.is_empty() {
+            limbs.push(0);
+        }
         self.make_bigint(negative, limbs)
     }
 
@@ -31118,52 +31090,89 @@ impl Interp {
         if !(-LIMIT..=LIMIT).contains(&epoch_nanoseconds) {
             return Err(self.catchable_range_error());
         }
-        let inst = self.slots.alloc(Slot::instance(self.temporal_instant_proto));
-        self.temporal_instants.insert(inst, TemporalInstantRecord { epoch_nanoseconds });
+        let inst = self
+            .slots
+            .alloc(Slot::instance(self.temporal_instant_proto));
+        self.temporal_instants
+            .insert(inst, TemporalInstantRecord { epoch_nanoseconds });
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
     fn temporal_new_duration(&mut self, record: TemporalDurationRecord) -> Result<Slot, Halt> {
-        if !temporal_duration_sign_valid(record) { return Err(self.catchable_range_error()); }
-        let inst = self.slots.alloc(Slot::instance(self.temporal_duration_proto));
+        if !temporal_duration_sign_valid(record) {
+            return Err(self.catchable_range_error());
+        }
+        let inst = self
+            .slots
+            .alloc(Slot::instance(self.temporal_duration_proto));
         self.temporal_durations.insert(inst, record);
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
     fn temporal_new_plain(&mut self, record: TemporalPlainRecord) -> Result<Slot, Halt> {
-        if !temporal_plain_valid(record) { return Err(self.catchable_range_error()); }
-        let inst = self.slots.alloc(Slot::instance(self.temporal_plain_protos[record.kind as usize]));
+        if !temporal_plain_valid(record) {
+            return Err(self.catchable_range_error());
+        }
+        let inst = self.slots.alloc(Slot::instance(
+            self.temporal_plain_protos[record.kind as usize],
+        ));
         self.temporal_plains.insert(inst, record);
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
-    fn temporal_plain_construct(&mut self, kind: u8, args: &[Slot], code: &[u8]) -> Result<Slot, Halt> {
+    fn temporal_plain_construct(
+        &mut self,
+        kind: u8,
+        args: &[Slot],
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
         if kind == 5 {
-            let id = self.value_to_string(code, args.first().copied().unwrap_or_else(Slot::undefined))?;
-            if id != "iso8601" { return Err(self.catchable_range_error()); }
-            return self.temporal_new_plain(TemporalPlainRecord { kind, ..Default::default() });
+            let id =
+                self.value_to_string(code, args.first().copied().unwrap_or_else(Slot::undefined))?;
+            if id != "iso8601" {
+                return Err(self.catchable_range_error());
+            }
+            return self.temporal_new_plain(TemporalPlainRecord {
+                kind,
+                ..Default::default()
+            });
         }
         let integer = |this: &mut Self, i: usize, default: i64| -> Result<i64, Halt> {
             let value = args.get(i).copied().unwrap_or_else(Slot::undefined);
-            if value.kind == Kind::Undefined { Ok(default) } else { this.temporal_integer(value) }
+            if value.kind == Kind::Undefined {
+                Ok(default)
+            } else {
+                this.temporal_integer(value)
+            }
         };
-        let mut r = TemporalPlainRecord { kind, ..Default::default() };
+        let mut r = TemporalPlainRecord {
+            kind,
+            ..Default::default()
+        };
         match kind {
             0 | 2 => {
                 r.year = integer(self, 0, 0)?;
-                r.month = u32::try_from(integer(self, 1, 0)?).map_err(|_| self.catchable_range_error())?;
-                r.day = u32::try_from(integer(self, 2, 0)?).map_err(|_| self.catchable_range_error())?;
-                if kind == 2 { temporal_set_time_args(self, &mut r, args, 3)?; }
+                r.month = u32::try_from(integer(self, 1, 0)?)
+                    .map_err(|_| self.catchable_range_error())?;
+                r.day = u32::try_from(integer(self, 2, 0)?)
+                    .map_err(|_| self.catchable_range_error())?;
+                if kind == 2 {
+                    temporal_set_time_args(self, &mut r, args, 3)?;
+                }
             }
             1 => temporal_set_time_args(self, &mut r, args, 0)?,
             3 => {
                 r.year = integer(self, 0, 0)?;
-                r.month = u32::try_from(integer(self, 1, 0)?).map_err(|_| self.catchable_range_error())?;
-                r.day = u32::try_from(integer(self, 3, 1)?).map_err(|_| self.catchable_range_error())?;
+                r.month = u32::try_from(integer(self, 1, 0)?)
+                    .map_err(|_| self.catchable_range_error())?;
+                r.day = u32::try_from(integer(self, 3, 1)?)
+                    .map_err(|_| self.catchable_range_error())?;
             }
             4 => {
-                r.month = u32::try_from(integer(self, 0, 0)?).map_err(|_| self.catchable_range_error())?;
-                r.day = u32::try_from(integer(self, 1, 0)?).map_err(|_| self.catchable_range_error())?;
+                r.month = u32::try_from(integer(self, 0, 0)?)
+                    .map_err(|_| self.catchable_range_error())?;
+                r.day = u32::try_from(integer(self, 1, 0)?)
+                    .map_err(|_| self.catchable_range_error())?;
                 r.year = integer(self, 3, 1972)?;
             }
             _ => unreachable!(),
@@ -31171,44 +31180,105 @@ impl Interp {
         self.temporal_new_plain(r)
     }
 
-    fn temporal_plain_from(&mut self, kind: u8, value: Slot, code: &[u8]) -> Result<TemporalPlainRecord, Halt> {
+    fn temporal_plain_from(
+        &mut self,
+        kind: u8,
+        value: Slot,
+        code: &[u8],
+    ) -> Result<TemporalPlainRecord, Halt> {
         if kind == 5 {
             if let Payload::Reference(i) = value.value {
-                if let Some(r) = self.temporal_plains.get(&i).filter(|r| r.kind == 5) { return Ok(*r); }
+                if let Some(r) = self.temporal_plains.get(&i).filter(|r| r.kind == 5) {
+                    return Ok(*r);
+                }
             }
             let id = self.value_to_string(code, value)?;
-            return if id == "iso8601" { Ok(TemporalPlainRecord { kind, ..Default::default() }) }
-                else { Err(self.catchable_range_error()) };
+            return if id == "iso8601" {
+                Ok(TemporalPlainRecord {
+                    kind,
+                    ..Default::default()
+                })
+            } else {
+                Err(self.catchable_range_error())
+            };
         }
         if let Payload::Reference(i) = value.value {
-            if let Some(r) = self.temporal_plains.get(&i).filter(|r| r.kind == kind) { return Ok(*r); }
-            let mut r = TemporalPlainRecord { kind, year: if kind == 4 { 1972 } else { 0 }, day: if kind == 3 { 1 } else { 0 }, ..Default::default() };
-            let names = ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"];
+            if let Some(r) = self.temporal_plains.get(&i).filter(|r| r.kind == kind) {
+                return Ok(*r);
+            }
+            let mut r = TemporalPlainRecord {
+                kind,
+                year: if kind == 4 { 1972 } else { 0 },
+                day: if kind == 3 { 1 } else { 0 },
+                ..Default::default()
+            };
+            let names = [
+                "year",
+                "month",
+                "day",
+                "hour",
+                "minute",
+                "second",
+                "millisecond",
+                "microsecond",
+                "nanosecond",
+            ];
             let mut seen = [false; 9];
             for (n, name) in names.iter().enumerate() {
-                let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                let Some(&id) = self.symbol_ids.get(*name) else {
+                    continue;
+                };
                 let item = self.ordinary_get(code, i, id, value)?;
-                if item.kind == Kind::Undefined { continue; }
+                if item.kind == Kind::Undefined {
+                    continue;
+                }
                 let v = self.temporal_integer(item)?;
                 seen[n] = true;
-                match n { 0 => r.year=v, 1 => r.month=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    2 => r.day=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    3 => r.hour=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    4 => r.minute=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    5 => r.second=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    6 => r.millisecond=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    7 => r.microsecond=u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    _ => r.nanosecond=u32::try_from(v).map_err(|_| self.catchable_range_error())? }
+                match n {
+                    0 => r.year = v,
+                    1 => r.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    2 => r.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    3 => r.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    4 => r.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    5 => r.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    6 => {
+                        r.millisecond =
+                            u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                    }
+                    7 => {
+                        r.microsecond =
+                            u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                    }
+                    _ => {
+                        r.nanosecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                    }
+                }
             }
-            let required = match kind { 0|2 => seen[0]&&seen[1]&&seen[2], 1 => seen[3]||seen[4]||seen[5]||seen[6]||seen[7]||seen[8], 3 => seen[0]&&seen[1], 4 => seen[1]&&seen[2], _ => false };
-            if !required || !temporal_plain_valid(r) { return Err(self.catchable_type_error()); }
+            let required = match kind {
+                0 | 2 => seen[0] && seen[1] && seen[2],
+                1 => seen[3] || seen[4] || seen[5] || seen[6] || seen[7] || seen[8],
+                3 => seen[0] && seen[1],
+                4 => seen[1] && seen[2],
+                _ => false,
+            };
+            if !required || !temporal_plain_valid(r) {
+                return Err(self.catchable_type_error());
+            }
             return Ok(r);
         }
         let text = self.value_to_string(code, value)?;
         parse_temporal_plain(kind, &text).ok_or_else(|| self.catchable_range_error())
     }
 
-    fn temporal_plain_method(&mut self, kind: u8, op: u8, this: Slot, arg0: Slot, arg1: Slot, code: &[u8]) -> Result<Slot, Halt> {
+    fn temporal_plain_method(
+        &mut self,
+        kind: u8,
+        op: u8,
+        this: Slot,
+        arg0: Slot,
+        arg1: Slot,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
         if op == 0 {
             let r = self.temporal_plain_from(kind, arg0, code)?;
             return self.temporal_new_plain(r);
@@ -31216,77 +31286,201 @@ impl Interp {
         if op == 1 {
             let a = self.temporal_plain_from(kind, arg0, code)?;
             let b = self.temporal_plain_from(kind, arg1, code)?;
-            return Ok(Slot::integer(temporal_plain_key(a).cmp(&temporal_plain_key(b)) as i32));
+            return Ok(Slot::integer(
+                temporal_plain_key(a).cmp(&temporal_plain_key(b)) as i32,
+            ));
         }
         let old = temporal_brand(this, &self.temporal_plains)
-            .filter(|r| r.kind == kind).ok_or_else(|| self.catchable_type_error())?;
+            .filter(|r| r.kind == kind)
+            .ok_or_else(|| self.catchable_type_error())?;
         match op {
             2 => {
-                let Payload::Reference(i) = arg0.value else { return Err(self.catchable_type_error()) };
-                let mut r = old; let mut any = false;
-                for (n,name) in ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"].iter().enumerate() {
-                    let Some(&id)=self.symbol_ids.get(*name) else { continue }; let v=self.ordinary_get(code,i,id,arg0)?;
-                    if v.kind==Kind::Undefined { continue } let v=self.temporal_integer(v)?; any=true;
-                    match n {0=>r.year=v,1=>r.month=u32::try_from(v).map_err(|_|self.catchable_range_error())?,2=>r.day=u32::try_from(v).map_err(|_|self.catchable_range_error())?,3=>r.hour=u32::try_from(v).map_err(|_|self.catchable_range_error())?,4=>r.minute=u32::try_from(v).map_err(|_|self.catchable_range_error())?,5=>r.second=u32::try_from(v).map_err(|_|self.catchable_range_error())?,6=>r.millisecond=u32::try_from(v).map_err(|_|self.catchable_range_error())?,7=>r.microsecond=u32::try_from(v).map_err(|_|self.catchable_range_error())?,_=>r.nanosecond=u32::try_from(v).map_err(|_|self.catchable_range_error())?}
+                let Payload::Reference(i) = arg0.value else {
+                    return Err(self.catchable_type_error());
+                };
+                let mut r = old;
+                let mut any = false;
+                for (n, name) in [
+                    "year",
+                    "month",
+                    "day",
+                    "hour",
+                    "minute",
+                    "second",
+                    "millisecond",
+                    "microsecond",
+                    "nanosecond",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let Some(&id) = self.symbol_ids.get(*name) else {
+                        continue;
+                    };
+                    let v = self.ordinary_get(code, i, id, arg0)?;
+                    if v.kind == Kind::Undefined {
+                        continue;
+                    }
+                    let v = self.temporal_integer(v)?;
+                    any = true;
+                    match n {
+                        0 => r.year = v,
+                        1 => {
+                            r.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        2 => r.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        3 => r.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        4 => {
+                            r.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        5 => {
+                            r.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        6 => {
+                            r.millisecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        7 => {
+                            r.microsecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        _ => {
+                            r.nanosecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                    }
                 }
-                if !any { return Err(self.catchable_type_error()) } self.temporal_new_plain(r)
+                if !any {
+                    return Err(self.catchable_type_error());
+                }
+                self.temporal_new_plain(r)
             }
-            3|4 => {
-                let mut d=self.temporal_duration_from(arg0,code)?; if op==4 {d=d.negated().ok_or_else(||self.catchable_range_error())?;}
-                let r=temporal_plain_add(old,d).ok_or_else(||self.catchable_range_error())?; self.temporal_new_plain(r)
+            3 | 4 => {
+                let mut d = self.temporal_duration_from(arg0, code)?;
+                if op == 4 {
+                    d = d.negated().ok_or_else(|| self.catchable_range_error())?;
+                }
+                let r = temporal_plain_add(old, d).ok_or_else(|| self.catchable_range_error())?;
+                self.temporal_new_plain(r)
             }
-            5|6 => {
-                let other=self.temporal_plain_from(kind,arg0,code)?;
-                let (a,b)=if op==5 {(old,other)} else {(other,old)};
-                let d=temporal_plain_difference(a,b).ok_or(Halt::Unsupported("Temporal.Plain:difference-calendar"))?;
+            5 | 6 => {
+                let other = self.temporal_plain_from(kind, arg0, code)?;
+                let (a, b) = if op == 5 { (old, other) } else { (other, old) };
+                let d = temporal_plain_difference(a, b)
+                    .ok_or(Halt::Unsupported("Temporal.Plain:difference-calendar"))?;
                 self.temporal_new_duration(d)
             }
-            7 => Ok(Slot::boolean(old == self.temporal_plain_from(kind,arg0,code)?)),
-            8|9 => Ok(self.new_string_metered(format_temporal_plain(old).as_bytes())),
+            7 => Ok(Slot::boolean(
+                old == self.temporal_plain_from(kind, arg0, code)?,
+            )),
+            8 | 9 => Ok(self.new_string_metered(format_temporal_plain(old).as_bytes())),
             10 => Err(self.catchable_type_error()),
-            11 => self.temporal_new_plain(TemporalPlainRecord{kind:0,..old}),
-            12 => self.temporal_new_plain(TemporalPlainRecord{kind:1,year:0,month:0,day:0,..old}),
-            13 if kind==0 => { let t=self.temporal_plain_from(1,arg0,code)?; self.temporal_new_plain(TemporalPlainRecord{kind:2,year:old.year,month:old.month,day:old.day,..t}) }
-            13 if kind==1 => { let d=self.temporal_plain_from(0,arg0,code)?; self.temporal_new_plain(TemporalPlainRecord{kind:2,hour:old.hour,minute:old.minute,second:old.second,millisecond:old.millisecond,microsecond:old.microsecond,nanosecond:old.nanosecond,..d}) }
+            11 => self.temporal_new_plain(TemporalPlainRecord { kind: 0, ..old }),
+            12 => self.temporal_new_plain(TemporalPlainRecord {
+                kind: 1,
+                year: 0,
+                month: 0,
+                day: 0,
+                ..old
+            }),
+            13 if kind == 0 => {
+                let t = self.temporal_plain_from(1, arg0, code)?;
+                self.temporal_new_plain(TemporalPlainRecord {
+                    kind: 2,
+                    year: old.year,
+                    month: old.month,
+                    day: old.day,
+                    ..t
+                })
+            }
+            13 if kind == 1 => {
+                let d = self.temporal_plain_from(0, arg0, code)?;
+                self.temporal_new_plain(TemporalPlainRecord {
+                    kind: 2,
+                    hour: old.hour,
+                    minute: old.minute,
+                    second: old.second,
+                    millisecond: old.millisecond,
+                    microsecond: old.microsecond,
+                    nanosecond: old.nanosecond,
+                    ..d
+                })
+            }
             _ => Err(Halt::Unsupported("Temporal.Plain:method")),
         }
     }
 
     fn temporal_instant_from(&mut self, value: Slot, code: &[u8]) -> Result<i128, Halt> {
         if let Payload::Reference(r) = value.value {
-            if let Some(record) = self.temporal_instants.get(&r) { return Ok(record.epoch_nanoseconds); }
+            if let Some(record) = self.temporal_instants.get(&r) {
+                return Ok(record.epoch_nanoseconds);
+            }
         }
         let text = self.value_to_string(code, value)?;
         parse_temporal_instant(&text).ok_or_else(|| self.catchable_range_error())
     }
 
-    fn temporal_duration_from(&mut self, value: Slot, code: &[u8]) -> Result<TemporalDurationRecord, Halt> {
+    fn temporal_duration_from(
+        &mut self,
+        value: Slot,
+        code: &[u8],
+    ) -> Result<TemporalDurationRecord, Halt> {
         if let Payload::Reference(r) = value.value {
-            if let Some(record) = self.temporal_durations.get(&r) { return Ok(*record); }
-            let names = ["years","months","weeks","days","hours","minutes","seconds",
-                "milliseconds","microseconds","nanoseconds"];
+            if let Some(record) = self.temporal_durations.get(&r) {
+                return Ok(*record);
+            }
+            let names = [
+                "years",
+                "months",
+                "weeks",
+                "days",
+                "hours",
+                "minutes",
+                "seconds",
+                "milliseconds",
+                "microseconds",
+                "nanoseconds",
+            ];
             let mut fields = [0i64; 10];
             let mut any = false;
             for (i, name) in names.iter().enumerate() {
-                let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                let Some(&id) = self.symbol_ids.get(*name) else {
+                    continue;
+                };
                 let receiver = Slot::of(Kind::Reference, Payload::Reference(r));
                 let item = self.ordinary_get(code, r, id, receiver)?;
-                if item.kind != Kind::Undefined { fields[i] = self.temporal_integer(item)?; any = true; }
+                if item.kind != Kind::Undefined {
+                    fields[i] = self.temporal_integer(item)?;
+                    any = true;
+                }
             }
-            if !any { return Err(self.catchable_type_error()); }
+            if !any {
+                return Err(self.catchable_type_error());
+            }
             let record = TemporalDurationRecord::from_fields(fields);
-            if !temporal_duration_sign_valid(record) { return Err(self.catchable_range_error()); }
+            if !temporal_duration_sign_valid(record) {
+                return Err(self.catchable_range_error());
+            }
             return Ok(record);
         }
         let text = self.value_to_string(code, value)?;
         parse_temporal_duration(&text).ok_or_else(|| self.catchable_range_error())
     }
 
-    fn temporal_unit_option(&mut self, value: Slot, code: &[u8], default: &str) -> Result<String, Halt> {
-        if value.kind == Kind::Undefined { return Ok(default.to_string()); }
+    fn temporal_unit_option(
+        &mut self,
+        value: Slot,
+        code: &[u8],
+        default: &str,
+    ) -> Result<String, Halt> {
+        if value.kind == Kind::Undefined {
+            return Ok(default.to_string());
+        }
         if let Payload::Reference(r) = value.value {
             for name in ["smallestUnit", "unit"] {
-                if let Some(text) = self.intl_option_string(code, r, name)? { return Ok(text); }
+                if let Some(text) = self.intl_option_string(code, r, name)? {
+                    return Ok(text);
+                }
             }
             return Ok(default.to_string());
         }
@@ -31300,17 +31494,29 @@ impl Interp {
     /// (local, for zoned) calendar date. Returns `None` when `relativeTo` is
     /// absent (`undefined`/`null`), letting the caller decide whether the
     /// operation needs a reference (a `RangeError` for calendar units).
-    fn temporal_relative_to_date(&mut self, options: Slot, code: &[u8]) -> Result<Option<TemporalPlainRecord>, Halt> {
-        if options.kind == Kind::Undefined { return Ok(None); }
+    fn temporal_relative_to_date(
+        &mut self,
+        options: Slot,
+        code: &[u8],
+    ) -> Result<Option<TemporalPlainRecord>, Halt> {
+        if options.kind == Kind::Undefined {
+            return Ok(None);
+        }
         let Payload::Reference(r) = options.value else {
             // A non-object, non-undefined options argument is a TypeError for
             // every Temporal reader that accepts an options bag.
             return Err(self.catchable_type_error());
         };
-        if options.kind != Kind::Reference { return Err(self.catchable_type_error()); }
-        let Some(&id) = self.symbol_ids.get("relativeTo") else { return Ok(None); };
+        if options.kind != Kind::Reference {
+            return Err(self.catchable_type_error());
+        }
+        let Some(&id) = self.symbol_ids.get("relativeTo") else {
+            return Ok(None);
+        };
         let value = self.ordinary_get(code, r, id, options)?;
-        if value.kind == Kind::Undefined || value.kind == Kind::Null { return Ok(None); }
+        if value.kind == Kind::Undefined || value.kind == Kind::Null {
+            return Ok(None);
+        }
         // A branded `ZonedDateTime` resolves to its local wall-clock date; every
         // other date-bearing value (`PlainDate`/`PlainDateTime` brand, property
         // bag, or ISO string) is read as a `PlainDate` via the shared reader,
@@ -31328,12 +31534,21 @@ impl Interp {
     /// the calendar units are resolved by ISO `dateAdd`; without one a duration
     /// carrying calendar units (`years`/`months`/`weeks`) is a `RangeError`
     /// (`relativeTo` is required), while days are treated as fixed 24-hour days.
-    fn temporal_duration_span(&mut self, d: TemporalDurationRecord, relative: Option<TemporalPlainRecord>) -> Result<i128, Halt> {
+    fn temporal_duration_span(
+        &mut self,
+        d: TemporalDurationRecord,
+        relative: Option<TemporalPlainRecord>,
+    ) -> Result<i128, Halt> {
         match relative {
-            Some(start) => iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error()),
+            Some(start) => {
+                iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error())
+            }
             None => {
-                if d.has_calendar_units() { return Err(self.catchable_range_error()); }
-                d.time_nanoseconds(true).ok_or_else(|| self.catchable_range_error())
+                if d.has_calendar_units() {
+                    return Err(self.catchable_range_error());
+                }
+                d.time_nanoseconds(true)
+                    .ok_or_else(|| self.catchable_range_error())
             }
         }
     }
@@ -31345,21 +31560,46 @@ impl Interp {
     /// duration, the smallest, or the largest unit) require a `relativeTo`; the
     /// exact nanosecond span is resolved against that ISO date under the
     /// constant-24-hour-day model.
-    fn temporal_duration_round(&mut self, d: TemporalDurationRecord, options: Slot, code: &[u8]) -> Result<TemporalDurationRecord, Halt> {
+    fn temporal_duration_round(
+        &mut self,
+        d: TemporalDurationRecord,
+        options: Slot,
+        code: &[u8],
+    ) -> Result<TemporalDurationRecord, Halt> {
         const DAY_NS: i128 = 86_400_000_000_000;
         let (smallest, largest_opt, increment, mode, relative) = if options.kind == Kind::String {
-            (Some(self.value_to_string(code, options)?), None, 1i64, "halfExpand".to_string(), None)
+            (
+                Some(self.value_to_string(code, options)?),
+                None,
+                1i64,
+                "halfExpand".to_string(),
+                None,
+            )
         } else if let Payload::Reference(r) = options.value {
-            if options.kind != Kind::Reference { return Err(self.catchable_type_error()); }
+            if options.kind != Kind::Reference {
+                return Err(self.catchable_type_error());
+            }
             let smallest = self.intl_option_string(code, r, "smallestUnit")?;
             let largest = self.intl_option_string(code, r, "largestUnit")?;
-            if smallest.is_none() && largest.is_none() { return Err(self.catchable_range_error()); }
+            if smallest.is_none() && largest.is_none() {
+                return Err(self.catchable_range_error());
+            }
             let increment = if let Some(&id) = self.symbol_ids.get("roundingIncrement") {
                 let v = self.ordinary_get(code, r, id, options)?;
-                if v.kind == Kind::Undefined { 1 } else { self.temporal_integer(v)? }
-            } else { 1 };
-            if increment < 1 { return Err(self.catchable_range_error()); }
-            let mode = self.intl_option_string(code, r, "roundingMode")?.unwrap_or_else(|| "halfExpand".to_string());
+                if v.kind == Kind::Undefined {
+                    1
+                } else {
+                    self.temporal_integer(v)?
+                }
+            } else {
+                1
+            };
+            if increment < 1 {
+                return Err(self.catchable_range_error());
+            }
+            let mode = self
+                .intl_option_string(code, r, "roundingMode")?
+                .unwrap_or_else(|| "halfExpand".to_string());
             let relative = self.temporal_relative_to_date(options, code)?;
             (smallest, largest, increment, mode, relative)
         } else {
@@ -31376,8 +31616,11 @@ impl Interp {
             Some(l) => temporal_unit_rank(l).ok_or_else(|| self.catchable_range_error())?,
         };
         // largestUnit must be the same size or coarser (smaller rank) than smallestUnit.
-        if largest_rank > smallest_rank { return Err(self.catchable_range_error()); }
-        validate_duration_increment(smallest_rank, increment).ok_or_else(|| self.catchable_range_error())?;
+        if largest_rank > smallest_rank {
+            return Err(self.catchable_range_error());
+        }
+        validate_duration_increment(smallest_rank, increment)
+            .ok_or_else(|| self.catchable_range_error())?;
 
         let smallest_name = temporal_unit_name(smallest_rank);
         let largest_name = temporal_unit_name(largest_rank);
@@ -31390,20 +31633,39 @@ impl Interp {
         if smallest_rank >= 3 {
             // Fixed-length smallest unit: round the exact nanosecond span.
             let span = self.temporal_duration_span(d, relative)?;
-            let unit_ns = if smallest_name == "day" { DAY_NS } else { temporal_unit_nanoseconds(smallest_name).ok_or_else(|| self.catchable_range_error())? };
-            let quantum = unit_ns.checked_mul(increment as i128).ok_or_else(|| self.catchable_range_error())?;
-            let rounded = round_temporal(span, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+            let unit_ns = if smallest_name == "day" {
+                DAY_NS
+            } else {
+                temporal_unit_nanoseconds(smallest_name)
+                    .ok_or_else(|| self.catchable_range_error())?
+            };
+            let quantum = unit_ns
+                .checked_mul(increment as i128)
+                .ok_or_else(|| self.catchable_range_error())?;
+            let rounded =
+                round_temporal(span, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
             if largest_rank >= 3 {
-                balance_zoned_diff(rounded, largest_name).ok_or_else(|| self.catchable_range_error())
+                balance_zoned_diff(rounded, largest_name)
+                    .ok_or_else(|| self.catchable_range_error())
             } else {
                 let start = relative.ok_or_else(|| self.catchable_range_error())?;
-                let start_days = days_from_civil(start.year, start.month, start.day).ok_or_else(|| self.catchable_range_error())?;
+                let start_days = days_from_civil(start.year, start.month, start.day)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 let day_offset = rounded.div_euclid(DAY_NS);
                 let time_ns = rounded.rem_euclid(DAY_NS);
                 let (ey, em, ed) = civil_from_days(start_days + day_offset);
-                let start_dt = TemporalPlainRecord { kind: 2, year: start.year, month: start.month, day: start.day, ..Default::default() };
+                let start_dt = TemporalPlainRecord {
+                    kind: 2,
+                    year: start.year,
+                    month: start.month,
+                    day: start.day,
+                    ..Default::default()
+                };
                 let end_dt = TemporalPlainRecord {
-                    kind: 2, year: ey, month: em, day: ed,
+                    kind: 2,
+                    year: ey,
+                    month: em,
+                    day: ed,
                     hour: (time_ns / 3_600_000_000_000) as u32,
                     minute: ((time_ns / 60_000_000_000) % 60) as u32,
                     second: ((time_ns / 1_000_000_000) % 60) as u32,
@@ -31411,15 +31673,18 @@ impl Interp {
                     microsecond: ((time_ns / 1_000) % 1000) as u32,
                     nanosecond: (time_ns % 1000) as u32,
                 };
-                iso_datetime_difference(start_dt, end_dt, largest_name).ok_or_else(|| self.catchable_range_error())
+                iso_datetime_difference(start_dt, end_dt, largest_name)
+                    .ok_or_else(|| self.catchable_range_error())
             }
         } else {
             // Calendar smallest unit: round the fractional calendar total, then
             // re-express the whole-unit endpoint as a calendar difference.
             let start = relative.ok_or_else(|| self.catchable_range_error())?;
-            let span = iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error())?;
+            let span = iso_duration_span_nanoseconds(start, d)
+                .ok_or_else(|| self.catchable_range_error())?;
             let total = match smallest_name {
-                "year" | "month" => iso_total_calendar_units(start, span, smallest_name).ok_or_else(|| self.catchable_range_error())?,
+                "year" | "month" => iso_total_calendar_units(start, span, smallest_name)
+                    .ok_or_else(|| self.catchable_range_error())?,
                 _ => span as f64 / (7.0 * DAY_NS as f64), // week
             };
             let count = round_number_to_increment(total, increment, &mode) as i64;
@@ -31427,12 +31692,21 @@ impl Interp {
                 "year" => iso_date_add(start, count, 0, 0, 0),
                 "month" => iso_date_add(start, 0, count, 0, 0),
                 _ => iso_date_add(start, 0, 0, count, 0), // week
-            }.ok_or_else(|| self.catchable_range_error())?;
+            }
+            .ok_or_else(|| self.catchable_range_error())?;
             iso_date_until(start, dest, largest_name).ok_or_else(|| self.catchable_range_error())
         }
     }
 
-    fn temporal_method(&mut self, method: NativeMethod, this: Slot, arg0: Slot, arg1: Slot, arg2: Slot, code: &[u8]) -> Result<Slot, Halt> {
+    fn temporal_method(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+        arg0: Slot,
+        arg1: Slot,
+        arg2: Slot,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
         use NativeMethod::*;
         match method {
             TemporalInstantFrom => {
@@ -31441,11 +31715,16 @@ impl Interp {
             }
             TemporalInstantFromEpochMilliseconds => {
                 let n = self.temporal_integer(arg0)? as i128;
-                let ns = match n.checked_mul(1_000_000) { Some(ns) => ns, None => return Err(self.catchable_range_error()) };
+                let ns = match n.checked_mul(1_000_000) {
+                    Some(ns) => ns,
+                    None => return Err(self.catchable_range_error()),
+                };
                 self.temporal_new_instant(ns)
             }
             TemporalInstantFromEpochNanoseconds => {
-                let ns = self.temporal_bigint_to_i128(arg0).ok_or_else(|| self.catchable_type_error())?;
+                let ns = self
+                    .temporal_bigint_to_i128(arg0)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 self.temporal_new_instant(ns)
             }
             TemporalInstantCompare => {
@@ -31454,33 +31733,55 @@ impl Interp {
                 Ok(Slot::integer(a.cmp(&b) as i32))
             }
             TemporalInstantAdd | TemporalInstantSubtract => {
-                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 let d = self.temporal_duration_from(arg0, code)?;
-                let mut delta = d.time_nanoseconds(false).ok_or_else(|| self.catchable_range_error())?;
-                if method == TemporalInstantSubtract { delta = delta.checked_neg().ok_or_else(|| self.catchable_range_error())?; }
-                let ns = match inst.epoch_nanoseconds.checked_add(delta) { Some(ns) => ns, None => return Err(self.catchable_range_error()) };
+                let mut delta = d
+                    .time_nanoseconds(false)
+                    .ok_or_else(|| self.catchable_range_error())?;
+                if method == TemporalInstantSubtract {
+                    delta = delta
+                        .checked_neg()
+                        .ok_or_else(|| self.catchable_range_error())?;
+                }
+                let ns = match inst.epoch_nanoseconds.checked_add(delta) {
+                    Some(ns) => ns,
+                    None => return Err(self.catchable_range_error()),
+                };
                 self.temporal_new_instant(ns)
             }
             TemporalInstantUntil | TemporalInstantSince => {
-                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 let other = self.temporal_instant_from(arg0, code)?;
-                let delta = if method == TemporalInstantUntil { other - inst.epoch_nanoseconds } else { inst.epoch_nanoseconds - other };
+                let delta = if method == TemporalInstantUntil {
+                    other - inst.epoch_nanoseconds
+                } else {
+                    inst.epoch_nanoseconds - other
+                };
                 self.temporal_new_duration(duration_from_nanoseconds(delta))
             }
             TemporalInstantRound => {
-                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 let unit = self.temporal_unit_option(arg0, code, "nanosecond")?;
-                let quantum = temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
+                let quantum =
+                    temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
                 let ns = round_half_expand(inst.epoch_nanoseconds, quantum);
                 self.temporal_new_instant(ns)
             }
             TemporalInstantEquals => {
-                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
-                Ok(Slot::boolean(inst.epoch_nanoseconds == self.temporal_instant_from(arg0, code)?))
+                let inst = temporal_brand(this, &self.temporal_instants)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                Ok(Slot::boolean(
+                    inst.epoch_nanoseconds == self.temporal_instant_from(arg0, code)?,
+                ))
             }
             TemporalInstantToString | TemporalInstantToJSON => {
-                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| self.catchable_type_error())?;
-                Ok(self.new_string_metered(format_temporal_instant(inst.epoch_nanoseconds).as_bytes()))
+                let inst = temporal_brand(this, &self.temporal_instants)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                Ok(self
+                    .new_string_metered(format_temporal_instant(inst.epoch_nanoseconds).as_bytes()))
             }
             TemporalInstantValueOf | TemporalDurationValueOf => Err(self.catchable_type_error()),
             TemporalDurationFrom => {
@@ -31505,46 +31806,86 @@ impl Interp {
                 Ok(Slot::integer(av.cmp(&bv) as i32))
             }
             TemporalDurationNegated | TemporalDurationAbs => {
-                let mut d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
-                if method == TemporalDurationNegated || d.sign() < 0 { d = d.negated().ok_or_else(|| self.catchable_range_error())?; }
+                let mut d = temporal_brand(this, &self.temporal_durations)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                if method == TemporalDurationNegated || d.sign() < 0 {
+                    d = d.negated().ok_or_else(|| self.catchable_range_error())?;
+                }
                 self.temporal_new_duration(d)
             }
             TemporalDurationAdd | TemporalDurationSubtract => {
-                let a = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let a = temporal_brand(this, &self.temporal_durations)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 let mut b = self.temporal_duration_from(arg0, code)?;
-                if method == TemporalDurationSubtract { b = b.negated().ok_or_else(|| self.catchable_range_error())?; }
-                let af = a.fields(); let bf = b.fields(); let mut out = [0i64; 10];
-                for i in 0..10 { out[i] = af[i].checked_add(bf[i]).ok_or_else(|| self.catchable_range_error())?; }
+                if method == TemporalDurationSubtract {
+                    b = b.negated().ok_or_else(|| self.catchable_range_error())?;
+                }
+                let af = a.fields();
+                let bf = b.fields();
+                let mut out = [0i64; 10];
+                for i in 0..10 {
+                    out[i] = af[i]
+                        .checked_add(bf[i])
+                        .ok_or_else(|| self.catchable_range_error())?;
+                }
                 self.temporal_new_duration(TemporalDurationRecord::from_fields(out))
             }
             TemporalDurationWith => {
-                let old = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
-                let Payload::Reference(r) = arg0.value else { return Err(self.catchable_type_error()) };
-                let names = ["years","months","weeks","days","hours","minutes","seconds","milliseconds","microseconds","nanoseconds"];
-                let mut fields = old.fields(); let mut any = false;
+                let old = temporal_brand(this, &self.temporal_durations)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                let Payload::Reference(r) = arg0.value else {
+                    return Err(self.catchable_type_error());
+                };
+                let names = [
+                    "years",
+                    "months",
+                    "weeks",
+                    "days",
+                    "hours",
+                    "minutes",
+                    "seconds",
+                    "milliseconds",
+                    "microseconds",
+                    "nanoseconds",
+                ];
+                let mut fields = old.fields();
+                let mut any = false;
                 for (i, name) in names.iter().enumerate() {
-                    let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                    let Some(&id) = self.symbol_ids.get(*name) else {
+                        continue;
+                    };
                     let item = self.ordinary_get(code, r, id, arg0)?;
-                    if item.kind != Kind::Undefined { fields[i] = self.temporal_integer(item)?; any = true; }
+                    if item.kind != Kind::Undefined {
+                        fields[i] = self.temporal_integer(item)?;
+                        any = true;
+                    }
                 }
-                if !any { return Err(self.catchable_type_error()); }
+                if !any {
+                    return Err(self.catchable_type_error());
+                }
                 self.temporal_new_duration(TemporalDurationRecord::from_fields(fields))
             }
             TemporalDurationRound => {
-                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let d = temporal_brand(this, &self.temporal_durations)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 let record = self.temporal_duration_round(d, arg0, code)?;
                 self.temporal_new_duration(record)
             }
             TemporalDurationTotal => {
-                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let d = temporal_brand(this, &self.temporal_durations)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 // `total` requires a `unit`: a bare string argument IS the unit,
                 // an options bag must carry a `unit` property (no default), and
                 // anything else is a TypeError.
                 let (unit, relative) = if arg0.kind == Kind::String {
                     (self.value_to_string(code, arg0)?, None)
                 } else if let Payload::Reference(r) = arg0.value {
-                    if arg0.kind != Kind::Reference { return Err(self.catchable_type_error()); }
-                    let unit = self.intl_option_string(code, r, "unit")?.ok_or_else(|| self.catchable_range_error())?;
+                    if arg0.kind != Kind::Reference {
+                        return Err(self.catchable_type_error());
+                    }
+                    let unit = self
+                        .intl_option_string(code, r, "unit")?
+                        .ok_or_else(|| self.catchable_range_error())?;
                     (unit, self.temporal_relative_to_date(arg0, code)?)
                 } else {
                     return Err(self.catchable_type_error());
@@ -31553,16 +31894,20 @@ impl Interp {
                 match unit_key {
                     "year" | "month" => {
                         let start = relative.ok_or_else(|| self.catchable_range_error())?;
-                        let span = iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error())?;
-                        let total = iso_total_calendar_units(start, span, unit_key).ok_or_else(|| self.catchable_range_error())?;
+                        let span = iso_duration_span_nanoseconds(start, d)
+                            .ok_or_else(|| self.catchable_range_error())?;
+                        let total = iso_total_calendar_units(start, span, unit_key)
+                            .ok_or_else(|| self.catchable_range_error())?;
                         Ok(Slot::number(total))
                     }
-                    "week" | "day" | "hour" | "minute" | "second" | "millisecond" | "microsecond" | "nanosecond" => {
+                    "week" | "day" | "hour" | "minute" | "second" | "millisecond"
+                    | "microsecond" | "nanosecond" => {
                         let span = self.temporal_duration_span(d, relative)?;
                         let q = if unit_key == "week" {
                             7 * 86_400_000_000_000i128
                         } else {
-                            temporal_unit_nanoseconds(unit_key).ok_or_else(|| self.catchable_range_error())?
+                            temporal_unit_nanoseconds(unit_key)
+                                .ok_or_else(|| self.catchable_range_error())?
                         };
                         Ok(Slot::number(span as f64 / q as f64))
                     }
@@ -31570,7 +31915,8 @@ impl Interp {
                 }
             }
             TemporalDurationToString | TemporalDurationToJSON => {
-                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| self.catchable_type_error())?;
+                let d = temporal_brand(this, &self.temporal_durations)
+                    .ok_or_else(|| self.catchable_type_error())?;
                 Ok(self.new_string_metered(format_temporal_duration(d).as_bytes()))
             }
             _ => unreachable!("non-Temporal method routed to temporal_method"),
@@ -31588,7 +31934,14 @@ impl Interp {
             return Err(self.catchable_range_error());
         }
         let inst = self.slots.alloc(Slot::instance(self.temporal_zoned_proto));
-        self.temporal_zoneds.insert(inst, TemporalZonedRecord { epoch_nanoseconds, time_zone, offset_ns });
+        self.temporal_zoneds.insert(
+            inst,
+            TemporalZonedRecord {
+                epoch_nanoseconds,
+                time_zone,
+                offset_ns,
+            },
+        );
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
@@ -31606,34 +31959,77 @@ impl Interp {
     /// ToTemporalZonedDateTime: an existing brand (copied), a property bag with a
     /// required `timeZone` plus ISO fields, or an ISO string with a `[timeZone]`
     /// annotation.
-    fn temporal_zoned_from(&mut self, value: Slot, code: &[u8]) -> Result<TemporalZonedRecord, Halt> {
-        if let Some(rec) = self.temporal_zoned_brand(value) { return Ok(rec); }
+    fn temporal_zoned_from(
+        &mut self,
+        value: Slot,
+        code: &[u8],
+    ) -> Result<TemporalZonedRecord, Halt> {
+        if let Some(rec) = self.temporal_zoned_brand(value) {
+            return Ok(rec);
+        }
         if let Payload::Reference(r) = value.value {
             if value.kind == Kind::Reference {
-                let Some(&tz_id) = self.symbol_ids.get("timeZone") else { return Err(self.catchable_type_error()) };
+                let Some(&tz_id) = self.symbol_ids.get("timeZone") else {
+                    return Err(self.catchable_type_error());
+                };
                 let tz_val = self.ordinary_get(code, r, tz_id, value)?;
-                if tz_val.kind == Kind::Undefined { return Err(self.catchable_type_error()); }
+                if tz_val.kind == Kind::Undefined {
+                    return Err(self.catchable_type_error());
+                }
                 let tz_text = self.value_to_string(code, tz_val)?;
-                let (time_zone, offset_ns) =
-                    resolve_zoned_time_zone(&tz_text).ok_or_else(|| self.catchable_range_error())?;
-                let mut p = TemporalPlainRecord { kind: 2, ..Default::default() };
-                let names = ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"];
+                let (time_zone, offset_ns) = resolve_zoned_time_zone(&tz_text)
+                    .ok_or_else(|| self.catchable_range_error())?;
+                let mut p = TemporalPlainRecord {
+                    kind: 2,
+                    ..Default::default()
+                };
+                let names = [
+                    "year",
+                    "month",
+                    "day",
+                    "hour",
+                    "minute",
+                    "second",
+                    "millisecond",
+                    "microsecond",
+                    "nanosecond",
+                ];
                 let mut seen = [false; 9];
                 for (n, name) in names.iter().enumerate() {
-                    let Some(&fid) = self.symbol_ids.get(*name) else { continue };
+                    let Some(&fid) = self.symbol_ids.get(*name) else {
+                        continue;
+                    };
                     let item = self.ordinary_get(code, r, fid, value)?;
-                    if item.kind == Kind::Undefined { continue; }
-                    let v = self.temporal_integer(item)?; seen[n] = true;
+                    if item.kind == Kind::Undefined {
+                        continue;
+                    }
+                    let v = self.temporal_integer(item)?;
+                    seen[n] = true;
                     match n {
                         0 => p.year = v,
-                        1 => p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        1 => {
+                            p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
                         2 => p.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
                         3 => p.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        4 => p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        5 => p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        6 => p.millisecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        7 => p.microsecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        _ => p.nanosecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        4 => {
+                            p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        5 => {
+                            p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        6 => {
+                            p.millisecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        7 => {
+                            p.microsecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        _ => {
+                            p.nanosecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
                     }
                 }
                 if !(seen[0] && seen[1] && seen[2]) || !temporal_plain_valid(p) {
@@ -31645,12 +32041,20 @@ impl Interp {
                     let off_val = self.ordinary_get(code, r, off_id, value)?;
                     if off_val.kind != Kind::Undefined {
                         let s = self.value_to_string(code, off_val)?;
-                        let provided = parse_offset_ns(&s).ok_or_else(|| self.catchable_range_error())?;
-                        if provided != offset_ns { return Err(self.catchable_range_error()); }
+                        let provided =
+                            parse_offset_ns(&s).ok_or_else(|| self.catchable_range_error())?;
+                        if provided != offset_ns {
+                            return Err(self.catchable_range_error());
+                        }
                     }
                 }
-                let epoch = local_datetime_to_epoch(&p, offset_ns).ok_or_else(|| self.catchable_range_error())?;
-                return Ok(TemporalZonedRecord { epoch_nanoseconds: epoch, time_zone, offset_ns });
+                let epoch = local_datetime_to_epoch(&p, offset_ns)
+                    .ok_or_else(|| self.catchable_range_error())?;
+                return Ok(TemporalZonedRecord {
+                    epoch_nanoseconds: epoch,
+                    time_zone,
+                    offset_ns,
+                });
             }
         }
         let text = self.value_to_string(code, value)?;
@@ -31672,11 +32076,21 @@ impl Interp {
         // A bare string argument is the smallestUnit.
         if arg.kind == Kind::String {
             let unit = self.value_to_string(code, arg)?;
-            return Ok((unit, largest_default.to_string(), 1, mode_default.to_string()));
+            return Ok((
+                unit,
+                largest_default.to_string(),
+                1,
+                mode_default.to_string(),
+            ));
         }
         let Payload::Reference(r) = arg.value else {
             return match smallest_default {
-                Some(d) => Ok((d.to_string(), largest_default.to_string(), 1, mode_default.to_string())),
+                Some(d) => Ok((
+                    d.to_string(),
+                    largest_default.to_string(),
+                    1,
+                    mode_default.to_string(),
+                )),
                 None => Err(self.catchable_type_error()),
             };
         };
@@ -31690,19 +32104,36 @@ impl Interp {
                 None => return Err(self.catchable_range_error()),
             },
         };
-        let largest = self.intl_option_string(code, r, "largestUnit")?
+        let largest = self
+            .intl_option_string(code, r, "largestUnit")?
             .unwrap_or_else(|| largest_default.to_string());
-        let mode = self.intl_option_string(code, r, "roundingMode")?
+        let mode = self
+            .intl_option_string(code, r, "roundingMode")?
             .unwrap_or_else(|| mode_default.to_string());
         let increment = if let Some(&id) = self.symbol_ids.get("roundingIncrement") {
             let v = self.instance_get(r, id);
-            if v.kind == Kind::Undefined { 1 } else { self.temporal_integer(v)? as i128 }
-        } else { 1 };
-        if increment < 1 { return Err(self.catchable_range_error()); }
+            if v.kind == Kind::Undefined {
+                1
+            } else {
+                self.temporal_integer(v)? as i128
+            }
+        } else {
+            1
+        };
+        if increment < 1 {
+            return Err(self.catchable_range_error());
+        }
         Ok((smallest, largest, increment, mode))
     }
 
-    fn temporal_zoned_method(&mut self, op: u8, this: Slot, arg0: Slot, arg1: Slot, code: &[u8]) -> Result<Slot, Halt> {
+    fn temporal_zoned_method(
+        &mut self,
+        op: u8,
+        this: Slot,
+        arg0: Slot,
+        arg1: Slot,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
         // Statics: from(0), compare(1) — no `this` brand.
         if op == 0 {
             let rec = self.temporal_zoned_from(arg0, code)?;
@@ -31711,74 +32142,163 @@ impl Interp {
         if op == 1 {
             let a = self.temporal_zoned_from(arg0, code)?;
             let b = self.temporal_zoned_from(arg1, code)?;
-            return Ok(Slot::integer(a.epoch_nanoseconds.cmp(&b.epoch_nanoseconds) as i32));
+            return Ok(Slot::integer(
+                a.epoch_nanoseconds.cmp(&b.epoch_nanoseconds) as i32
+            ));
         }
-        let old = self.temporal_zoned_brand(this).ok_or_else(|| self.catchable_type_error())?;
+        let old = self
+            .temporal_zoned_brand(this)
+            .ok_or_else(|| self.catchable_type_error())?;
         match op {
             2 => {
                 // with(fields): override present ISO date/time fields; the zone is fixed.
-                let Payload::Reference(r) = arg0.value else { return Err(self.catchable_type_error()) };
-                if arg0.kind != Kind::Reference { return Err(self.catchable_type_error()); }
+                let Payload::Reference(r) = arg0.value else {
+                    return Err(self.catchable_type_error());
+                };
+                if arg0.kind != Kind::Reference {
+                    return Err(self.catchable_type_error());
+                }
                 let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
                 let mut any = false;
-                for (n, name) in ["year","month","day","hour","minute","second","millisecond","microsecond","nanosecond"].iter().enumerate() {
-                    let Some(&id) = self.symbol_ids.get(*name) else { continue };
+                for (n, name) in [
+                    "year",
+                    "month",
+                    "day",
+                    "hour",
+                    "minute",
+                    "second",
+                    "millisecond",
+                    "microsecond",
+                    "nanosecond",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let Some(&id) = self.symbol_ids.get(*name) else {
+                        continue;
+                    };
                     let v = self.ordinary_get(code, r, id, arg0)?;
-                    if v.kind == Kind::Undefined { continue; }
-                    let v = self.temporal_integer(v)?; any = true;
+                    if v.kind == Kind::Undefined {
+                        continue;
+                    }
+                    let v = self.temporal_integer(v)?;
+                    any = true;
                     match n {
                         0 => p.year = v,
-                        1 => p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        1 => {
+                            p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
                         2 => p.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
                         3 => p.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        4 => p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        5 => p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        6 => p.millisecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        7 => p.microsecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        _ => p.nanosecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        4 => {
+                            p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        5 => {
+                            p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        6 => {
+                            p.millisecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        7 => {
+                            p.microsecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
+                        _ => {
+                            p.nanosecond =
+                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        }
                     }
                 }
-                if !any || !temporal_plain_valid(p) { return Err(self.catchable_type_error()); }
-                let epoch = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| self.catchable_range_error())?;
+                if !any || !temporal_plain_valid(p) {
+                    return Err(self.catchable_type_error());
+                }
+                let epoch = local_datetime_to_epoch(&p, old.offset_ns)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
             3 | 4 => {
                 // add / subtract a duration.
                 let mut d = self.temporal_duration_from(arg0, code)?;
-                if op == 4 { d = d.negated().ok_or_else(|| self.catchable_range_error())?; }
+                if op == 4 {
+                    d = d.negated().ok_or_else(|| self.catchable_range_error())?;
+                }
                 let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
                 // Add the date part (years/months/weeks/days) to the wall-clock
                 // *date* only — a bare `PlainDate` (kind 0) so `temporal_plain_add`
                 // never routes days through its time branch — then recombine with
                 // the original wall-clock time.
-                let date = TemporalPlainRecord { kind: 0, year: p.year, month: p.month, day: p.day, ..Default::default() };
-                let date_only = TemporalDurationRecord { years: d.years, months: d.months, weeks: d.weeks, days: d.days, ..Default::default() };
-                let shifted = temporal_plain_add(date, date_only).ok_or_else(|| self.catchable_range_error())?;
-                p.year = shifted.year; p.month = shifted.month; p.day = shifted.day;
-                let intermediate = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| self.catchable_range_error())?;
-                let time_ns = TemporalDurationRecord { hours: d.hours, minutes: d.minutes, seconds: d.seconds, milliseconds: d.milliseconds, microseconds: d.microseconds, nanoseconds: d.nanoseconds, ..Default::default() }
-                    .time_nanoseconds(false).ok_or_else(|| self.catchable_range_error())?;
-                let epoch = intermediate.checked_add(time_ns).ok_or_else(|| self.catchable_range_error())?;
+                let date = TemporalPlainRecord {
+                    kind: 0,
+                    year: p.year,
+                    month: p.month,
+                    day: p.day,
+                    ..Default::default()
+                };
+                let date_only = TemporalDurationRecord {
+                    years: d.years,
+                    months: d.months,
+                    weeks: d.weeks,
+                    days: d.days,
+                    ..Default::default()
+                };
+                let shifted = temporal_plain_add(date, date_only)
+                    .ok_or_else(|| self.catchable_range_error())?;
+                p.year = shifted.year;
+                p.month = shifted.month;
+                p.day = shifted.day;
+                let intermediate = local_datetime_to_epoch(&p, old.offset_ns)
+                    .ok_or_else(|| self.catchable_range_error())?;
+                let time_ns = TemporalDurationRecord {
+                    hours: d.hours,
+                    minutes: d.minutes,
+                    seconds: d.seconds,
+                    milliseconds: d.milliseconds,
+                    microseconds: d.microseconds,
+                    nanoseconds: d.nanoseconds,
+                    ..Default::default()
+                }
+                .time_nanoseconds(false)
+                .ok_or_else(|| self.catchable_range_error())?;
+                let epoch = intermediate
+                    .checked_add(time_ns)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
             5 | 6 => {
                 // until / since: exact difference, balanced to the requested units.
                 let other = self.temporal_zoned_from(arg0, code)?;
-                let (a, b) = if op == 5 { (&old, &other) } else { (&other, &old) };
-                let (smallest, largest, increment, mode) =
-                    self.temporal_zoned_round_options(arg1, code, Some("nanosecond"), "hour", "trunc")?;
-                let smallest_rank = temporal_unit_rank(&smallest).ok_or_else(|| self.catchable_range_error())?;
-                let largest_rank = temporal_unit_rank(&largest).ok_or_else(|| self.catchable_range_error())?;
+                let (a, b) = if op == 5 {
+                    (&old, &other)
+                } else {
+                    (&other, &old)
+                };
+                let (smallest, largest, increment, mode) = self.temporal_zoned_round_options(
+                    arg1,
+                    code,
+                    Some("nanosecond"),
+                    "hour",
+                    "trunc",
+                )?;
+                let smallest_rank =
+                    temporal_unit_rank(&smallest).ok_or_else(|| self.catchable_range_error())?;
+                let largest_rank =
+                    temporal_unit_rank(&largest).ok_or_else(|| self.catchable_range_error())?;
                 // largestUnit must be the same size or coarser than smallestUnit.
-                if largest_rank > smallest_rank { return Err(self.catchable_range_error()); }
-                validate_duration_increment(smallest_rank, increment as i64).ok_or_else(|| self.catchable_range_error())?;
+                if largest_rank > smallest_rank {
+                    return Err(self.catchable_range_error());
+                }
+                validate_duration_increment(smallest_rank, increment as i64)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 if largest_rank >= 3 {
                     // Fixed-length largest unit: round the exact instant difference.
                     let mut diff = b.epoch_nanoseconds - a.epoch_nanoseconds;
                     let quantum = temporal_unit_nanoseconds(temporal_unit_name(smallest_rank))
                         .ok_or_else(|| self.catchable_range_error())?
-                        .checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
-                    diff = round_temporal(diff, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+                        .checked_mul(increment)
+                        .ok_or_else(|| self.catchable_range_error())?;
+                    diff = round_temporal(diff, quantum, &mode)
+                        .ok_or_else(|| self.catchable_range_error())?;
                     let record = balance_zoned_diff(diff, temporal_unit_name(largest_rank))
                         .ok_or_else(|| self.catchable_range_error())?;
                     self.temporal_new_duration(record)
@@ -31789,17 +32309,26 @@ impl Interp {
                     // this is exact. A sub-day smallestUnit rounds the time part.
                     let a_local = zoned_local_datetime(a.epoch_nanoseconds, a.offset_ns);
                     let b_local = zoned_local_datetime(b.epoch_nanoseconds, b.offset_ns);
-                    let mut record = iso_datetime_difference(a_local, b_local, temporal_unit_name(largest_rank))
-                        .ok_or_else(|| self.catchable_range_error())?;
+                    let mut record =
+                        iso_datetime_difference(a_local, b_local, temporal_unit_name(largest_rank))
+                            .ok_or_else(|| self.catchable_range_error())?;
                     if smallest_rank > 3 {
-                        let time_ns = record.time_only_nanoseconds().ok_or_else(|| self.catchable_range_error())?;
+                        let time_ns = record
+                            .time_only_nanoseconds()
+                            .ok_or_else(|| self.catchable_range_error())?;
                         let quantum = temporal_unit_nanoseconds(temporal_unit_name(smallest_rank))
                             .ok_or_else(|| self.catchable_range_error())?
-                            .checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
-                        let rounded = round_temporal(time_ns, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+                            .checked_mul(increment)
+                            .ok_or_else(|| self.catchable_range_error())?;
+                        let rounded = round_temporal(time_ns, quantum, &mode)
+                            .ok_or_else(|| self.catchable_range_error())?;
                         let t = duration_from_nanoseconds(rounded);
-                        record.hours = t.hours; record.minutes = t.minutes; record.seconds = t.seconds;
-                        record.milliseconds = t.milliseconds; record.microseconds = t.microseconds; record.nanoseconds = t.nanoseconds;
+                        record.hours = t.hours;
+                        record.minutes = t.minutes;
+                        record.seconds = t.seconds;
+                        record.milliseconds = t.milliseconds;
+                        record.microseconds = t.microseconds;
+                        record.nanoseconds = t.nanoseconds;
                     }
                     self.temporal_new_duration(record)
                 }
@@ -31808,18 +32337,25 @@ impl Interp {
                 // round(smallestUnit | options).
                 let (smallest, _largest, increment, mode) =
                     self.temporal_zoned_round_options(arg0, code, None, "hour", "halfExpand")?;
-                let unit_ns = temporal_unit_nanoseconds(&smallest).ok_or_else(|| self.catchable_range_error())?;
-                let quantum = unit_ns.checked_mul(increment).ok_or_else(|| self.catchable_range_error())?;
+                let unit_ns = temporal_unit_nanoseconds(&smallest)
+                    .ok_or_else(|| self.catchable_range_error())?;
+                let quantum = unit_ns
+                    .checked_mul(increment)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 // Fixed-offset day boundaries align to every sub-day quantum, so
                 // rounding the local wall-time value is exact for all units.
                 let local = old.epoch_nanoseconds + old.offset_ns as i128;
-                let rounded_local = round_temporal(local, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+                let rounded_local = round_temporal(local, quantum, &mode)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 let epoch = rounded_local - old.offset_ns as i128;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
             8 => {
                 let other = self.temporal_zoned_from(arg0, code)?;
-                Ok(Slot::boolean(old.epoch_nanoseconds == other.epoch_nanoseconds && old.time_zone == other.time_zone))
+                Ok(Slot::boolean(
+                    old.epoch_nanoseconds == other.epoch_nanoseconds
+                        && old.time_zone == other.time_zone,
+                ))
             }
             9 => {
                 // startOfDay: local midnight of the same calendar day.
@@ -31830,17 +32366,34 @@ impl Interp {
             }
             10 => {
                 // getTimeZoneTransition(direction): a fixed offset never transitions.
-                if arg0.kind == Kind::Undefined { return Err(self.catchable_type_error()); }
+                if arg0.kind == Kind::Undefined {
+                    return Err(self.catchable_type_error());
+                }
                 Ok(Slot::null())
             }
             11 => self.temporal_new_instant(old.epoch_nanoseconds),
             12 => {
                 let p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
-                self.temporal_new_plain(TemporalPlainRecord { kind: 0, year: p.year, month: p.month, day: p.day, ..Default::default() })
+                self.temporal_new_plain(TemporalPlainRecord {
+                    kind: 0,
+                    year: p.year,
+                    month: p.month,
+                    day: p.day,
+                    ..Default::default()
+                })
             }
             13 => {
                 let p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
-                self.temporal_new_plain(TemporalPlainRecord { kind: 1, hour: p.hour, minute: p.minute, second: p.second, millisecond: p.millisecond, microsecond: p.microsecond, nanosecond: p.nanosecond, ..Default::default() })
+                self.temporal_new_plain(TemporalPlainRecord {
+                    kind: 1,
+                    hour: p.hour,
+                    minute: p.minute,
+                    second: p.second,
+                    millisecond: p.millisecond,
+                    microsecond: p.microsecond,
+                    nanosecond: p.nanosecond,
+                    ..Default::default()
+                })
             }
             14 => {
                 let p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
@@ -31850,25 +32403,36 @@ impl Interp {
                 // withPlainTime(plainTimeLike?): keep the date, replace the time.
                 let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
                 let t = if arg0.kind == Kind::Undefined {
-                    TemporalPlainRecord { kind: 1, ..Default::default() }
+                    TemporalPlainRecord {
+                        kind: 1,
+                        ..Default::default()
+                    }
                 } else {
                     self.temporal_plain_from(1, arg0, code)?
                 };
-                p.hour = t.hour; p.minute = t.minute; p.second = t.second;
-                p.millisecond = t.millisecond; p.microsecond = t.microsecond; p.nanosecond = t.nanosecond;
-                let epoch = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| self.catchable_range_error())?;
+                p.hour = t.hour;
+                p.minute = t.minute;
+                p.second = t.second;
+                p.millisecond = t.millisecond;
+                p.microsecond = t.microsecond;
+                p.nanosecond = t.nanosecond;
+                let epoch = local_datetime_to_epoch(&p, old.offset_ns)
+                    .ok_or_else(|| self.catchable_range_error())?;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
             16 => {
                 // withTimeZone: same instant, different zone.
                 let text = self.value_to_string(code, arg0)?;
-                let (time_zone, offset_ns) = resolve_zoned_time_zone(&text).ok_or_else(|| self.catchable_range_error())?;
+                let (time_zone, offset_ns) =
+                    resolve_zoned_time_zone(&text).ok_or_else(|| self.catchable_range_error())?;
                 self.temporal_new_zoned(old.epoch_nanoseconds, time_zone, offset_ns)
             }
             17 => {
                 // withCalendar: only iso8601 is modeled.
                 let id = self.value_to_string(code, arg0)?;
-                if id.to_ascii_lowercase() != "iso8601" { return Err(self.catchable_range_error()); }
+                if id.to_ascii_lowercase() != "iso8601" {
+                    return Err(self.catchable_range_error());
+                }
                 self.temporal_new_zoned(old.epoch_nanoseconds, old.time_zone, old.offset_ns)
             }
             18 | 19 => {
@@ -31880,7 +32444,9 @@ impl Interp {
                 };
                 Ok(self.new_string_metered(s.as_bytes()))
             }
-            20 => Err(Halt::Unsupported("Temporal.ZonedDateTime.toLocaleString:needs-intl")),
+            20 => Err(Halt::Unsupported(
+                "Temporal.ZonedDateTime.toLocaleString:needs-intl",
+            )),
             21 => Err(self.catchable_type_error()),
             _ => Err(Halt::Unsupported("Temporal.ZonedDateTime:method")),
         }
@@ -31888,7 +32454,12 @@ impl Interp {
 
     /// `toString(options)`: validate and apply the `calendarName`/`offset`/
     /// `timeZoneName` display toggles, then render.
-    fn temporal_zoned_to_string(&mut self, rec: &TemporalZonedRecord, options: Slot, code: &[u8]) -> Result<String, Halt> {
+    fn temporal_zoned_to_string(
+        &mut self,
+        rec: &TemporalZonedRecord,
+        options: Slot,
+        code: &[u8],
+    ) -> Result<String, Halt> {
         let mut calendar_name = "auto".to_string();
         let mut show_offset = true;
         let mut show_zone = true;
@@ -31901,26 +32472,43 @@ impl Interp {
                     calendar_name = cn;
                 }
                 if let Some(off) = self.intl_option_string(code, r, "offset")? {
-                    match off.as_str() { "auto" => {}, "never" => show_offset = false, _ => return Err(self.catchable_range_error()) }
+                    match off.as_str() {
+                        "auto" => {}
+                        "never" => show_offset = false,
+                        _ => return Err(self.catchable_range_error()),
+                    }
                 }
                 if let Some(tzn) = self.intl_option_string(code, r, "timeZoneName")? {
-                    match tzn.as_str() { "auto" | "critical" => {}, "never" => show_zone = false, _ => return Err(self.catchable_range_error()) }
+                    match tzn.as_str() {
+                        "auto" | "critical" => {}
+                        "never" => show_zone = false,
+                        _ => return Err(self.catchable_range_error()),
+                    }
                 }
             }
         } else if options.kind != Kind::Undefined {
             return Err(self.catchable_type_error());
         }
         let show_cal = matches!(calendar_name.as_str(), "always" | "critical");
-        Ok(format_zoned(rec, if show_cal { "always" } else { "auto" }, show_offset, show_zone))
+        Ok(format_zoned(
+            rec,
+            if show_cal { "always" } else { "auto" },
+            show_offset,
+            show_zone,
+        ))
     }
 
     fn temporal_now_method(&mut self, op: u8, arg0: Slot, code: &[u8]) -> Result<Slot, Halt> {
         // Deterministic host clock: the Unix epoch, and the `UTC` system zone.
         const NOW_EPOCH_NS: i128 = 0;
         let zone_offset = |this: &mut Self, arg: Slot| -> Result<i64, Halt> {
-            if arg.kind == Kind::Undefined { return Ok(0); }
+            if arg.kind == Kind::Undefined {
+                return Ok(0);
+            }
             let s = this.value_to_string(code, arg)?;
-            resolve_zoned_time_zone(&s).map(|(_, off)| off).ok_or_else(|| this.catchable_range_error())
+            resolve_zoned_time_zone(&s)
+                .map(|(_, off)| off)
+                .ok_or_else(|| this.catchable_range_error())
         };
         match op {
             0 => self.temporal_new_instant(NOW_EPOCH_NS),
@@ -31937,7 +32525,13 @@ impl Interp {
             3 => {
                 let off = zone_offset(self, arg0)?;
                 let p = zoned_local_datetime(NOW_EPOCH_NS, off);
-                self.temporal_new_plain(TemporalPlainRecord { kind: 0, year: p.year, month: p.month, day: p.day, ..Default::default() })
+                self.temporal_new_plain(TemporalPlainRecord {
+                    kind: 0,
+                    year: p.year,
+                    month: p.month,
+                    day: p.day,
+                    ..Default::default()
+                })
             }
             4 => {
                 let off = zone_offset(self, arg0)?;
@@ -31946,14 +32540,35 @@ impl Interp {
             5 => {
                 let off = zone_offset(self, arg0)?;
                 let p = zoned_local_datetime(NOW_EPOCH_NS, off);
-                self.temporal_new_plain(TemporalPlainRecord { kind: 1, hour: p.hour, minute: p.minute, second: p.second, millisecond: p.millisecond, microsecond: p.microsecond, nanosecond: p.nanosecond, ..Default::default() })
+                self.temporal_new_plain(TemporalPlainRecord {
+                    kind: 1,
+                    hour: p.hour,
+                    minute: p.minute,
+                    second: p.second,
+                    millisecond: p.millisecond,
+                    microsecond: p.microsecond,
+                    nanosecond: p.nanosecond,
+                    ..Default::default()
+                })
             }
             _ => Err(Halt::Unsupported("Temporal.Now:method")),
         }
     }
 
-    fn date_method(&mut self, op: u8, this: Slot, base: usize, argc: usize, code: &[u8]) -> Result<Slot, Halt> {
-        let arg = |stack: &[Slot], i: usize| stack.get(base + 4 + i).copied().unwrap_or_else(Slot::undefined);
+    fn date_method(
+        &mut self,
+        op: u8,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let arg = |stack: &[Slot], i: usize| {
+            stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
         match op {
             0 => {
                 let text = self.value_to_string(code, arg(&self.stack, 0))?;
@@ -32062,28 +32677,46 @@ impl Interp {
                         28 => components[6] = inputs[0],
                         29 => {
                             components[5] = inputs[0];
-                            if inputs.len() > 1 { components[6] = inputs[1]; }
+                            if inputs.len() > 1 {
+                                components[6] = inputs[1];
+                            }
                         }
                         30 => {
                             components[4] = inputs[0];
-                            if inputs.len() > 1 { components[5] = inputs[1]; }
-                            if inputs.len() > 2 { components[6] = inputs[2]; }
+                            if inputs.len() > 1 {
+                                components[5] = inputs[1];
+                            }
+                            if inputs.len() > 2 {
+                                components[6] = inputs[2];
+                            }
                         }
                         31 => {
                             components[3] = inputs[0];
-                            if inputs.len() > 1 { components[4] = inputs[1]; }
-                            if inputs.len() > 2 { components[5] = inputs[2]; }
-                            if inputs.len() > 3 { components[6] = inputs[3]; }
+                            if inputs.len() > 1 {
+                                components[4] = inputs[1];
+                            }
+                            if inputs.len() > 2 {
+                                components[5] = inputs[2];
+                            }
+                            if inputs.len() > 3 {
+                                components[6] = inputs[3];
+                            }
                         }
                         32 => components[2] = inputs[0],
                         33 => {
                             components[1] = inputs[0];
-                            if inputs.len() > 1 { components[2] = inputs[1]; }
+                            if inputs.len() > 1 {
+                                components[2] = inputs[1];
+                            }
                         }
                         34 => {
                             components[0] = inputs[0];
-                            if inputs.len() > 1 { components[1] = inputs[1]; }
-                            if inputs.len() > 2 { components[2] = inputs[2]; }
+                            if inputs.len() > 1 {
+                                components[1] = inputs[1];
+                            }
+                            if inputs.len() > 2 {
+                                components[2] = inputs[2];
+                            }
                         }
                         _ => unreachable!(),
                     }
@@ -32091,7 +32724,9 @@ impl Interp {
                     self.dates.insert(inst, clipped);
                     return Ok(Slot::number(clipped));
                 }
-                if matches!(op, 10 | 11) { return Ok(Slot::number(t)); }
+                if matches!(op, 10 | 11) {
+                    return Ok(Slot::number(t));
+                }
                 if !t.is_finite() {
                     return match op {
                         21 => Err(self.catchable_range_error()),
@@ -32101,13 +32736,20 @@ impl Interp {
                 }
                 let (year, month, day, weekday, hour, minute, second, millis) = civil_fields(t, 0);
                 Ok(match op {
-                    12 => Slot::number(year as f64), 13 => Slot::integer(month as i32 - 1),
-                    14 => Slot::integer(day as i32), 15 => Slot::integer(weekday as i32),
-                    16 => Slot::integer(hour as i32), 17 => Slot::integer(minute as i32),
-                    18 => Slot::integer(second as i32), 19 => Slot::integer(millis as i32),
-                    20 => Slot::integer(0), 21 => self.intl_string(&date_iso_string(t)),
-                    22 => self.intl_string(&date_utc_string(t)), 23 => self.intl_string(&date_local_string(t)),
-                    24 => self.intl_string(&date_only_string(t)), 25 => self.intl_string(&date_time_string(t)),
+                    12 => Slot::number(year as f64),
+                    13 => Slot::integer(month as i32 - 1),
+                    14 => Slot::integer(day as i32),
+                    15 => Slot::integer(weekday as i32),
+                    16 => Slot::integer(hour as i32),
+                    17 => Slot::integer(minute as i32),
+                    18 => Slot::integer(second as i32),
+                    19 => Slot::integer(millis as i32),
+                    20 => Slot::integer(0),
+                    21 => self.intl_string(&date_iso_string(t)),
+                    22 => self.intl_string(&date_utc_string(t)),
+                    23 => self.intl_string(&date_local_string(t)),
+                    24 => self.intl_string(&date_only_string(t)),
+                    25 => self.intl_string(&date_time_string(t)),
                     _ => return Err(Halt::Unsupported("Date:method")),
                 })
             }
@@ -32176,11 +32818,19 @@ impl Interp {
         let result: Slot = match m {
             NativeMethod::Date(op) => self.date_method(op, this, base, argc, code)?,
             NativeMethod::TemporalPlain(kind, op) => {
-                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 self.temporal_plain_method(kind, op, this, arg0, arg1, code)?
             }
             NativeMethod::TemporalZoned(op) => {
-                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 self.temporal_zoned_method(op, this, arg0, arg1, code)?
             }
             NativeMethod::TemporalNow(op) => self.temporal_now_method(op, arg0, code)?,
@@ -32209,8 +32859,16 @@ impl Interp {
             | NativeMethod::TemporalDurationToString
             | NativeMethod::TemporalDurationToJSON
             | NativeMethod::TemporalDurationValueOf => {
-                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-                let arg2 = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let arg2 = self
+                    .stack
+                    .get(base + 6)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 self.temporal_method(m, this, arg0, arg1, arg2, code)?
             }
             NativeMethod::IntlGetCanonicalLocales => {
@@ -32233,12 +32891,91 @@ impl Interp {
             NativeMethod::IntlSupportedValuesOf => {
                 let key = self.intl_locale_argument(code, arg0)?;
                 let values: &[&str] = match key.as_str() {
-                    "calendar" => &["buddhist", "chinese", "coptic", "dangi", "ethioaa", "ethiopic", "gregory", "hebrew", "indian", "islamic", "islamic-civil", "iso8601", "japanese", "persian", "roc"],
-                    "collation" => &["big5han", "compat", "dict", "emoji", "eor", "gb2312", "phonebk", "phonetic", "pinyin", "searchjl", "stroke", "trad", "unihan", "zhuyin"],
-                    "currency" => &["AED", "AUD", "BRL", "CAD", "CHF", "CNY", "EUR", "GBP", "INR", "JPY", "KRW", "MXN", "RUB", "USD", "ZAR"],
-                    "numberingSystem" => &["arab", "arabext", "beng", "deva", "fullwide", "gujr", "guru", "hanidec", "khmr", "knda", "laoo", "latn", "limb", "mlym", "mong", "mymr", "orya", "tamldec", "telu", "thai", "tibt"],
-                    "timeZone" => &["Africa/Cairo", "America/Los_Angeles", "America/New_York", "Asia/Shanghai", "Asia/Tokyo", "Europe/Berlin", "Europe/London", "Pacific/Auckland", "UTC"],
-                    "unit" => &["acre", "bit", "byte", "celsius", "centimeter", "day", "degree", "fahrenheit", "foot", "gallon", "gigabit", "gigabyte", "gram", "hectare", "hour", "inch", "kilobit", "kilobyte", "kilogram", "kilometer", "liter", "megabit", "megabyte", "meter", "mile", "mile-scandinavian", "milliliter", "millimeter", "millisecond", "minute", "month", "ounce", "percent", "petabyte", "pound", "second", "stone", "terabit", "terabyte", "week", "yard", "year"],
+                    "calendar" => &[
+                        "buddhist",
+                        "chinese",
+                        "coptic",
+                        "dangi",
+                        "ethioaa",
+                        "ethiopic",
+                        "gregory",
+                        "hebrew",
+                        "indian",
+                        "islamic",
+                        "islamic-civil",
+                        "iso8601",
+                        "japanese",
+                        "persian",
+                        "roc",
+                    ],
+                    "collation" => &[
+                        "big5han", "compat", "dict", "emoji", "eor", "gb2312", "phonebk",
+                        "phonetic", "pinyin", "searchjl", "stroke", "trad", "unihan", "zhuyin",
+                    ],
+                    "currency" => &[
+                        "AED", "AUD", "BRL", "CAD", "CHF", "CNY", "EUR", "GBP", "INR", "JPY",
+                        "KRW", "MXN", "RUB", "USD", "ZAR",
+                    ],
+                    "numberingSystem" => &[
+                        "arab", "arabext", "beng", "deva", "fullwide", "gujr", "guru", "hanidec",
+                        "khmr", "knda", "laoo", "latn", "limb", "mlym", "mong", "mymr", "orya",
+                        "tamldec", "telu", "thai", "tibt",
+                    ],
+                    "timeZone" => &[
+                        "Africa/Cairo",
+                        "America/Los_Angeles",
+                        "America/New_York",
+                        "Asia/Shanghai",
+                        "Asia/Tokyo",
+                        "Europe/Berlin",
+                        "Europe/London",
+                        "Pacific/Auckland",
+                        "UTC",
+                    ],
+                    "unit" => &[
+                        "acre",
+                        "bit",
+                        "byte",
+                        "celsius",
+                        "centimeter",
+                        "day",
+                        "degree",
+                        "fahrenheit",
+                        "foot",
+                        "gallon",
+                        "gigabit",
+                        "gigabyte",
+                        "gram",
+                        "hectare",
+                        "hour",
+                        "inch",
+                        "kilobit",
+                        "kilobyte",
+                        "kilogram",
+                        "kilometer",
+                        "liter",
+                        "megabit",
+                        "megabyte",
+                        "meter",
+                        "mile",
+                        "mile-scandinavian",
+                        "milliliter",
+                        "millimeter",
+                        "millisecond",
+                        "minute",
+                        "month",
+                        "ounce",
+                        "percent",
+                        "petabyte",
+                        "pound",
+                        "second",
+                        "stone",
+                        "terabit",
+                        "terabyte",
+                        "week",
+                        "yard",
+                        "year",
+                    ],
                     _ => return Err(self.catchable_range_error()),
                 };
                 let slots = values
@@ -32290,7 +33027,11 @@ impl Interp {
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
             NativeMethod::CollatorCompare => {
-                let function = self.stack.get(base + 1).copied().unwrap_or_else(Slot::undefined);
+                let function = self
+                    .stack
+                    .get(base + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let f = match function.value {
                     Payload::Reference(r) => r,
                     _ => return Err(self.catchable_type_error()),
@@ -32300,9 +33041,15 @@ impl Interp {
                     None => return Err(self.catchable_type_error()),
                 };
                 let data = self.collators[&collator].clone();
-                let left = String::from_utf8_lossy(&self.to_string_bytes_metered(arg0)).into_owned();
-                let right_slot = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-                let right = String::from_utf8_lossy(&self.to_string_bytes_metered(right_slot)).into_owned();
+                let left =
+                    String::from_utf8_lossy(&self.to_string_bytes_metered(arg0)).into_owned();
+                let right_slot = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let right =
+                    String::from_utf8_lossy(&self.to_string_bytes_metered(right_slot)).into_owned();
                 Slot::integer(collator_compare(&data, &left, &right))
             }
             NativeMethod::ListFormatFormat | NativeMethod::ListFormatFormatToParts => {
@@ -32331,7 +33078,11 @@ impl Interp {
                         let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
                         item.id = 0;
                         item.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
+                        self.arrays.get_mut(&arr).unwrap().insert_item(
+                            i as u32,
+                            item,
+                            &mut self.side_refs,
+                        );
                     }
                     self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
                     Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -32370,7 +33121,11 @@ impl Interp {
                 };
                 let data = self.plural_rules[&inst].clone();
                 let start_arg = arg0;
-                let end_arg = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let end_arg = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 if start_arg.kind == Kind::Undefined || end_arg.kind == Kind::Undefined {
                     return Err(self.catchable_type_error());
                 }
@@ -32422,9 +33177,10 @@ impl Interp {
                     );
                 }
                 if uses_significant {
-                    if let (Some(mn), Some(mx)) =
-                        (data.minimum_significant_digits, data.maximum_significant_digits)
-                    {
+                    if let (Some(mn), Some(mx)) = (
+                        data.minimum_significant_digits,
+                        data.maximum_significant_digits,
+                    ) {
                         self.define_descriptor_field(
                             result,
                             "minimumSignificantDigits",
@@ -32443,7 +33199,11 @@ impl Interp {
                     let mut item = self.intl_string(cat);
                     item.id = 0;
                     item.next = crate::value::SlotIndex::NULL;
-                    self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
+                    self.arrays.get_mut(&arr).unwrap().insert_item(
+                        i as u32,
+                        item,
+                        &mut self.side_refs,
+                    );
                 }
                 self.arrays.get_mut(&arr).unwrap().length = categories.len() as u32;
                 self.define_descriptor_field(
@@ -32487,8 +33247,8 @@ impl Interp {
                 let function = match self.number_formats[&inst].bound_format {
                     Some(f) => f,
                     None => {
-                        let f = self
-                            .alloc_named_method(NativeMethod::NumberFormatBoundFormat, "", 1);
+                        let f =
+                            self.alloc_named_method(NativeMethod::NumberFormatBoundFormat, "", 1);
                         self.number_format_bound_functions.insert(f, inst);
                         self.number_formats.get_mut(&inst).unwrap().bound_format = Some(f);
                         f
@@ -32500,8 +33260,11 @@ impl Interp {
                 // The bound function recovers its NumberFormat from its own
                 // function slot (`stack[base + 1]`) — like `CollatorCompare` —
                 // then formats `arg0` exactly as `format` would.
-                let function =
-                    self.stack.get(base + 1).copied().unwrap_or_else(Slot::undefined);
+                let function = self
+                    .stack
+                    .get(base + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 let f = match function.value {
                     Payload::Reference(r) => r,
                     _ => return Err(self.catchable_type_error()),
@@ -32586,9 +33349,10 @@ impl Interp {
                     );
                 }
                 if uses_sig {
-                    if let (Some(mn), Some(mx)) =
-                        (data.minimum_significant_digits, data.maximum_significant_digits)
-                    {
+                    if let (Some(mn), Some(mx)) = (
+                        data.minimum_significant_digits,
+                        data.maximum_significant_digits,
+                    ) {
                         self.define_descriptor_field(
                             result,
                             "minimumSignificantDigits",
@@ -32663,7 +33427,9 @@ impl Interp {
                     Payload::Reference(r) if self.segments.contains_key(&r) => r,
                     _ => return Err(self.catchable_type_error()),
                 };
-                let it = self.slots.alloc(Slot::instance(self.segment_iterator_proto));
+                let it = self
+                    .slots
+                    .alloc(Slot::instance(self.segment_iterator_proto));
                 self.segment_iterators.insert(
                     it,
                     SegmentIteratorData {
@@ -32723,7 +33489,11 @@ impl Interp {
             | NativeMethod::DateTimeFormatFormatRange
             | NativeMethod::DateTimeFormatFormatRangeToParts
             | NativeMethod::DateTimeFormatResolvedOptions => {
-                let arg1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
                 self.date_time_format_method(m, this, arg0, arg1, code)?
             }
             NativeMethod::DisposableStackUse
@@ -32914,8 +33684,7 @@ impl Interp {
                 | Kind::String
                 | Kind::Symbol
                 | Kind::BigInt => {
-                    self.meter
-                        .tick_raw(OBJECT_VALUE_OF_PRIMITIVE_METERING);
+                    self.meter.tick_raw(OBJECT_VALUE_OF_PRIMITIVE_METERING);
                     self.array_to_object(this)?
                 }
                 Kind::Null | Kind::Undefined => {
@@ -32990,22 +33759,20 @@ impl Interp {
                     // (step 6) — the shape the `format` accessor getter's
                     // `builtin.js` reads — otherwise Error / plain Object.
                     let wrapper_tag = match this.value {
-                        Payload::Reference(r) => self.wrapper_data.get(&r).map(|value| {
-                            match value.kind {
+                        Payload::Reference(r) => {
+                            self.wrapper_data.get(&r).map(|value| match value.kind {
                                 Kind::Boolean => b"[object Boolean]".as_slice(),
                                 Kind::Integer | Kind::Number => b"[object Number]".as_slice(),
                                 Kind::String => b"[object String]".as_slice(),
                                 Kind::Symbol => b"[object Symbol]".as_slice(),
                                 Kind::BigInt => b"[object BigInt]".as_slice(),
                                 _ => b"[object Object]".as_slice(),
-                            }
-                        }),
+                            })
+                        }
                         _ => None,
                     };
                     let text: &[u8] = match this.value {
-                        Payload::Reference(r) if self.dates.contains_key(&r) => {
-                            b"[object Date]"
-                        }
+                        Payload::Reference(r) if self.dates.contains_key(&r) => b"[object Date]",
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
                         }
@@ -33253,9 +34020,7 @@ impl Interp {
             // `? ToPropertyKey(V)` / `? ToObject(this)` / `HasOwnProperty(O, P)`
             // path — primitive-boxing receivers, symbol / number / index keys,
             // and the array/function/string-wrapper exotic own-property views.
-            NativeMethod::ObjectHasOwnProperty => {
-                self.object_has_own_property(code, this, arg0)?
-            }
+            NativeMethod::ObjectHasOwnProperty => self.object_has_own_property(code, this, arg0)?,
             // `Object.prototype.isPrototypeOf(v)`: is the receiver in `v`'s
             // prototype chain. A non-object `v` short-circuits before the
             // receiver is boxed; otherwise walk `v.[[GetPrototypeOf]]`
@@ -33376,24 +34141,14 @@ impl Interp {
                 // answers `undefined` for every key through the ordinary path.
                 let inst = match (arg0.kind, arg0.value) {
                     (Kind::Reference, Payload::Reference(o)) => o,
-                    (Kind::Null | Kind::Undefined, _) => {
-                        return Err(self.catchable_type_error())
-                    }
-                    (Kind::Boolean, _) => {
-                        self.box_primitive_wrapper(Native::Boolean, arg0)
-                    }
+                    (Kind::Null | Kind::Undefined, _) => return Err(self.catchable_type_error()),
+                    (Kind::Boolean, _) => self.box_primitive_wrapper(Native::Boolean, arg0),
                     (Kind::Integer | Kind::Number, _) => {
                         self.box_primitive_wrapper(Native::Number, arg0)
                     }
-                    (Kind::String, _) => {
-                        self.box_primitive_wrapper(Native::String, arg0)
-                    }
-                    (Kind::Symbol, _) => {
-                        self.box_primitive_wrapper(Native::Symbol, arg0)
-                    }
-                    (Kind::BigInt, _) => {
-                        self.box_primitive_wrapper(Native::BigInt, arg0)
-                    }
+                    (Kind::String, _) => self.box_primitive_wrapper(Native::String, arg0),
+                    (Kind::Symbol, _) => self.box_primitive_wrapper(Native::Symbol, arg0),
+                    (Kind::BigInt, _) => self.box_primitive_wrapper(Native::BigInt, arg0),
                     _ => return Err(self.catchable_type_error()),
                 };
                 // The integer-indexed exotic `[[GetOwnProperty]]` (10.4.5.1): a
@@ -33410,9 +34165,7 @@ impl Interp {
                     // it. `to_read_key` canonicalizes both spellings and mints
                     // nothing.
                     let descriptor = match self.to_read_key(code, arg1)? {
-                        ReadKey::Index(index) => {
-                            self.ta_index_own_descriptor(ta, f64::from(index))
-                        }
+                        ReadKey::Index(index) => self.ta_index_own_descriptor(ta, f64::from(index)),
                         ReadKey::Id(id) => match self.ta_numeric_index_at(id, 0) {
                             Some(n) => self.ta_index_own_descriptor(ta, n),
                             None => self.ordinary_get_own_descriptor(inst, id),
@@ -33457,77 +34210,93 @@ impl Interp {
                         }
                     }
                 } else {
-                // A symbol key resolves to its interned key id; a non-index
-                // string interns as a name. Own-only, so no boot-default gate:
-                // an own miss is soundly `undefined`. A canonical index the key
-                // table never held mints nothing — every own property of an
-                // ordinary object lives in the slot chain under an interned
-                // name, so such a key is an own miss by construction, and
-                // `function_meta_own_descriptor` names only `length`/`name`.
-                match self.to_read_key(code, arg1)? {
-                    ReadKey::Index(_) => {
-                        self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
-                        Slot::undefined()
-                    }
-                    ReadKey::Id(id) => match self.find_property(inst, id) {
-                    Some(p) => {
-                        let prop = self.slots.get(p);
-                        // An accessor own property needs the accessor-descriptor
-                        // shape (`{get, set, enumerable, configurable}`), which
-                        // is not modeled — honest skip. A data property carries
-                        // only the `writable`/`enumerable`/`configurable` flag
-                        // bits, rendered below; a literal's property is flag 0
-                        // (all true), an `Object.defineProperty`-defined one may
-                        // clear any of them.
-                        if prop.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
-                            self.descriptor_object(
-                                self.ordinary_get_own_descriptor(inst, id).unwrap(),
-                            )
-                        } else {
-                            let writable = prop.flag & XS_DONT_SET_FLAG == 0;
-                            let enumerable = prop.flag & XS_DONT_ENUM_FLAG == 0;
-                            let configurable = prop.flag & XS_DONT_DELETE_FLAG == 0;
-                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
-                            let value = Slot::of(prop.kind, prop.value);
-                            let desc = self.slots.alloc(Slot::instance(self.object_proto));
-                            self.define_descriptor_field(desc, "value", value);
-                            self.define_descriptor_field(desc, "writable", Slot::boolean(writable));
-                            self.define_descriptor_field(
-                                desc,
-                                "enumerable",
-                                Slot::boolean(enumerable),
-                            );
-                            self.define_descriptor_field(
-                                desc,
-                                "configurable",
-                                Slot::boolean(configurable),
-                            );
-                            Slot::of(Kind::Reference, Payload::Reference(desc))
-                        }
-                    }
-                    None => {
-                        // XS carries a function's `length`/`name` as real own
-                        // data properties; ironhorse synthesizes them from the
-                        // `FuncInfo` (no ordinary slot), so render the exotic
-                        // descriptor as PRESENT (not an absent miss) — matching
-                        // the residual XS charges for a present property.
-                        if let Some(desc) = self.function_meta_own_descriptor(inst, id) {
-                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
-                            let value = desc.value.unwrap_or_else(Slot::undefined);
-                            let d = self.slots.alloc(Slot::instance(self.object_proto));
-                            self.define_descriptor_field(d, "value", value);
-                            self.define_descriptor_field(d, "writable", Slot::boolean(false));
-                            self.define_descriptor_field(d, "enumerable", Slot::boolean(false));
-                            self.define_descriptor_field(d, "configurable", Slot::boolean(true));
-                            Slot::of(Kind::Reference, Payload::Reference(d))
-                        } else {
+                    // A symbol key resolves to its interned key id; a non-index
+                    // string interns as a name. Own-only, so no boot-default gate:
+                    // an own miss is soundly `undefined`. A canonical index the key
+                    // table never held mints nothing — every own property of an
+                    // ordinary object lives in the slot chain under an interned
+                    // name, so such a key is an own miss by construction, and
+                    // `function_meta_own_descriptor` names only `length`/`name`.
+                    match self.to_read_key(code, arg1)? {
+                        ReadKey::Index(_) => {
                             self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
                             Slot::undefined()
                         }
+                        ReadKey::Id(id) => match self.find_property(inst, id) {
+                            Some(p) => {
+                                let prop = self.slots.get(p);
+                                // An accessor own property needs the accessor-descriptor
+                                // shape (`{get, set, enumerable, configurable}`), which
+                                // is not modeled — honest skip. A data property carries
+                                // only the `writable`/`enumerable`/`configurable` flag
+                                // bits, rendered below; a literal's property is flag 0
+                                // (all true), an `Object.defineProperty`-defined one may
+                                // clear any of them.
+                                if prop.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                                    self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                                    self.descriptor_object(
+                                        self.ordinary_get_own_descriptor(inst, id).unwrap(),
+                                    )
+                                } else {
+                                    let writable = prop.flag & XS_DONT_SET_FLAG == 0;
+                                    let enumerable = prop.flag & XS_DONT_ENUM_FLAG == 0;
+                                    let configurable = prop.flag & XS_DONT_DELETE_FLAG == 0;
+                                    self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                                    let value = Slot::of(prop.kind, prop.value);
+                                    let desc = self.slots.alloc(Slot::instance(self.object_proto));
+                                    self.define_descriptor_field(desc, "value", value);
+                                    self.define_descriptor_field(
+                                        desc,
+                                        "writable",
+                                        Slot::boolean(writable),
+                                    );
+                                    self.define_descriptor_field(
+                                        desc,
+                                        "enumerable",
+                                        Slot::boolean(enumerable),
+                                    );
+                                    self.define_descriptor_field(
+                                        desc,
+                                        "configurable",
+                                        Slot::boolean(configurable),
+                                    );
+                                    Slot::of(Kind::Reference, Payload::Reference(desc))
+                                }
+                            }
+                            None => {
+                                // XS carries a function's `length`/`name` as real own
+                                // data properties; ironhorse synthesizes them from the
+                                // `FuncInfo` (no ordinary slot), so render the exotic
+                                // descriptor as PRESENT (not an absent miss) — matching
+                                // the residual XS charges for a present property.
+                                if let Some(desc) = self.function_meta_own_descriptor(inst, id) {
+                                    self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                                    let value = desc.value.unwrap_or_else(Slot::undefined);
+                                    let d = self.slots.alloc(Slot::instance(self.object_proto));
+                                    self.define_descriptor_field(d, "value", value);
+                                    self.define_descriptor_field(
+                                        d,
+                                        "writable",
+                                        Slot::boolean(false),
+                                    );
+                                    self.define_descriptor_field(
+                                        d,
+                                        "enumerable",
+                                        Slot::boolean(false),
+                                    );
+                                    self.define_descriptor_field(
+                                        d,
+                                        "configurable",
+                                        Slot::boolean(true),
+                                    );
+                                    Slot::of(Kind::Reference, Payload::Reference(d))
+                                } else {
+                                    self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                                    Slot::undefined()
+                                }
+                            }
+                        },
                     }
-                    },
-                }
                 }
             }
             NativeMethod::ObjectGetOwnPropertyNames => {
@@ -33647,9 +34416,7 @@ impl Interp {
                         {
                             descriptor
                         }
-                        _ => {
-                            return Err(self.catchable_type_error_msg("invalid descriptor".into()))
-                        }
+                        _ => return Err(self.catchable_type_error_msg("invalid descriptor".into())),
                     };
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
@@ -33682,9 +34449,7 @@ impl Interp {
                         {
                             descriptor
                         }
-                        _ => {
-                            return Err(self.catchable_type_error_msg("invalid descriptor".into()))
-                        }
+                        _ => return Err(self.catchable_type_error_msg("invalid descriptor".into())),
                     };
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
@@ -33910,7 +34675,11 @@ impl Interp {
                         pd.insert_item(0, *key, &mut self.side_refs);
                         pd.insert_item(1, *val, &mut self.side_refs);
                         self.arrays.insert(pair, pd);
-                        data.insert_item(i as u32, Slot::of(Kind::Reference, Payload::Reference(pair)), &mut self.side_refs);
+                        data.insert_item(
+                            i as u32,
+                            Slot::of(Kind::Reference, Payload::Reference(pair)),
+                            &mut self.side_refs,
+                        );
                     } else {
                         self.meter.tick_raw(OBJECT_VALUES_PER_KEY_METERING);
                         self.meter.tick_slot_alloc();
@@ -34032,9 +34801,7 @@ impl Interp {
             | NativeMethod::TypedArrayReverse => {
                 self.typed_array_mutator(m, this, base, argc, code)?
             }
-            NativeMethod::TypedArrayJoin => {
-                self.typed_array_join(this, base, argc, code)?
-            }
+            NativeMethod::TypedArrayJoin => self.typed_array_join(this, base, argc, code)?,
             NativeMethod::TypedArrayValues
             | NativeMethod::TypedArrayKeys
             | NativeMethod::TypedArrayEntries => {
@@ -34073,9 +34840,7 @@ impl Interp {
             | NativeMethod::TypedArrayByteLengthGetter
             | NativeMethod::TypedArrayByteOffsetGetter
             | NativeMethod::TypedArrayBufferGetter
-            | NativeMethod::TypedArrayToStringTagGetter => {
-                self.typed_array_accessor(m, this)?
-            }
+            | NativeMethod::TypedArrayToStringTagGetter => self.typed_array_accessor(m, this)?,
             NativeMethod::TypedArrayFrom | NativeMethod::TypedArrayOf => {
                 self.typed_array_static(m, this, base, argc, code)?
             }
@@ -34091,8 +34856,7 @@ impl Interp {
                         i
                     }
                     _ => {
-                        let result =
-                            self.array_generic_push_pop(code, m, this, base, argc)?;
+                        let result = self.array_generic_push_pop(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34123,7 +34887,10 @@ impl Interp {
                     let mut v = a;
                     v.id = 0;
                     v.next = crate::value::SlotIndex::NULL;
-                    self.arrays.get_mut(&inst).unwrap().insert_item(idx, v, &mut self.side_refs);
+                    self.arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .insert_item(idx, v, &mut self.side_refs);
                     self.meter.tick_builtin_some(5);
                 }
                 let a = self.arrays.get_mut(&inst).unwrap();
@@ -34136,14 +34903,12 @@ impl Interp {
             NativeMethod::ArrayPop => {
                 let inst = match self.dense_array_this(this) {
                     Some(i)
-                        if !self.arguments_objects.contains(&i)
-                            && self.array_pop_fast_safe(i) =>
+                        if !self.arguments_objects.contains(&i) && self.array_pop_fast_safe(i) =>
                     {
                         i
                     }
                     _ => {
-                        let result =
-                            self.array_generic_push_pop(code, m, this, base, argc)?;
+                        let result = self.array_generic_push_pop(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34177,11 +34942,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let target = arg0;
                 let (found, steps) = {
@@ -34212,11 +34977,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let target = arg0;
                 let from = self.arg_to_index(base, 1, 0, self.arrays[&inst].length);
@@ -34245,11 +35010,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let target = arg0;
                 let length = self.arrays[&inst].length;
@@ -34310,7 +35075,10 @@ impl Interp {
                 v.id = 0;
                 v.next = crate::value::SlotIndex::NULL;
                 for i in start..end {
-                    self.arrays.get_mut(&inst).unwrap().insert_item(i, v, &mut self.side_refs);
+                    self.arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .insert_item(i, v, &mut self.side_refs);
                     self.meter.tick_builtin_some(5);
                 }
                 this
@@ -34358,7 +35126,10 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i)
                         if self.array_allocating_uses_default_species(i)
-                            && matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined)
+                            && matches!(
+                                arg0.kind,
+                                Kind::Integer | Kind::Number | Kind::Undefined
+                            )
                             && (argc < 2
                                 || matches!(
                                     self.stack
@@ -34435,7 +35206,10 @@ impl Interp {
                                         }
                                         _ => true,
                                     }
-                            }) => i,
+                            }) =>
+                    {
+                        i
+                    }
                     _ => {
                         let result = self.array_generic_concat(code, this, base, argc)?;
                         self.stack.truncate(base);
@@ -34481,7 +35255,11 @@ impl Interp {
                             return Err(Halt::Unsupported("concat:sparse-arg"));
                         }
                         for i in 0..len {
-                            let s = self.arrays[&r].items().get(&i).copied().unwrap_or_else(Slot::undefined);
+                            let s = self.arrays[&r]
+                                .items()
+                                .get(&i)
+                                .copied()
+                                .unwrap_or_else(Slot::undefined);
                             self.meter.tick_slot_alloc();
                             self.meter.tick_builtin_some(2);
                             self.meter.tick_raw(ARRAY_CONCAT_SPREAD_EXTRA_METERING);
@@ -34518,11 +35296,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 self.meter.tick_raw(ARRAY_AT_FRAME_METERING);
                 let length = self.arrays[&inst].length as i64;
@@ -34556,8 +35334,7 @@ impl Interp {
                         i
                     }
                     _ => {
-                        let result =
-                            self.array_generic_shift_unshift(code, m, this, base, argc)?;
+                        let result = self.array_generic_shift_unshift(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34570,7 +35347,9 @@ impl Interp {
                     let new_len = length - 1;
                     let removed = {
                         let a = self.arrays.get_mut(&inst).unwrap();
-                        let first = a.remove_item(&0, &mut self.side_refs).unwrap_or_else(Slot::undefined);
+                        let first = a
+                            .remove_item(&0, &mut self.side_refs)
+                            .unwrap_or_else(Slot::undefined);
                         let mut shifted = std::collections::BTreeMap::new();
                         for (&k, &v) in a.items().iter() {
                             shifted.insert(k - 1, v);
@@ -34602,8 +35381,7 @@ impl Interp {
                         i
                     }
                     _ => {
-                        let result =
-                            self.array_generic_shift_unshift(code, m, this, base, argc)?;
+                        let result = self.array_generic_shift_unshift(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34657,8 +35435,7 @@ impl Interp {
                         i
                     }
                     _ => {
-                        let result =
-                            self.array_generic_copy_within(code, this, base, argc)?;
+                        let result = self.array_generic_copy_within(code, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34703,9 +35480,14 @@ impl Interp {
             // path, calibrated against the pin.
             NativeMethod::ArrayWith => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) => i,
+                    Some(i)
+                        if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) =>
+                    {
+                        i
+                    }
                     _ => {
-                        let result = self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        let result =
+                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34762,11 +35544,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let callback = arg0;
                 let this_arg = self
@@ -34793,8 +35575,7 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) if self.array_allocating_uses_default_species(i) => i,
                     _ => {
-                        let result =
-                            self.array_generic_map_filter(code, m, this, base)?;
+                        let result = self.array_generic_map_filter(code, m, this, base)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34822,7 +35603,11 @@ impl Interp {
                         let mut v = r;
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&result).unwrap().insert_item(i, v, &mut self.side_refs);
+                        self.arrays.get_mut(&result).unwrap().insert_item(
+                            i,
+                            v,
+                            &mut self.side_refs,
+                        );
                     }
                 }
                 self.arrays.get_mut(&result).unwrap().length = length;
@@ -34836,11 +35621,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let callback = arg0;
                 let this_arg = self
@@ -34880,11 +35665,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let callback = arg0;
                 let this_arg = self
@@ -34902,8 +35687,7 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in 0..length {
-                    let item = self
-                        .arrays[&inst]
+                    let item = self.arrays[&inst]
                         .items()
                         .get(&i)
                         .copied()
@@ -34942,8 +35726,7 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) if self.array_allocating_uses_default_species(i) => i,
                     _ => {
-                        let result =
-                            self.array_generic_map_filter(code, m, this, base)?;
+                        let result = self.array_generic_map_filter(code, m, this, base)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -34998,20 +35781,25 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let callback = arg0;
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
                 // The present indices in fold order.
                 let order: Vec<u32> = if right {
-                    (0..length).rev().filter(|i| self.arrays[&inst].items().contains_key(i)).collect()
+                    (0..length)
+                        .rev()
+                        .filter(|i| self.arrays[&inst].items().contains_key(i))
+                        .collect()
                 } else {
-                    (0..length).filter(|i| self.arrays[&inst].items().contains_key(i)).collect()
+                    (0..length)
+                        .filter(|i| self.arrays[&inst].items().contains_key(i))
+                        .collect()
                 };
                 let mut it = order.into_iter();
                 let mut acc = if argc >= 2 {
@@ -35057,11 +35845,11 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                    let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
-                }
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let callback = arg0;
                 let this_arg = self
@@ -35079,8 +35867,7 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in (0..length).rev() {
-                    let item = self
-                        .arrays[&inst]
+                    let item = self.arrays[&inst]
                         .items()
                         .get(&i)
                         .copied()
@@ -35119,7 +35906,8 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => {
-                        let result = self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        let result =
+                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -35232,7 +36020,13 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Perform the splice on a dense element vector.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| self.arrays[&inst].items().get(&i).copied().unwrap_or_else(Slot::undefined))
+                    .map(|i| {
+                        self.arrays[&inst]
+                            .items()
+                            .get(&i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
                     .collect();
                 let removed: Vec<Slot> = cur[start as usize..(start + deletions) as usize].to_vec();
                 let inserted: Vec<Slot> = (0..insertions)
@@ -35273,14 +36067,21 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i)
                         if (argc == 0
-                            || matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined))
+                            || matches!(
+                                arg0.kind,
+                                Kind::Integer | Kind::Number | Kind::Undefined
+                            ))
                             && (argc < 2
                                 || matches!(
                                     self.stack.get(base + 5).map(|slot| slot.kind),
                                     Some(Kind::Integer | Kind::Number | Kind::Undefined)
-                                )) => i,
+                                )) =>
+                    {
+                        i
+                    }
                     _ => {
-                        let result = self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        let result =
+                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -35323,7 +36124,13 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Build the result densely; the receiver stays untouched.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| self.arrays[&inst].items().get(&i).copied().unwrap_or_else(Slot::undefined))
+                    .map(|i| {
+                        self.arrays[&inst]
+                            .items()
+                            .get(&i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
                     .collect();
                 let inserted: Vec<Slot> = (0..insertions)
                     .map(|k| {
@@ -35358,7 +36165,10 @@ impl Interp {
                 let inst = match self.dense_array_this(this) {
                     Some(i)
                         if self.array_allocating_uses_default_species(i)
-                            && matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined)
+                            && matches!(
+                                arg0.kind,
+                                Kind::Integer | Kind::Number | Kind::Undefined
+                            )
                             && self.array_flat_fast_safe(
                                 i,
                                 if argc == 0 || arg0.kind == Kind::Undefined {
@@ -35376,9 +36186,8 @@ impl Interp {
                         i
                     }
                     _ => {
-                        let result = self.array_generic_flat_or_flat_map(
-                            code, m, this, base, argc,
-                        )?;
+                        let result =
+                            self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
                         return Ok(());
@@ -35414,8 +36223,7 @@ impl Interp {
             // result flattening reuses `flat`'s per-leaf/per-array constants,
             // plus a per-source callback overhead.
             NativeMethod::ArrayFlatMap => {
-                let result =
-                    self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
+                let result = self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
                 self.stack.truncate(base);
                 self.push(result);
                 return Ok(());
@@ -35441,10 +36249,7 @@ impl Interp {
                         return Ok(());
                     }
                 };
-                if argc > 0
-                    && arg0.kind != Kind::Undefined
-                    && arg0.kind != Kind::String
-                {
+                if argc > 0 && arg0.kind != Kind::Undefined && arg0.kind != Kind::String {
                     // The calibrated fast path below keeps the historic exact
                     // metering for the default/string separator. Other values
                     // still follow ordinary ToString, including re-entrant
@@ -35540,8 +36345,7 @@ impl Interp {
                 }
                 let inst = match self.dense_array_this(this) {
                     Some(i)
-                        if self.array_to_string_fast_safe(i)
-                            && self.array_join_fast_safe(i) =>
+                        if self.array_to_string_fast_safe(i) && self.array_join_fast_safe(i) =>
                     {
                         i
                     }
@@ -35583,18 +36387,12 @@ impl Interp {
                 let off = self.alloc_str_text(&out);
                 Slot::of(Kind::String, Payload::String(off))
             }
-            NativeMethod::ArraySort => {
-                self.array_sort(this, base, argc, code, false)?
-            }
-            NativeMethod::ArrayToSorted => {
-                self.array_sort(this, base, argc, code, true)?
-            }
+            NativeMethod::ArraySort => self.array_sort(this, base, argc, code, false)?,
+            NativeMethod::ArrayToSorted => self.array_sort(this, base, argc, code, true)?,
             NativeMethod::ArrayToLocaleString => {
                 self.array_to_locale_string(this, base, argc, code)?
             }
-            NativeMethod::ArrayFrom => {
-                self.array_from(code, base, argc)?
-            }
+            NativeMethod::ArrayFrom => self.array_from(code, base, argc)?,
             NativeMethod::ArrayFromAsync => self.array_from_async(code, base, argc)?,
             // `Array.isArray(v)`: whether `v` is an array exotic object.
             NativeMethod::ArrayIsArray => {
@@ -35630,10 +36428,10 @@ impl Interp {
             NativeMethod::ArrayIteratorNext => {
                 let iter = match this.value {
                     Payload::Reference(i)
-                        if self
-                            .iterators
-                            .get(&i)
-                            .is_some_and(|state| state.kind <= 4) => i,
+                        if self.iterators.get(&i).is_some_and(|state| state.kind <= 4) =>
+                    {
+                        i
+                    }
                     _ => return Err(self.catchable_type_error()),
                 };
                 self.array_iterator_next(code, iter)?
@@ -35650,7 +36448,10 @@ impl Interp {
                             .iterators
                             .get(&i)
                             .and_then(|state| self.collections.get(&state.iterable))
-                            .is_some_and(|collection| collection.kind == expected) => i,
+                            .is_some_and(|collection| collection.kind == expected) =>
+                    {
+                        i
+                    }
                     _ => return Err(self.catchable_type_error()),
                 };
                 self.collection_iterator_next(iter)
@@ -35658,15 +36459,9 @@ impl Interp {
             NativeMethod::RegExpStringIteratorNext => {
                 self.regexp_string_iterator_next(code, this)?
             }
-            NativeMethod::IteratorFrom => {
-                self.iterator_from(code, arg0)?
-            }
-            NativeMethod::IteratorWrapperNext => {
-                self.iterator_wrapper_next(code, this)?
-            }
-            NativeMethod::IteratorWrapperReturn => {
-                self.iterator_wrapper_return(code, this)?
-            }
+            NativeMethod::IteratorFrom => self.iterator_from(code, arg0)?,
+            NativeMethod::IteratorWrapperNext => self.iterator_wrapper_next(code, this)?,
+            NativeMethod::IteratorWrapperReturn => self.iterator_wrapper_return(code, this)?,
             NativeMethod::IteratorConstructorGetter => {
                 let constructor = self
                     .intrinsics
@@ -35675,11 +36470,8 @@ impl Interp {
                     .ok_or(Halt::Unsupported("Iterator:missing-constructor"))?;
                 Slot::of(Kind::Reference, Payload::Reference(constructor))
             }
-            NativeMethod::IteratorToStringTagGetter => {
-                self.new_string_metered(b"Iterator")
-            }
-            NativeMethod::IteratorConstructorSetter
-            | NativeMethod::IteratorToStringTagSetter => {
+            NativeMethod::IteratorToStringTagGetter => self.new_string_metered(b"Iterator"),
+            NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter => {
                 self.iterator_prototype_setter(code, m, this, arg0)?
             }
             NativeMethod::IteratorHelper(op @ 5..=10) => {
@@ -35838,18 +36630,18 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 self.meter.tick_raw(COLLECTION_CLEAR_FRAME_METERING);
-                self.collections.get_mut(&inst).unwrap().clear_entries(&mut self.side_refs);
+                self.collections
+                    .get_mut(&inst)
+                    .unwrap()
+                    .clear_entries(&mut self.side_refs);
                 // `fxResizeEntries` with size 0 shrinks the address chunk back
                 // toward `mxTableMinLength`, charging the rehash chunk if the
                 // length changes (modeled by [`Self::collection_table_resize`]).
                 self.collection_table_resize(inst);
                 Slot::undefined()
             }
-            NativeMethod::ArrayBufferSlice => {
-                self.array_buffer_slice(code, this, base, argc)?
-            }
-            NativeMethod::ArrayBufferTransfer
-            | NativeMethod::ArrayBufferTransferToFixedLength => {
+            NativeMethod::ArrayBufferSlice => self.array_buffer_slice(code, this, base, argc)?,
+            NativeMethod::ArrayBufferTransfer | NativeMethod::ArrayBufferTransferToFixedLength => {
                 self.array_buffer_transfer(code, this, arg0)?
             }
             NativeMethod::ArrayBufferDetachedGetter
@@ -36035,30 +36827,24 @@ impl Interp {
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Throw)?
             }
-            NativeMethod::AsyncGeneratorNext => {
-                match this.value {
-                    Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                        self.enqueue_async_generator(code, r, arg0, GenStatus::Next)?
-                    }
-                    _ => self.reject_async_generator_brand()?,
+            NativeMethod::AsyncGeneratorNext => match this.value {
+                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                    self.enqueue_async_generator(code, r, arg0, GenStatus::Next)?
                 }
-            }
-            NativeMethod::AsyncGeneratorReturn => {
-                match this.value {
-                    Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                        self.enqueue_async_generator(code, r, arg0, GenStatus::Return)?
-                    }
-                    _ => self.reject_async_generator_brand()?,
+                _ => self.reject_async_generator_brand()?,
+            },
+            NativeMethod::AsyncGeneratorReturn => match this.value {
+                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                    self.enqueue_async_generator(code, r, arg0, GenStatus::Return)?
                 }
-            }
-            NativeMethod::AsyncGeneratorThrow => {
-                match this.value {
-                    Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                        self.enqueue_async_generator(code, r, arg0, GenStatus::Throw)?
-                    }
-                    _ => self.reject_async_generator_brand()?,
+                _ => self.reject_async_generator_brand()?,
+            },
+            NativeMethod::AsyncGeneratorThrow => match this.value {
+                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                    self.enqueue_async_generator(code, r, arg0, GenStatus::Throw)?
                 }
-            }
+                _ => self.reject_async_generator_brand()?,
+            },
             NativeMethod::AsyncIteratorIdentity => this,
             // `Promise.resolve(v)` (`fx_Promise_resolve`): a native promise
             // whose observable constructor is the receiver is returned as-is;
@@ -36094,12 +36880,7 @@ impl Interp {
                     Slot::of(Kind::Reference, Payload::Reference(derived))
                 } else {
                     let capability = self.new_promise_capability_for(code, this)?;
-                    self.call_any(
-                        code,
-                        capability.resolve,
-                        Slot::undefined(),
-                        &[arg0],
-                    )?;
+                    self.call_any(code, capability.resolve, Slot::undefined(), &[arg0])?;
                     capability.promise
                 }
             }
@@ -36120,12 +36901,7 @@ impl Interp {
                     Slot::of(Kind::Reference, Payload::Reference(derived))
                 } else {
                     let capability = self.new_promise_capability_for(code, this)?;
-                    self.call_any(
-                        code,
-                        capability.reject,
-                        Slot::undefined(),
-                        &[arg0],
-                    )?;
+                    self.call_any(code, capability.reject, Slot::undefined(), &[arg0])?;
                     capability.promise
                 }
             }
@@ -36142,9 +36918,7 @@ impl Interp {
             // finally`): observable SpeciesConstructor + Invoke dispatch, with
             // the default native path registering a FINALLY reaction whose
             // callback runs at the drain.
-            NativeMethod::PromiseFinally => {
-                self.promise_finally_dispatch(code, this, arg0)?
-            }
+            NativeMethod::PromiseFinally => self.promise_finally_dispatch(code, this, arg0)?,
             NativeMethod::PromiseSpeciesGetter
             | NativeMethod::RegExpSpeciesGetter
             | NativeMethod::ArrayBufferSpeciesGetter => this,
@@ -36288,18 +37062,10 @@ impl Interp {
                     let units = self.to_string_units(code, arg0)?;
                     self.new_string_units(&units)
                 };
-                if self.regexps.contains_key(&regexp)
-                    && self.regexp_replace_fast_safe(regexp)
-                {
+                if self.regexps.contains_key(&regexp) && self.regexp_replace_fast_safe(regexp) {
                     self.string_replace(code, regexp, subject, replacement)?
                 } else {
-                    self.regexp_replace_generic(
-                        code,
-                        regexp,
-                        this,
-                        subject,
-                        replacement,
-                    )?
+                    self.regexp_replace_generic(code, regexp, this, subject, replacement)?
                 }
             }
             NativeMethod::RegExpToString => {
@@ -36327,8 +37093,7 @@ impl Interp {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
                     return Err(self.catchable_type_error());
                 }
-                self.meter
-                    .tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
+                self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let search_method = self.string_protocol_method(code, arg0, "search")?;
                 if !matches!(search_method.kind, Kind::Undefined | Kind::Null) {
                     self.invoke_value(code, search_method, arg0, &[this])?
@@ -36343,16 +37108,9 @@ impl Interp {
                         .intrinsics
                         .get("RegExp")
                         .expect("RegExp intrinsic is linked");
-                    let constructor = Slot::of(
-                        Kind::Reference,
-                        Payload::Reference(regexp_constructor),
-                    );
-                    let matcher = self.construct_value(
-                        code,
-                        constructor,
-                        &[arg0],
-                        constructor,
-                    )?;
+                    let constructor =
+                        Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
+                    let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
                     let method = self.string_protocol_method(code, matcher, "search")?;
                     self.invoke_value(code, method, matcher, &[subject])?
                 }
@@ -36365,8 +37123,7 @@ impl Interp {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
                     return Err(self.catchable_type_error());
                 }
-                self.meter
-                    .tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
+                self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let match_method = self.string_protocol_method(code, arg0, "match")?;
                 if !matches!(match_method.kind, Kind::Undefined | Kind::Null) {
                     self.invoke_value(code, match_method, arg0, &[this])?
@@ -36381,23 +37138,14 @@ impl Interp {
                         .intrinsics
                         .get("RegExp")
                         .expect("RegExp intrinsic is linked");
-                    let constructor = Slot::of(
-                        Kind::Reference,
-                        Payload::Reference(regexp_constructor),
-                    );
-                    let matcher = self.construct_value(
-                        code,
-                        constructor,
-                        &[arg0],
-                        constructor,
-                    )?;
+                    let constructor =
+                        Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
+                    let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
                     let method = self.string_protocol_method(code, matcher, "match")?;
                     self.invoke_value(code, method, matcher, &[subject])?
                 }
             }
-            NativeMethod::StringMatchAll => {
-                self.string_match_all(code, this, arg0)?
-            }
+            NativeMethod::StringMatchAll => self.string_match_all(code, this, arg0)?,
             // `String.prototype.replace`: a custom `searchValue[Symbol.replace]`
             // runs with the original receiver before string coercion. Internal
             // RegExps use the matcher worker; every other value follows the
@@ -36448,8 +37196,7 @@ impl Interp {
                     let Payload::Reference(search_object) = arg0.value else {
                         unreachable!("IsRegExp is false for primitive values")
                     };
-                    let flags =
-                        self.regexp_flags_units(code, search_object, arg0, true)?;
+                    let flags = self.regexp_flags_units(code, search_object, arg0, true)?;
                     if !flags.contains(&(b'g' as u16)) {
                         return Err(self.catchable_type_error());
                     }
@@ -36485,8 +37232,7 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 let split_method = self.string_protocol_method(code, arg0, "split")?;
                 if !matches!(split_method.kind, Kind::Undefined | Kind::Null) {
-                    self.meter
-                        .tick_raw(STRING_SPLIT_PROTOCOL_FRAME_METERING);
+                    self.meter.tick_raw(STRING_SPLIT_PROTOCOL_FRAME_METERING);
                     self.invoke_value(code, split_method, arg0, &[this, limit])?
                 } else {
                     self.string_split_plain(code, this, arg0, limit)?
@@ -36573,9 +37319,7 @@ impl Interp {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
                     _ => return Err(self.catchable_type_error()),
                 };
-                Ok(Slot::boolean(
-                    self.mop_prevent_extensions(code, object)?,
-                ))
+                Ok(Slot::boolean(self.mop_prevent_extensions(code, object)?))
             }
             // `Reflect.getOwnPropertyDescriptor(target, key)`: identical result
             // to `Object.getOwnPropertyDescriptor` — the data-descriptor object
@@ -36612,9 +37356,9 @@ impl Interp {
                 };
                 let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                 self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
-                Ok(Slot::boolean(self.mop_define_own_property(
-                    code, inst, id, descriptor,
-                )?))
+                Ok(Slot::boolean(
+                    self.mop_define_own_property(code, inst, id, descriptor)?,
+                ))
             }
             // `Reflect.ownKeys(target)`: a fresh Array containing the target's
             // complete `[[OwnPropertyKeys]]` result, including exotic indices,
@@ -36669,9 +37413,7 @@ impl Interp {
                 let id = self.to_property_id(code, arg1)?;
                 let receiver = if argc >= 4 { arg3 } else { arg0 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(Slot::boolean(self.mop_set(
-                    code, inst, id, arg2, receiver,
-                )?))
+                Ok(Slot::boolean(self.mop_set(code, inst, id, arg2, receiver)?))
             }
             // `Reflect.deleteProperty(target, key)`: the target's `[[Delete]]`
             // result (`false` for a non-configurable own property).
@@ -36783,9 +37525,7 @@ impl Interp {
             .expect("well-known iterator symbol");
         let iterator_method = match items.value {
             Payload::Reference(object) if items.kind == Kind::Reference => {
-                match self.array_from_try(|this| {
-                    this.mop_get(code, object, iterator_id, items)
-                })? {
+                match self.array_from_try(|this| this.mop_get(code, object, iterator_id, items))? {
                     Ok(method) => method,
                     Err(error) => return Ok(Err(error)),
                 }
@@ -36806,9 +37546,9 @@ impl Interp {
                 if proto.is_null() {
                     Slot::undefined()
                 } else {
-                    match self.array_from_try(|this| {
-                        this.mop_get(code, proto, iterator_id, items)
-                    })? {
+                    match self
+                        .array_from_try(|this| this.mop_get(code, proto, iterator_id, items))?
+                    {
                         Ok(method) => method,
                         Err(error) => return Ok(Err(error)),
                     }
@@ -36818,12 +37558,11 @@ impl Interp {
         if !self.is_callable_value(iterator_method) {
             return Ok(Err(self.build_error("TypeError", 0, 0)));
         }
-        let iterator = match self
-            .array_from_try(|this| this.call_any(code, iterator_method, items, &[]))?
-        {
-            Ok(iterator) => iterator,
-            Err(error) => return Ok(Err(error)),
-        };
+        let iterator =
+            match self.array_from_try(|this| this.call_any(code, iterator_method, items, &[]))? {
+                Ok(iterator) => iterator,
+                Err(error) => return Ok(Err(error)),
+            };
         let iterator_inst = match iterator.value {
             Payload::Reference(iterator_inst) if iterator.kind == Kind::Reference => iterator_inst,
             _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
@@ -36838,9 +37577,7 @@ impl Interp {
         };
         let mut values = Vec::new();
         for _ in 0..1_000_000u64 {
-            let step = match self
-                .array_from_try(|this| this.call_any(code, next, iterator, &[]))?
-            {
+            let step = match self.array_from_try(|this| this.call_any(code, next, iterator, &[]))? {
                 Ok(step) => step,
                 Err(error) => return Ok(Err(error)),
             };
@@ -36848,21 +37585,19 @@ impl Interp {
                 Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
                 _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
             };
-            let done = match self
-                .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
-            {
-                Ok(done) => done,
-                Err(error) => return Ok(Err(error)),
-            };
+            let done =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
+                    Ok(done) => done,
+                    Err(error) => return Ok(Err(error)),
+                };
             if self.truthy(&done) {
                 return Ok(Ok(values));
             }
-            let value = match self
-                .array_from_try(|this| this.mop_get(code, step_inst, value_id, step))?
-            {
-                Ok(value) => value,
-                Err(error) => return Ok(Err(error)),
-            };
+            let value =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, value_id, step))? {
+                    Ok(value) => value,
+                    Err(error) => return Ok(Err(error)),
+                };
             values.push(value);
         }
         Err(Halt::StepLimit(self.n_dispatched))
@@ -36942,14 +37677,22 @@ impl Interp {
                 }
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().set_entry_value(p, val, &mut self.side_refs);
+                        self.collections.get_mut(&inst).unwrap().set_entry_value(
+                            p,
+                            val,
+                            &mut self.side_refs,
+                        );
                     }
                     None => {
                         // `fxSetEntry`/`fxSetWeakEntry` new key: three slots
                         // (Map: key + value + entry; WeakMap: keyEntry +
                         // listEntry + closure).
                         self.charge_new_entry_slots(3);
-                        self.collections.get_mut(&inst).unwrap().push_entry(key, val, &mut self.side_refs);
+                        self.collections.get_mut(&inst).unwrap().push_entry(
+                            key,
+                            val,
+                            &mut self.side_refs,
+                        );
                         self.collection_table_resize(inst);
                     }
                 }
@@ -36965,7 +37708,11 @@ impl Interp {
                     // `fxSetWeakEntry` → three (keyEntry + listEntry + closure).
                     let n = if weak { 3 } else { 2 };
                     self.charge_new_entry_slots(n);
-                    self.collections.get_mut(&inst).unwrap().push_entry(key, Slot::undefined(), &mut self.side_refs);
+                    self.collections.get_mut(&inst).unwrap().push_entry(
+                        key,
+                        Slot::undefined(),
+                        &mut self.side_refs,
+                    );
                     self.collection_table_resize(inst);
                 }
                 Ok(this)
@@ -36993,7 +37740,10 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().remove_entry(p, &mut self.side_refs);
+                        self.collections
+                            .get_mut(&inst)
+                            .unwrap()
+                            .remove_entry(p, &mut self.side_refs);
                         // `fxDeleteEntry` calls `fxResizeEntries` (a Map/Set may
                         // shrink its address chunk; a weak unlink is
                         // allocation-free).
@@ -37026,11 +37776,7 @@ impl Interp {
         let kind = self.collections[&inst].kind;
         let next_id = self.intern_key("next");
         let return_id = self.intern_key("return");
-        if !self.chain_resolves_native_data_method(
-            array,
-            iterator_id,
-            NativeMethod::ArrayValues,
-        )
+        if !self.chain_resolves_native_data_method(array, iterator_id, NativeMethod::ArrayValues)
             || !self.chain_resolves_native_data_method(
                 self.array_iterator_proto,
                 next_id,
@@ -37146,7 +37892,11 @@ impl Interp {
             }
             if let Some(position) = self.collection_find(inst, &key) {
                 if matches!(kind, CollKind::Map | CollKind::WeakMap) {
-                    self.collections.get_mut(&inst).unwrap().set_entry_value(position, value, &mut self.side_refs);
+                    self.collections.get_mut(&inst).unwrap().set_entry_value(
+                        position,
+                        value,
+                        &mut self.side_refs,
+                    );
                 }
             } else {
                 let slots = match kind {
@@ -37154,7 +37904,11 @@ impl Interp {
                     CollKind::Set => 2,
                 };
                 self.charge_new_entry_slots(slots);
-                self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
+                self.collections.get_mut(&inst).unwrap().push_entry(
+                    key,
+                    value,
+                    &mut self.side_refs,
+                );
                 self.collection_table_resize(inst);
             }
         }
@@ -37263,9 +38017,9 @@ impl Interp {
                 if proto.is_null() {
                     Slot::undefined()
                 } else {
-                    match self.array_from_try(|this| {
-                        this.mop_get(code, proto, iterator_id, iterable)
-                    })? {
+                    match self
+                        .array_from_try(|this| this.mop_get(code, proto, iterator_id, iterable))?
+                    {
                         Ok(method) => method,
                         Err(error) => return Ok(Err(error)),
                     }
@@ -37297,9 +38051,7 @@ impl Interp {
         let value_id = self.intern_key("value");
 
         for _ in 0..1_000_000u64 {
-            let step = match self
-                .array_from_try(|this| this.call_any(code, next, iterator, &[]))?
-            {
+            let step = match self.array_from_try(|this| this.call_any(code, next, iterator, &[]))? {
                 Ok(step) => step,
                 Err(error) => return Ok(Err(error)),
             };
@@ -37307,21 +38059,19 @@ impl Interp {
                 Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
                 _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
             };
-            let done = match self
-                .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
-            {
-                Ok(done) => done,
-                Err(error) => return Ok(Err(error)),
-            };
+            let done =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
+                    Ok(done) => done,
+                    Err(error) => return Ok(Err(error)),
+                };
             if self.truthy(&done) {
                 return Ok(Ok(()));
             }
-            let element = match self
-                .array_from_try(|this| this.mop_get(code, step_inst, value_id, step))?
-            {
-                Ok(element) => element,
-                Err(error) => return Ok(Err(error)),
-            };
+            let element =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, value_id, step))? {
+                    Ok(element) => element,
+                    Err(error) => return Ok(Err(error)),
+                };
             let args = if is_map {
                 let entry = match element.value {
                     Payload::Reference(entry) if element.kind == Kind::Reference => entry,
@@ -37331,14 +38081,13 @@ impl Interp {
                     }
                 };
                 let key_id = self.intern_key("0");
-                let key = match self
-                    .array_from_try(|this| this.mop_get(code, entry, key_id, element))?
-                {
-                    Ok(key) => key,
-                    Err(error) => {
-                        return Ok(Err(self.array_from_close(code, iterator, error)?));
-                    }
-                };
+                let key =
+                    match self.array_from_try(|this| this.mop_get(code, entry, key_id, element))? {
+                        Ok(key) => key,
+                        Err(error) => {
+                            return Ok(Err(self.array_from_close(code, iterator, error)?));
+                        }
+                    };
                 let value_id = self.intern_key("1");
                 let value = match self
                     .array_from_try(|this| this.mop_get(code, entry, value_id, element))?
@@ -37352,9 +38101,7 @@ impl Interp {
             } else {
                 vec![element]
             };
-            match self
-                .array_from_try(|this| this.call_any(code, adder, receiver, &args))?
-            {
+            match self.array_from_try(|this| this.call_any(code, adder, receiver, &args))? {
                 Ok(_) => {}
                 Err(error) => {
                     return Ok(Err(self.array_from_close(code, iterator, error)?));
@@ -37424,10 +38171,7 @@ impl Interp {
             Sqrt => self.math_unary(code, base, argc, f64::sqrt)?,
             Tan => self.math_unary(code, base, argc, f64::tan)?,
             Tanh => self.math_unary(code, base, argc, f64::tanh)?,
-            Atan2 => match (
-                self.math_arg(base, argc, 0),
-                self.math_arg(base, argc, 1),
-            ) {
+            Atan2 => match (self.math_arg(base, argc, 0), self.math_arg(base, argc, 1)) {
                 (Some(y), Some(x)) => {
                     let y = self.to_number_f64(code, y)?;
                     let x = self.to_number_f64(code, x)?;
@@ -37437,10 +38181,7 @@ impl Interp {
             },
             // `fx_Math_pow` → `fx_pow`: `(±1) ** ±Infinity` is NaN (the pin's
             // explicit special-case), otherwise `c_pow`.
-            Pow => match (
-                self.math_arg(base, argc, 0),
-                self.math_arg(base, argc, 1),
-            ) {
+            Pow => match (self.math_arg(base, argc, 0), self.math_arg(base, argc, 1)) {
                 (Some(x), Some(y)) => {
                     let x = self.to_number_f64(code, x)?;
                     let y = self.to_number_f64(code, y)?;
@@ -37853,8 +38594,7 @@ impl Interp {
                     .get(base + 6)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                let (replacer, property_list) =
-                    self.json_stringify_replacer(code, arg1)?;
+                let (replacer, property_list) = self.json_stringify_replacer(code, arg1)?;
                 let gap = self.json_stringify_gap(code, arg2)?;
                 let mut state = JsonStringifyState {
                     replacer,
@@ -37883,14 +38623,7 @@ impl Interp {
                     self.set_own_unmetered(holder, empty_id, arg0);
                     self.json_stringify_property(code, holder, &root_name, &mut state, &mut cost)?
                 } else {
-                    self.json_stringify_value(
-                        code,
-                        arg0,
-                        &root_name,
-                        None,
-                        &mut state,
-                        &mut cost,
-                    )?
+                    self.json_stringify_value(code, arg0, &root_name, None, &mut state, &mut cost)?
                 };
                 if arg0.kind == Kind::Reference && out.is_some() {
                     cost += JSON_STRINGIFY_TOP_REFERENCE_METERING;
@@ -38087,12 +38820,7 @@ impl Interp {
 
     /// `GetV(value, id)` for the object/BigInt `toJSON` probe.  BigInt is the
     /// sole primitive admitted by the specification at this step.
-    fn json_stringify_get_v(
-        &mut self,
-        code: &[u8],
-        value: Slot,
-        id: u16,
-    ) -> Result<Slot, Halt> {
+    fn json_stringify_get_v(&mut self, code: &[u8], value: Slot, id: u16) -> Result<Slot, Halt> {
         match value.value {
             Payload::Reference(inst) if value.kind == Kind::Reference => {
                 self.mop_get(code, inst, id, value)
@@ -38720,7 +39448,10 @@ impl Interp {
             self.json_parse_whitespace(input, pos);
             *cost += JSON_PARSE_ARRAY_ELEMENT_METERING;
             let (v, source) = self.json_parse_value(input, pos, cost, track_source)?;
-            self.arrays.get_mut(&inst).unwrap().insert_item(length, v, &mut self.side_refs);
+            self.arrays
+                .get_mut(&inst)
+                .unwrap()
+                .insert_item(length, v, &mut self.side_refs);
             if track_source {
                 sources.push(source);
             }
@@ -38878,9 +39609,9 @@ impl Interp {
                         // common one there is — poisoned the machine.
                         let key = self.array_index_read_key(index);
                         let child_source = match source.as_ref() {
-                            Some(JsonSource::Array(children)) => {
-                                usize::try_from(index).ok().and_then(|i| children.get(i).cloned())
-                            }
+                            Some(JsonSource::Array(children)) => usize::try_from(index)
+                                .ok()
+                                .and_then(|i| children.get(i).cloned()),
                             _ => None,
                         };
                         let revived = self.json_internalize_property(
@@ -39163,9 +39894,7 @@ impl Interp {
                     out.push(integer.rem_euclid(0x1_0000) as u16);
                 }
                 NativeMethod::StringFromCodePoint => {
-                    if !n.is_finite()
-                        || n.fract() != 0.0
-                        || !(0.0..=0x10_FFFF as f64).contains(&n)
+                    if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10_FFFF as f64).contains(&n)
                     {
                         return Err(self.catchable_range_error());
                     }
@@ -39189,12 +39918,7 @@ impl Interp {
     /// `ToLength`, then interleave each observable literal segment with the
     /// corresponding substitution. All string conversion remains in UTF-16
     /// units so lone surrogates survive unchanged.
-    fn call_string_raw(
-        &mut self,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Halt> {
+    fn call_string_raw(&mut self, base: usize, argc: usize, code: &[u8]) -> Result<Slot, Halt> {
         if self
             .stack
             .get(base)
@@ -39525,31 +40249,27 @@ impl Interp {
             // `string_search_match_meter` translates that charge to the VM's
             // UTF-16 storage without losing astral/lone-surrogate behavior.
             StringIndexOf | StringLastIndexOf => {
-                let search = self.to_string_units(
-                    code,
-                    argn(0).unwrap_or_else(Slot::undefined),
-                )?;
+                let search = self.to_string_units(code, argn(0).unwrap_or_else(Slot::undefined))?;
                 let last = m == StringLastIndexOf;
-                let position = if last
-                    && (argc < 2 || argn(1).is_some_and(|v| v.kind == Kind::Undefined))
-                {
-                    f64::INFINITY
-                } else if argc < 2 {
-                    0.0
-                } else if last {
-                    // `lastIndexOf` maps *any* NaN position to +INFINITY, not
-                    // only a missing or `undefined` one, so it cannot share
-                    // `ToIntegerOrInfinity`'s NaN-to-zero rule.
-                    self.string_last_index_of_position(
-                        code,
-                        argn(1).unwrap_or_else(Slot::undefined),
-                    )?
-                } else {
-                    self.array_to_integer_or_infinity(
-                        code,
-                        argn(1).unwrap_or_else(Slot::undefined),
-                    )?
-                };
+                let position =
+                    if last && (argc < 2 || argn(1).is_some_and(|v| v.kind == Kind::Undefined)) {
+                        f64::INFINITY
+                    } else if argc < 2 {
+                        0.0
+                    } else if last {
+                        // `lastIndexOf` maps *any* NaN position to +INFINITY, not
+                        // only a missing or `undefined` one, so it cannot share
+                        // `ToIntegerOrInfinity`'s NaN-to-zero rule.
+                        self.string_last_index_of_position(
+                            code,
+                            argn(1).unwrap_or_else(Slot::undefined),
+                        )?
+                    } else {
+                        self.array_to_integer_or_infinity(
+                            code,
+                            argn(1).unwrap_or_else(Slot::undefined),
+                        )?
+                    };
                 let length = content.len();
                 let start = if position == f64::INFINITY {
                     length
@@ -39575,9 +40295,8 @@ impl Interp {
                         {
                             matched += 1;
                         }
-                        self.meter.tick_raw(Self::string_search_match_meter(
-                            &search[..matched],
-                        ));
+                        self.meter
+                            .tick_raw(Self::string_search_match_meter(&search[..matched]));
                         if matched == search.len() {
                             break Self::array_index_number(candidate as u64);
                         }
@@ -39598,9 +40317,8 @@ impl Interp {
                         {
                             matched += 1;
                         }
-                        self.meter.tick_raw(Self::string_search_match_meter(
-                            &search[..matched],
-                        ));
+                        self.meter
+                            .tick_raw(Self::string_search_match_meter(&search[..matched]));
                         if matched == search.len() {
                             break Self::array_index_number(candidate as u64);
                         }
@@ -39625,10 +40343,8 @@ impl Interp {
                 self.new_string_units(&out)
             }
             StringToLocaleLowerCase | StringToLocaleUpperCase => {
-                let locale = self.intl_resolve_locale(
-                    code,
-                    argn(0).unwrap_or_else(Slot::undefined),
-                )?;
+                let locale =
+                    self.intl_resolve_locale(code, argn(0).unwrap_or_else(Slot::undefined))?;
                 let up = m == StringToLocaleUpperCase;
                 let out = unicode_locale_case_convert_utf16(&content, up, &locale);
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
@@ -39636,14 +40352,9 @@ impl Interp {
                 self.new_string_units(&out)
             }
             StringLocaleCompare => {
-                let right = self.to_string_units(
-                    code,
-                    argn(0).unwrap_or_else(Slot::undefined),
-                )?;
-                let locale = self.intl_resolve_locale(
-                    code,
-                    argn(1).unwrap_or_else(Slot::undefined),
-                )?;
+                let right = self.to_string_units(code, argn(0).unwrap_or_else(Slot::undefined))?;
+                let locale =
+                    self.intl_resolve_locale(code, argn(1).unwrap_or_else(Slot::undefined))?;
                 let mut data = CollatorData {
                     locale,
                     usage: "sort".to_string(),
@@ -39653,9 +40364,9 @@ impl Interp {
                     case_first: "false".to_string(),
                     ignore_punctuation: false,
                 };
-                if let Some(options) = self.intl_get_options_object(
-                    argn(2).unwrap_or_else(Slot::undefined),
-                )? {
+                if let Some(options) =
+                    self.intl_get_options_object(argn(2).unwrap_or_else(Slot::undefined))?
+                {
                     self.apply_collator_options(code, options, &mut data)?;
                 }
                 let left = String::from_utf16_lossy(&content);
@@ -39730,7 +40441,11 @@ impl Interp {
                     self.new_string_units(&content)
                 } else {
                     let fill = match argn(1) {
-                        None | Some(Slot { kind: Kind::Undefined, .. }) => vec![0x20],
+                        None
+                        | Some(Slot {
+                            kind: Kind::Undefined,
+                            ..
+                        }) => vec![0x20],
                         Some(v) => self.to_string_units(code, v)?,
                     };
                     if fill.is_empty() {
@@ -39761,9 +40476,7 @@ impl Interp {
                 while i < content.len() {
                     let u = content[i];
                     if (0xD800..=0xDBFF).contains(&u) {
-                        if i + 1 < content.len()
-                            && (0xDC00..=0xDFFF).contains(&content[i + 1])
-                        {
+                        if i + 1 < content.len() && (0xDC00..=0xDFFF).contains(&content[i + 1]) {
                             out.push(u);
                             out.push(content[i + 1]);
                             i += 2;
@@ -40068,24 +40781,22 @@ impl Interp {
             return Ok(Err(self.build_error("TypeError", 0, 0)));
         };
         let return_id = self.intern_key("return");
-        let return_method = match self.array_from_try(|this| {
-            this.mop_get(code, inst, return_id, iterator)
-        })? {
-            Ok(method) => method,
-            Err(error) => return Ok(Err(error)),
-        };
+        let return_method =
+            match self.array_from_try(|this| this.mop_get(code, inst, return_id, iterator))? {
+                Ok(method) => method,
+                Err(error) => return Ok(Err(error)),
+            };
         if matches!(return_method.kind, Kind::Undefined | Kind::Null) {
             return Ok(Ok(completion));
         }
         if !self.is_callable_value(return_method) {
             return Ok(Err(self.build_error("TypeError", 0, 0)));
         }
-        let inner = match self.array_from_try(|this| {
-            this.call_any(code, return_method, iterator, &[])
-        })? {
-            Ok(value) => value,
-            Err(error) => return Ok(Err(error)),
-        };
+        let inner =
+            match self.array_from_try(|this| this.call_any(code, return_method, iterator, &[]))? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
         if inner.kind != Kind::Reference {
             return Ok(Err(self.build_error("TypeError", 0, 0)));
         }
@@ -40125,13 +40836,12 @@ impl Interp {
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
         let next_id = self.intern_key("next");
-        let next_method = match self.array_from_try(|this| {
-            this.mop_get(code, inst, next_id, iterator)
-        })? {
-            Ok(method) if self.is_callable_value(method) => method,
-            Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
-            Err(error) => return Ok(Err(error)),
-        };
+        let next_method =
+            match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
+                Ok(method) if self.is_callable_value(method) => method,
+                Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                Err(error) => return Ok(Err(error)),
+            };
 
         let mut counter = 0u64;
         let mut accumulator = if op == 5 && argc >= 2 {
@@ -40145,9 +40855,9 @@ impl Interp {
         let mut items = Vec::new();
 
         for _ in 0..1_000_000u64 {
-            let step = match self.array_from_try(|this| {
-                this.call_any(code, next_method, iterator, &[])
-            })? {
+            let step = match self
+                .array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?
+            {
                 Ok(step) => step,
                 // IteratorStepValue failures propagate directly and do not
                 // invoke `return`.
@@ -40157,12 +40867,11 @@ impl Interp {
                 Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
                 _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
             };
-            let done = match self.array_from_try(|this| {
-                this.mop_get(code, step_inst, done_id, step)
-            })? {
-                Ok(done) => done,
-                Err(error) => return Ok(Err(error)),
-            };
+            let done =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
+                    Ok(done) => done,
+                    Err(error) => return Ok(Err(error)),
+                };
             if self.truthy(&done) {
                 return Ok(match op {
                     5 if accumulator.kind == Kind::Uninitialized => {
@@ -40181,8 +40890,7 @@ impl Interp {
                             data.insert_item(index as u32, *value, &mut self.side_refs);
                         }
                         if length != 0 {
-                            self.meter
-                                .tick_raw(self.array_chunk_size_metering(length));
+                            self.meter.tick_raw(self.array_chunk_size_metering(length));
                         }
                         Ok(Slot::of(Kind::Reference, Payload::Reference(array)))
                     }
@@ -40193,12 +40901,11 @@ impl Interp {
                     _ => unreachable!("terminal Iterator helper id"),
                 });
             }
-            let value = match self.array_from_try(|this| {
-                this.mop_get(code, step_inst, value_id, step)
-            })? {
-                Ok(value) => value,
-                Err(error) => return Ok(Err(error)),
-            };
+            let value =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, value_id, step))? {
+                    Ok(value) => value,
+                    Err(error) => return Ok(Err(error)),
+                };
 
             if op == 6 {
                 items.push(value);
@@ -40216,9 +40923,9 @@ impl Interp {
             } else {
                 vec![value, Slot::number(counter as f64)]
             };
-            let result = match self.array_from_try(|this| {
-                this.call_any(code, callback, Slot::undefined(), &args)
-            })? {
+            let result = match self
+                .array_from_try(|this| this.call_any(code, callback, Slot::undefined(), &args))?
+            {
                 Ok(result) => result,
                 Err(error) => {
                     return Ok(Err(self.array_from_close(code, iterator, error)?));
@@ -40334,18 +41041,20 @@ impl Interp {
             Payload::Reference(function) => function,
             _ => return None,
         };
-        self.proto_methods.iter().find_map(|(prototype, _, method)| {
-            if *method != function {
-                return None;
-            }
-            if *prototype == self.map_proto {
-                Some(CollKind::Map)
-            } else if *prototype == self.set_proto {
-                Some(CollKind::Set)
-            } else {
-                None
-            }
-        })
+        self.proto_methods
+            .iter()
+            .find_map(|(prototype, _, method)| {
+                if *method != function {
+                    return None;
+                }
+                if *prototype == self.map_proto {
+                    Some(CollKind::Map)
+                } else if *prototype == self.set_proto {
+                    Some(CollKind::Set)
+                } else {
+                    None
+                }
+            })
     }
 
     /// `fx_Map_prototype_forEach` / `fx_Set_prototype_forEach`: call the
@@ -40409,7 +41118,10 @@ impl Interp {
             {
                 break;
             }
-            let entry = self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
+            let entry = self
+                .collections
+                .get(&inst)
+                .and_then(|c| c.entries().get(i as usize));
             let (k, v) = match entry {
                 Some(Some(kv)) => *kv,
                 Some(None) => {
@@ -40464,7 +41176,12 @@ impl Interp {
     fn collection_live_keys(&self, inst: crate::value::SlotIndex) -> Vec<Slot> {
         self.collections
             .get(&inst)
-            .map(|c| c.entries().iter().filter_map(|e| e.map(|(k, _)| k)).collect())
+            .map(|c| {
+                c.entries()
+                    .iter()
+                    .filter_map(|e| e.map(|(k, _)| k))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -40502,11 +41219,7 @@ impl Interp {
     /// keys)` after the exact observable get order — `size` → ToNumber →
     /// NaN/negative checks, then `has`, then `keys`. `size` is stored as an
     /// `f64` so `+Infinity` is representable.
-    fn get_set_record(
-        &mut self,
-        code: &[u8],
-        arg: Slot,
-    ) -> Result<(Slot, f64, Slot, Slot), Halt> {
+    fn get_set_record(&mut self, code: &[u8], arg: Slot) -> Result<(Slot, f64, Slot, Slot), Halt> {
         let obj = match arg.value {
             Payload::Reference(inst) if arg.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -40634,7 +41347,11 @@ impl Interp {
         );
         for key in keys {
             self.charge_new_entry_slots(2);
-            self.collections.get_mut(&inst).unwrap().push_entry(key, Slot::undefined(), &mut self.side_refs);
+            self.collections.get_mut(&inst).unwrap().push_entry(
+                key,
+                Slot::undefined(),
+                &mut self.side_refs,
+            );
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -40674,8 +41391,10 @@ impl Interp {
                     // may mutate THIS, so re-check the element is still present.
                     let mut i = 0u32;
                     loop {
-                        let entry =
-                            self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
+                        let entry = self
+                            .collections
+                            .get(&inst)
+                            .and_then(|c| c.entries().get(i as usize));
                         let k = match entry {
                             Some(Some((k, _))) => *k,
                             Some(None) => {
@@ -40755,8 +41474,10 @@ impl Interp {
                 }
                 let mut i = 0u32;
                 loop {
-                    let entry =
-                        self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
+                    let entry = self
+                        .collections
+                        .get(&inst)
+                        .and_then(|c| c.entries().get(i as usize));
                     let k = match entry {
                         Some(Some((k, _))) => *k,
                         Some(None) => {
@@ -40795,8 +41516,10 @@ impl Interp {
                 if (this_len as f64) <= other_size {
                     let mut i = 0u32;
                     loop {
-                        let entry =
-                            self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
+                        let entry = self
+                            .collections
+                            .get(&inst)
+                            .and_then(|c| c.entries().get(i as usize));
                         let k = match entry {
                             Some(Some((k, _))) => *k,
                             Some(None) => {
@@ -40885,12 +41608,15 @@ impl Interp {
                     return Ok(self.collections[&inst].entries()[p].unwrap().1);
                 }
                 self.charge_new_entry_slots(3);
-                self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
+                self.collections.get_mut(&inst).unwrap().push_entry(
+                    key,
+                    value,
+                    &mut self.side_refs,
+                );
                 self.collection_table_resize(inst);
                 Ok(value)
             }
-            NativeMethod::MapGetOrInsertComputed
-            | NativeMethod::WeakMapGetOrInsertComputed => {
+            NativeMethod::MapGetOrInsertComputed | NativeMethod::WeakMapGetOrInsertComputed => {
                 let callbackfn = self
                     .stack
                     .get(base + 5)
@@ -40908,11 +41634,19 @@ impl Interp {
                 let value = self.run_callback(code, callbackfn, Slot::undefined(), &[key])?;
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().set_entry_value(p, value, &mut self.side_refs);
+                        self.collections.get_mut(&inst).unwrap().set_entry_value(
+                            p,
+                            value,
+                            &mut self.side_refs,
+                        );
                     }
                     None => {
                         self.charge_new_entry_slots(3);
-                        self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
+                        self.collections.get_mut(&inst).unwrap().push_entry(
+                            key,
+                            value,
+                            &mut self.side_refs,
+                        );
                         self.collection_table_resize(inst);
                     }
                 }
@@ -40933,12 +41667,7 @@ impl Interp {
 
     /// Read one member of an iterator result object's own `value`/`done`
     /// (through the cached ids the group-by widening force-bound).
-    fn iter_result_member(
-        &mut self,
-        code: &[u8],
-        result: Slot,
-        done: bool,
-    ) -> Result<Slot, Halt> {
+    fn iter_result_member(&mut self, code: &[u8], result: Slot, done: bool) -> Result<Slot, Halt> {
         let inst = match result.value {
             Payload::Reference(i) if result.kind == Kind::Reference => i,
             _ => return Err(self.catchable_type_error()),
@@ -40984,13 +41713,18 @@ impl Interp {
         macro_rules! record {
             ($value:expr) => {{
                 let value = $value;
-                let key = self.run_callback(code, callbackfn, Slot::undefined(), &[
-                    value,
-                    Slot::integer(index),
-                ])?;
+                let key = self.run_callback(
+                    code,
+                    callbackfn,
+                    Slot::undefined(),
+                    &[value, Slot::integer(index)],
+                )?;
                 if is_map {
                     let key = self.normalize_coll_key(key);
-                    match buckets.iter().position(|(k, _)| self.same_value_zero(k, &key)) {
+                    match buckets
+                        .iter()
+                        .position(|(k, _)| self.same_value_zero(k, &key))
+                    {
                         Some(p) => buckets[p].1.push(value),
                         None => buckets.push((key, vec![value])),
                     }
@@ -41144,7 +41878,10 @@ impl Interp {
         for (key, values) in buckets {
             let array = self.group_array_from_values(values);
             self.charge_new_entry_slots(3);
-            self.collections.get_mut(&inst).unwrap().push_entry(key, array, &mut self.side_refs);
+            self.collections
+                .get_mut(&inst)
+                .unwrap()
+                .push_entry(key, array, &mut self.side_refs);
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -41203,7 +41940,10 @@ impl Interp {
             let mut v = v;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&inst).unwrap().insert_item(i as u32, v, &mut self.side_refs);
+            self.arrays
+                .get_mut(&inst)
+                .unwrap()
+                .insert_item(i as u32, v, &mut self.side_refs);
         }
         self.arrays.get_mut(&inst).unwrap().length = n;
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -41417,8 +42157,7 @@ impl Interp {
                 let length = self.array_iterator_generic_length(code, st.iterable)?;
                 if length > u64::from(u32::MAX) {
                     if self.arguments_objects.contains(&st.iterable) {
-                        self.meter
-                            .untick_raw(ARRAY_ITERATOR_WIDE_ARGUMENTS_CREDIT);
+                        self.meter.untick_raw(ARRAY_ITERATOR_WIDE_ARGUMENTS_CREDIT);
                     }
                     u64::from(self.resident_indexed_limit(st.iterable))
                 } else {
@@ -41462,11 +42201,7 @@ impl Interp {
                     0 => match direct_element {
                         Some(value) => value,
                         None => {
-                            self.array_iterator_generic_get(
-                                code,
-                                st.iterable,
-                                u64::from(st.index),
-                            )?
+                            self.array_iterator_generic_get(code, st.iterable, u64::from(st.index))?
                         }
                     },
                     1 => Slot::integer(st.index as i32),
@@ -41474,13 +42209,11 @@ impl Interp {
                         // entries: a fresh `[index, arr[index]]` pair array.
                         let elem = match direct_element {
                             Some(value) => value,
-                            None => {
-                                self.array_iterator_generic_get(
-                                    code,
-                                    st.iterable,
-                                    u64::from(st.index),
-                                )?
-                            }
+                            None => self.array_iterator_generic_get(
+                                code,
+                                st.iterable,
+                                u64::from(st.index),
+                            )?,
                         };
                         let pair = self.new_array();
                         let a = self.arrays.get_mut(&pair).unwrap();
@@ -41686,11 +42419,7 @@ impl Interp {
 
     /// Whether `unshift` can rewrite all existing packed indices and create
     /// the appended tail without observing descriptors or prototypes.
-    fn array_unshift_fast_safe(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        argc: usize,
-    ) -> bool {
+    fn array_unshift_fast_safe(&mut self, inst: crate::value::SlotIndex, argc: usize) -> bool {
         if !self.array_length_writable(inst) {
             return false;
         }
@@ -41718,11 +42447,7 @@ impl Interp {
     /// arrays have own data properties at every source and destination index;
     /// only destination writability can make the direct item-table mutation
     /// observably differ from the ordinary object MOP.
-    fn array_copy_within_fast_safe(
-        &self,
-        inst: crate::value::SlotIndex,
-        base: usize,
-    ) -> bool {
+    fn array_copy_within_fast_safe(&self, inst: crate::value::SlotIndex, base: usize) -> bool {
         let length = self.arrays[&inst].length;
         let to = self.arg_to_index(base, 0, 0, length);
         let from = self.arg_to_index(base, 1, 0, length);
@@ -41760,22 +42485,25 @@ impl Interp {
         if self.arguments_objects.contains(&inst) {
             return false;
         }
-        self.arrays[&inst].items().values().all(|item| match item.kind {
-            Kind::Undefined
-            | Kind::Null
-            | Kind::Boolean
-            | Kind::Integer
-            | Kind::Number
-            | Kind::BigInt => true,
-            Kind::String => match item.value {
-                Payload::String(off) => !self
-                    .str_units(off)
-                    .iter()
-                    .any(|unit| (0xD800..=0xDFFF).contains(unit)),
+        self.arrays[&inst]
+            .items()
+            .values()
+            .all(|item| match item.kind {
+                Kind::Undefined
+                | Kind::Null
+                | Kind::Boolean
+                | Kind::Integer
+                | Kind::Number
+                | Kind::BigInt => true,
+                Kind::String => match item.value {
+                    Payload::String(off) => !self
+                        .str_units(off)
+                        .iter()
+                        .any(|unit| (0xD800..=0xDFFF).contains(unit)),
+                    _ => false,
+                },
                 _ => false,
-            },
-            _ => false,
-        })
+            })
     }
 
     /// Whether `Array.prototype.toString` can assume its `join` lookup resolves
@@ -41806,9 +42534,7 @@ impl Interp {
             }
             if let Some(property) = self.find_property(current, id) {
                 return match self.slots.get(property).value {
-                    Payload::Reference(function) => {
-                        self.method_of(function) == Some(expected)
-                    }
+                    Payload::Reference(function) => self.method_of(function) == Some(expected),
                     _ => false,
                 };
             }
@@ -41838,17 +42564,14 @@ impl Interp {
     /// observing species, descriptors, or inherited writes. Argument coercion
     /// is checked by the caller; this conservatively validates every possible
     /// new tail index implied by the insertion count.
-    fn array_splice_fast_safe(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        argc: usize,
-    ) -> bool {
+    fn array_splice_fast_safe(&mut self, inst: crate::value::SlotIndex, argc: usize) -> bool {
         if self.instance_prototype(inst) != self.array_proto
             || !self.array_allocating_uses_default_species(inst)
             || !self.array_length_writable(inst)
-            || self.arrays[&inst].items().values().any(|item| {
-                item.flag & (XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG) != 0
-            })
+            || self.arrays[&inst]
+                .items()
+                .values()
+                .any(|item| item.flag & (XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG) != 0)
         {
             return false;
         }
@@ -42801,18 +43524,13 @@ impl Interp {
                 integer.min(length as f64) as u64
             }
         };
-        let target = arguments
-            .first()
-            .copied()
-            .unwrap_or_else(Slot::undefined);
+        let target = arguments.first().copied().unwrap_or_else(Slot::undefined);
         let to = relative_index(self.array_to_integer_or_infinity(code, target)?);
-        let start = arguments
-            .get(1)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
+        let start = arguments.get(1).copied().unwrap_or_else(Slot::undefined);
         let from = relative_index(self.array_to_integer_or_infinity(code, start)?);
         let final_index = match arguments.get(2).copied() {
-            None | Some(Slot {
+            None
+            | Some(Slot {
                 kind: Kind::Undefined,
                 ..
             }) => length,
@@ -42991,10 +43709,7 @@ impl Interp {
     /// `IsArray(O)`, including transparent Proxy recursion and the revoked
     /// Proxy `TypeError`. Arguments objects share compact indexed storage with
     /// Arrays in IronHorse, but are not Arrays for `ArraySpeciesCreate`.
-    fn array_generic_is_array(
-        &mut self,
-        mut o: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
+    fn array_generic_is_array(&mut self, mut o: crate::value::SlotIndex) -> Result<bool, Halt> {
         loop {
             if self.proxies.contains_key(&o) {
                 let (target, _) = self.proxy_target_handler(o)?;
@@ -43028,9 +43743,7 @@ impl Interp {
                     unreachable!()
                 };
                 let species = self.mop_get(code, c, species_id, constructor)?;
-                constructor = if species.kind == Kind::Null
-                    || species.kind == Kind::Undefined
-                {
+                constructor = if species.kind == Kind::Null || species.kind == Kind::Undefined {
                     Slot::undefined()
                 } else {
                     species
@@ -43105,8 +43818,7 @@ impl Interp {
             let can_create_compact = compact.is_none()
                 && ordinary.is_none()
                 && self.instance_extensible(target)
-                && (index < self.arrays[&target].length
-                    || self.array_length_writable(target));
+                && (index < self.arrays[&target].length || self.array_length_writable(target));
             if compact_is_default || can_create_compact {
                 self.array_set_dense(target, index, value);
                 return Ok(());
@@ -43162,8 +43874,7 @@ impl Interp {
             let depth = if argc == 0 || argument.kind == Kind::Undefined {
                 1.0
             } else {
-                self.array_to_integer_or_infinity(code, argument)?
-                    .max(0.0)
+                self.array_to_integer_or_infinity(code, argument)?.max(0.0)
             };
             (depth, None)
         };
@@ -43176,10 +43887,11 @@ impl Interp {
         } else {
             0
         };
-        self.meter.tick_raw(
-            ARRAY_FLAT_FRAME_METERING - ARRAY_CREATE_METERING - mapper_overlap,
-        );
-        self.array_generic_flatten_into(code, target, source, source_len, 0, depth, mapper, object)?;
+        self.meter
+            .tick_raw(ARRAY_FLAT_FRAME_METERING - ARRAY_CREATE_METERING - mapper_overlap);
+        self.array_generic_flatten_into(
+            code, target, source, source_len, 0, depth, mapper, object,
+        )?;
         Ok(Slot::of(Kind::Reference, Payload::Reference(target)))
     }
 
@@ -43235,24 +43947,21 @@ impl Interp {
         let mut source_index = 0u64;
         let mut linear_steps = 0u64;
         while source_index < source_len {
-            let present = match self.array_generic_next_present_index(
-                source,
-                source_index,
-                source_len,
-            ) {
-                Some(Some(next)) => {
-                    source_index = next;
-                    true
-                }
-                Some(None) => break,
-                None => {
-                    if linear_steps >= GENERIC_FLAT_LINEAR_CAP {
-                        return Err(Halt::Unsupported("flat:oversized-array-like"));
+            let present =
+                match self.array_generic_next_present_index(source, source_index, source_len) {
+                    Some(Some(next)) => {
+                        source_index = next;
+                        true
                     }
-                    linear_steps += 1;
-                    self.array_generic_has(code, source, source_index)?
-                }
-            };
+                    Some(None) => break,
+                    None => {
+                        if linear_steps >= GENERIC_FLAT_LINEAR_CAP {
+                            return Err(Halt::Unsupported("flat:oversized-array-like"));
+                        }
+                        linear_steps += 1;
+                        self.array_generic_has(code, source, source_index)?
+                    }
+                };
             if !present {
                 source_index += 1;
                 continue;
@@ -43261,8 +43970,7 @@ impl Interp {
             let mut element = self.array_generic_get(code, source, source_index)?;
             if let Some((callback, this_arg)) = mapper {
                 self.meter.tick_raw(
-                    ARRAY_FLATMAP_CALLBACK_METERING
-                        - ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP,
+                    ARRAY_FLATMAP_CALLBACK_METERING - ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP,
                 );
                 let callback_args = [
                     element,
@@ -44399,11 +45107,7 @@ impl Interp {
         Ok(Self::typed_array_relative_index(n, length))
     }
 
-    fn typed_array_accessor(
-        &mut self,
-        method: NativeMethod,
-        this: Slot,
-    ) -> Result<Slot, Halt> {
+    fn typed_array_accessor(&mut self, method: NativeMethod, this: Slot) -> Result<Slot, Halt> {
         let ta = match this.value {
             Payload::Reference(r) if this.kind == Kind::Reference => {
                 self.typed_arrays.get(&r).copied()
@@ -44412,9 +45116,9 @@ impl Interp {
         };
         if method == NativeMethod::TypedArrayToStringTagGetter {
             return Ok(match ta {
-                Some(ta) => self.new_string_metered(
-                    TYPED_ARRAY_TYPES[ta.kind as usize].name.as_bytes(),
-                ),
+                Some(ta) => {
+                    self.new_string_metered(TYPED_ARRAY_TYPES[ta.kind as usize].name.as_bytes())
+                }
                 None => Slot::undefined(),
             });
         }
@@ -44565,12 +45269,8 @@ impl Interp {
                 let end = middle.saturating_add(width).min(values.len());
                 let (mut left, mut right, mut out) = (start, middle, start);
                 while left < middle && right < end {
-                    let ordering = self.array_compare_elements(
-                        code,
-                        comparator,
-                        values[left],
-                        values[right],
-                    )?;
+                    let ordering =
+                        self.array_compare_elements(code, comparator, values[left], values[right])?;
                     if ordering == std::cmp::Ordering::Greater {
                         scratch[out] = values[right];
                         right += 1;
@@ -44703,12 +45403,8 @@ impl Interp {
         if source_reads > ARRAY_COPY_CAP {
             return Err(Halt::Unsupported(match method {
                 NativeMethod::ArrayWith => "Array.prototype.with:oversized-array-like",
-                NativeMethod::ArrayToReversed => {
-                    "Array.prototype.toReversed:oversized-array-like"
-                }
-                NativeMethod::ArrayToSpliced => {
-                    "Array.prototype.toSpliced:oversized-array-like"
-                }
+                NativeMethod::ArrayToReversed => "Array.prototype.toReversed:oversized-array-like",
+                NativeMethod::ArrayToSpliced => "Array.prototype.toSpliced:oversized-array-like",
                 _ => unreachable!(),
             }));
         }
@@ -45107,12 +45803,8 @@ impl Interp {
                 let mut value =
                     self.arraylike_index(code, array_like_inst, u64::from(index), array_like)?;
                 if mapping {
-                    value = self.call_any(
-                        code,
-                        mapfn,
-                        this_arg,
-                        &[value, Slot::number(index as f64)],
-                    )?;
+                    value =
+                        self.call_any(code, mapfn, this_arg, &[value, Slot::number(index as f64)])?;
                 }
                 self.typed_array_element_set(code, ta, index, value)?;
             }
@@ -45191,12 +45883,7 @@ impl Interp {
             Slot::of(Kind::Reference, Payload::Reference(default_constructor));
         let exemplar_slot = Slot::of(Kind::Reference, Payload::Reference(exemplar));
         let constructor_id = self.intern_key("constructor");
-        let mut constructor = self.mop_get(
-            code,
-            exemplar,
-            constructor_id,
-            exemplar_slot,
-        )?;
+        let mut constructor = self.mop_get(code, exemplar, constructor_id, exemplar_slot)?;
         if constructor.kind == Kind::Undefined {
             constructor = default_constructor;
         } else {
@@ -45247,8 +45934,10 @@ impl Interp {
     ) -> Result<Slot, Halt> {
         let exemplar = match this.value {
             Payload::Reference(reference)
-                if this.kind == Kind::Reference
-                    && self.typed_arrays.contains_key(&reference) => reference,
+                if this.kind == Kind::Reference && self.typed_arrays.contains_key(&reference) =>
+            {
+                reference
+            }
             _ => return Err(self.catchable_type_error()),
         };
         // `subarray` intentionally performs its begin/end coercions even for a
@@ -45312,13 +46001,8 @@ impl Interp {
         }
 
         let args = [Slot::number(count as f64)];
-        let (result, target) = self.typed_array_species_create(
-            code,
-            exemplar,
-            source,
-            &args,
-            Some(count),
-        )?;
+        let (result, target) =
+            self.typed_array_species_create(code, exemplar, source, &args, Some(count))?;
         if count == 0 {
             return Ok(result);
         }
@@ -45420,13 +46104,8 @@ impl Interp {
         }
         let length = kept.len() as u32;
         let args = [Slot::number(length as f64)];
-        let (result, target) = self.typed_array_species_create(
-            code,
-            exemplar,
-            source,
-            &args,
-            Some(length),
-        )?;
+        let (result, target) =
+            self.typed_array_species_create(code, exemplar, source, &args, Some(length))?;
         for (index, value) in kept.into_iter().enumerate() {
             self.ta_indexed_element_set(code, target, index as f64, value)?;
         }
@@ -45473,12 +46152,8 @@ impl Interp {
             while destination > 0 {
                 let previous = values[destination - 1];
                 let ordering = if custom {
-                    let result = self.run_callback(
-                        code,
-                        compare,
-                        Slot::undefined(),
-                        &[value, previous],
-                    )?;
+                    let result =
+                        self.run_callback(code, compare, Slot::undefined(), &[value, previous])?;
                     let number = self.to_number_value(code, result)?;
                     if number.kind == Kind::BigInt {
                         return Err(self.catchable_type_error());
@@ -45520,11 +46195,10 @@ impl Interp {
                     } else if right.is_nan() {
                         std::cmp::Ordering::Less
                     } else if left == 0.0 && right == 0.0 {
-                        right
-                            .is_sign_negative()
-                            .cmp(&left.is_sign_negative())
+                        right.is_sign_negative().cmp(&left.is_sign_negative())
                     } else {
-                        left.partial_cmp(&right).unwrap_or(std::cmp::Ordering::Equal)
+                        left.partial_cmp(&right)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     }
                 };
                 if ordering != std::cmp::Ordering::Less {
@@ -45754,9 +46428,7 @@ impl Interp {
                 if self.detached_buffers.contains(&ta.buffer) {
                     return Err(self.catchable_type_error());
                 }
-                let count = end
-                    .saturating_sub(from)
-                    .min(ta.length.saturating_sub(to));
+                let count = end.saturating_sub(from).min(ta.length.saturating_sub(to));
                 if count > 0 {
                     let buffer = self.array_buffers[&ta.buffer];
                     let src = ta.offset as usize + from as usize * size;
@@ -45849,8 +46521,7 @@ impl Interp {
                             let out = self
                                 .chunks
                                 .slice_mut(target_buffer.data, target_start + byte_count);
-                            out[target_start..target_start + byte_count]
-                                .copy_from_slice(&snapshot);
+                            out[target_start..target_start + byte_count].copy_from_slice(&snapshot);
                         } else {
                             // Different element types convert source values. Read
                             // the complete list first so overlapping views behave
@@ -45865,12 +46536,7 @@ impl Interp {
                                 values.push(value);
                             }
                             for (i, value) in values.into_iter().enumerate() {
-                                self.typed_array_element_set(
-                                    code,
-                                    ta,
-                                    offset + i as u32,
-                                    value,
-                                )?;
+                                self.typed_array_element_set(code, ta, offset + i as u32, value)?;
                             }
                         }
                         return Ok(Slot::undefined());
@@ -45984,10 +46650,9 @@ impl Interp {
         let number = match primitive.kind {
             Kind::Integer | Kind::Number => primitive,
             Kind::String => match primitive.value {
-                Payload::String(off) => Slot::number(string_to_number(
-                    self.str_text(off).as_bytes(),
-                    true,
-                )),
+                Payload::String(off) => {
+                    Slot::number(string_to_number(self.str_text(off).as_bytes(), true))
+                }
                 _ => unreachable!(),
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => Slot::number(to_number(&primitive)),
@@ -46148,8 +46813,8 @@ impl Interp {
         if let Some(index) = self.ta_valid_index(ta, n) {
             let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
             let base = ta.offset as usize + index as usize * size;
-            let le =
-                encode_element_le(ta.kind, num).ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
+            let le = encode_element_le(ta.kind, num)
+                .ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
             let buf = self.array_buffers[&ta.buffer];
             let out = self.chunks.slice_mut(buf.data, base + size);
             out[base..base + size].copy_from_slice(&le);
@@ -46164,7 +46829,11 @@ impl Interp {
     /// true }` data descriptor holding the element — and `None` (undefined)
     /// for an invalid canonical numeric index. Only meaningful for a key that
     /// is a canonical numeric index.
-    fn ta_index_own_descriptor(&mut self, ta: TypedArrayData, n: f64) -> Option<OrdinaryDescriptor> {
+    fn ta_index_own_descriptor(
+        &mut self,
+        ta: TypedArrayData,
+        n: f64,
+    ) -> Option<OrdinaryDescriptor> {
         let index = self.ta_valid_index(ta, n)?;
         let value = if ta.kind <= 1 {
             self.typed_array_element_get_bigint(ta, index)
@@ -46296,10 +46965,26 @@ impl Interp {
     /// compareExchange, 3 exchange, 4 load, 5 or, 6 store, 7 sub, 8 xor, 9
     /// isLockFree, ≥10 wait/notify/waitAsync.
     fn atomics_dispatch(&mut self, op: u8, base: usize) -> Result<Slot, Halt> {
-        let a0 = self.stack.get(base + 4).copied().unwrap_or_else(Slot::undefined);
-        let a1 = self.stack.get(base + 5).copied().unwrap_or_else(Slot::undefined);
-        let a2 = self.stack.get(base + 6).copied().unwrap_or_else(Slot::undefined);
-        let a3 = self.stack.get(base + 7).copied().unwrap_or_else(Slot::undefined);
+        let a0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let a1 = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let a2 = self
+            .stack
+            .get(base + 6)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let a3 = self
+            .stack
+            .get(base + 7)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
 
         // `Atomics.isLockFree(size)`: a pure numeric query. XS
         // (`fx_Atomics_isLockFree`) reports lock-free only for the 4-byte
@@ -46551,10 +47236,9 @@ impl Interp {
         let number = match primitive.kind {
             Kind::Integer | Kind::Number => primitive,
             Kind::String => match primitive.value {
-                Payload::String(off) => Slot::number(string_to_number(
-                    self.str_text(off).as_bytes(),
-                    true,
-                )),
+                Payload::String(off) => {
+                    Slot::number(string_to_number(self.str_text(off).as_bytes(), true))
+                }
                 _ => unreachable!(),
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => Slot::number(to_number(&primitive)),
@@ -46617,9 +47301,7 @@ impl Interp {
     ) -> Result<[u8; 8], Halt> {
         let primitive = self.to_primitive(code, value, false)?;
         let u = match primitive.value {
-            Payload::BigInt(_) | Payload::Boolean(_) => {
-                self.slot_to_bigint_u64(primitive).unwrap()
-            }
+            Payload::BigInt(_) | Payload::Boolean(_) => self.slot_to_bigint_u64(primitive).unwrap(),
             Payload::String(off) => parse_bigint_string_u64(&self.str_text(off))
                 .ok_or_else(|| self.catchable_syntax_error())?,
             _ => return Err(self.catchable_type_error()),
@@ -47258,11 +47940,7 @@ impl Interp {
         id: u16,
         cell: crate::value::SlotIndex,
     ) {
-        self.append_environment_capture(
-            env,
-            id,
-            Slot::of(Kind::Closure, Payload::Reference(cell)),
-        );
+        self.append_environment_capture(env, id, Slot::of(Kind::Closure, Payload::Reference(cell)));
     }
 
     /// `XS_CODE_BEGIN_SLOPPY`'s `this` binding: an `undefined`/`null` `this`
@@ -47376,7 +48054,11 @@ impl Interp {
         out: &mut Vec<Slot>,
     ) {
         for index in 0..len {
-            let item = match self.arrays.get(&src).and_then(|a| a.items().get(&index).copied()) {
+            let item = match self
+                .arrays
+                .get(&src)
+                .and_then(|a| a.items().get(&index).copied())
+            {
                 Some(it) => it,
                 None => continue, // a hole is skipped (fxHasIndex false)
             };
@@ -47504,9 +48186,7 @@ impl Interp {
     fn intern_symbol_key(&mut self, desc: crate::value::SlotIndex) -> u16 {
         let (id, newly_interned) = if let Some(&id) = self.symbol_key_ids.get(&desc) {
             (id, false)
-        } else if (self.next_symbol_key_id as usize)
-            <= self.symbol_names.len().saturating_add(1)
-        {
+        } else if (self.next_symbol_key_id as usize) <= self.symbol_names.len().saturating_add(1) {
             // Same poison latch as `append_name_key`: the placeholder id
             // aliases, but the loop-top halt fires before the next
             // instruction, so it never leaks to a completed crank.
@@ -47548,11 +48228,7 @@ impl Interp {
 
     /// Materialize symbol-keyed boot properties whose function identity was
     /// minted below `boot_slot_count` but whose property id must remain lazy.
-    fn install_well_known_symbol_property(
-        &mut self,
-        descriptor: crate::value::SlotIndex,
-        id: u16,
-    ) {
+    fn install_well_known_symbol_property(&mut self, descriptor: crate::value::SlotIndex, id: u16) {
         let well_known_name = self.well_known_symbols.iter().find_map(|(name, value)| {
             (value.value == Payload::Reference(descriptor)).then_some(*name)
         });
@@ -47565,10 +48241,13 @@ impl Interp {
         if well_known_name == Some("unscopables") {
             if self.array_proto.is_null()
                 || self.slots.get(self.array_proto).flag & XS_DONT_PATCH_FLAG != 0
-                || self.find_property(self.array_proto, id).is_some() {
+                || self.find_property(self.array_proto, id).is_some()
+            {
                 return;
             }
-            let list = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+            let list = self
+                .slots
+                .alloc(Slot::instance(crate::value::SlotIndex::NULL));
             for name in ARRAY_UNSCOPABLES {
                 let key = self.intern_key_unmetered(name);
                 // `CreateDataPropertyOrThrow`: writable, enumerable and
@@ -47640,7 +48319,8 @@ impl Interp {
         };
         for (owner, method, label, flags) in installs {
             if self.find_property(owner, id).is_some()
-                || self.slots.get(owner).flag & XS_DONT_PATCH_FLAG != 0 {
+                || self.slots.get(owner).flag & XS_DONT_PATCH_FLAG != 0
+            {
                 continue;
             }
             assert!(!method.is_null(), "{label}");
@@ -48076,8 +48756,12 @@ impl Interp {
         let property_key = self.to_property_key(code, key)?;
         if property_key.kind == Kind::Symbol {
             return match property_key.value {
-                Payload::Reference(descriptor) => Ok(ReadKey::Id(self.intern_symbol_key(descriptor))),
-                _ => Err(Halt::EngineInvariant("to_read_key:symbol-without-descriptor")),
+                Payload::Reference(descriptor) => {
+                    Ok(ReadKey::Id(self.intern_symbol_key(descriptor)))
+                }
+                _ => Err(Halt::EngineInvariant(
+                    "to_read_key:symbol-without-descriptor",
+                )),
             };
         }
         let name = match property_key.value {
@@ -48653,9 +49337,7 @@ impl Interp {
                 // Look up an existing name only: interning every literal index
                 // charged a name-slot allocation and shifted exact metering.
                 let key_id = self.symbol_ids.get(&index.to_string()).copied();
-                if let Some(key_id) =
-                    key_id.filter(|id| self.find_property(inst, *id).is_some())
-                {
+                if let Some(key_id) = key_id.filter(|id| self.find_property(inst, *id).is_some()) {
                     if define {
                         let descriptor = OrdinaryDescriptor {
                             value: Some(value),
@@ -48677,8 +49359,7 @@ impl Interp {
                         .items()
                         .get(&index)
                         .is_some_and(|item| item.flag & XS_DONT_SET_FLAG != 0)
-                        || index >= self.arrays[&inst].length
-                            && !self.array_length_writable(inst)
+                        || index >= self.arrays[&inst].length && !self.array_length_writable(inst)
                         || !self.instance_extensible(inst)
                             && !self.arrays[&inst].items().contains_key(&index))
                 {
@@ -49012,9 +49693,7 @@ impl Interp {
             let new_len = if !uint32_number.is_finite() || uint32_number == 0.0 {
                 0
             } else {
-                uint32_number
-                    .trunc()
-                    .rem_euclid(4_294_967_296.0) as u32
+                uint32_number.trunc().rem_euclid(4_294_967_296.0) as u32
             };
             let number = to_number(&self.to_number_value(code, value)?);
             if !number.is_finite()
@@ -49156,7 +49835,10 @@ impl Interp {
                             &mut self.side_refs,
                         );
                     } else {
-                        self.arrays.get_mut(&inst).unwrap().set_item_flag(index, flag);
+                        self.arrays
+                            .get_mut(&inst)
+                            .unwrap()
+                            .set_item_flag(index, flag);
                     }
                     return true;
                 }
@@ -49221,7 +49903,10 @@ impl Interp {
                     // Attributes only: the value and its reference topology
                     // are untouched, so stamp the flag where it lies.
                     None => {
-                        self.arrays.get_mut(&inst).unwrap().set_item_flag(index, flag);
+                        self.arrays
+                            .get_mut(&inst)
+                            .unwrap()
+                            .set_item_flag(index, flag);
                     }
                 }
                 return true;
@@ -49696,12 +50381,7 @@ impl Interp {
         }
         if let Some(desc) = self.function_meta_own_descriptor(inst, id) {
             let value = desc.value.unwrap_or_else(Slot::undefined);
-            self.set_own_unmetered_with_flag(
-                inst,
-                id,
-                value,
-                XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG,
-            );
+            self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG);
         }
     }
 
@@ -49896,12 +50576,7 @@ impl Interp {
     /// deliberately rejects native callees (`callback:non-user-function`). The
     /// native path builds the `[THIS, FUNCTION, RESULT, FRAME]` frame the call
     /// opcode would, dispatches with zero arguments, and pops the pushed result.
-    fn invoke_getter(
-        &mut self,
-        code: &[u8],
-        getter: Slot,
-        receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    fn invoke_getter(&mut self, code: &[u8], getter: Slot, receiver: Slot) -> Result<Slot, Halt> {
         if let Payload::Reference(f) = getter.value {
             // A `.call`/`.apply` or promise-resolving function used as an
             // accessor takes the abstract dispatcher, exactly as it does at
@@ -50182,7 +50857,9 @@ impl Interp {
         };
         // A proxy instance has no identity prototype of its own (null proto);
         // its `[[Get]]`/`[[GetPrototypeOf]]` come from the traps/target.
-        let inst = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        let inst = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
         self.proxies.insert(
             inst,
             ProxyData {
@@ -50328,8 +51005,7 @@ impl Interp {
                 let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
                 let forwarded: Vec<Slot> = args.get(1..).unwrap_or_default().to_vec();
                 self.meter.tick_raw(
-                    CALL_TRAMPOLINE_METERING
-                        + forwarded.len() as u64 * CALL_TRAMPOLINE_PER_ARG,
+                    CALL_TRAMPOLINE_METERING + forwarded.len() as u64 * CALL_TRAMPOLINE_PER_ARG,
                 );
                 func = this;
                 this = this_arg;
@@ -50687,13 +51363,12 @@ impl Interp {
                 _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
             };
             let next_id = self.intern_key("next");
-            next_method = match self
-                .array_from_try(|this| this.mop_get(code, inst, next_id, iterator))?
-            {
-                Ok(method) if self.is_callable_value(method) => method,
-                Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
-                Err(error) => return Ok(Err(error)),
-            };
+            next_method =
+                match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
+                    Ok(method) if self.is_callable_value(method) => method,
+                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                    Err(error) => return Ok(Err(error)),
+                };
             Some(iterator)
         } else {
             None
@@ -50709,8 +51384,8 @@ impl Interp {
                 _ => unreachable!(),
             };
             let _ = iter_inst;
-            let step = self
-                .array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?;
+            let step =
+                self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?;
             // IteratorStepValue failures are returned directly. The iterator
             // has not yielded an entry yet, so AddEntriesFromIterable does not
             // apply IteratorClose to these abrupt completions.
@@ -50802,7 +51477,9 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
     ) -> Result<Slot, Halt> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_get_prototype_inner(code, inst))
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_get_prototype_inner(code, inst)
+        })
     }
 
     fn mop_get_prototype_inner(
@@ -50898,7 +51575,9 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
     ) -> Result<bool, Halt> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_is_extensible_inner(code, inst))
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.mop_is_extensible_inner(code, inst)
+        })
     }
 
     fn mop_is_extensible_inner(
@@ -51107,9 +51786,7 @@ impl Interp {
                         let index = name.as_deref().and_then(string_to_index);
                         self.string_exotic_has_own(len, name.as_deref(), index)
                     }
-                    ReadKey::Index(index) => {
-                        self.string_exotic_has_own(len, None, Some(index))
-                    }
+                    ReadKey::Index(index) => self.string_exotic_has_own(len, None, Some(index)),
                 }
             }
             // Every other primitive (Number/Boolean/Symbol/BigInt) boxes to a
@@ -51124,12 +51801,7 @@ impl Interp {
     /// read live before a throwing `Set` on the target. Nullish sources are
     /// skipped; every other primitive is boxed through the same ToObject path
     /// used by generic Array methods.
-    fn object_assign(
-        &mut self,
-        code: &[u8],
-        target: Slot,
-        sources: &[Slot],
-    ) -> Result<Slot, Halt> {
+    fn object_assign(&mut self, code: &[u8], target: Slot, sources: &[Slot]) -> Result<Slot, Halt> {
         let to = self.array_to_object(target)?;
         let Payload::Reference(target_inst) = to.value else {
             unreachable!("ToObject target")
@@ -51219,8 +51891,9 @@ impl Interp {
         // live in the slot chain.
         if let Some(a) = self.arrays.get(&o) {
             if name.as_deref() == Some("length") {
-                return Ok(!self.arguments_objects.contains(&o)
-                    || self.find_property(o, id).is_some());
+                return Ok(
+                    !self.arguments_objects.contains(&o) || self.find_property(o, id).is_some()
+                );
             }
             if let Some(idx) = index {
                 if a.items().contains_key(&idx) {
@@ -51321,7 +51994,12 @@ impl Interp {
     }
 
     /// `O.[[HasProperty]](P)`.
-    fn mop_has(&mut self, code: &[u8], inst: crate::value::SlotIndex, id: u16) -> Result<bool, Halt> {
+    fn mop_has(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<bool, Halt> {
         Ok(self.mop_has_with_recursions(code, inst, id)?.0)
     }
 
@@ -51401,7 +52079,16 @@ impl Interp {
                 true,
             );
         }
-        self.mop_get_with_proxy_metering(code, inst, ReadKey::Id(id), receiver, 0, false, false, false)
+        self.mop_get_with_proxy_metering(
+            code,
+            inst,
+            ReadKey::Id(id),
+            receiver,
+            0,
+            false,
+            false,
+            false,
+        )
     }
 
     /// `O.[[Get]](P, Receiver)` with a caller-owned residual for each Proxy
@@ -51494,9 +52181,7 @@ impl Interp {
         // wrapper units) and then the prototype chain.
         let id = match key {
             ReadKey::Id(id) => id,
-            ReadKey::Index(index) => {
-                return self.uninterned_index_get(code, inst, index, receiver)
-            }
+            ReadKey::Index(index) => return self.uninterned_index_get(code, inst, index, receiver),
         };
         // An exotic-array / function target's `length` / integer-index / `name`
         // / `prototype` own values live in side tables, not the slot chain (they
@@ -51968,19 +52653,16 @@ impl Interp {
         let result = match self.invoke_value(code, trap, handler_slot, &[target_slot]) {
             Ok(result) => result,
             Err(error) => {
-                self.meter
-                    .tick_raw(PROXY_GET_PROTOTYPE_THROW_METERING);
+                self.meter.tick_raw(PROXY_GET_PROTOTYPE_THROW_METERING);
                 return Err(error);
             }
         };
         if result.kind != Kind::Reference && result.kind != Kind::Null {
-            self.meter
-                .tick_raw(PROXY_GET_PROTOTYPE_PRIMITIVE_METERING);
+            self.meter.tick_raw(PROXY_GET_PROTOTYPE_PRIMITIVE_METERING);
             return Err(self.catchable_type_error());
         }
         if self.mop_is_extensible(code, target)? {
-            self.meter
-                .tick_raw(PROXY_GET_PROTOTYPE_TRAP_METERING);
+            self.meter.tick_raw(PROXY_GET_PROTOTYPE_TRAP_METERING);
             return Ok(result);
         }
         let target_proto = self.mop_get_prototype(code, target)?;
@@ -52132,9 +52814,7 @@ impl Interp {
         if result_desc.configurable == Some(false) {
             match &target_desc {
                 None => return Err(self.catchable_type_error()),
-                Some(d) if d.configurable != Some(false) => {
-                    return Err(self.catchable_type_error())
-                }
+                Some(d) if d.configurable != Some(false) => return Err(self.catchable_type_error()),
                 Some(d) => {
                     // A non-configurable non-writable target data property may
                     // not be reported writable.
@@ -52168,8 +52848,7 @@ impl Interp {
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.property_key_slot(id)?;
         let desc_obj = self.descriptor_object(desc);
-        let result =
-            self.invoke_value(code, trap, handler_slot, &[target_slot, key, desc_obj])?;
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key, desc_obj])?;
         if !self.truthy(&result) {
             return Ok(false);
         }
@@ -52239,7 +52918,16 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        self.proxy_get_with_metering(code, proxy, ReadKey::Id(id), receiver, 0, false, false, false)
+        self.proxy_get_with_metering(
+            code,
+            proxy,
+            ReadKey::Id(id),
+            receiver,
+            0,
+            false,
+            false,
+            false,
+        )
     }
 
     fn proxy_get_with_metering(
@@ -52258,8 +52946,7 @@ impl Interp {
             Some(t) => t,
             None => {
                 if proxy_trap_metering != 0 {
-                    self.meter
-                        .tick_raw(ARRAY_ITERATOR_PROXY_FORWARD_METERING);
+                    self.meter.tick_raw(ARRAY_ITERATOR_PROXY_FORWARD_METERING);
                 }
                 return self.mop_get_with_proxy_metering(
                     code,
@@ -52270,7 +52957,7 @@ impl Interp {
                     meter_terminal_wrapper,
                     meter_forwarded_target || proxy_trap_metering != 0,
                     after_active_trap,
-                )
+                );
             }
         };
         self.proxy_get_trapped(
@@ -52331,7 +53018,8 @@ impl Interp {
                 });
             }
         }
-        let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver]);
+        let trap_result =
+            self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver]);
         self.array_iterator_proxy_get_context = saved_context;
         let trap_result = trap_result?;
         // Ask the target by INDEX when the table still has no name for it: an
@@ -52377,8 +53065,12 @@ impl Interp {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.property_key_slot(id)?;
-        let result =
-            self.invoke_value(code, trap, handler_slot, &[target_slot, key, value, receiver])?;
+        let result = self.invoke_value(
+            code,
+            trap,
+            handler_slot,
+            &[target_slot, key, value, receiver],
+        )?;
         if !self.truthy(&result) {
             return Ok(false);
         }
@@ -52502,7 +53194,11 @@ impl Interp {
         // both sides HERE, at the point of comparison — after the last guest
         // code that could have changed the answer, and before the first
         // equality test that depends on it.
-        for key in seen.iter_mut().chain(&mut target_nonconfigurable).chain(&mut target_configurable) {
+        for key in seen
+            .iter_mut()
+            .chain(&mut target_nonconfigurable)
+            .chain(&mut target_configurable)
+        {
             *key = self.refresh_read_key(*key);
         }
         let mut unchecked = seen.clone();
@@ -52619,8 +53315,12 @@ impl Interp {
         };
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let arg_array = self.array_from_slots(args);
-        let result =
-            self.invoke_value(code, trap, handler_slot, &[target_slot, arg_array, new_target])?;
+        let result = self.invoke_value(
+            code,
+            trap,
+            handler_slot,
+            &[target_slot, arg_array, new_target],
+        )?;
         if result.kind != Kind::Reference {
             return Err(self.catchable_type_error());
         }
@@ -52676,19 +53376,21 @@ impl Interp {
             }
             NativeMethod::ObjectGetOwnPropertyNames => {
                 let keys = self.mop_own_keys(code, proxy)?;
-                let strings: Vec<Slot> =
-                    keys.into_iter().filter(|k| k.kind == Kind::String).collect();
+                let strings: Vec<Slot> = keys
+                    .into_iter()
+                    .filter(|k| k.kind == Kind::String)
+                    .collect();
                 Ok(self.array_from_slots(&strings))
             }
             NativeMethod::ObjectGetOwnPropertySymbols => {
                 let keys = self.mop_own_keys(code, proxy)?;
-                let symbols: Vec<Slot> =
-                    keys.into_iter().filter(|k| k.kind == Kind::Symbol).collect();
+                let symbols: Vec<Slot> = keys
+                    .into_iter()
+                    .filter(|k| k.kind == Kind::Symbol)
+                    .collect();
                 Ok(self.array_from_slots(&symbols))
             }
-            NativeMethod::ObjectKeys
-            | NativeMethod::ObjectValues
-            | NativeMethod::ObjectEntries => {
+            NativeMethod::ObjectKeys | NativeMethod::ObjectValues | NativeMethod::ObjectEntries => {
                 // EnumerableOwnPropertyNames: string keys whose own descriptor
                 // is enumerable; then keys / values / [key,value] entries.
                 let keys = self.mop_own_keys(code, proxy)?;
@@ -52929,7 +53631,9 @@ impl Interp {
                 // A `Kind::Symbol` slot always carries its descriptor
                 // reference; anything else is a port invariant break, not
                 // guest behavior.
-                _ => Err(Halt::EngineInvariant("to_property_id:symbol-without-descriptor")),
+                _ => Err(Halt::EngineInvariant(
+                    "to_property_id:symbol-without-descriptor",
+                )),
             };
         }
         let name = match property_key.value {
@@ -53094,7 +53798,11 @@ impl Interp {
         }
         let deleted_index_limit = self
             .is_ordinary_object(inst)
-            .then(|| self.string_key_name(id).as_deref().and_then(string_to_index))
+            .then(|| {
+                self.string_key_name(id)
+                    .as_deref()
+                    .and_then(string_to_index)
+            })
             .flatten()
             .map(|index| index.saturating_add(1));
         let mut prev = inst;
@@ -53719,9 +54427,7 @@ impl Interp {
                 return Err(self.catchable_type_error());
             }
             let result = match op {
-                BitOp::And | BitOp::Or | BitOp::Xor => {
-                    self.bigint_bitwise(op, a_off, b_off)
-                }
+                BitOp::And | BitOp::Or | BitOp::Xor => self.bigint_bitwise(op, a_off, b_off),
                 BitOp::Shl | BitOp::Sar => self.bigint_shift(op, a_off, b_off)?,
                 BitOp::Shr => unreachable!(),
             };
@@ -54473,8 +55179,8 @@ impl Interp {
                     Payload::String(off) => self.str_text(off),
                     _ => return Err(self.catchable_syntax_error()),
                 };
-                let (negative, magnitude) = parse_bigint_string(&text)
-                    .ok_or_else(|| self.catchable_syntax_error())?;
+                let (negative, magnitude) =
+                    parse_bigint_string(&text).ok_or_else(|| self.catchable_syntax_error())?;
                 Ok(self.make_bigint(negative, magnitude))
             }
             _ => Err(self.catchable_type_error()),
@@ -54498,16 +55204,18 @@ impl Interp {
         let top = *magnitude
             .last()
             .expect("a non-zero BigInt has a leading limb");
-        let magnitude_bits = (magnitude.len() as u64 - 1) * 32
-            + u64::from(32 - top.leading_zeros());
+        let magnitude_bits =
+            (magnitude.len() as u64 - 1) * 32 + u64::from(32 - top.leading_zeros());
 
-        if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits < bits))
-        {
+        if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits < bits)) {
             return Ok(value);
         }
         if negative && signed {
             let minimum_at_width = magnitude_bits == bits
-                && magnitude.iter().take(magnitude.len() - 1).all(|&limb| limb == 0)
+                && magnitude
+                    .iter()
+                    .take(magnitude.len() - 1)
+                    .all(|&limb| limb == 0)
                 && top.is_power_of_two();
             if magnitude_bits < bits || minimum_at_width {
                 return Ok(value);
@@ -54584,8 +55292,7 @@ impl Interp {
         let top = *base_magnitude
             .last()
             .expect("a non-zero BigInt has a leading limb");
-        let base_bits = (base_magnitude.len() - 1) * 32
-            + (32 - top.leading_zeros() as usize);
+        let base_bits = (base_magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize);
         let projected_bits = base_bits
             .checked_mul(exponent as usize)
             .ok_or(Halt::Unsupported("exponentiation:result-too-large"))?;
@@ -54748,16 +55455,19 @@ impl Interp {
         };
         let max = magnitude.len().max(one.len()) as u64;
         let allocation_limbs = if increment {
-            if negative { max } else { max + 1 }
+            if negative {
+                max
+            } else {
+                max + 1
+            }
         } else if negative {
             max + 1
         } else {
             max
         };
         self.meter.tick_chunk_new(allocation_limbs * 4);
-        self.meter.tick_raw(
-            (result_magnitude.len() as u64 - 1) * crate::meter::BIGINT_METERING,
-        );
+        self.meter
+            .tick_raw((result_magnitude.len() as u64 - 1) * crate::meter::BIGINT_METERING);
         self.meter.tick_raw(BIGINT_ARITH_FRAME_METERING);
         self.store_bigint(result_negative, result_magnitude)
     }
@@ -54867,10 +55577,7 @@ impl Interp {
             let max_shift = MAX_BIGINT_SHIFT_RESULT_BITS.saturating_sub(value_bits);
             let shift = bi_usize_up_to(&count_magnitude, max_shift)
                 .ok_or(Halt::Unsupported("bigint-shift:result-too-large"))?;
-            return Ok(self.make_bigint(
-                negative,
-                bi_shl_bits(&magnitude, shift),
-            ));
+            return Ok(self.make_bigint(negative, bi_shl_bits(&magnitude, shift)));
         }
 
         let Some(shift) = bi_usize_up_to(&count_magnitude, value_bits) else {
@@ -55175,8 +55882,24 @@ fn locale_is_supported(locale: &str) -> bool {
     let language = locale.split('-').next().unwrap_or("");
     matches!(
         language,
-        "ar" | "de" | "en" | "es" | "fr" | "he" | "id" | "it" | "ja" | "ko"
-            | "nl" | "pl" | "pt" | "ro" | "ru" | "sv" | "tr" | "yi" | "zh"
+        "ar" | "de"
+            | "en"
+            | "es"
+            | "fr"
+            | "he"
+            | "id"
+            | "it"
+            | "ja"
+            | "ko"
+            | "nl"
+            | "pl"
+            | "pt"
+            | "ro"
+            | "ru"
+            | "sv"
+            | "tr"
+            | "yi"
+            | "zh"
     )
 }
 
@@ -55307,14 +56030,24 @@ fn civil_fields(t: f64, offset_minutes: i32) -> (i64, u32, u32, u32, u32, u32, u
 }
 
 fn time_clip(t: f64) -> f64 {
-    if !t.is_finite() || t.abs() > 8_640_000_000_000_000.0 { f64::NAN }
-    else { let clipped = t.trunc(); if clipped == 0.0 { 0.0 } else { clipped } }
+    if !t.is_finite() || t.abs() > 8_640_000_000_000_000.0 {
+        f64::NAN
+    } else {
+        let clipped = t.trunc();
+        if clipped == 0.0 {
+            0.0
+        } else {
+            clipped
+        }
+    }
 }
 
 fn date_from_components(v: [f64; 7]) -> f64 {
     let mut v = v;
     let mut year = v[0].trunc();
-    if (0.0..=99.0).contains(&year) { year += 1900.0; }
+    if (0.0..=99.0).contains(&year) {
+        year += 1900.0;
+    }
     v[0] = year;
     date_from_components_exact(v)
 }
@@ -55323,24 +56056,39 @@ fn date_from_components(v: [f64; 7]) -> f64 {
 /// exact year. Date construction/`Date.UTC` apply their legacy 0..99 →
 /// 1900..1999 adjustment before entering here; Date setters do not.
 fn date_from_components_exact(v: [f64; 7]) -> f64 {
-    if v.iter().any(|n| !n.is_finite()) { return f64::NAN; }
+    if v.iter().any(|n| !n.is_finite()) {
+        return f64::NAN;
+    }
     let year = v[0].trunc();
-    if year < i64::MIN as f64 || year > i64::MAX as f64 { return f64::NAN; }
+    if year < i64::MIN as f64 || year > i64::MAX as f64 {
+        return f64::NAN;
+    }
     let month = v[1].trunc();
-    if month < i64::MIN as f64 || month > i64::MAX as f64 { return f64::NAN; }
+    if month < i64::MIN as f64 || month > i64::MAX as f64 {
+        return f64::NAN;
+    }
     let total_month = (year as i128) * 12 + month as i128;
     let norm_year = total_month.div_euclid(12);
     let norm_month = total_month.rem_euclid(12) as u32 + 1;
-    let Ok(norm_year) = i64::try_from(norm_year) else { return f64::NAN };
-    let Some(first) = days_from_civil(norm_year, norm_month, 1) else { return f64::NAN };
+    let Ok(norm_year) = i64::try_from(norm_year) else {
+        return f64::NAN;
+    };
+    let Some(first) = days_from_civil(norm_year, norm_month, 1) else {
+        return f64::NAN;
+    };
     let Some(days) = first
         .checked_add(v[2].trunc() as i128)
         .and_then(|days| days.checked_sub(1))
     else {
         return f64::NAN;
     };
-    time_clip(days as f64 * 86_400_000.0 + v[3].trunc() * 3_600_000.0
-        + v[4].trunc() * 60_000.0 + v[5].trunc() * 1_000.0 + v[6].trunc())
+    time_clip(
+        days as f64 * 86_400_000.0
+            + v[3].trunc() * 3_600_000.0
+            + v[4].trunc() * 60_000.0
+            + v[5].trunc() * 1_000.0
+            + v[6].trunc(),
+    )
 }
 
 fn parse_date_string(text: &str) -> Option<f64> {
@@ -55376,9 +56124,7 @@ fn parse_iso_date_string(text: &str) -> Option<f64> {
     let (month, day) = match tail.len() {
         0 => (1, 1),
         3 if tail.starts_with('-') => (tail[1..].parse().ok()?, 1),
-        6 if tail.as_bytes().get(0) == Some(&b'-')
-            && tail.as_bytes().get(3) == Some(&b'-') =>
-        {
+        6 if tail.as_bytes().get(0) == Some(&b'-') && tail.as_bytes().get(3) == Some(&b'-') => {
             (tail[1..3].parse().ok()?, tail[4..6].parse().ok()?)
         }
         _ => return None,
@@ -55388,38 +56134,42 @@ fn parse_iso_date_string(text: &str) -> Option<f64> {
         return Some(time_clip((days * 86_400_000) as f64));
     };
 
-    let (clock, offset_minutes) = if let Some(clock) = clock
-        .strip_suffix('Z')
-        .or_else(|| clock.strip_suffix('z'))
-    {
-        (clock, 0i128)
-    } else if let Some(at) = clock.rfind(['+', '-']) {
-        let (clock, zone) = clock.split_at(at);
-        let sign = if zone.starts_with('-') { -1i128 } else { 1i128 };
-        let zone = &zone[1..];
-        let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
-            (zone[..2].parse::<i128>().ok()?, zone[3..].parse::<i128>().ok()?)
-        } else if zone.len() == 4 {
-            (zone[..2].parse::<i128>().ok()?, zone[2..].parse::<i128>().ok()?)
+    let (clock, offset_minutes) =
+        if let Some(clock) = clock.strip_suffix('Z').or_else(|| clock.strip_suffix('z')) {
+            (clock, 0i128)
+        } else if let Some(at) = clock.rfind(['+', '-']) {
+            let (clock, zone) = clock.split_at(at);
+            let sign = if zone.starts_with('-') { -1i128 } else { 1i128 };
+            let zone = &zone[1..];
+            let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
+                (
+                    zone[..2].parse::<i128>().ok()?,
+                    zone[3..].parse::<i128>().ok()?,
+                )
+            } else if zone.len() == 4 {
+                (
+                    zone[..2].parse::<i128>().ok()?,
+                    zone[2..].parse::<i128>().ok()?,
+                )
+            } else {
+                return None;
+            };
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            (clock, sign * (hours * 60 + minutes))
         } else {
-            return None;
+            (clock, 0)
         };
-        if hours > 23 || minutes > 59 {
-            return None;
-        }
-        (clock, sign * (hours * 60 + minutes))
-    } else {
-        (clock, 0)
-    };
     let (hour, minute, second, millis) = parse_date_clock(clock)?;
-    if hour > 24 || minute > 59 || second > 59 || (hour == 24 && (minute != 0 || second != 0 || millis != 0)) {
+    if hour > 24
+        || minute > 59
+        || second > 59
+        || (hour == 24 && (minute != 0 || second != 0 || millis != 0))
+    {
         return None;
     }
-    let total = days * 86_400_000
-        + hour * 3_600_000
-        + minute * 60_000
-        + second * 1_000
-        + millis
+    let total = days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 + millis
         - offset_minutes * 60_000;
     Some(time_clip(total as f64))
 }
@@ -55474,9 +56224,7 @@ fn parse_xs_legacy_iso_string(text: &str) -> Option<f64> {
     let (month, day) = match tail.len() {
         0 => (1i128, 1i128),
         3 if tail.starts_with('-') => (tail[1..].parse().ok()?, 1),
-        6 if tail.as_bytes().first() == Some(&b'-')
-            && tail.as_bytes().get(3) == Some(&b'-') =>
-        {
+        6 if tail.as_bytes().first() == Some(&b'-') && tail.as_bytes().get(3) == Some(&b'-') => {
             (tail[1..3].parse().ok()?, tail[4..6].parse().ok()?)
         }
         _ => return None,
@@ -55497,31 +56245,35 @@ fn parse_xs_legacy_iso_string(text: &str) -> Option<f64> {
         ]));
     };
 
-    let (clock, offset_minutes) = if let Some(clock) = clock
-        .strip_suffix('Z')
-        .or_else(|| clock.strip_suffix('z'))
-    {
-        (clock, 0i128)
-    } else if let Some(at) = clock.rfind(['+', '-']) {
-        let (clock, zone) = clock.split_at(at);
-        let sign = if zone.starts_with('-') { -1i128 } else { 1i128 };
-        let zone = &zone[1..];
-        let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
-            (zone[..2].parse::<i128>().ok()?, zone[3..].parse::<i128>().ok()?)
-        } else if zone.len() == 4 {
-            (zone[..2].parse::<i128>().ok()?, zone[2..].parse::<i128>().ok()?)
-        } else if zone.len() == 2 {
-            (zone.parse::<i128>().ok()?, 0)
+    let (clock, offset_minutes) =
+        if let Some(clock) = clock.strip_suffix('Z').or_else(|| clock.strip_suffix('z')) {
+            (clock, 0i128)
+        } else if let Some(at) = clock.rfind(['+', '-']) {
+            let (clock, zone) = clock.split_at(at);
+            let sign = if zone.starts_with('-') { -1i128 } else { 1i128 };
+            let zone = &zone[1..];
+            let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
+                (
+                    zone[..2].parse::<i128>().ok()?,
+                    zone[3..].parse::<i128>().ok()?,
+                )
+            } else if zone.len() == 4 {
+                (
+                    zone[..2].parse::<i128>().ok()?,
+                    zone[2..].parse::<i128>().ok()?,
+                )
+            } else if zone.len() == 2 {
+                (zone.parse::<i128>().ok()?, 0)
+            } else {
+                return None;
+            };
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            (clock, sign * (hours * 60 + minutes))
         } else {
-            return None;
+            (clock, 0)
         };
-        if hours > 23 || minutes > 59 {
-            return None;
-        }
-        (clock, sign * (hours * 60 + minutes))
-    } else {
-        (clock, 0)
-    };
     let (hour, minute, second, millis) = parse_xs_legacy_date_clock(clock)?;
     let local = date_from_components_exact([
         year as f64,
@@ -55565,8 +56317,9 @@ fn parse_xs_legacy_date_clock(clock: &str) -> Option<(i128, i128, i128, i128)> {
 fn parse_date_display_string(text: &str) -> Option<f64> {
     let fields: Vec<&str> = text.split_ascii_whitespace().collect();
     let (month, day, year, clock, zone) = match fields.as_slice() {
-        [weekday, month, day, year, clock, "GMT+0000"]
-            if weekday.len() == 3 => (*month, *day, *year, *clock, 0i128),
+        [weekday, month, day, year, clock, "GMT+0000"] if weekday.len() == 3 => {
+            (*month, *day, *year, *clock, 0i128)
+        }
         [weekday, day, month, year, clock, "GMT"]
             if weekday.len() == 4 && weekday.ends_with(',') =>
         {
@@ -55582,18 +56335,19 @@ fn parse_date_display_string(text: &str) -> Option<f64> {
     if hour > 23 || minute > 59 || second > 59 || millis != 0 {
         return None;
     }
-    let total = days * 86_400_000
-        + hour * 3_600_000
-        + minute * 60_000
-        + second * 1_000
-        - zone * 60_000;
+    let total =
+        days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1_000 - zone * 60_000;
     Some(time_clip(total as f64))
 }
 
 fn date_iso_year_string(year: i64) -> String {
-    if (0..=9999).contains(&year) { format!("{year:04}") }
-    else if year < 0 { format!("-{:06}", year.unsigned_abs()) }
-    else { format!("+{year:06}") }
+    if (0..=9999).contains(&year) {
+        format!("{year:04}")
+    } else if year < 0 {
+        format!("-{:06}", year.unsigned_abs())
+    } else {
+        format!("+{year:06}")
+    }
 }
 
 fn date_display_year_string(year: i64) -> String {
@@ -55606,17 +56360,30 @@ fn date_display_year_string(year: i64) -> String {
 
 fn date_iso_string(t: f64) -> String {
     let (y, m, d, _, h, min, s, ms) = civil_fields(t, 0);
-    format!("{}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{ms:03}Z", date_iso_year_string(y))
+    format!(
+        "{}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{ms:03}Z",
+        date_iso_year_string(y)
+    )
 }
 
 fn date_utc_string(t: f64) -> String {
     let (y, m, d, w, h, min, s, _) = civil_fields(t, 0);
-    format!("{}, {d:02} {} {} {h:02}:{min:02}:{s:02} GMT", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_display_year_string(y))
+    format!(
+        "{}, {d:02} {} {} {h:02}:{min:02}:{s:02} GMT",
+        EN_WEEKDAYS_SHORT[w as usize],
+        EN_MONTHS_SHORT[m as usize - 1],
+        date_display_year_string(y)
+    )
 }
 
 fn date_only_string(t: f64) -> String {
     let (y, m, d, w, _, _, _, _) = civil_fields(t, 0);
-    format!("{} {} {d:02} {}", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_display_year_string(y))
+    format!(
+        "{} {} {d:02} {}",
+        EN_WEEKDAYS_SHORT[w as usize],
+        EN_MONTHS_SHORT[m as usize - 1],
+        date_display_year_string(y)
+    )
 }
 
 fn date_time_string(t: f64) -> String {
@@ -55624,20 +56391,36 @@ fn date_time_string(t: f64) -> String {
     format!("{h:02}:{min:02}:{s:02} GMT+0000")
 }
 
-fn date_local_string(t: f64) -> String { format!("{} {}", date_only_string(t), date_time_string(t)) }
+fn date_local_string(t: f64) -> String {
+    format!("{} {}", date_only_string(t), date_time_string(t))
+}
 
 const EN_MONTHS_LONG: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August",
-    "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 const EN_MONTHS_SHORT: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
-const EN_MONTHS_NARROW: [&str; 12] = [
-    "J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D",
-];
+const EN_MONTHS_NARROW: [&str; 12] = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 const EN_WEEKDAYS_LONG: [&str; 7] = [
-    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
 ];
 const EN_WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const EN_WEEKDAYS_NARROW: [&str; 7] = ["S", "M", "T", "W", "T", "F", "S"];
@@ -55654,7 +56437,10 @@ fn two_digit(n: u32) -> String {
 fn resolve_time_zone(raw: &str) -> Option<(String, i32)> {
     let trimmed = raw.trim();
     let lower = trimmed.to_ascii_lowercase();
-    if matches!(lower.as_str(), "utc" | "etc/utc" | "gmt" | "etc/gmt" | "zulu" | "etc/zulu") {
+    if matches!(
+        lower.as_str(),
+        "utc" | "etc/utc" | "gmt" | "etc/gmt" | "zulu" | "etc/zulu"
+    ) {
         return Some(("UTC".to_string(), 0));
     }
     // Numeric offset: +HH, +HHMM, +HH:MM (and the minus forms).
@@ -55674,12 +56460,7 @@ fn resolve_time_zone(raw: &str) -> Option<(String, i32)> {
             };
             if hh <= 23 && mm <= 59 {
                 let total = sign * (hh * 60 + mm);
-                let canonical = format!(
-                    "{}{:02}:{:02}",
-                    if sign < 0 { "-" } else { "+" },
-                    hh,
-                    mm
-                );
+                let canonical = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, hh, mm);
                 return Some((canonical, total));
             }
         }
@@ -55787,7 +56568,10 @@ fn effective_components(data: &DateTimeFormatData) -> Vec<(&'static str, String)
 }
 
 fn comp_rep<'a>(comps: &'a [(&'static str, String)], name: &str) -> Option<&'a str> {
-    comps.iter().find(|(k, _)| *k == name).map(|(_, v)| v.as_str())
+    comps
+        .iter()
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| v.as_str())
 }
 
 /// Render `hour` (0..23) under the resolved cycle, returning `(displayed hour,
@@ -56066,7 +56850,11 @@ fn format_date_time_range_parts(
     for (ty, v) in a {
         parts.push((ty, v, "startRange"));
     }
-    parts.push(("literal", " \u{2009}\u{2013}\u{2009} ".to_string(), "shared"));
+    parts.push((
+        "literal",
+        " \u{2009}\u{2013}\u{2009} ".to_string(),
+        "shared",
+    ));
     for (ty, v) in b {
         parts.push((ty, v, "endRange"));
     }
@@ -56115,12 +56903,51 @@ fn is_well_formed_currency_code(code: &str) -> bool {
 
 /// The ECMA-402 sanctioned single unit identifiers.
 const SANCTIONED_UNITS: &[&str] = &[
-    "acre", "bit", "byte", "celsius", "centimeter", "day", "degree", "fahrenheit",
-    "fluid-ounce", "foot", "gallon", "gigabit", "gigabyte", "gram", "hectare", "hour",
-    "inch", "kilobit", "kilobyte", "kilogram", "kilometer", "liter", "megabit",
-    "megabyte", "meter", "microsecond", "mile", "mile-scandinavian", "milliliter",
-    "millimeter", "millisecond", "minute", "month", "nanosecond", "ounce", "percent",
-    "petabyte", "pound", "second", "stone", "terabit", "terabyte", "week", "yard", "year",
+    "acre",
+    "bit",
+    "byte",
+    "celsius",
+    "centimeter",
+    "day",
+    "degree",
+    "fahrenheit",
+    "fluid-ounce",
+    "foot",
+    "gallon",
+    "gigabit",
+    "gigabyte",
+    "gram",
+    "hectare",
+    "hour",
+    "inch",
+    "kilobit",
+    "kilobyte",
+    "kilogram",
+    "kilometer",
+    "liter",
+    "megabit",
+    "megabyte",
+    "meter",
+    "microsecond",
+    "mile",
+    "mile-scandinavian",
+    "milliliter",
+    "millimeter",
+    "millisecond",
+    "minute",
+    "month",
+    "nanosecond",
+    "ounce",
+    "percent",
+    "petabyte",
+    "pound",
+    "second",
+    "stone",
+    "terabit",
+    "terabyte",
+    "week",
+    "yard",
+    "year",
 ];
 
 /// `IsWellFormedUnitIdentifier` (ECMA-402): a sanctioned single unit, or
@@ -56141,8 +56968,8 @@ fn is_well_formed_unit_identifier(unit: &str) -> bool {
 fn currency_digits(code: &str) -> u32 {
     match code {
         // Zero-decimal currencies.
-        "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF"
-        | "UGX" | "UYI" | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 0,
+        "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF" | "UGX"
+        | "UYI" | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 0,
         // Three-decimal currencies.
         "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 3,
         // Four-decimal currencies.
@@ -56369,107 +57196,262 @@ fn temporal_set_time_args(
                 .map_err(|_| interp.catchable_range_error())?;
         }
     }
-    [record.hour, record.minute, record.second, record.millisecond, record.microsecond, record.nanosecond] = out;
+    [
+        record.hour,
+        record.minute,
+        record.second,
+        record.millisecond,
+        record.microsecond,
+        record.nanosecond,
+    ] = out;
     Ok(())
 }
 
 fn temporal_plain_valid(r: TemporalPlainRecord) -> bool {
-    if r.kind >= 6 { return false; }
-    if r.kind == 5 { return true; }
-    if matches!(r.kind, 0|2|3|4) && days_from_civil(r.year, r.month, r.day).is_none() { return false; }
-    if matches!(r.kind, 1|2) && (r.hour > 23 || r.minute > 59 || r.second > 59
-        || r.millisecond > 999 || r.microsecond > 999 || r.nanosecond > 999) { return false; }
+    if r.kind >= 6 {
+        return false;
+    }
+    if r.kind == 5 {
+        return true;
+    }
+    if matches!(r.kind, 0 | 2 | 3 | 4) && days_from_civil(r.year, r.month, r.day).is_none() {
+        return false;
+    }
+    if matches!(r.kind, 1 | 2)
+        && (r.hour > 23
+            || r.minute > 59
+            || r.second > 59
+            || r.millisecond > 999
+            || r.microsecond > 999
+            || r.nanosecond > 999)
+    {
+        return false;
+    }
     true
 }
 
 fn parse_temporal_plain(kind: u8, text: &str) -> Option<TemporalPlainRecord> {
     let text = text.split('[').next()?;
-    if kind == 5 { return (text == "iso8601").then_some(TemporalPlainRecord { kind, ..Default::default() }); }
-    let (date, time) = match text.find(['T','t']) {
-        Some(at) => (&text[..at], Some(&text[at+1..])),
+    if kind == 5 {
+        return (text == "iso8601").then_some(TemporalPlainRecord {
+            kind,
+            ..Default::default()
+        });
+    }
+    let (date, time) = match text.find(['T', 't']) {
+        Some(at) => (&text[..at], Some(&text[at + 1..])),
         None if kind == 1 => ("", Some(text)),
         None => (text, None),
     };
-    let mut r = TemporalPlainRecord { kind, year: if kind == 4 { 1972 } else { 0 }, day: if kind == 3 { 1 } else { 0 }, ..Default::default() };
-    if matches!(kind,0|2|3|4) {
+    let mut r = TemporalPlainRecord {
+        kind,
+        year: if kind == 4 { 1972 } else { 0 },
+        day: if kind == 3 { 1 } else { 0 },
+        ..Default::default()
+    };
+    if matches!(kind, 0 | 2 | 3 | 4) {
         let basic = !date.is_empty() && date.bytes().all(|b| b.is_ascii_digit());
-        if basic && matches!(kind, 0|2) && date.len() == 8 {
+        if basic && matches!(kind, 0 | 2) && date.len() == 8 {
             // ISO 8601 basic-format calendar date `YYYYMMDD`.
-            r.year = date[0..4].parse().ok()?; r.month = date[4..6].parse().ok()?; r.day = date[6..8].parse().ok()?;
+            r.year = date[0..4].parse().ok()?;
+            r.month = date[4..6].parse().ok()?;
+            r.day = date[6..8].parse().ok()?;
         } else if basic && kind == 3 && date.len() == 6 {
             // Basic-format year-month `YYYYMM`.
-            r.year = date[0..4].parse().ok()?; r.month = date[4..6].parse().ok()?;
+            r.year = date[0..4].parse().ok()?;
+            r.month = date[4..6].parse().ok()?;
         } else if kind == 4 && date.matches('-').count() == 1 {
-            let mut p=date.trim_start_matches('-').split('-'); r.month=p.next()?.parse().ok()?; r.day=p.next()?.parse().ok()?; if p.next().is_some(){return None;}
+            let mut p = date.trim_start_matches('-').split('-');
+            r.month = p.next()?.parse().ok()?;
+            r.day = p.next()?.parse().ok()?;
+            if p.next().is_some() {
+                return None;
+            }
         } else {
-            let mut p=date.rsplitn(3,'-');
-            if kind == 3 { r.month=p.next()?.parse().ok()?; r.year=p.next()?.parse().ok()?; }
-            else { r.day=p.next()?.parse().ok()?; r.month=p.next()?.parse().ok()?; r.year=p.next()?.parse().ok()?; }
+            let mut p = date.rsplitn(3, '-');
+            if kind == 3 {
+                r.month = p.next()?.parse().ok()?;
+                r.year = p.next()?.parse().ok()?;
+            } else {
+                r.day = p.next()?.parse().ok()?;
+                r.month = p.next()?.parse().ok()?;
+                r.year = p.next()?.parse().ok()?;
+            }
         }
     }
-    if matches!(kind,1|2) {
-        let mut p=time?.split(':'); r.hour=p.next()?.parse().ok()?; r.minute=p.next().unwrap_or("0").parse().ok()?;
-        let sec=p.next().unwrap_or("0"); if p.next().is_some(){return None;} let (whole,frac)=sec.split_once('.').unwrap_or((sec,"")); r.second=whole.parse().ok()?;
-        if frac.len()>9 || !frac.bytes().all(|b|b.is_ascii_digit()){return None;} let f=format!("{frac:0<9}");
-        if !frac.is_empty(){let n:u32=f.parse().ok()?;r.millisecond=n/1_000_000;r.microsecond=(n/1_000)%1_000;r.nanosecond=n%1_000;}
+    if matches!(kind, 1 | 2) {
+        let mut p = time?.split(':');
+        r.hour = p.next()?.parse().ok()?;
+        r.minute = p.next().unwrap_or("0").parse().ok()?;
+        let sec = p.next().unwrap_or("0");
+        if p.next().is_some() {
+            return None;
+        }
+        let (whole, frac) = sec.split_once('.').unwrap_or((sec, ""));
+        r.second = whole.parse().ok()?;
+        if frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let f = format!("{frac:0<9}");
+        if !frac.is_empty() {
+            let n: u32 = f.parse().ok()?;
+            r.millisecond = n / 1_000_000;
+            r.microsecond = (n / 1_000) % 1_000;
+            r.nanosecond = n % 1_000;
+        }
     }
     temporal_plain_valid(r).then_some(r)
 }
 
-fn temporal_plain_key(r: TemporalPlainRecord) -> (i64,u32,u32,u32,u32,u32,u32,u32,u32) {
-    (r.year,r.month,r.day,r.hour,r.minute,r.second,r.millisecond,r.microsecond,r.nanosecond)
+fn temporal_plain_key(r: TemporalPlainRecord) -> (i64, u32, u32, u32, u32, u32, u32, u32, u32) {
+    (
+        r.year,
+        r.month,
+        r.day,
+        r.hour,
+        r.minute,
+        r.second,
+        r.millisecond,
+        r.microsecond,
+        r.nanosecond,
+    )
 }
 
 fn temporal_plain_time_ns(r: TemporalPlainRecord) -> i128 {
-    (((((r.hour as i128*60+r.minute as i128)*60+r.second as i128)*1000+r.millisecond as i128)*1000+r.microsecond as i128)*1000)+r.nanosecond as i128
+    (((((r.hour as i128 * 60 + r.minute as i128) * 60 + r.second as i128) * 1000
+        + r.millisecond as i128)
+        * 1000
+        + r.microsecond as i128)
+        * 1000)
+        + r.nanosecond as i128
 }
 
-fn temporal_plain_add(mut r: TemporalPlainRecord, d: TemporalDurationRecord) -> Option<TemporalPlainRecord> {
-    if r.kind == 5 { return None; }
-    if matches!(r.kind,0|2|3|4) {
-        let mut year=r.year.checked_add(d.years)?; let month0=(r.month as i64-1).checked_add(d.months)?;
-        year=year.checked_add(month0.div_euclid(12))?; r.month=(month0.rem_euclid(12)+1) as u32;
-        let max_day=(1..=31).rev().find(|&day|days_from_civil(year,r.month,day).is_some())?; r.day=r.day.min(max_day); r.year=year;
-        let base=days_from_civil(r.year,r.month,r.day)?; let days=base.checked_add((d.weeks as i128).checked_mul(7)?)?.checked_add(d.days as i128)?;
-        (r.year,r.month,r.day)=civil_from_days(days);
-    } else if d.years!=0||d.months!=0||d.weeks!=0||d.days!=0 { return None; }
-    if matches!(r.kind,1|2) {
-        let delta=d.time_nanoseconds(false)?; let total=temporal_plain_time_ns(r).checked_add(delta)?;
-        let carry=total.div_euclid(86_400_000_000_000); let n=total.rem_euclid(86_400_000_000_000);
-        if r.kind==2 && carry!=0 { let day=days_from_civil(r.year,r.month,r.day)?.checked_add(carry)?;(r.year,r.month,r.day)=civil_from_days(day); }
-        r.hour=(n/3_600_000_000_000) as u32;r.minute=((n/60_000_000_000)%60) as u32;r.second=((n/1_000_000_000)%60) as u32;r.millisecond=((n/1_000_000)%1000) as u32;r.microsecond=((n/1000)%1000) as u32;r.nanosecond=(n%1000) as u32;
-    } else if d.hours!=0||d.minutes!=0||d.seconds!=0||d.milliseconds!=0||d.microseconds!=0||d.nanoseconds!=0 { return None; }
+fn temporal_plain_add(
+    mut r: TemporalPlainRecord,
+    d: TemporalDurationRecord,
+) -> Option<TemporalPlainRecord> {
+    if r.kind == 5 {
+        return None;
+    }
+    if matches!(r.kind, 0 | 2 | 3 | 4) {
+        let mut year = r.year.checked_add(d.years)?;
+        let month0 = (r.month as i64 - 1).checked_add(d.months)?;
+        year = year.checked_add(month0.div_euclid(12))?;
+        r.month = (month0.rem_euclid(12) + 1) as u32;
+        let max_day = (1..=31)
+            .rev()
+            .find(|&day| days_from_civil(year, r.month, day).is_some())?;
+        r.day = r.day.min(max_day);
+        r.year = year;
+        let base = days_from_civil(r.year, r.month, r.day)?;
+        let days = base
+            .checked_add((d.weeks as i128).checked_mul(7)?)?
+            .checked_add(d.days as i128)?;
+        (r.year, r.month, r.day) = civil_from_days(days);
+    } else if d.years != 0 || d.months != 0 || d.weeks != 0 || d.days != 0 {
+        return None;
+    }
+    if matches!(r.kind, 1 | 2) {
+        let delta = d.time_nanoseconds(false)?;
+        let total = temporal_plain_time_ns(r).checked_add(delta)?;
+        let carry = total.div_euclid(86_400_000_000_000);
+        let n = total.rem_euclid(86_400_000_000_000);
+        if r.kind == 2 && carry != 0 {
+            let day = days_from_civil(r.year, r.month, r.day)?.checked_add(carry)?;
+            (r.year, r.month, r.day) = civil_from_days(day);
+        }
+        r.hour = (n / 3_600_000_000_000) as u32;
+        r.minute = ((n / 60_000_000_000) % 60) as u32;
+        r.second = ((n / 1_000_000_000) % 60) as u32;
+        r.millisecond = ((n / 1_000_000) % 1000) as u32;
+        r.microsecond = ((n / 1000) % 1000) as u32;
+        r.nanosecond = (n % 1000) as u32;
+    } else if d.hours != 0
+        || d.minutes != 0
+        || d.seconds != 0
+        || d.milliseconds != 0
+        || d.microseconds != 0
+        || d.nanoseconds != 0
+    {
+        return None;
+    }
     temporal_plain_valid(r).then_some(r)
 }
 
-fn temporal_plain_difference(a: TemporalPlainRecord,b: TemporalPlainRecord)->Option<TemporalDurationRecord>{
-    if a.kind!=b.kind{return None} match a.kind {
-        0 => Some(TemporalDurationRecord{days:i64::try_from(days_from_civil(b.year,b.month,b.day)?-days_from_civil(a.year,a.month,a.day)?).ok()?,..Default::default()}),
-        1 => Some(duration_from_nanoseconds(temporal_plain_time_ns(b)-temporal_plain_time_ns(a))),
-        2 => {let days=days_from_civil(b.year,b.month,b.day)?-days_from_civil(a.year,a.month,a.day)?;Some(duration_from_nanoseconds(days*86_400_000_000_000+temporal_plain_time_ns(b)-temporal_plain_time_ns(a)))},
-        3 => Some(TemporalDurationRecord{months:(b.year-a.year).checked_mul(12)?.checked_add(b.month as i64-a.month as i64)?,..Default::default()}),
+fn temporal_plain_difference(
+    a: TemporalPlainRecord,
+    b: TemporalPlainRecord,
+) -> Option<TemporalDurationRecord> {
+    if a.kind != b.kind {
+        return None;
+    }
+    match a.kind {
+        0 => Some(TemporalDurationRecord {
+            days: i64::try_from(
+                days_from_civil(b.year, b.month, b.day)? - days_from_civil(a.year, a.month, a.day)?,
+            )
+            .ok()?,
+            ..Default::default()
+        }),
+        1 => Some(duration_from_nanoseconds(
+            temporal_plain_time_ns(b) - temporal_plain_time_ns(a),
+        )),
+        2 => {
+            let days =
+                days_from_civil(b.year, b.month, b.day)? - days_from_civil(a.year, a.month, a.day)?;
+            Some(duration_from_nanoseconds(
+                days * 86_400_000_000_000 + temporal_plain_time_ns(b) - temporal_plain_time_ns(a),
+            ))
+        }
+        3 => Some(TemporalDurationRecord {
+            months: (b.year - a.year)
+                .checked_mul(12)?
+                .checked_add(b.month as i64 - a.month as i64)?,
+            ..Default::default()
+        }),
         _ => None,
     }
 }
 
 /// A bare ISO `PlainDate` record (`kind == 0`) at the given civil date.
 fn iso_date(year: i64, month: u32, day: u32) -> TemporalPlainRecord {
-    TemporalPlainRecord { kind: 0, year, month, day, ..Default::default() }
+    TemporalPlainRecord {
+        kind: 0,
+        year,
+        month,
+        day,
+        ..Default::default()
+    }
 }
 
 /// ISO-calendar `dateAdd`: `start`'s date advanced by `(years, months, weeks,
 /// days)` with the day clamped to the target month's length (the ISO
 /// `overflow: "constrain"` default). Operates on the date fields only.
-fn iso_date_add(start: TemporalPlainRecord, years: i64, months: i64, weeks: i64, days: i64) -> Option<TemporalPlainRecord> {
+fn iso_date_add(
+    start: TemporalPlainRecord,
+    years: i64,
+    months: i64,
+    weeks: i64,
+    days: i64,
+) -> Option<TemporalPlainRecord> {
     temporal_plain_add(
         iso_date(start.year, start.month, start.day),
-        TemporalDurationRecord { years, months, weeks, days, ..Default::default() },
+        TemporalDurationRecord {
+            years,
+            months,
+            weeks,
+            days,
+            ..Default::default()
+        },
     )
 }
 
 /// The signed civil-day offset from `start`'s date to `end`'s date.
 fn iso_days_between(start: TemporalPlainRecord, end: TemporalPlainRecord) -> Option<i128> {
-    Some(days_from_civil(end.year, end.month, end.day)? - days_from_civil(start.year, start.month, start.day)?)
+    Some(
+        days_from_civil(end.year, end.month, end.day)?
+            - days_from_civil(start.year, start.month, start.day)?,
+    )
 }
 
 /// The ISO-calendar `dateUntil`: the difference between two ISO dates expressed
@@ -56477,10 +57459,17 @@ fn iso_days_between(start: TemporalPlainRecord, end: TemporalPlainRecord) -> Opt
 /// `"week"`, or `"day"`). The result carries the sign of `end - start`. Whole
 /// years/months are counted by `dateAdd` from `start` so day-clamping matches
 /// the constructive Temporal semantics (e.g. Jan 31 + 1 month = Feb 28).
-fn iso_date_until(start: TemporalPlainRecord, end: TemporalPlainRecord, largest: &str) -> Option<TemporalDurationRecord> {
+fn iso_date_until(
+    start: TemporalPlainRecord,
+    end: TemporalPlainRecord,
+    largest: &str,
+) -> Option<TemporalDurationRecord> {
     let total_days = iso_days_between(start, end)?;
     match largest {
-        "day" => Some(TemporalDurationRecord { days: i64::try_from(total_days).ok()?, ..Default::default() }),
+        "day" => Some(TemporalDurationRecord {
+            days: i64::try_from(total_days).ok()?,
+            ..Default::default()
+        }),
         "week" => {
             let weeks = total_days / 7;
             let days = total_days % 7;
@@ -56520,9 +57509,18 @@ fn iso_date_until(start: TemporalPlainRecord, end: TemporalPlainRecord, largest:
             let days = i64::try_from(iso_days_between(mid, end)?).ok()?;
             if largest == "month" {
                 let months = years.checked_mul(12)?.checked_add(months)?;
-                Some(TemporalDurationRecord { months, days, ..Default::default() })
+                Some(TemporalDurationRecord {
+                    months,
+                    days,
+                    ..Default::default()
+                })
             } else {
-                Some(TemporalDurationRecord { years, months, days, ..Default::default() })
+                Some(TemporalDurationRecord {
+                    years,
+                    months,
+                    days,
+                    ..Default::default()
+                })
             }
         }
         _ => None,
@@ -56535,7 +57533,11 @@ fn iso_date_until(start: TemporalPlainRecord, end: TemporalPlainRecord, largest:
 /// time-of-day difference opposes the date-of-month difference so the result
 /// carries a single sign. Correct for the fixed-offset (constant 24-hour-day)
 /// model, where the wall clock and the exact instant advance together.
-fn iso_datetime_difference(start: TemporalPlainRecord, end: TemporalPlainRecord, largest: &str) -> Option<TemporalDurationRecord> {
+fn iso_datetime_difference(
+    start: TemporalPlainRecord,
+    end: TemporalPlainRecord,
+    largest: &str,
+) -> Option<TemporalDurationRecord> {
     const DAY_NS: i128 = 86_400_000_000_000;
     let mut time_diff = temporal_plain_time_ns(end) - temporal_plain_time_ns(start);
     let start_date = iso_date(start.year, start.month, start.day);
@@ -56565,7 +57567,10 @@ fn iso_datetime_difference(start: TemporalPlainRecord, end: TemporalPlainRecord,
 /// (day-clamped) and the time part is a plain nanosecond addend. `None` on
 /// calendar overflow. The time-of-day of `start` is irrelevant to a duration in
 /// this model, so only its date matters.
-fn iso_duration_span_nanoseconds(start: TemporalPlainRecord, d: TemporalDurationRecord) -> Option<i128> {
+fn iso_duration_span_nanoseconds(
+    start: TemporalPlainRecord,
+    d: TemporalDurationRecord,
+) -> Option<i128> {
     const DAY_NS: i128 = 86_400_000_000_000;
     // The ISO datetime limit: `nsMaxInstant` (±10^8 days) plus a one-day margin.
     // A `start + duration` endpoint beyond it is a `RangeError` — and bounds the
@@ -56623,12 +57628,40 @@ fn iso_total_calendar_units(start: TemporalPlainRecord, span_ns: i128, unit: &st
     Some(k as f64 + sign as f64 * frac)
 }
 
-fn format_temporal_plain(r:TemporalPlainRecord)->String{
-    if r.kind==5{return "iso8601".to_string()} let y=if(0..=9999).contains(&r.year){format!("{:04}",r.year)}else{format!("{:+07}",r.year)};
-    let date=match r.kind {3=>format!("{y}-{:02}",r.month),4=>format!("{:02}-{:02}",r.month,r.day),_=>format!("{y}-{:02}-{:02}",r.month,r.day)};
-    if !matches!(r.kind,1|2){return date} let fraction=r.millisecond*1_000_000+r.microsecond*1_000+r.nanosecond;
-    let time=if fraction==0{format!("{:02}:{:02}:{:02}",r.hour,r.minute,r.second)}else{format!("{:02}:{:02}:{:02}.{}",r.hour,r.minute,r.second,format!("{fraction:09}").trim_end_matches('0'))};
-    if r.kind==1{time}else{format!("{date}T{time}")}
+fn format_temporal_plain(r: TemporalPlainRecord) -> String {
+    if r.kind == 5 {
+        return "iso8601".to_string();
+    }
+    let y = if (0..=9999).contains(&r.year) {
+        format!("{:04}", r.year)
+    } else {
+        format!("{:+07}", r.year)
+    };
+    let date = match r.kind {
+        3 => format!("{y}-{:02}", r.month),
+        4 => format!("{:02}-{:02}", r.month, r.day),
+        _ => format!("{y}-{:02}-{:02}", r.month, r.day),
+    };
+    if !matches!(r.kind, 1 | 2) {
+        return date;
+    }
+    let fraction = r.millisecond * 1_000_000 + r.microsecond * 1_000 + r.nanosecond;
+    let time = if fraction == 0 {
+        format!("{:02}:{:02}:{:02}", r.hour, r.minute, r.second)
+    } else {
+        format!(
+            "{:02}:{:02}:{:02}.{}",
+            r.hour,
+            r.minute,
+            r.second,
+            format!("{fraction:09}").trim_end_matches('0')
+        )
+    };
+    if r.kind == 1 {
+        time
+    } else {
+        format!("{date}T{time}")
+    }
 }
 
 fn temporal_brand<T: Copy>(
@@ -56643,7 +57676,11 @@ fn temporal_brand<T: Copy>(
 
 fn temporal_duration_sign_valid(record: TemporalDurationRecord) -> bool {
     let sign = record.sign();
-    sign == 0 || record.fields().into_iter().all(|v| v == 0 || v.signum() == sign)
+    sign == 0
+        || record
+            .fields()
+            .into_iter()
+            .all(|v| v == 0 || v.signum() == sign)
 }
 
 fn temporal_unit_nanoseconds(unit: &str) -> Option<i128> {
@@ -56680,13 +57717,28 @@ fn temporal_unit_rank(unit: &str) -> Option<u8> {
 
 /// The canonical singular unit name for a rank produced by [`temporal_unit_rank`].
 fn temporal_unit_name(rank: u8) -> &'static str {
-    ["year", "month", "week", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"][rank as usize]
+    [
+        "year",
+        "month",
+        "week",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "millisecond",
+        "microsecond",
+        "nanosecond",
+    ][rank as usize]
 }
 
 /// The rank of a duration's largest *present* (non-zero) unit — the `"auto"`
 /// `largestUnit` default. An all-zero duration defaults to `nanosecond`.
 fn temporal_duration_default_largest_rank(d: TemporalDurationRecord) -> u8 {
-    d.fields().iter().position(|&v| v != 0).map(|i| i as u8).unwrap_or(9)
+    d.fields()
+        .iter()
+        .position(|&v| v != 0)
+        .map(|i| i as u8)
+        .unwrap_or(9)
 }
 
 /// `ValidateTemporalRoundingIncrement` for a duration unit: sub-day units carry
@@ -56700,7 +57752,11 @@ fn validate_duration_increment(rank: u8, increment: i64) -> Option<()> {
         7 | 8 | 9 => 1000,
         _ => return Some(()),
     };
-    if increment >= max || max % increment != 0 { None } else { Some(()) }
+    if increment >= max || max % increment != 0 {
+        None
+    } else {
+        Some(())
+    }
 }
 
 /// Round a real `value` to the nearest multiple of `increment` under `mode`,
@@ -56719,8 +57775,20 @@ fn round_number_to_increment(value: f64, increment: i64, mode: &str) -> f64 {
     let chosen = match mode {
         "ceil" => ceil,
         "floor" => floor,
-        "trunc" => if quotient >= 0.0 { floor } else { ceil },
-        "expand" => if quotient >= 0.0 { ceil } else { floor },
+        "trunc" => {
+            if quotient >= 0.0 {
+                floor
+            } else {
+                ceil
+            }
+        }
+        "expand" => {
+            if quotient >= 0.0 {
+                ceil
+            } else {
+                floor
+            }
+        }
         _ => {
             if frac < 0.5 {
                 floor
@@ -56730,9 +57798,27 @@ fn round_number_to_increment(value: f64, increment: i64, mode: &str) -> f64 {
                 match mode {
                     "halfFloor" => floor,
                     "halfCeil" => ceil,
-                    "halfTrunc" => if quotient >= 0.0 { floor } else { ceil },
-                    "halfEven" => if (floor as i64).rem_euclid(2) == 0 { floor } else { ceil },
-                    _ => if quotient >= 0.0 { ceil } else { floor }, // halfExpand
+                    "halfTrunc" => {
+                        if quotient >= 0.0 {
+                            floor
+                        } else {
+                            ceil
+                        }
+                    }
+                    "halfEven" => {
+                        if (floor as i64).rem_euclid(2) == 0 {
+                            floor
+                        } else {
+                            ceil
+                        }
+                    }
+                    _ => {
+                        if quotient >= 0.0 {
+                            ceil
+                        } else {
+                            floor
+                        }
+                    } // halfExpand
                 }
             }
         }
@@ -56743,39 +57829,78 @@ fn round_number_to_increment(value: f64, increment: i64, mode: &str) -> f64 {
 fn round_half_expand(value: i128, quantum: i128) -> i128 {
     let q = value / quantum;
     let r = value % quantum;
-    if r.unsigned_abs() * 2 >= quantum as u128 { (q + value.signum()) * quantum } else { q * quantum }
+    if r.unsigned_abs() * 2 >= quantum as u128 {
+        (q + value.signum()) * quantum
+    } else {
+        q * quantum
+    }
 }
 
 fn duration_from_nanoseconds(value: i128) -> TemporalDurationRecord {
     let sign = value.signum();
     let mut n = value.unsigned_abs();
-    let hours = (n / 3_600_000_000_000) as i64 * sign as i64; n %= 3_600_000_000_000;
-    let minutes = (n / 60_000_000_000) as i64 * sign as i64; n %= 60_000_000_000;
-    let seconds = (n / 1_000_000_000) as i64 * sign as i64; n %= 1_000_000_000;
-    let milliseconds = (n / 1_000_000) as i64 * sign as i64; n %= 1_000_000;
+    let hours = (n / 3_600_000_000_000) as i64 * sign as i64;
+    n %= 3_600_000_000_000;
+    let minutes = (n / 60_000_000_000) as i64 * sign as i64;
+    n %= 60_000_000_000;
+    let seconds = (n / 1_000_000_000) as i64 * sign as i64;
+    n %= 1_000_000_000;
+    let milliseconds = (n / 1_000_000) as i64 * sign as i64;
+    n %= 1_000_000;
     let microseconds = (n / 1_000) as i64 * sign as i64;
     let nanoseconds = (n % 1_000) as i64 * sign as i64;
-    TemporalDurationRecord { hours, minutes, seconds, milliseconds, microseconds, nanoseconds, ..Default::default() }
+    TemporalDurationRecord {
+        hours,
+        minutes,
+        seconds,
+        milliseconds,
+        microseconds,
+        nanoseconds,
+        ..Default::default()
+    }
 }
 
 fn parse_temporal_duration(text: &str) -> Option<TemporalDurationRecord> {
-    let (sign, text) = if let Some(s) = text.strip_prefix('-') { (-1i64, s) }
-        else if let Some(s) = text.strip_prefix('+') { (1, s) } else { (1, text) };
+    let (sign, text) = if let Some(s) = text.strip_prefix('-') {
+        (-1i64, s)
+    } else if let Some(s) = text.strip_prefix('+') {
+        (1, s)
+    } else {
+        (1, text)
+    };
     let mut rest = text.strip_prefix('P')?;
-    if rest.is_empty() { return None; }
+    if rest.is_empty() {
+        return None;
+    }
     let mut out = TemporalDurationRecord::default();
-    let mut time = false; let mut saw = false;
+    let mut time = false;
+    let mut saw = false;
     while !rest.is_empty() {
-        if let Some(r) = rest.strip_prefix('T') { if time { return None; } time = true; rest = r; continue; }
+        if let Some(r) = rest.strip_prefix('T') {
+            if time {
+                return None;
+            }
+            time = true;
+            rest = r;
+            continue;
+        }
         let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
-        if end == 0 { return None; }
-        let number = &rest[..end]; let designator = rest.as_bytes().get(end).copied()? as char;
-        rest = &rest[end + 1..]; saw = true;
+        if end == 0 {
+            return None;
+        }
+        let number = &rest[..end];
+        let designator = rest.as_bytes().get(end).copied()? as char;
+        rest = &rest[end + 1..];
+        saw = true;
         if number.contains('.') {
-            if designator != 'S' || !time { return None; }
+            if designator != 'S' || !time {
+                return None;
+            }
             let (whole, frac) = number.split_once('.')?;
             let seconds: i64 = whole.parse().ok()?;
-            if frac.is_empty() || frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) { return None; }
+            if frac.is_empty() || frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
             let fraction: i64 = format!("{frac:0<9}").parse().ok()?;
             out.seconds = sign.checked_mul(seconds)?;
             out.milliseconds = sign.checked_mul(fraction / 1_000_000)?;
@@ -56785,29 +57910,44 @@ fn parse_temporal_duration(text: &str) -> Option<TemporalDurationRecord> {
         }
         let v = sign.checked_mul(number.parse::<i64>().ok()?)?;
         match (time, designator) {
-            (false, 'Y') => out.years = v, (false, 'M') => out.months = v,
-            (false, 'W') => out.weeks = v, (false, 'D') => out.days = v,
-            (true, 'H') => out.hours = v, (true, 'M') => out.minutes = v,
-            (true, 'S') => out.seconds = v, _ => return None,
+            (false, 'Y') => out.years = v,
+            (false, 'M') => out.months = v,
+            (false, 'W') => out.weeks = v,
+            (false, 'D') => out.days = v,
+            (true, 'H') => out.hours = v,
+            (true, 'M') => out.minutes = v,
+            (true, 'S') => out.seconds = v,
+            _ => return None,
         }
     }
     saw.then_some(out)
 }
 
 fn format_temporal_duration(d: TemporalDurationRecord) -> String {
-    if d.sign() == 0 { return "PT0S".to_string(); }
+    if d.sign() == 0 {
+        return "PT0S".to_string();
+    }
     let sign = if d.sign() < 0 { "-" } else { "" };
     let f = d.fields().map(i64::unsigned_abs);
     let mut s = format!("{sign}P");
-    for (v, mark) in [(f[0],"Y"),(f[1],"M"),(f[2],"W"),(f[3],"D")] { if v != 0 { s.push_str(&format!("{v}{mark}")); } }
+    for (v, mark) in [(f[0], "Y"), (f[1], "M"), (f[2], "W"), (f[3], "D")] {
+        if v != 0 {
+            s.push_str(&format!("{v}{mark}"));
+        }
+    }
     if f[4..].iter().any(|&v| v != 0) {
         s.push('T');
-        if f[4] != 0 { s.push_str(&format!("{}H", f[4])); }
-        if f[5] != 0 { s.push_str(&format!("{}M", f[5])); }
+        if f[4] != 0 {
+            s.push_str(&format!("{}H", f[4]));
+        }
+        if f[5] != 0 {
+            s.push_str(&format!("{}M", f[5]));
+        }
         let fraction = f[7] * 1_000_000 + f[8] * 1_000 + f[9];
         if f[6] != 0 || fraction != 0 {
-            if fraction == 0 { s.push_str(&format!("{}S", f[6])); }
-            else {
+            if fraction == 0 {
+                s.push_str(&format!("{}S", f[6]));
+            } else {
                 let digits = format!("{fraction:09}");
                 s.push_str(&format!("{}.{}S", f[6], digits.trim_end_matches('0')));
             }
@@ -56819,8 +57959,7 @@ fn format_temporal_duration(d: TemporalDurationRecord) -> String {
 // Proleptic-Gregorian civil date conversion (Howard Hinnant's algorithms),
 // expressed entirely in integers so every supported Instant stays nanosecond exact.
 fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i128> {
-    let leap = year.rem_euclid(4) == 0
-        && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0);
+    let leap = year.rem_euclid(4) == 0 && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0);
     let month_days = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -56828,7 +57967,9 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i128> {
         2 => 28,
         _ => return None,
     };
-    if day == 0 || day > month_days { return None; }
+    if day == 0 || day > month_days {
+        return None;
+    }
     // Use i128 throughout: Date accepts finite components up to the Number
     // range, and the i64 boundary values admitted above must become an invalid
     // TimeClip result rather than overflowing debug arithmetic here.
@@ -56859,40 +58000,83 @@ fn parse_temporal_instant(text: &str) -> Option<i128> {
     if text.starts_with("-000000-") {
         return None;
     }
-    let t = text.find(['T','t'])?;
-    let (date, mut time) = text.split_at(t); time = &time[1..];
+    let t = text.find(['T', 't'])?;
+    let (date, mut time) = text.split_at(t);
+    time = &time[1..];
     let mut dp = date.rsplitn(3, '-');
-    let day: u32 = dp.next()?.parse().ok()?; let month: u32 = dp.next()?.parse().ok()?;
-    let year_text = dp.next()?; let year: i64 = year_text.parse().ok()?;
-    let zone_at = time.rfind(['Z','z','+','-'])?;
+    let day: u32 = dp.next()?.parse().ok()?;
+    let month: u32 = dp.next()?.parse().ok()?;
+    let year_text = dp.next()?;
+    let year: i64 = year_text.parse().ok()?;
+    let zone_at = time.rfind(['Z', 'z', '+', '-'])?;
     let (clock, zone) = time.split_at(zone_at);
     let mut cp = clock.split(':');
-    let hour: i128 = cp.next()?.parse().ok()?; let minute: i128 = cp.next()?.parse().ok()?;
-    let second_text = cp.next()?; if cp.next().is_some() || hour > 23 || minute > 59 { return None; }
+    let hour: i128 = cp.next()?.parse().ok()?;
+    let minute: i128 = cp.next()?.parse().ok()?;
+    let second_text = cp.next()?;
+    if cp.next().is_some() || hour > 23 || minute > 59 {
+        return None;
+    }
     let (second, fraction) = second_text.split_once('.').unwrap_or((second_text, ""));
-    let second: i128 = second.parse().ok()?; if second > 59 { return None; }
-    if fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) { return None; }
-    let frac: i128 = if fraction.is_empty() { 0 } else { format!("{fraction:0<9}").parse().ok()? };
-    let offset_seconds: i128 = if zone.eq_ignore_ascii_case("z") { 0 } else {
-        let sign = if zone.starts_with('-') { -1 } else if zone.starts_with('+') { 1 } else { return None };
-        let mut zp = zone[1..].split(':'); let zh: i128 = zp.next()?.parse().ok()?;
+    let second: i128 = second.parse().ok()?;
+    if second > 59 {
+        return None;
+    }
+    if fraction.len() > 9 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let frac: i128 = if fraction.is_empty() {
+        0
+    } else {
+        format!("{fraction:0<9}").parse().ok()?
+    };
+    let offset_seconds: i128 = if zone.eq_ignore_ascii_case("z") {
+        0
+    } else {
+        let sign = if zone.starts_with('-') {
+            -1
+        } else if zone.starts_with('+') {
+            1
+        } else {
+            return None;
+        };
+        let mut zp = zone[1..].split(':');
+        let zh: i128 = zp.next()?.parse().ok()?;
         let zm: i128 = zp.next().unwrap_or("0").parse().ok()?;
-        if zh > 23 || zm > 59 || zp.next().is_some() { return None; }
+        if zh > 23 || zm > 59 || zp.next().is_some() {
+            return None;
+        }
         sign * (zh * 3600 + zm * 60)
     };
     let days = days_from_civil(year, month, day)?;
-    Some(((days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds) * 1_000_000_000) + frac)
+    Some(
+        ((days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds) * 1_000_000_000)
+            + frac,
+    )
 }
 
 fn format_temporal_instant(ns: i128) -> String {
     let seconds = ns.div_euclid(1_000_000_000);
     let fraction = ns.rem_euclid(1_000_000_000);
-    let days = seconds.div_euclid(86_400); let sod = seconds.rem_euclid(86_400);
+    let days = seconds.div_euclid(86_400);
+    let sod = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
-    let hour = sod / 3600; let minute = (sod % 3600) / 60; let second = sod % 60;
-    let y = if (0..=9999).contains(&year) { format!("{year:04}") } else { format!("{year:+07}") };
-    if fraction == 0 { format!("{y}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z") }
-    else { format!("{y}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{}Z", format!("{fraction:09}").trim_end_matches('0')) }
+    let hour = sod / 3600;
+    let minute = (sod % 3600) / 60;
+    let second = sod % 60;
+    let y = if (0..=9999).contains(&year) {
+        format!("{year:04}")
+    } else {
+        format!("{year:+07}")
+    };
+    if fraction == 0 {
+        format!("{y}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    } else {
+        format!(
+            "{y}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{}Z",
+            format!("{fraction:09}").trim_end_matches('0')
+        )
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -56909,7 +58093,10 @@ fn zoned_local_datetime(epoch_ns: i128, offset_ns: i64) -> TemporalPlainRecord {
     let sod = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
     TemporalPlainRecord {
-        kind: 2, year, month, day,
+        kind: 2,
+        year,
+        month,
+        day,
         hour: (sod / 3600) as u32,
         minute: ((sod % 3600) / 60) as u32,
         second: (sod % 60) as u32,
@@ -56945,7 +58132,10 @@ fn format_offset_string(offset_ns: i64) -> String {
     } else if frac == 0 {
         format!("{sign}{h:02}:{m:02}:{s:02}")
     } else {
-        format!("{sign}{h:02}:{m:02}:{s:02}.{}", format!("{frac:09}").trim_end_matches('0'))
+        format!(
+            "{sign}{h:02}:{m:02}:{s:02}.{}",
+            format!("{frac:09}").trim_end_matches('0')
+        )
     }
 }
 
@@ -56953,7 +58143,9 @@ fn format_offset_string(offset_ns: i64) -> String {
 /// `±HH:MM:SS.fff…`) into nanoseconds east of UTC.
 fn parse_offset_ns(text: &str) -> Option<i64> {
     let t = text.trim();
-    if t.eq_ignore_ascii_case("z") { return Some(0); }
+    if t.eq_ignore_ascii_case("z") {
+        return Some(0);
+    }
     let (sign, rest) = match t.strip_prefix('+') {
         Some(r) => (1i64, r),
         None => (-1i64, t.strip_prefix('-')?),
@@ -56965,21 +58157,35 @@ fn parse_offset_ns(text: &str) -> Option<i64> {
         let h: i64 = p.next()?.parse().ok()?;
         let m: i64 = p.next().unwrap_or("0").parse().ok()?;
         let s: i64 = p.next().unwrap_or("0").parse().ok()?;
-        if p.next().is_some() { return None; }
+        if p.next().is_some() {
+            return None;
+        }
         (h, m, s)
     } else {
         // Compact HH / HHMM / HHMMSS.
-        if !clock.bytes().all(|b| b.is_ascii_digit()) { return None; }
+        if !clock.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
         match clock.len() {
             2 => (clock.parse().ok()?, 0, 0),
             4 => (clock[0..2].parse().ok()?, clock[2..4].parse().ok()?, 0),
-            6 => (clock[0..2].parse().ok()?, clock[2..4].parse().ok()?, clock[4..6].parse().ok()?),
+            6 => (
+                clock[0..2].parse().ok()?,
+                clock[2..4].parse().ok()?,
+                clock[4..6].parse().ok()?,
+            ),
             _ => return None,
         }
     };
-    if h > 23 || m > 59 || s > 59 { return None; }
-    let frac_ns: i64 = if frac.is_empty() { 0 } else {
-        if frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) { return None; }
+    if h > 23 || m > 59 || s > 59 {
+        return None;
+    }
+    let frac_ns: i64 = if frac.is_empty() {
+        0
+    } else {
+        if frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
         format!("{frac:0<9}").parse().ok()?
     };
     Some(sign * ((h * 3600 + m * 60 + s) * 1_000_000_000 + frac_ns))
@@ -56990,7 +58196,9 @@ fn parse_offset_ns(text: &str) -> Option<i64> {
 /// zone falls through to [`resolve_time_zone`].
 fn parse_offset_time_zone(text: &str) -> Option<(String, i64)> {
     let t = text.trim();
-    if !(t.starts_with('+') || t.starts_with('-')) { return None; }
+    if !(t.starts_with('+') || t.starts_with('-')) {
+        return None;
+    }
     let ns = parse_offset_ns(t)?;
     Some((format_offset_string(ns), ns))
 }
@@ -56999,7 +58207,9 @@ fn parse_offset_time_zone(text: &str) -> Option<(String, i64)> {
 /// offset ns)`, reusing the shared fixed-offset [`resolve_time_zone`] table for
 /// named/`Etc`/`UTC` zones and adding sub-minute numeric offsets.
 fn resolve_zoned_time_zone(raw: &str) -> Option<(String, i64)> {
-    if let Some(pair) = parse_offset_time_zone(raw) { return Some(pair); }
+    if let Some(pair) = parse_offset_time_zone(raw) {
+        return Some(pair);
+    }
     let (canonical, minutes) = resolve_time_zone(raw)?;
     Some((canonical, minutes as i64 * 60_000_000_000))
 }
@@ -57029,7 +58239,10 @@ fn parse_temporal_zoned(text: &str) -> Option<TemporalZonedRecord> {
         Some(at) => (&main[..at], Some(&main[at + 1..])),
         None => (main, None),
     };
-    let mut p = TemporalPlainRecord { kind: 2, ..Default::default() };
+    let mut p = TemporalPlainRecord {
+        kind: 2,
+        ..Default::default()
+    };
     let mut dp = date_part.rsplitn(3, '-');
     p.day = dp.next()?.parse().ok()?;
     p.month = dp.next()?.parse().ok()?;
@@ -57047,43 +58260,76 @@ fn parse_temporal_zoned(text: &str) -> Option<TemporalZonedRecord> {
         p.hour = cp.next()?.parse().ok()?;
         p.minute = cp.next().unwrap_or("0").parse().ok()?;
         let sec = cp.next().unwrap_or("0");
-        if cp.next().is_some() { return None; }
+        if cp.next().is_some() {
+            return None;
+        }
         let (whole, frac) = sec.split_once('.').unwrap_or((sec, ""));
         p.second = whole.parse().ok()?;
         if !frac.is_empty() {
-            if frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) { return None; }
+            if frac.len() > 9 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
             let n: u32 = format!("{frac:0<9}").parse().ok()?;
-            p.millisecond = n / 1_000_000; p.microsecond = (n / 1_000) % 1_000; p.nanosecond = n % 1_000;
+            p.millisecond = n / 1_000_000;
+            p.microsecond = (n / 1_000) % 1_000;
+            p.nanosecond = n % 1_000;
         }
-        if let Some(o) = off { string_offset = Some(parse_offset_ns(o)?); }
+        if let Some(o) = off {
+            string_offset = Some(parse_offset_ns(o)?);
+        }
     }
-    if !temporal_plain_valid(p) { return None; }
+    if !temporal_plain_valid(p) {
+        return None;
+    }
     if let Some(so) = string_offset {
-        if so != zone_off { return None; }
+        if so != zone_off {
+            return None;
+        }
     }
     let epoch = local_datetime_to_epoch(&p, zone_off)?;
-    Some(TemporalZonedRecord { epoch_nanoseconds: epoch, time_zone, offset_ns: zone_off })
+    Some(TemporalZonedRecord {
+        epoch_nanoseconds: epoch,
+        time_zone,
+        offset_ns: zone_off,
+    })
 }
 
 /// Render a `Temporal.ZonedDateTime`: the local datetime, then (optionally) the
 /// offset, the `[timeZone]` annotation, and a `[u-ca=iso8601]` calendar tag.
-fn format_zoned(rec: &TemporalZonedRecord, calendar_name: &str, show_offset: bool, show_zone: bool) -> String {
+fn format_zoned(
+    rec: &TemporalZonedRecord,
+    calendar_name: &str,
+    show_offset: bool,
+    show_zone: bool,
+) -> String {
     let p = zoned_local_datetime(rec.epoch_nanoseconds, rec.offset_ns);
     let mut s = format_temporal_plain(p);
-    if show_offset { s.push_str(&format_offset_string(rec.offset_ns)); }
-    if show_zone { s.push_str(&format!("[{}]", rec.time_zone)); }
-    if calendar_name == "always" { s.push_str("[u-ca=iso8601]"); }
+    if show_offset {
+        s.push_str(&format_offset_string(rec.offset_ns));
+    }
+    if show_zone {
+        s.push_str(&format!("[{}]", rec.time_zone));
+    }
+    if calendar_name == "always" {
+        s.push_str("[u-ca=iso8601]");
+    }
     s
 }
 
 /// The ISO-8601 week-of-year and its week-numbering year.
 fn iso_week_of_year(year: i64, month: u32, day: u32) -> (u32, i64) {
     let weeks_in = |y: i64| -> u32 {
-        let p = |y: i64| ((y + y.div_euclid(4) - y.div_euclid(100) + y.div_euclid(400)) % 7 + 7) % 7;
-        if p(y) == 4 || p(y - 1) == 3 { 53 } else { 52 }
+        let p =
+            |y: i64| ((y + y.div_euclid(4) - y.div_euclid(100) + y.div_euclid(400)) % 7 + 7) % 7;
+        if p(y) == 4 || p(y - 1) == 3 {
+            53
+        } else {
+            52
+        }
     };
     let ordinal = (days_from_civil(year, month, day).unwrap_or(0)
-        - days_from_civil(year, 1, 1).unwrap_or(0)) as i64 + 1;
+        - days_from_civil(year, 1, 1).unwrap_or(0)) as i64
+        + 1;
     // ISO weekday, Monday = 1 … Sunday = 7.
     let dow = ((days_from_civil(year, month, day).unwrap_or(0) + 3).rem_euclid(7)) as i64 + 1;
     let mut week = (ordinal - dow + 10).div_euclid(7);
@@ -57101,27 +58347,63 @@ fn iso_week_of_year(year: i64, month: u32, day: u32) -> (u32, i64) {
 /// Round `value` to a multiple of `quantum` (> 0) under a Temporal rounding mode.
 /// Returns `None` for an unrecognized mode.
 fn round_temporal(value: i128, quantum: i128, mode: &str) -> Option<i128> {
-    if quantum <= 0 { return None; }
+    if quantum <= 0 {
+        return None;
+    }
     let lo = value.div_euclid(quantum) * quantum;
     let r = value - lo;
-    if r == 0 { return Some(value); }
+    if r == 0 {
+        return Some(value);
+    }
     let hi = lo + quantum;
     let idx = value.div_euclid(quantum);
     let res = match mode {
-        "trunc" => if value >= 0 { lo } else { hi },
+        "trunc" => {
+            if value >= 0 {
+                lo
+            } else {
+                hi
+            }
+        }
         "floor" => lo,
         "ceil" => hi,
-        "expand" => if value >= 0 { hi } else { lo },
+        "expand" => {
+            if value >= 0 {
+                hi
+            } else {
+                lo
+            }
+        }
         "halfExpand" | "halfCeil" | "halfFloor" | "halfEven" | "halfTrunc" => {
-            if 2 * r < quantum { lo }
-            else if 2 * r > quantum { hi }
-            else {
+            if 2 * r < quantum {
+                lo
+            } else if 2 * r > quantum {
+                hi
+            } else {
                 match mode {
-                    "halfExpand" => if value >= 0 { hi } else { lo },
-                    "halfTrunc" => if value >= 0 { lo } else { hi },
+                    "halfExpand" => {
+                        if value >= 0 {
+                            hi
+                        } else {
+                            lo
+                        }
+                    }
+                    "halfTrunc" => {
+                        if value >= 0 {
+                            lo
+                        } else {
+                            hi
+                        }
+                    }
                     "halfCeil" => hi,
                     "halfFloor" => lo,
-                    "halfEven" => if idx.rem_euclid(2) == 0 { lo } else { hi },
+                    "halfEven" => {
+                        if idx.rem_euclid(2) == 0 {
+                            lo
+                        } else {
+                            hi
+                        }
+                    }
                     _ => hi,
                 }
             }
@@ -57168,7 +58450,7 @@ fn balance_zoned_diff(ns: i128, largest: &str) -> Option<TemporalDurationRecord>
 
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
-            Native::Eval => "native-call:eval",
+        Native::Eval => "native-call:eval",
         Native::Locale => "native-call:Locale",
         Native::Collator => "native-call:Collator",
         Native::ListFormat => "native-call:ListFormat",
@@ -57426,11 +58708,7 @@ fn unicode_case_convert_utf16(units: &[u16], upper: bool) -> Vec<u16> {
 /// Apply the locale tailoring required by the frozen Intl profile before the
 /// Unicode whole-string conversion. Turkish and Azeri specialize dotted and
 /// dotless I; every other supported or fallback locale uses default casing.
-fn unicode_locale_case_convert_utf16(
-    units: &[u16],
-    upper: bool,
-    locale: &str,
-) -> Vec<u16> {
+fn unicode_locale_case_convert_utf16(units: &[u16], upper: bool, locale: &str) -> Vec<u16> {
     let language = locale.split('-').next().unwrap_or(locale);
     if !matches!(language, "tr" | "az") {
         return unicode_case_convert_utf16(units, upper);
@@ -57474,10 +58752,7 @@ enum UnicodeNormalizationForm {
 /// ICU4X's UTF-16 entry point deliberately maps invalid pairs to U+FFFD, so
 /// valid scalar runs are normalized separately and each unpaired surrogate is
 /// copied verbatim as a normalization boundary.
-fn unicode_normalize_utf16(
-    units: &[u16],
-    form: UnicodeNormalizationForm,
-) -> Vec<u16> {
+fn unicode_normalize_utf16(units: &[u16], form: UnicodeNormalizationForm) -> Vec<u16> {
     let mut out = Vec::with_capacity(units.len());
     let mut scalar_run = String::new();
     let flush = |scalar_run: &mut String, out: &mut Vec<u16>| {
@@ -58112,11 +59387,7 @@ mod tests {
             .well_known_symbol_property_id("iterator")
             .expect("boot iterator symbol");
         interp.set_own_unmetered(custom_args, iterator_id, Slot::integer(17));
-        interp.restore_arguments_brands(vec![
-            default_args.0,
-            custom_args.0,
-            custom_missing_args.0,
-        ]);
+        interp.restore_arguments_brands(vec![default_args.0, custom_args.0, custom_missing_args.0]);
 
         interp.migrate_restored_layout();
 
@@ -58365,8 +59636,8 @@ mod tests {
         // so the assertion faithfully mirrors the fuzz harness rather
         // than the test runner's smaller worker stack.
         let bytes: &[u8] = &[
-            41, 12, 193, 193, 193, 193, 12, 12, 56, 102, 102, 102, 102, 102, 102, 102, 6, 66,
-            193, 82,
+            41, 12, 193, 193, 193, 193, 12, 12, 56, 102, 102, 102, 102, 102, 102, 102, 6, 66, 193,
+            82,
         ];
         let halt = std::thread::Builder::new()
             .stack_size(8 * 1024 * 1024)
@@ -58391,9 +59662,9 @@ mod tests {
 
         let get_var = b(Opcode::XS_CODE_GET_VARIABLE); // size 0 (ID operand)
         let string_1 = b(Opcode::XS_CODE_STRING_1); // size -1 (length-prefixed data)
-        // A unit whose program-local id 1 names "bar": a STRING_1 literal whose
-        // 2-byte payload is `[get_var, 0x00]` (data that must NOT be walked as
-        // an opcode), then a real GET_VARIABLE of program-local id 1.
+                                                    // A unit whose program-local id 1 names "bar": a STRING_1 literal whose
+                                                    // 2-byte payload is `[get_var, 0x00]` (data that must NOT be walked as
+                                                    // an opcode), then a real GET_VARIABLE of program-local id 1.
         let unit = vec![
             string_1, 0x02, get_var, 0x00, // string literal, payload = [get_var, 0]
             get_var, 0x01, 0x00, // GET_VARIABLE id=1 (the unit's "bar")
@@ -58406,7 +59677,11 @@ mod tests {
         // Same length, literal payload byte-identical (the data at index 2..4
         // is NOT a symbol operand and is preserved verbatim).
         assert_eq!(relinked.len(), unit.len());
-        assert_eq!(&relinked[0..4], &unit[0..4], "string literal payload preserved");
+        assert_eq!(
+            &relinked[0..4],
+            &unit[0..4],
+            "string literal payload preserved"
+        );
         // The real GET_VARIABLE operand was remapped 1 -> host id 2 ("bar").
         let host_id = u16::from_le_bytes([relinked[5], relinked[6]]);
         assert_eq!(host_id, 2, "unit id 1 (\"bar\") relinked to host id 2");
@@ -58459,7 +59734,9 @@ mod tests {
         interp.link_intrinsics(&names);
         let get_var = b(Opcode::XS_CODE_GET_VARIABLE);
         let get_prop = b(Opcode::XS_CODE_GET_PROPERTY);
-        let unit = vec![get_var, 0x02, 0x00, get_prop, 0x03, 0x00, get_var, 0x01, 0x00];
+        let unit = vec![
+            get_var, 0x02, 0x00, get_prop, 0x03, 0x00, get_var, 0x01, 0x00,
+        ];
         let relinked = interp
             .relink_program_symbols(&unit, &names)
             .expect("relink walks the buffer");
@@ -59777,8 +61054,8 @@ fn bi_shr_mag(magnitude: &[u32], bits: usize) -> (Vec<u32>, bool) {
     }
 
     let whole_discarded = magnitude[..limb_shift].iter().any(|&limb| limb != 0);
-    let partial_discarded = bit_shift != 0
-        && magnitude[limb_shift] & ((1u32 << bit_shift) - 1) != 0;
+    let partial_discarded =
+        bit_shift != 0 && magnitude[limb_shift] & ((1u32 << bit_shift) - 1) != 0;
     let mut shifted = Vec::with_capacity(magnitude.len() - limb_shift);
     for i in limb_shift..magnitude.len() {
         let low = magnitude[i] >> bit_shift;
@@ -60053,7 +61330,11 @@ fn parse_bigint_string_u64(source: &str) -> Option<u64> {
         let digit = ch.to_digit(radix)? as u64;
         value = value.wrapping_mul(radix as u64).wrapping_add(digit);
     }
-    Some(if negative { value.wrapping_neg() } else { value })
+    Some(if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    })
 }
 
 /// Parse a StringIntegerLiteral into arbitrary-precision sign/magnitude
@@ -60388,8 +61669,7 @@ impl Interp {
             async_generators: &'a mut std::collections::HashMap<SlotIndex, AsyncGeneratorData>,
             segment_iterators: &'a mut std::collections::HashMap<SlotIndex, SegmentIteratorData>,
             collator_compare_functions: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
-            number_format_bound_functions:
-                &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
+            number_format_bound_functions: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
             number_formats: &'a mut std::collections::HashMap<SlotIndex, NumberFormatData>,
             combinators: &'a [CombinatorState],
             from_async: &'a mut Vec<FromAsyncData>,
@@ -60679,8 +61959,10 @@ impl Interp {
                 self.async_generators.remove(&idx);
                 self.disposable_stacks.remove(&idx);
                 self.accessors.retain(|(owner, _), _| *owner != idx);
-                self.private_values.retain(|(recv, cell), _| *recv != idx && *cell != idx);
-                self.private_accessors.retain(|(recv, cell), _| *recv != idx && *cell != idx);
+                self.private_values
+                    .retain(|(recv, cell), _| *recv != idx && *cell != idx);
+                self.private_accessors
+                    .retain(|(recv, cell), _| *recv != idx && *cell != idx);
                 // The tables holding no slots or chunks (error data,
                 // regexps, symbol id maps) are pruned after the
                 // collection from this list — late pruning cannot
@@ -61003,8 +62285,10 @@ impl Interp {
         self.proxies.retain(|k, _| !dead.contains(k));
         self.proxy_revokers.retain(|k, _| !dead.contains(k));
         self.segment_iterators.retain(|k, _| !dead.contains(k));
-        self.collator_compare_functions.retain(|k, _| !dead.contains(k));
-        self.number_format_bound_functions.retain(|k, _| !dead.contains(k));
+        self.collator_compare_functions
+            .retain(|k, _| !dead.contains(k));
+        self.number_format_bound_functions
+            .retain(|k, _| !dead.contains(k));
         self.temporal_instants.retain(|k, _| !dead.contains(k));
         self.temporal_durations.retain(|k, _| !dead.contains(k));
         self.temporal_plains.retain(|k, _| !dead.contains(k));
@@ -61116,9 +62400,7 @@ impl Interp {
             .collect();
 
         let repoint = |kind: &mut ReactionKind| match kind {
-            ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
-                *ci = comb_map[ci]
-            }
+            ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => *ci = comb_map[ci],
             ReactionKind::FromAsyncNext(fa)
             | ReactionKind::FromAsyncElem(fa)
             | ReactionKind::FromAsyncMap(fa)
@@ -61216,8 +62498,10 @@ impl Interp {
             // u64 page math: `page * SLOTS_PER_PAGE` would wrap u32 at
             // the maximal page index, turning an out-of-range page
             // into a bogus in-range sweep.
-            let start = (page as u64 * SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64) as u32;
-            let end = ((start as u64 + SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64)) as u32;
+            let start =
+                (page as u64 * SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64) as u32;
+            let end =
+                ((start as u64 + SLOTS_PER_PAGE as u64).min(self.slots.capacity() as u64)) as u32;
             for i in start..end {
                 let idx = SlotIndex(i);
                 if !self.slots.is_free_index(idx) {
@@ -61268,8 +62552,10 @@ impl Interp {
         self.disposable_stacks.retain(|k, _| !dead.contains(k));
         self.async_generators.retain(|k, _| !dead.contains(k));
         self.segment_iterators.retain(|k, _| !dead.contains(k));
-        self.collator_compare_functions.retain(|k, _| !dead.contains(k));
-        self.number_format_bound_functions.retain(|k, _| !dead.contains(k));
+        self.collator_compare_functions
+            .retain(|k, _| !dead.contains(k));
+        self.number_format_bound_functions
+            .retain(|k, _| !dead.contains(k));
         self.temporal_instants.retain(|k, _| !dead.contains(k));
         self.temporal_durations.retain(|k, _| !dead.contains(k));
         self.temporal_plains.retain(|k, _| !dead.contains(k));
@@ -61343,10 +62629,7 @@ impl Interp {
     /// constant on wide heaps. Out-of-arena indices (including the
     /// null sentinel) fall outside the bitmap and are skipped.
     pub fn side_table_ref_page_bits(&self) -> Vec<bool> {
-        let pages = self
-            .slots
-            .capacity()
-            .div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
+        let pages = self.slots.capacity().div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
         let mut bits = vec![false; pages];
         // The TAIL tables (functions, promises, iterators, …) stay an
         // O(small) walk; the BULK tables (arrays' items, collections'
@@ -61371,8 +62654,7 @@ impl Interp {
             let mut walked = vec![false; pages];
             self.each_side_table_ref(&mut |r| {
                 if !r.is_null() {
-                    if let Some(b) = walked.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize)
-                    {
+                    if let Some(b) = walked.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize) {
                         *b = true;
                     }
                 }

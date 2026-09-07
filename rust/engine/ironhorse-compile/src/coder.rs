@@ -163,14 +163,64 @@ struct FieldPlan {
 /// of every program symbol, so their position is part of the ID contract
 /// whenever the program (or the coder) emits one of them.
 const SEED_SYMBOLS: &[&str] = &[
-    "Object", "__dirname", "__filename", "__jsx__", "__proto__", "*", "args",
-    "arguments", "=>", "as", "async", "await", "call", "caller", "constructor",
-    "default", "done", "eval", "exports", "fill", "freeze", "from", "get", "id",
-    "include", "Infinity", "json", "length", "let", "meta", "module", "name",
-    "NaN", "Native", "native", "next", "new.target", "of", "#constructor",
-    "prototype", "RangeError", "raw", "return", "set", "slice", "SyntaxError",
-    "static", "String", "target", "this", "throw", "toString", "undefined",
-    "uri", "using", "value", "with", "yield",
+    "Object",
+    "__dirname",
+    "__filename",
+    "__jsx__",
+    "__proto__",
+    "*",
+    "args",
+    "arguments",
+    "=>",
+    "as",
+    "async",
+    "await",
+    "call",
+    "caller",
+    "constructor",
+    "default",
+    "done",
+    "eval",
+    "exports",
+    "fill",
+    "freeze",
+    "from",
+    "get",
+    "id",
+    "include",
+    "Infinity",
+    "json",
+    "length",
+    "let",
+    "meta",
+    "module",
+    "name",
+    "NaN",
+    "Native",
+    "native",
+    "next",
+    "new.target",
+    "of",
+    "#constructor",
+    "prototype",
+    "RangeError",
+    "raw",
+    "return",
+    "set",
+    "slice",
+    "SyntaxError",
+    "static",
+    "String",
+    "target",
+    "this",
+    "throw",
+    "toString",
+    "undefined",
+    "uri",
+    "using",
+    "value",
+    "with",
+    "yield",
 ];
 
 /// One interned symbol — XS's `txSymbol` (the fields the coder reads).
@@ -205,7 +255,10 @@ impl SymbolTable {
     /// A table pre-seeded with the built-in symbols, matching XS's
     /// `fxInitializeParser`.
     fn seeded() -> SymbolTable {
-        let mut t = SymbolTable { entries: Vec::new(), index: HashMap::new() };
+        let mut t = SymbolTable {
+            entries: Vec::new(),
+            index: HashMap::new(),
+        };
         for s in SEED_SYMBOLS {
             t.intern(s);
         }
@@ -231,7 +284,12 @@ impl SymbolTable {
         }
         let bucket = SymbolTable::hash(s) % SYMBOL_MODULO;
         let i = self.entries.len();
-        self.entries.push(SymEntry { string: s.to_string(), bucket, usage: false, id: 0 });
+        self.entries.push(SymEntry {
+            string: s.to_string(),
+            bucket,
+            usage: false,
+            id: 0,
+        });
         self.index.insert(s.to_string(), i);
         i
     }
@@ -503,7 +561,11 @@ impl<'a> Coder<'a> {
     /// The declaration `(scope, id)` a node's symbol binds to (XS's
     /// `access->declaration`), or `None` for the symbol path.
     fn resolution_of(&self, node: &Node) -> Option<(usize, u32)> {
-        self.tree.resolutions.get(&node_key(node)).copied().flatten()
+        self.tree
+            .resolutions
+            .get(&node_key(node))
+            .copied()
+            .flatten()
     }
 
     /// A resolved declaration's `flags` word (for the closure test).
@@ -605,7 +667,11 @@ impl<'a> Coder<'a> {
     fn add(&mut self, delta: i32, payload: Payload, id: i32) {
         self.stack_level += delta;
         let stack_level = self.stack_level;
-        self.codes.push(Code { id, stack_level, payload });
+        self.codes.push(Code {
+            id,
+            stack_level,
+            payload,
+        });
     }
 
     fn add_byte(&mut self, delta: i32, id: i32) {
@@ -613,7 +679,14 @@ impl<'a> Coder<'a> {
     }
 
     fn add_index(&mut self, delta: i32, id: i32, index: i32) {
-        self.add(delta, Payload::Index { index, plus_one: false }, id);
+        self.add(
+            delta,
+            Payload::Index {
+                index,
+                plus_one: false,
+            },
+            id,
+        );
     }
 
     fn add_integer(&mut self, delta: i32, id: i32, value: i32) {
@@ -702,7 +775,11 @@ impl<'a> Coder<'a> {
 
     /// The primary scope XS hung off `node`.
     fn scope_of(&self, node: &Node) -> usize {
-        self.tree.node_scopes.get(&node_key(node)).expect("scope for node").0
+        self.tree
+            .node_scopes
+            .get(&node_key(node))
+            .expect("scope for node")
+            .0
     }
 
     /// The secondary scope XS hung off `node` (`statementScope` /
@@ -899,7 +976,11 @@ impl<'a> Coder<'a> {
         for (id, closure) in names {
             let index = self.declare_index(scope, id);
             self.add_byte(1, XS_CODE_CURRENT);
-            let op = if closure { XS_CODE_CONST_CLOSURE_1 } else { XS_CODE_CONST_LOCAL_1 };
+            let op = if closure {
+                XS_CODE_CONST_CLOSURE_1
+            } else {
+                XS_CODE_CONST_LOCAL_1
+            };
             self.add_index(0, op, index);
             self.add_byte(-1, XS_CODE_POP);
         }
@@ -961,7 +1042,9 @@ pub fn script_goal_deviates(source: &str) -> bool {
 /// [`declares_top_level_var_or_function`] and [`script_goal_deviates`] so
 /// neither has to re-scope to ask the other's question.
 fn root_declares_var_or_function(root: &crate::scoper::Scope) -> bool {
-    root.declares.iter().any(|d| matches!(d.token, Token::Var | Token::Define))
+    root.declares
+        .iter()
+        .any(|d| matches!(d.token, Token::Var | Token::Define))
 }
 
 /// The public entry: compile `source` as a top-level **Script**
@@ -1075,9 +1158,7 @@ pub fn compile_module(source: &str) -> Result<Vec<u8>, crate::parser::ParseError
 /// (`(bytecode, symbols)`) — the module-goal counterpart of
 /// [`compile_atoms`], byte-identical to
 /// `xs_oracle::compile_module(source).symbols` whenever the bytecode is.
-pub fn compile_module_atoms(
-    source: &str,
-) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+pub fn compile_module_atoms(source: &str) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
     // The module goal is strict and allows top-level await (the parser's
     // `module` flag), mirroring the oracle shim's fxParserTree module branch
     // (`mxStrictFlag | mxAsyncFlag`).
@@ -1234,10 +1315,21 @@ impl Coder<'_> {
             New => self.code_new(node),
             Params => self.code_params(node, false, false),
             Assign => self.code_assign_node(node),
-            AddAssign | SubtractAssign | MultiplyAssign | DivideAssign | ModuloAssign
-            | ExponentiationAssign | BitAndAssign | BitOrAssign | BitXorAssign
-            | LeftShiftAssign | SignedRightShiftAssign | UnsignedRightShiftAssign
-            | AndAssign | OrAssign | CoalesceAssign => self.code_compound(node, no_value),
+            AddAssign
+            | SubtractAssign
+            | MultiplyAssign
+            | DivideAssign
+            | ModuloAssign
+            | ExponentiationAssign
+            | BitAndAssign
+            | BitOrAssign
+            | BitXorAssign
+            | LeftShiftAssign
+            | SignedRightShiftAssign
+            | UnsignedRightShiftAssign
+            | AndAssign
+            | OrAssign
+            | CoalesceAssign => self.code_compound(node, no_value),
             Increment | Decrement => self.code_postfix(node, no_value),
             Delete => self.code_delete(&node.children[0]),
             Object => self.code_object(node),
@@ -1321,10 +1413,10 @@ impl Coder<'_> {
         let is_eval = self.tree.scopes[scope].flags & crate::scoper::SCOPE_EVAL != 0;
         let scope_count = *self.tree.scope_counts.get(&scope).unwrap_or(&0);
         let declares = self.declares_of(scope);
-        let hoists_declarations =
-            declares.iter().any(|(_, t, _, _)| matches!(t, Token::Var | Token::Define));
-        let strict_eval =
-            strict && !(self.tree.goal == Goal::Script && hoists_declarations);
+        let hoists_declarations = declares
+            .iter()
+            .any(|(_, t, _, _)| matches!(t, Token::Var | Token::Define));
+        let strict_eval = strict && !(self.tree.goal == Goal::Script && hoists_declarations);
         if strict_eval {
             if scope_count != 0 {
                 self.add_index(0, XS_CODE_RESERVE_1, scope_count);
@@ -1460,7 +1552,11 @@ impl Coder<'_> {
         }
 
         // The module-body function (async when the module top-level awaits).
-        let create_op = if awaiting { XS_CODE_ASYNC_FUNCTION } else { XS_CODE_FUNCTION };
+        let create_op = if awaiting {
+            XS_CODE_ASYNC_FUNCTION
+        } else {
+            XS_CODE_FUNCTION
+        };
         self.add_symbol_null(1, create_op);
         self.add_branch(0, XS_CODE_CODE_1, target);
         self.add_index(0, XS_CODE_BEGIN_STRICT, 0);
@@ -1594,7 +1690,10 @@ impl Coder<'_> {
     fn fuse_pull(&mut self, pull_id: i32) {
         self.stack_level -= 1;
         let sl = self.stack_level;
-        let last = self.codes.last_mut().expect("fuse_pull needs a last record");
+        let last = self
+            .codes
+            .last_mut()
+            .expect("fuse_pull needs a last record");
         last.id = pull_id;
         last.stack_level = sl;
     }
@@ -1784,7 +1883,10 @@ impl Coder<'_> {
         // label of this statement.
         for (i, outer) in labels.iter().enumerate() {
             if let Some(o) = outer {
-                if labels[i + 1..].iter().any(|inner| inner.as_deref() == Some(o.as_str())) {
+                if labels[i + 1..]
+                    .iter()
+                    .any(|inner| inner.as_deref() == Some(o.as_str()))
+                {
                     self.report(node.line, &format!("duplicate label {}", o));
                 }
             }
@@ -1868,8 +1970,8 @@ impl Coder<'_> {
 
         self.scope_coding_block(scope);
         self.scope_code_define_nodes(scope);
-        let using_context = (self.tree.scopes[scope].disposable_count > 0)
-            .then(|| self.scope_code_using(scope));
+        let using_context =
+            (self.tree.scopes[scope].disposable_count > 0).then(|| self.scope_code_using(scope));
         let next_target = self.create_target();
         let done_target = self.create_target();
         if !matches!(node.children[0], Item::Null) {
@@ -1937,7 +2039,9 @@ impl Coder<'_> {
         let selector = self.use_temporary();
 
         // Take the continue target the enclosing (anonymous) label pushed.
-        let continue_target = self.first_continue_target.expect("for-in/of needs a continue target");
+        let continue_target = self
+            .first_continue_target
+            .expect("for-in/of needs a continue target");
         self.first_continue_target = self.targets[continue_target].next_target;
         self.targets[continue_target].next_target = None;
 
@@ -2016,8 +2120,12 @@ impl Coder<'_> {
         self.add_index(-1, XS_CODE_PULL_LOCAL_1, selector);
         self.add_branch(0, XS_CODE_BRANCH_1, finally_target);
         let mut selection = 1;
-        self.first_break_target =
-            self.finalize_targets(self.first_break_target, selector, &mut selection, uncatch_target);
+        self.first_break_target = self.finalize_targets(
+            self.first_break_target,
+            selector,
+            &mut selection,
+            uncatch_target,
+        );
         self.first_continue_target = self.finalize_targets(
             self.first_continue_target,
             selector,
@@ -2200,8 +2308,12 @@ impl Coder<'_> {
         self.add_index(-1, XS_CODE_PULL_LOCAL_1, selector);
         self.add_branch(0, XS_CODE_BRANCH_1, finally_target);
         let mut selection = 1;
-        self.first_break_target =
-            self.finalize_targets(self.first_break_target, selector, &mut selection, uncatch_target);
+        self.first_break_target = self.finalize_targets(
+            self.first_break_target,
+            selector,
+            &mut selection,
+            uncatch_target,
+        );
         self.first_continue_target = self.finalize_targets(
             self.first_continue_target,
             selector,
@@ -2257,7 +2369,11 @@ impl Coder<'_> {
         // the front end declines the source exactly as XS does.
         self.report(
             node.line,
-            if is_break { "invalid break" } else { "invalid continue" },
+            if is_break {
+                "invalid break"
+            } else {
+                "invalid continue"
+            },
         );
     }
 
@@ -2324,7 +2440,14 @@ impl Coder<'_> {
         let result = self.use_temporary();
 
         self.code(&node.children[0]);
-        self.add_byte(0, if is_async { XS_CODE_FOR_AWAIT_OF } else { XS_CODE_FOR_OF });
+        self.add_byte(
+            0,
+            if is_async {
+                XS_CODE_FOR_AWAIT_OF
+            } else {
+                XS_CODE_FOR_OF
+            },
+        );
         self.add_index(0, XS_CODE_SET_LOCAL_1, iterator);
         self.add_symbol(0, XS_CODE_GET_PROPERTY, "next");
         self.add_index(0, XS_CODE_SET_LOCAL_1, next);
@@ -2508,7 +2631,11 @@ impl Coder<'_> {
         // reference falls back to the symbol path.
         if let Some((scope, id)) = self.resolution_of(node) {
             let index = self.declare_index(scope, id);
-            let op = if self.is_closure(scope, id) { XS_CODE_GET_CLOSURE_1 } else { XS_CODE_GET_LOCAL_1 };
+            let op = if self.is_closure(scope, id) {
+                XS_CODE_GET_CLOSURE_1
+            } else {
+                XS_CODE_GET_LOCAL_1
+            };
             self.add_index(1, op, index);
             return;
         }
@@ -2647,13 +2774,25 @@ impl Coder<'_> {
                 let closure = self.is_closure(scope, id);
                 let op = match node.token {
                     Token::Const | Token::Using => {
-                        if closure { XS_CODE_CONST_CLOSURE_1 } else { XS_CODE_CONST_LOCAL_1 }
+                        if closure {
+                            XS_CODE_CONST_CLOSURE_1
+                        } else {
+                            XS_CODE_CONST_LOCAL_1
+                        }
                     }
                     Token::Let => {
-                        if closure { XS_CODE_LET_CLOSURE_1 } else { XS_CODE_LET_LOCAL_1 }
+                        if closure {
+                            XS_CODE_LET_CLOSURE_1
+                        } else {
+                            XS_CODE_LET_LOCAL_1
+                        }
                     }
                     _ => {
-                        if closure { XS_CODE_VAR_CLOSURE_1 } else { XS_CODE_VAR_LOCAL_1 }
+                        if closure {
+                            XS_CODE_VAR_CLOSURE_1
+                        } else {
+                            XS_CODE_VAR_LOCAL_1
+                        }
                     }
                 };
                 self.add_index(0, op, index);
@@ -2731,12 +2870,17 @@ impl Coder<'_> {
     /// count (stops at the first rest binding or non-parameter slot).
     fn count_parameters(&self, params: &Item) -> i32 {
         let Item::Node(p) = params else { return 0 };
-        let Some(Item::List(items)) = p.children.first() else { return 0 };
+        let Some(Item::List(items)) = p.children.first() else {
+            return 0;
+        };
         let mut count = 0;
         for it in items {
             match it {
                 Item::Node(n)
-                    if matches!(n.token, Token::Arg | Token::ArrayBinding | Token::ObjectBinding) =>
+                    if matches!(
+                        n.token,
+                        Token::Arg | Token::ArrayBinding | Token::ObjectBinding
+                    ) =>
                 {
                     count += 1;
                 }
@@ -2783,8 +2927,14 @@ impl Coder<'_> {
 
     fn code_class(&mut self, node: &Node) {
         use crate::ast::flags as f;
-        assert!(matches!(node.children[3], Item::Null), "class field/static-block init deferred");
-        assert!(matches!(node.children[4], Item::Null), "class instance-field init deferred");
+        assert!(
+            matches!(node.children[3], Item::Null),
+            "class field/static-block init deferred"
+        );
+        assert!(
+            matches!(node.children[4], Item::Null),
+            "class instance-field init deferred"
+        );
 
         let name = Self::symbol_opt(&node.children[0]);
         let class_scope = self.scope_of(node);
@@ -2920,7 +3070,8 @@ impl Coder<'_> {
                         if is_method {
                             self.pending_accessor = p.flags & (f::GETTER | f::SETTER) != 0;
                             self.code(&p.children[1]);
-                            let vidx = self.declare_index(class_scope, a.value.expect("valueAccess"));
+                            let vidx =
+                                self.declare_index(class_scope, a.value.expect("valueAccess"));
                             self.add_index(0, XS_CODE_CONST_CLOSURE_1, vidx);
                             self.add_byte(-1, XS_CODE_POP);
                         }
@@ -2940,8 +3091,7 @@ impl Coder<'_> {
         // Private methods first, then data fields / static blocks.
         let instance_fields: Vec<&Node> =
             instance_methods.into_iter().chain(instance_data).collect();
-        let static_fields: Vec<&Node> =
-            static_methods.into_iter().chain(static_data).collect();
+        let static_fields: Vec<&Node> = static_methods.into_iter().chain(static_data).collect();
 
         // Instance data fields run through the synthesized `instanceInit`
         // field function stored in the class-body closure. A base constructor
@@ -2967,7 +3117,11 @@ impl Coder<'_> {
         // captures (`fxClassNodeCode`'s `instanceInit` block).
         if !instance_fields.is_empty() {
             let (iscope, iid) = instance_init.expect("instance-init declare");
-            let fi = self.tree.class_field_init_inst.get(&node_key(node)).copied();
+            let fi = self
+                .tree
+                .class_field_init_inst
+                .get(&node_key(node))
+                .copied();
             self.code_field_init_function(&instance_fields, class_scope, fi);
             self.add_index(1, XS_CODE_GET_LOCAL_1, prototype);
             self.add_byte(-1, XS_CODE_SET_HOME);
@@ -2979,7 +3133,11 @@ impl Coder<'_> {
         // Static fields run through a synthesized `constructorInit` field
         // function invoked with the constructor as `this`/home.
         if !static_fields.is_empty() {
-            let ci = self.tree.class_field_init_static.get(&node_key(node)).copied();
+            let ci = self
+                .tree
+                .class_field_init_static
+                .get(&node_key(node))
+                .copied();
             self.add_index(1, XS_CODE_GET_LOCAL_1, constructor);
             self.code_field_init_function(&static_fields, class_scope, ci);
             self.add_index(1, XS_CODE_GET_LOCAL_1, constructor);
@@ -3007,7 +3165,12 @@ impl Coder<'_> {
     /// XS's field function is a real `mxFieldFlag` function with a scope, so
     /// it `RESERVE`s the alias slots, `RETRIEVE`s the closures at entry, and
     /// `STORE`s them from the enclosing class frame after creation.
-    fn code_field_init_function(&mut self, fields: &[&Node], class_scope: usize, fi: Option<usize>) {
+    fn code_field_init_function(
+        &mut self,
+        fields: &[&Node],
+        class_scope: usize,
+        fi: Option<usize>,
+    ) {
         use crate::ast::flags as f;
         let saved_return = self.return_target;
         let saved_scope_level = self.scope_level;
@@ -3029,7 +3192,8 @@ impl Coder<'_> {
         // (`fxScopeGetDeclareNode(functionScope, symbol)` dedups the
         // use-closure). Dedup the brand cap by private name here; each
         // member's `valueAccess` stays a distinct per-member cap.
-        let mut brand_slot: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
+        let mut brand_slot: std::collections::HashMap<String, i32> =
+            std::collections::HashMap::new();
         // The **member-closure** (static / `fi`-less) path builds the capture
         // plan by hand — class-scope declare ids in alias order and each
         // field's 0-based alias slot. The **field-function-scope** (`fi`) path
@@ -3138,8 +3302,12 @@ impl Coder<'_> {
             // operands (a get/set pair shares one brand slot via the scoper's
             // use-closure dedup).
             for field in fields {
-                let slots =
-                    self.tree.class_member_fi.get(&node_key(field)).copied().unwrap_or_default();
+                let slots = self
+                    .tree
+                    .class_member_fi
+                    .get(&node_key(field))
+                    .copied()
+                    .unwrap_or_default();
                 let plan = FieldPlan {
                     at: slots.at.map(|id| self.declare_index(fi, id)),
                     symbol: slots.symbol.map(|id| self.declare_index(fi, id)),
@@ -3228,24 +3396,40 @@ impl Coder<'_> {
                 let key = Self::symbol_of(&p.children[0]).to_string();
                 self.code(&p.children[1]);
                 self.add_symbol(-2, XS_CODE_NEW_PROPERTY, &key);
-                let flag = if Self::infers_name(&p.children[1]) { XS_NAME_FLAG } else { 0 };
+                let flag = if Self::infers_name(&p.children[1]) {
+                    XS_NAME_FLAG
+                } else {
+                    0
+                };
                 self.add_integer(0, XS_CODE_INTEGER_1, flag);
             }
             Token::PropertyAt => {
                 self.add_index(1, XS_CODE_GET_CLOSURE_1, plan.at.expect("atAccess alias"));
                 self.code(&p.children[1]);
                 self.add_byte(-3, XS_CODE_NEW_PROPERTY_AT);
-                let flag = if Self::infers_name(&p.children[1]) { XS_NAME_FLAG } else { 0 };
+                let flag = if Self::infers_name(&p.children[1]) {
+                    XS_NAME_FLAG
+                } else {
+                    0
+                };
                 self.add_integer(0, XS_CODE_INTEGER_1, flag);
             }
             Token::PrivateProperty => {
                 let is_method = p.flags & (f::METHOD | f::GETTER | f::SETTER) != 0;
                 if is_method {
-                    self.add_index(1, XS_CODE_GET_CLOSURE_1, plan.value.expect("valueAccess alias"));
+                    self.add_index(
+                        1,
+                        XS_CODE_GET_CLOSURE_1,
+                        plan.value.expect("valueAccess alias"),
+                    );
                 } else {
                     self.code(&p.children[1]);
                 }
-                self.add_index(-2, XS_CODE_NEW_PRIVATE_1, plan.symbol.expect("symbolAccess alias"));
+                self.add_index(
+                    -2,
+                    XS_CODE_NEW_PRIVATE_1,
+                    plan.symbol.expect("symbolAccess alias"),
+                );
                 let flag = if p.flags & f::METHOD != 0 {
                     XS_NAME_FLAG | XS_METHOD_FLAG
                 } else if p.flags & f::GETTER != 0 {
@@ -3274,8 +3458,8 @@ impl Coder<'_> {
         // `Define` (the `CURRENT` name binding) and an `arguments`
         // reference adds a `Var`. Guard those as named gaps.
         for d in &self.tree.scopes[scope].declares {
-            let is_alias = d.token == Token::NoToken
-                && d.flags & crate::scoper::dflags::USE_CLOSURE != 0;
+            let is_alias =
+                d.token == Token::NoToken && d.flags & crate::scoper::dflags::USE_CLOSURE != 0;
             // `Arg`: a parameter. `Define`: a named function expression's
             // own name. `Var`: the synthetic `arguments` object.
             assert!(
@@ -3386,8 +3570,7 @@ impl Coder<'_> {
                     .declares
                     .iter()
                     .find(|d| {
-                        d.flags & crate::scoper::dflags::USE_CLOSURE != 0
-                            && d.alias == Some(target)
+                        d.flags & crate::scoper::dflags::USE_CLOSURE != 0 && d.alias == Some(target)
                     })
                     .map(|d| d.id)
                     .expect("base constructor instanceInit capture alias");
@@ -3672,7 +3855,10 @@ impl Coder<'_> {
                 // so it publishes on the same footing — otherwise a direct eval
                 // in a named function expression (`(function fun(){ eval(…) })`)
                 // would not see `fun`, emitting one fewer `STORE_1`.
-                if matches!(token, Token::Arg | Token::Var | Token::Const | Token::Define) {
+                if matches!(
+                    token,
+                    Token::Arg | Token::Var | Token::Const | Token::Define
+                ) {
                     let index = self.declare_index(scope, id);
                     self.add_index(0, XS_CODE_STORE_1, index);
                 }
@@ -3995,8 +4181,8 @@ impl Coder<'_> {
         // (hoist ⇒ the scope's `direct_eval`). An enclosing function that only
         // *encloses* an arrow's direct eval gets `mxEvalFlag` but neither, so
         // its injected `Var` stays materialization-free.
-        let has_arguments_flag = func.flags & crate::ast::flags::ARGUMENTS != 0
-            || self.tree.scopes[scope].direct_eval;
+        let has_arguments_flag =
+            func.flags & crate::ast::flags::ARGUMENTS != 0 || self.tree.scopes[scope].direct_eval;
         if !has_arguments_flag {
             return;
         }
@@ -4012,18 +4198,19 @@ impl Coder<'_> {
         let args = self.tree.scopes[scope]
             .declares
             .iter()
-            .find(|d| {
-                matches!(&d.symbol, Some(crate::scoper::Sym::Named(s)) if s == "arguments")
-            })
+            .find(|d| matches!(&d.symbol, Some(crate::scoper::Sym::Named(s)) if s == "arguments"))
             .map(|d| (d.id, d.flags));
         let Some((id, flags)) = args else { return };
         let index = self.declare_index(scope, id);
         let count = self.count_binding_items(&func.children[1]);
         // Mapped only when sloppy with a simple parameter list (the scoper
         // then closure-marks the parameters so the object can alias them).
-        let mapped =
-            !is_strict && func.flags & crate::ast::flags::NOT_SIMPLE_PARAMETERS == 0;
-        let op = if mapped { XS_CODE_ARGUMENTS_SLOPPY } else { XS_CODE_ARGUMENTS_STRICT };
+        let mapped = !is_strict && func.flags & crate::ast::flags::NOT_SIMPLE_PARAMETERS == 0;
+        let op = if mapped {
+            XS_CODE_ARGUMENTS_SLOPPY
+        } else {
+            XS_CODE_ARGUMENTS_STRICT
+        };
         self.add_index(1, op, count);
         let store = if flags & crate::scoper::dflags::CLOSURE != 0 {
             XS_CODE_VAR_CLOSURE_1
@@ -4047,7 +4234,9 @@ impl Coder<'_> {
     }
 
     fn code_params_binding(&mut self, node: &Node) {
-        let Some(Item::List(items)) = node.children.first() else { return };
+        let Some(Item::List(items)) = node.children.first() else {
+            return;
+        };
         for (index, item) in items.iter().enumerate() {
             let Item::Node(arg) = item else {
                 panic!("coder: unexpected parameter slot {item:?}");
@@ -4223,7 +4412,10 @@ impl Coder<'_> {
     /// target, and branch to it (the branch is elided when the target is
     /// the next instruction).
     fn code_return(&mut self, node: &Node) {
-        assert!(!self.program_flag, "return at program scope is a syntax error");
+        assert!(
+            !self.program_flag,
+            "return at program scope is a syntax error"
+        );
         let rt = self.return_target.expect("return target");
         // XS `fxReturnNodeCode`: mark the return expression for tail-call
         // emission when the return is strict, non-generator, and its target
@@ -4327,7 +4519,11 @@ impl Coder<'_> {
         self.code(&node.children[0]);
         let is_super = self.node_is_super(&node.children[0]);
         let name = Self::symbol_of(&node.children[1]).to_string();
-        let op = if is_super { XS_CODE_GET_SUPER } else { XS_CODE_GET_PROPERTY };
+        let op = if is_super {
+            XS_CODE_GET_SUPER
+        } else {
+            XS_CODE_GET_PROPERTY
+        };
         self.add_symbol(0, op, &name);
     }
 
@@ -4369,8 +4565,22 @@ impl Coder<'_> {
         let is_super = self.node_is_super(&node.children[0]);
         self.code(&node.children[0]);
         self.code(&node.children[1]);
-        self.add_byte(0, if is_super { XS_CODE_SUPER_AT } else { XS_CODE_AT });
-        self.add_byte(-1, if is_super { XS_CODE_GET_SUPER_AT } else { XS_CODE_GET_PROPERTY_AT });
+        self.add_byte(
+            0,
+            if is_super {
+                XS_CODE_SUPER_AT
+            } else {
+                XS_CODE_AT
+            },
+        );
+        self.add_byte(
+            -1,
+            if is_super {
+                XS_CODE_GET_SUPER_AT
+            } else {
+                XS_CODE_GET_PROPERTY_AT
+            },
+        );
     }
 
     /// `fxCallNodeCode`. Children `[reference, params]`: set up the callee
@@ -4472,7 +4682,8 @@ impl Coder<'_> {
                     self.add_byte(-1, XS_CODE_POP);
                     continue;
                 }
-                let is_accessor = p.flags & (crate::ast::flags::GETTER | crate::ast::flags::SETTER) != 0;
+                let is_accessor =
+                    p.flags & (crate::ast::flags::GETTER | crate::ast::flags::SETTER) != 0;
                 match p.token {
                     Token::Property => {
                         let key = Self::symbol_of(&p.children[0]).to_string();
@@ -4608,7 +4819,14 @@ impl Coder<'_> {
             self.add_byte(0, XS_CODE_TO_NUMERIC);
             self.add_index(0, XS_CODE_SET_LOCAL_1, value);
         }
-        self.add_byte(0, if node.token == Token::Increment { XS_CODE_INCREMENT } else { XS_CODE_DECREMENT });
+        self.add_byte(
+            0,
+            if node.token == Token::Increment {
+                XS_CODE_INCREMENT
+            } else {
+                XS_CODE_DECREMENT
+            },
+        );
         self.code_assign(&node.children[0], 0);
         if !no_value {
             self.add_byte(-1, XS_CODE_POP);
@@ -4642,7 +4860,15 @@ impl Coder<'_> {
                     let is_super = self.node_is_super(&n.children[0]);
                     self.code(&n.children[0]);
                     let name = Self::symbol_of(&n.children[1]).to_string();
-                    self.add_symbol(0, if is_super { XS_CODE_DELETE_SUPER } else { XS_CODE_DELETE_PROPERTY }, &name);
+                    self.add_symbol(
+                        0,
+                        if is_super {
+                            XS_CODE_DELETE_SUPER
+                        } else {
+                            XS_CODE_DELETE_PROPERTY
+                        },
+                        &name,
+                    );
                 }
                 Token::MemberAt => {
                     let is_super = self.node_is_super(&n.children[0]);
@@ -4652,7 +4878,14 @@ impl Coder<'_> {
                     if !is_super {
                         self.add_byte(0, XS_CODE_AT);
                     }
-                    self.add_byte(-1, if is_super { XS_CODE_DELETE_SUPER_AT } else { XS_CODE_DELETE_PROPERTY_AT });
+                    self.add_byte(
+                        -1,
+                        if is_super {
+                            XS_CODE_DELETE_SUPER_AT
+                        } else {
+                            XS_CODE_DELETE_PROPERTY_AT
+                        },
+                    );
                 }
                 Token::Expressions => {
                     // Single-item sequence delegates; else the value form.
@@ -4740,9 +4973,24 @@ impl Coder<'_> {
             if is_eval {
                 // The arg count is pushed, then `EVAL` consumes it.
                 self.add_integer(1, XS_CODE_INTEGER_1, c);
-                self.add_byte(-3 - c, if tail { XS_CODE_EVAL_TAIL } else { XS_CODE_EVAL });
+                self.add_byte(
+                    -3 - c,
+                    if tail {
+                        XS_CODE_EVAL_TAIL
+                    } else {
+                        XS_CODE_EVAL
+                    },
+                );
             } else {
-                self.add_integer(-2 - c, if tail { XS_CODE_RUN_TAIL_1 } else { XS_CODE_RUN_1 }, c);
+                self.add_integer(
+                    -2 - c,
+                    if tail {
+                        XS_CODE_RUN_TAIL_1
+                    } else {
+                        XS_CODE_RUN_1
+                    },
+                    c,
+                );
             }
         }
     }
@@ -4820,7 +5068,11 @@ impl Coder<'_> {
         }
         if let Some((scope, id)) = self.resolution_of(node) {
             let index = self.declare_index(scope, id);
-            let op = if self.is_closure(scope, id) { XS_CODE_GET_CLOSURE_1 } else { XS_CODE_GET_LOCAL_1 };
+            let op = if self.is_closure(scope, id) {
+                XS_CODE_GET_CLOSURE_1
+            } else {
+                XS_CODE_GET_LOCAL_1
+            };
             self.add_index(1, op, index);
             return 0;
         }
@@ -4844,7 +5096,15 @@ impl Coder<'_> {
         let is_super = self.node_is_super(&node.children[0]);
         let name = Self::symbol_of(&node.children[1]).to_string();
         self.add_byte(1, XS_CODE_DUB);
-        self.add_symbol(0, if is_super { XS_CODE_GET_SUPER } else { XS_CODE_GET_PROPERTY }, &name);
+        self.add_symbol(
+            0,
+            if is_super {
+                XS_CODE_GET_SUPER
+            } else {
+                XS_CODE_GET_PROPERTY
+            },
+            &name,
+        );
         1
     }
 
@@ -4866,16 +5126,37 @@ impl Coder<'_> {
             // fxMemberAtNodeCodeReference(flag=0): reference, at, then AT.
             self.code(&node.children[0]);
             self.code(&node.children[1]);
-            self.add_byte(0, if is_super { XS_CODE_SUPER_AT } else { XS_CODE_AT });
+            self.add_byte(
+                0,
+                if is_super {
+                    XS_CODE_SUPER_AT
+                } else {
+                    XS_CODE_AT
+                },
+            );
             self.add_byte(2, XS_CODE_DUB_AT);
             flag = 2;
         } else {
             self.code(&node.children[0]);
             self.add_byte(1, XS_CODE_DUB);
             self.code(&node.children[1]);
-            self.add_byte(0, if is_super { XS_CODE_SUPER_AT } else { XS_CODE_AT });
+            self.add_byte(
+                0,
+                if is_super {
+                    XS_CODE_SUPER_AT
+                } else {
+                    XS_CODE_AT
+                },
+            );
         }
-        self.add_byte(-1, if is_super { XS_CODE_GET_SUPER_AT } else { XS_CODE_GET_PROPERTY_AT });
+        self.add_byte(
+            -1,
+            if is_super {
+                XS_CODE_GET_SUPER_AT
+            } else {
+                XS_CODE_GET_PROPERTY_AT
+            },
+        );
         flag
     }
 
@@ -4914,8 +5195,16 @@ impl Coder<'_> {
         let no_value = stmt_no_value || node.flags & crate::ast::flags::EXPRESSION_NO_VALUE != 0;
         let token = node.token;
         let shortcut = matches!(token, AndAssign | OrAssign | CoalesceAssign);
-        let else_target = if shortcut { Some(self.create_target()) } else { None };
-        let end_target = if shortcut { Some(self.create_target()) } else { None };
+        let else_target = if shortcut {
+            Some(self.create_target())
+        } else {
+            None
+        };
+        let end_target = if shortcut {
+            Some(self.create_target())
+        } else {
+            None
+        };
         let swap = self.code_this(&node.children[0], 1);
         match token {
             AndAssign => {
@@ -5010,7 +5299,14 @@ impl Coder<'_> {
                     self.code(&n.children[0]);
                     self.code(&n.children[1]);
                     if flag == 0 {
-                        self.add_byte(0, if is_super { XS_CODE_SUPER_AT } else { XS_CODE_AT });
+                        self.add_byte(
+                            0,
+                            if is_super {
+                                XS_CODE_SUPER_AT
+                            } else {
+                                XS_CODE_AT
+                            },
+                        );
                     }
                 }
                 // fxNodeCodeReference: nothing.
@@ -5034,7 +5330,11 @@ impl Coder<'_> {
                     // by slot; unresolved (global) → SET_VARIABLE by symbol.
                     if let Some((scope, id)) = self.resolution_of(n) {
                         let index = self.declare_index(scope, id);
-                        let op = if self.is_closure(scope, id) { XS_CODE_SET_CLOSURE_1 } else { XS_CODE_SET_LOCAL_1 };
+                        let op = if self.is_closure(scope, id) {
+                            XS_CODE_SET_CLOSURE_1
+                        } else {
+                            XS_CODE_SET_LOCAL_1
+                        };
                         self.add_index(0, op, index);
                     } else {
                         let name = Self::symbol_of(&n.children[0]).to_string();
@@ -5044,7 +5344,15 @@ impl Coder<'_> {
                 Token::Member => {
                     let is_super = self.node_is_super(&n.children[0]);
                     let name = Self::symbol_of(&n.children[1]).to_string();
-                    self.add_symbol(-1, if is_super { XS_CODE_SET_SUPER } else { XS_CODE_SET_PROPERTY }, &name);
+                    self.add_symbol(
+                        -1,
+                        if is_super {
+                            XS_CODE_SET_SUPER
+                        } else {
+                            XS_CODE_SET_PROPERTY
+                        },
+                        &name,
+                    );
                 }
                 Token::PrivateMember => {
                     // fxPrivateMemberNodeCodeAssign: store into the brand.
@@ -5054,9 +5362,23 @@ impl Coder<'_> {
                 Token::MemberAt => {
                     let is_super = self.node_is_super(&n.children[0]);
                     if flag != 0 {
-                        self.add_byte(0, if is_super { XS_CODE_SUPER_AT_2 } else { XS_CODE_AT_2 });
+                        self.add_byte(
+                            0,
+                            if is_super {
+                                XS_CODE_SUPER_AT_2
+                            } else {
+                                XS_CODE_AT_2
+                            },
+                        );
                     }
-                    self.add_byte(-2, if is_super { XS_CODE_SET_SUPER_AT } else { XS_CODE_SET_PROPERTY_AT });
+                    self.add_byte(
+                        -2,
+                        if is_super {
+                            XS_CODE_SET_SUPER_AT
+                        } else {
+                            XS_CODE_SET_PROPERTY_AT
+                        },
+                    );
                 }
                 // fxBindingNodeCodeAssign: an `= default` target. Use the
                 // supplied value unless it is `undefined`, in which case
@@ -5207,7 +5529,15 @@ impl Coder<'_> {
                 count += 1;
             }
         }
-        self.add_integer(-2 - count, if tail { XS_CODE_RUN_TAIL_1 } else { XS_CODE_RUN_1 }, count);
+        self.add_integer(
+            -2 - count,
+            if tail {
+                XS_CODE_RUN_TAIL_1
+            } else {
+                XS_CODE_RUN_1
+            },
+            count,
+        );
         self.unuse_temporaries(2);
     }
 
@@ -5231,8 +5561,8 @@ impl Coder<'_> {
         let scope = self.scope_of(node);
         self.code(&node.children[0]);
         self.scope_coding_block(scope);
-        let using_context = (self.tree.scopes[scope].disposable_count > 0)
-            .then(|| self.scope_code_using(scope));
+        let using_context =
+            (self.tree.scopes[scope].disposable_count > 0).then(|| self.scope_code_using(scope));
         let break_target = self.create_target();
         // XS gives the switch break target a zeroed (anonymous) label so a
         // bare `break;` matches it.
@@ -5362,8 +5692,12 @@ impl Coder<'_> {
         }
 
         let mut selection = 1;
-        self.first_break_target =
-            self.finalize_targets(self.first_break_target, selector, &mut selection, finally_target);
+        self.first_break_target = self.finalize_targets(
+            self.first_break_target,
+            selector,
+            &mut selection,
+            finally_target,
+        );
         self.first_continue_target = self.finalize_targets(
             self.first_continue_target,
             selector,
@@ -5637,17 +5971,28 @@ fn size1_step(c: &mut Code, size: &mut i32, delta: &mut i32, targets: &mut [Targ
             }
         }
         // branch family (`_1` forms): widest-assumption size 2, delta 3
-        XS_CODE_BRANCH_1 | XS_CODE_BRANCH_CHAIN_1 | XS_CODE_BRANCH_COALESCE_1
-        | XS_CODE_BRANCH_ELSE_1 | XS_CODE_BRANCH_IF_1 | XS_CODE_BRANCH_STATUS_1
-        | XS_CODE_CATCH_1 | XS_CODE_CODE_1 => {
+        XS_CODE_BRANCH_1
+        | XS_CODE_BRANCH_CHAIN_1
+        | XS_CODE_BRANCH_COALESCE_1
+        | XS_CODE_BRANCH_ELSE_1
+        | XS_CODE_BRANCH_IF_1
+        | XS_CODE_BRANCH_STATUS_1
+        | XS_CODE_CATCH_1
+        | XS_CODE_CODE_1 => {
             *size += 2;
             *delta += 3;
         }
         // 2-byte fixed (`BEGIN_*`, `ARGUMENT(S)*`, `MODULE`)
-        XS_CODE_ARGUMENT | XS_CODE_ARGUMENTS | XS_CODE_ARGUMENTS_SLOPPY
-        | XS_CODE_ARGUMENTS_STRICT | XS_CODE_BEGIN_SLOPPY | XS_CODE_BEGIN_STRICT
-        | XS_CODE_BEGIN_STRICT_BASE | XS_CODE_BEGIN_STRICT_DERIVED
-        | XS_CODE_BEGIN_STRICT_FIELD | XS_CODE_MODULE => {
+        XS_CODE_ARGUMENT
+        | XS_CODE_ARGUMENTS
+        | XS_CODE_ARGUMENTS_SLOPPY
+        | XS_CODE_ARGUMENTS_STRICT
+        | XS_CODE_BEGIN_SLOPPY
+        | XS_CODE_BEGIN_STRICT
+        | XS_CODE_BEGIN_STRICT_BASE
+        | XS_CODE_BEGIN_STRICT_DERIVED
+        | XS_CODE_BEGIN_STRICT_FIELD
+        | XS_CODE_MODULE => {
             *size += 2;
         }
         XS_CODE_LINE => *size += 3,
@@ -5756,9 +6101,14 @@ fn size2_step(c: &mut Code, size: &mut i32, delta: &mut i32, targets: &mut [Targ
                 targets[tid].offset = *size;
             }
         }
-        XS_CODE_BRANCH_1 | XS_CODE_BRANCH_CHAIN_1 | XS_CODE_BRANCH_COALESCE_1
-        | XS_CODE_BRANCH_ELSE_1 | XS_CODE_BRANCH_IF_1 | XS_CODE_BRANCH_STATUS_1
-        | XS_CODE_CATCH_1 | XS_CODE_CODE_1 => {
+        XS_CODE_BRANCH_1
+        | XS_CODE_BRANCH_CHAIN_1
+        | XS_CODE_BRANCH_COALESCE_1
+        | XS_CODE_BRANCH_ELSE_1
+        | XS_CODE_BRANCH_IF_1
+        | XS_CODE_BRANCH_STATUS_1
+        | XS_CODE_CATCH_1
+        | XS_CODE_CODE_1 => {
             let tid = match c.payload {
                 Payload::Branch { tid } => tid,
                 _ => unreachable!(),
@@ -5776,10 +6126,16 @@ fn size2_step(c: &mut Code, size: &mut i32, delta: &mut i32, targets: &mut [Targ
                 *size += 2;
             }
         }
-        XS_CODE_ARGUMENT | XS_CODE_ARGUMENTS | XS_CODE_ARGUMENTS_SLOPPY
-        | XS_CODE_ARGUMENTS_STRICT | XS_CODE_BEGIN_SLOPPY | XS_CODE_BEGIN_STRICT
-        | XS_CODE_BEGIN_STRICT_BASE | XS_CODE_BEGIN_STRICT_DERIVED
-        | XS_CODE_BEGIN_STRICT_FIELD | XS_CODE_MODULE => {
+        XS_CODE_ARGUMENT
+        | XS_CODE_ARGUMENTS
+        | XS_CODE_ARGUMENTS_SLOPPY
+        | XS_CODE_ARGUMENTS_STRICT
+        | XS_CODE_BEGIN_SLOPPY
+        | XS_CODE_BEGIN_STRICT
+        | XS_CODE_BEGIN_STRICT_BASE
+        | XS_CODE_BEGIN_STRICT_DERIVED
+        | XS_CODE_BEGIN_STRICT_FIELD
+        | XS_CODE_MODULE => {
             *size += 2;
         }
         XS_CODE_LINE => *size += 3,
@@ -5835,33 +6191,56 @@ fn emit_step(c: &Code, out: &mut Vec<u8>, targets: &[Target], sym_ids: &[i32]) {
     match c.id {
         XS_NO_CODE => {}
         // branch _1/_2/_4: displacement from just past the operand
-        XS_CODE_BRANCH_1 | XS_CODE_BRANCH_CHAIN_1 | XS_CODE_BRANCH_COALESCE_1
-        | XS_CODE_BRANCH_ELSE_1 | XS_CODE_BRANCH_IF_1 | XS_CODE_BRANCH_STATUS_1
-        | XS_CODE_CATCH_1 | XS_CODE_CODE_1 => {
+        XS_CODE_BRANCH_1
+        | XS_CODE_BRANCH_CHAIN_1
+        | XS_CODE_BRANCH_COALESCE_1
+        | XS_CODE_BRANCH_ELSE_1
+        | XS_CODE_BRANCH_IF_1
+        | XS_CODE_BRANCH_STATUS_1
+        | XS_CODE_CATCH_1
+        | XS_CODE_CODE_1 => {
             let tid = branch_tid(c);
             let offset = targets[tid].offset - (out.len() as i32 + 1);
             out.push(offset as i8 as u8);
         }
-        XS_CODE_BRANCH_2 | XS_CODE_BRANCH_CHAIN_2 | XS_CODE_BRANCH_COALESCE_2
-        | XS_CODE_BRANCH_ELSE_2 | XS_CODE_BRANCH_IF_2 | XS_CODE_BRANCH_STATUS_2
-        | XS_CODE_CATCH_2 | XS_CODE_CODE_2 => {
+        XS_CODE_BRANCH_2
+        | XS_CODE_BRANCH_CHAIN_2
+        | XS_CODE_BRANCH_COALESCE_2
+        | XS_CODE_BRANCH_ELSE_2
+        | XS_CODE_BRANCH_IF_2
+        | XS_CODE_BRANCH_STATUS_2
+        | XS_CODE_CATCH_2
+        | XS_CODE_CODE_2 => {
             let tid = branch_tid(c);
             let offset = targets[tid].offset - (out.len() as i32 + 2);
             out.extend_from_slice(&(offset as i16).to_le_bytes());
         }
-        XS_CODE_BRANCH_4 | XS_CODE_BRANCH_CHAIN_4 | XS_CODE_BRANCH_COALESCE_4
-        | XS_CODE_BRANCH_ELSE_4 | XS_CODE_BRANCH_IF_4 | XS_CODE_BRANCH_STATUS_4
-        | XS_CODE_CATCH_4 | XS_CODE_CODE_4 => {
+        XS_CODE_BRANCH_4
+        | XS_CODE_BRANCH_CHAIN_4
+        | XS_CODE_BRANCH_COALESCE_4
+        | XS_CODE_BRANCH_ELSE_4
+        | XS_CODE_BRANCH_IF_4
+        | XS_CODE_BRANCH_STATUS_4
+        | XS_CODE_CATCH_4
+        | XS_CODE_CODE_4 => {
             let tid = branch_tid(c);
             let offset = targets[tid].offset - (out.len() as i32 + 4);
             out.extend_from_slice(&offset.to_le_bytes());
         }
         // 2-byte fixed u1 (BEGIN_*, ARGUMENT(S), MODULE, RESERVE/RETRIEVE/UNWIND_1)
-        XS_CODE_ARGUMENT | XS_CODE_ARGUMENTS | XS_CODE_ARGUMENTS_SLOPPY
-        | XS_CODE_ARGUMENTS_STRICT | XS_CODE_BEGIN_SLOPPY | XS_CODE_BEGIN_STRICT
-        | XS_CODE_BEGIN_STRICT_BASE | XS_CODE_BEGIN_STRICT_DERIVED
-        | XS_CODE_BEGIN_STRICT_FIELD | XS_CODE_MODULE | XS_CODE_RESERVE_1
-        | XS_CODE_RETRIEVE_1 | XS_CODE_UNWIND_1 => {
+        XS_CODE_ARGUMENT
+        | XS_CODE_ARGUMENTS
+        | XS_CODE_ARGUMENTS_SLOPPY
+        | XS_CODE_ARGUMENTS_STRICT
+        | XS_CODE_BEGIN_SLOPPY
+        | XS_CODE_BEGIN_STRICT
+        | XS_CODE_BEGIN_STRICT_BASE
+        | XS_CODE_BEGIN_STRICT_DERIVED
+        | XS_CODE_BEGIN_STRICT_FIELD
+        | XS_CODE_MODULE
+        | XS_CODE_RESERVE_1
+        | XS_CODE_RETRIEVE_1
+        | XS_CODE_UNWIND_1 => {
             out.push(index_value(c) as u8);
         }
         XS_CODE_LINE | XS_CODE_RESERVE_2 | XS_CODE_RETRIEVE_2 | XS_CODE_UNWIND_2 => {
@@ -6059,7 +6438,10 @@ fn is_index_plus_one_1(id: i32) -> bool {
 /// width-selected in pass 1) plus `RESERVE_1`/`RETRIEVE_1`/`UNWIND_1`.
 fn is_index_1_fixed(id: i32) -> bool {
     is_index_plus_one_1(id)
-        || matches!(id, XS_CODE_RESERVE_1 | XS_CODE_RETRIEVE_1 | XS_CODE_UNWIND_1)
+        || matches!(
+            id,
+            XS_CODE_RESERVE_1 | XS_CODE_RETRIEVE_1 | XS_CODE_UNWIND_1
+        )
 }
 
 /// Pass-2 fixed 3-byte forms: the `_2` local/closure family plus

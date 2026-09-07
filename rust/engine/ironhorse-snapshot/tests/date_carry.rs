@@ -34,7 +34,12 @@ fn crank(m: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = m.relink_crank(&bytecode, &names).expect("relink");
     let outcome = m.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
+    (
+        outcome.completed,
+        format!("{:?}", outcome.halt),
+        outcome.result,
+        outcome.computrons,
+    )
 }
 
 fn twin(
@@ -89,7 +94,9 @@ fn resumed_date_values_and_mutations_match_uninterrupted() {
     let mut memory = MemoryStore::new();
     let seen = twin(crank1, &observations, &mut memory);
     assert_eq!(
-        seen.iter().map(|(_, _, value, _)| value.as_str()).collect::<Vec<_>>(),
+        seen.iter()
+            .map(|(_, _, value, _)| value.as_str())
+            .collect::<Vec<_>>(),
         expected,
     );
 

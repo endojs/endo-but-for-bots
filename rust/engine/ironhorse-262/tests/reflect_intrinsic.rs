@@ -234,7 +234,9 @@ fn reflect_extensibility_and_symbol_statics() {
     assert_result_agrees(
         "var o={}; Reflect.preventExtensions(o); Reflect.isExtensible(o)+'|'+Reflect.set(o,'x',1)",
     );
-    assert_result_agrees("var s=Symbol(); var o={}; o[s]=1; Object.getOwnPropertySymbols(o).length");
+    assert_result_agrees(
+        "var s=Symbol(); var o={}; o[s]=1; Object.getOwnPropertySymbols(o).length",
+    );
 }
 
 #[test]

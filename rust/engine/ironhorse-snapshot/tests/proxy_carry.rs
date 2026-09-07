@@ -33,7 +33,12 @@ fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
     let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
+    (
+        outcome.completed,
+        format!("{:?}", outcome.halt),
+        outcome.result,
+        outcome.computrons,
+    )
 }
 
 fn twin(first: &str, observation: &str, store: &mut dyn HeapStore) -> (bool, String, String, u64) {
@@ -138,9 +143,7 @@ fn malformed_proxy_rows_are_refused() {
     let mut revoked = image;
     revoked.proxy_state.proxies[0].revoked = true;
     match from_snapshot_bytes(&write_machine(&revoked), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "proxy state: revoked proxy retains target or handler",
-        )) => {}
+        Err(SnapshotError::Corrupt("proxy state: revoked proxy retains target or handler")) => {}
         Err(other) => panic!("wrong revoked-row refusal: {other:?}"),
         Ok(_) => panic!("a revoked proxy cannot retain live internals"),
     }

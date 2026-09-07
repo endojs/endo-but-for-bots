@@ -48,13 +48,15 @@ fn a_non_growing_crank_reaches_a_boot_interned_method() {
     );
     let (completed, halt, result) = crank(&mut m, "var lf; var t; t = typeof lf.format; t");
     assert!(completed, "{halt}");
-    assert_eq!(result, "function", "the interned method installs at the relink");
+    assert_eq!(
+        result, "function",
+        "the interned method installs at the relink"
+    );
     // And the method WORKS, not merely exists. (The array literal
     // interns `length`, so this crank happens to grow the table — the
     // accidental path the pre-fix twins survived on; the typeof crank
     // above is the non-growing lock.)
-    let (completed, halt, result) =
-        crank(&mut m, "var lf; var t; t = lf.format(['a', 'b']); t");
+    let (completed, halt, result) = crank(&mut m, "var lf; var t; t = lf.format(['a', 'b']); t");
     assert!(completed, "{halt}");
     assert_eq!(result, "a and b");
 }
@@ -67,12 +69,13 @@ fn a_non_growing_crank_reaches_a_boot_interned_method() {
 /// textually must get the global bound.
 #[test]
 fn a_non_growing_crank_reaches_a_guest_interned_intrinsic_name() {
-    let mut m = boot(
-        "var o = 0; var t = 0; o = JSON.parse('{\"Math\":1}'); t = 7; t",
-    );
+    let mut m = boot("var o = 0; var t = 0; o = JSON.parse('{\"Math\":1}'); t = 7; t");
     let (completed, halt, result) = crank(&mut m, "var o; var t; t = typeof Math; t");
     assert!(completed, "{halt}");
-    assert_eq!(result, "object", "the guest-interned intrinsic name binds at the relink");
+    assert_eq!(
+        result, "object",
+        "the guest-interned intrinsic name binds at the relink"
+    );
     // And the bound namespace WORKS (this crank grows the table with
     // `abs` — the already-locked W6-7 growing path — so the two paths
     // compose).
@@ -87,15 +90,16 @@ fn a_non_growing_crank_reaches_a_guest_interned_intrinsic_name() {
 /// being resurrected by a re-install.
 #[test]
 fn later_relinks_do_not_resurrect_an_installed_binding_over_a_guest_write() {
-    let mut m = boot(
-        "var o = 0; var t = 0; o = JSON.parse('{\"Math\":1}'); t = 7; t",
-    );
+    let mut m = boot("var o = 0; var t = 0; o = JSON.parse('{\"Math\":1}'); t = 7; t");
     let (completed, halt, result) = crank(&mut m, "var o; var t; t = typeof Math; t");
     assert!(completed, "{halt}");
     assert_eq!(result, "object");
     let (completed, halt, result) = crank(&mut m, "var o; var t; Math = 5; t = Math === 5; t");
     assert!(completed, "{halt}");
-    assert_eq!(result, "true", "the guest may overwrite the installed binding");
+    assert_eq!(
+        result, "true",
+        "the guest may overwrite the installed binding"
+    );
     // A growing relink AND a non-growing one both leave the guest's
     // value in place.
     let (completed, halt, result) =

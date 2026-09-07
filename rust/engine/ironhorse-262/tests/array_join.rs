@@ -77,9 +77,7 @@ fn element_coercion_observes_mutation_and_abrupt_completion() {
 fn primitive_typed_array_and_arguments_receivers() {
     agrees("Array.prototype.join.call('abc','-')");
     agrees("Array.prototype.join.call(new Uint8Array([1,2,3]),':')");
-    agrees(
-        "(function(a,b){b='z';return Array.prototype.join.call(arguments,':')})(1,2)",
-    );
+    agrees("(function(a,b){b='z';return Array.prototype.join.call(arguments,':')})(1,2)");
 }
 
 #[test]

@@ -32,9 +32,16 @@ use ironhorse_262::{dual_run, Agreement};
 /// bridge + family, not ironhorse in isolation.
 fn assert_oracle_result(source: &str, expected: &str) {
     let run = dual_run(source).expect("pinned XS oracle is available");
-    assert_eq!(run.agreement, Agreement::BothComplete, "agreement for {source}");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothComplete,
+        "agreement for {source}"
+    );
     assert_eq!(run.oracle_result, expected, "oracle result for {source}");
-    assert_eq!(run.ironhorse_result, expected, "ironhorse result for {source}");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse result for {source}"
+    );
 }
 
 /// Assert both engines agree the source is a shared abort (a thrown early
@@ -43,7 +50,11 @@ fn assert_oracle_result(source: &str, expected: &str) {
 /// catchable-identity cases below additionally pin *which* error.
 fn assert_shared_abort(source: &str) {
     let run = dual_run(source).expect("pinned XS oracle is available");
-    assert_eq!(run.agreement, Agreement::BothAbort, "shared abort for {source}");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothAbort,
+        "shared abort for {source}"
+    );
 }
 
 // ---- Function: construction, call/construct equivalence --------------------
@@ -54,10 +65,16 @@ fn function_constructs_and_calls() {
     assert_oracle_result("new Function('return 42')()", "42");
     // Call and construct are equivalent for the Function constructor: both
     // produce an ordinary callable, and calling either runs the same body.
-    assert_oracle_result("Function('return 1')() === new Function('return 1')()", "true");
+    assert_oracle_result(
+        "Function('return 1')() === new Function('return 1')()",
+        "true",
+    );
     // Parameter list + body.
     assert_oracle_result("Function('a', 'b', 'return a * b')(6, 7)", "42");
-    assert_oracle_result("new Function('a', 'b', 'c', 'return a + b + c')(1, 2, 3)", "6");
+    assert_oracle_result(
+        "new Function('a', 'b', 'c', 'return a + b + c')(1, 2, 3)",
+        "6",
+    );
     // Empty everything.
     assert_oracle_result("new Function()()", "undefined");
     assert_oracle_result("Function('')()", "undefined");
@@ -146,16 +163,25 @@ fn function_runs_in_the_global_realm() {
         "undefined",
     );
     // A `var` a dynamic function hoists lands on the realm global.
-    assert_oracle_result("Function('var g2 = 41; globalThis.g2 = g2')(); globalThis.g2", "41");
+    assert_oracle_result(
+        "Function('var g2 = 41; globalThis.g2 = g2')(); globalThis.g2",
+        "41",
+    );
 }
 
 #[test]
 fn function_strictness_is_independent_of_caller() {
     // A dynamic function is sloppy by default even under a strict caller: a
     // bare `this` is the global object.
-    assert_oracle_result("'use strict'; Function('return this')() === globalThis", "true");
+    assert_oracle_result(
+        "'use strict'; Function('return this')() === globalThis",
+        "true",
+    );
     // Its own `"use strict"` prologue makes it strict: `this` is `undefined`.
-    assert_oracle_result("Function('\"use strict\"; return this')() === undefined", "true");
+    assert_oracle_result(
+        "Function('\"use strict\"; return this')() === undefined",
+        "true",
+    );
     // A sloppy dynamic function sees `arguments`.
     assert_oracle_result("Function('return typeof arguments')()", "object");
 }
@@ -276,7 +302,10 @@ fn async_function_identity_and_run() {
 
 #[test]
 fn async_generator_function_identity_and_run() {
-    assert_oracle_result("(async function*(){}).constructor.name", "AsyncGeneratorFunction");
+    assert_oracle_result(
+        "(async function*(){}).constructor.name",
+        "AsyncGeneratorFunction",
+    );
     assert_oracle_result("(async function*(){}).constructor.length", "1");
     assert_oracle_result(
         "var AGF = (async function*(){}).constructor; Object.getPrototypeOf(AGF) === Function.prototype",

@@ -62,32 +62,95 @@ fn decode(op: u8, code: &[u8], pc: usize) -> (&'static str, Operand) {
     let name_of = |o: i32| -> &'static str { op_name(o) };
     // branch (_1/_2/_4)
     let branch1 = [
-        x::XS_CODE_BRANCH_1, x::XS_CODE_BRANCH_CHAIN_1, x::XS_CODE_BRANCH_COALESCE_1,
-        x::XS_CODE_BRANCH_ELSE_1, x::XS_CODE_BRANCH_IF_1, x::XS_CODE_BRANCH_STATUS_1,
+        x::XS_CODE_BRANCH_1,
+        x::XS_CODE_BRANCH_CHAIN_1,
+        x::XS_CODE_BRANCH_COALESCE_1,
+        x::XS_CODE_BRANCH_ELSE_1,
+        x::XS_CODE_BRANCH_IF_1,
+        x::XS_CODE_BRANCH_STATUS_1,
     ];
     if branch1.contains(&o) {
-        return (name_of(o), Operand { len: 1, text: format!(" {:+}", i8_at(1)) });
+        return (
+            name_of(o),
+            Operand {
+                len: 1,
+                text: format!(" {:+}", i8_at(1)),
+            },
+        );
     }
     if branch1.iter().any(|b| *b + 1 == o) {
-        return (name_of(o), Operand { len: 2, text: format!(" {:+}", i16_at(1)) });
+        return (
+            name_of(o),
+            Operand {
+                len: 2,
+                text: format!(" {:+}", i16_at(1)),
+            },
+        );
     }
     match o {
-        x::XS_CODE_INTEGER_1 => (name_of(o), Operand { len: 1, text: format!(" {}", i8_at(1)) }),
-        x::XS_CODE_INTEGER_2 => (name_of(o), Operand { len: 2, text: format!(" {}", i16_at(1)) }),
-        x::XS_CODE_INTEGER_4 => (name_of(o), Operand { len: 4, text: String::from(" i32") }),
-        x::XS_CODE_NUMBER => (name_of(o), Operand { len: 8, text: String::from(" f64") }),
+        x::XS_CODE_INTEGER_1 => (
+            name_of(o),
+            Operand {
+                len: 1,
+                text: format!(" {}", i8_at(1)),
+            },
+        ),
+        x::XS_CODE_INTEGER_2 => (
+            name_of(o),
+            Operand {
+                len: 2,
+                text: format!(" {}", i16_at(1)),
+            },
+        ),
+        x::XS_CODE_INTEGER_4 => (
+            name_of(o),
+            Operand {
+                len: 4,
+                text: String::from(" i32"),
+            },
+        ),
+        x::XS_CODE_NUMBER => (
+            name_of(o),
+            Operand {
+                len: 8,
+                text: String::from(" f64"),
+            },
+        ),
         x::XS_CODE_STRING_1 => {
             let n = *code.get(pc + 1).unwrap_or(&0) as usize;
-            (name_of(o), Operand { len: 1 + n, text: format!(" [{}]", n) })
+            (
+                name_of(o),
+                Operand {
+                    len: 1 + n,
+                    text: format!(" [{}]", n),
+                },
+            )
         }
-        x::XS_CODE_BEGIN_SLOPPY | x::XS_CODE_BEGIN_STRICT | x::XS_CODE_BEGIN_STRICT_BASE
-        | x::XS_CODE_BEGIN_STRICT_DERIVED | x::XS_CODE_BEGIN_STRICT_FIELD => {
-            (name_of(o), Operand { len: 1, text: format!(" {}", code.get(pc + 1).copied().unwrap_or(0)) })
-        }
-        x::XS_CODE_RESERVE_1 | x::XS_CODE_UNWIND_1 => {
-            (name_of(o), Operand { len: 1, text: format!(" #{}", code.get(pc + 1).copied().unwrap_or(0)) })
-        }
-        _ => (name_of(o), Operand { len: 0, text: String::new() }),
+        x::XS_CODE_BEGIN_SLOPPY
+        | x::XS_CODE_BEGIN_STRICT
+        | x::XS_CODE_BEGIN_STRICT_BASE
+        | x::XS_CODE_BEGIN_STRICT_DERIVED
+        | x::XS_CODE_BEGIN_STRICT_FIELD => (
+            name_of(o),
+            Operand {
+                len: 1,
+                text: format!(" {}", code.get(pc + 1).copied().unwrap_or(0)),
+            },
+        ),
+        x::XS_CODE_RESERVE_1 | x::XS_CODE_UNWIND_1 => (
+            name_of(o),
+            Operand {
+                len: 1,
+                text: format!(" #{}", code.get(pc + 1).copied().unwrap_or(0)),
+            },
+        ),
+        _ => (
+            name_of(o),
+            Operand {
+                len: 0,
+                text: String::new(),
+            },
+        ),
     }
 }
 
@@ -98,25 +161,71 @@ fn op_name(o: i32) -> &'static str {
         match o { $( x if x == ironhorse_compile::opcodes::$n => stringify!($n), )* _ => "?" }
     }}
     names!(
-        XS_NO_CODE, XS_CODE_ADD, XS_CODE_SUBTRACT, XS_CODE_MULTIPLY, XS_CODE_DIVIDE,
-        XS_CODE_MODULO, XS_CODE_EXPONENTIATION, XS_CODE_BIT_AND, XS_CODE_BIT_OR,
-        XS_CODE_BIT_XOR, XS_CODE_BIT_NOT, XS_CODE_LEFT_SHIFT, XS_CODE_SIGNED_RIGHT_SHIFT,
-        XS_CODE_UNSIGNED_RIGHT_SHIFT, XS_CODE_EQUAL, XS_CODE_NOT_EQUAL, XS_CODE_STRICT_EQUAL,
-        XS_CODE_STRICT_NOT_EQUAL, XS_CODE_LESS, XS_CODE_LESS_EQUAL, XS_CODE_MORE,
-        XS_CODE_MORE_EQUAL, XS_CODE_INSTANCEOF, XS_CODE_IN, XS_CODE_NOT, XS_CODE_MINUS,
-        XS_CODE_PLUS, XS_CODE_VOID, XS_CODE_TYPEOF, XS_CODE_TRUE, XS_CODE_FALSE,
-        XS_CODE_NULL, XS_CODE_UNDEFINED, XS_CODE_INTEGER_1, XS_CODE_INTEGER_2,
-        XS_CODE_INTEGER_4, XS_CODE_NUMBER, XS_CODE_STRING_1, XS_CODE_STRING_2,
-        XS_CODE_BEGIN_SLOPPY, XS_CODE_BEGIN_STRICT, XS_CODE_EVAL_ENVIRONMENT,
-        XS_CODE_PROGRAM_ENVIRONMENT, XS_CODE_RESERVE_1, XS_CODE_SET_RESULT, XS_CODE_RETURN,
-        XS_CODE_POP, XS_CODE_DUB, XS_CODE_UNWIND_1, XS_CODE_BRANCH_1, XS_CODE_BRANCH_2,
-        XS_CODE_BRANCH_ELSE_1, XS_CODE_BRANCH_ELSE_2, XS_CODE_BRANCH_IF_1, XS_CODE_BRANCH_IF_2,
-        XS_CODE_BRANCH_COALESCE_1, XS_CODE_BRANCH_COALESCE_2,
+        XS_NO_CODE,
+        XS_CODE_ADD,
+        XS_CODE_SUBTRACT,
+        XS_CODE_MULTIPLY,
+        XS_CODE_DIVIDE,
+        XS_CODE_MODULO,
+        XS_CODE_EXPONENTIATION,
+        XS_CODE_BIT_AND,
+        XS_CODE_BIT_OR,
+        XS_CODE_BIT_XOR,
+        XS_CODE_BIT_NOT,
+        XS_CODE_LEFT_SHIFT,
+        XS_CODE_SIGNED_RIGHT_SHIFT,
+        XS_CODE_UNSIGNED_RIGHT_SHIFT,
+        XS_CODE_EQUAL,
+        XS_CODE_NOT_EQUAL,
+        XS_CODE_STRICT_EQUAL,
+        XS_CODE_STRICT_NOT_EQUAL,
+        XS_CODE_LESS,
+        XS_CODE_LESS_EQUAL,
+        XS_CODE_MORE,
+        XS_CODE_MORE_EQUAL,
+        XS_CODE_INSTANCEOF,
+        XS_CODE_IN,
+        XS_CODE_NOT,
+        XS_CODE_MINUS,
+        XS_CODE_PLUS,
+        XS_CODE_VOID,
+        XS_CODE_TYPEOF,
+        XS_CODE_TRUE,
+        XS_CODE_FALSE,
+        XS_CODE_NULL,
+        XS_CODE_UNDEFINED,
+        XS_CODE_INTEGER_1,
+        XS_CODE_INTEGER_2,
+        XS_CODE_INTEGER_4,
+        XS_CODE_NUMBER,
+        XS_CODE_STRING_1,
+        XS_CODE_STRING_2,
+        XS_CODE_BEGIN_SLOPPY,
+        XS_CODE_BEGIN_STRICT,
+        XS_CODE_EVAL_ENVIRONMENT,
+        XS_CODE_PROGRAM_ENVIRONMENT,
+        XS_CODE_RESERVE_1,
+        XS_CODE_SET_RESULT,
+        XS_CODE_RETURN,
+        XS_CODE_POP,
+        XS_CODE_DUB,
+        XS_CODE_UNWIND_1,
+        XS_CODE_BRANCH_1,
+        XS_CODE_BRANCH_2,
+        XS_CODE_BRANCH_ELSE_1,
+        XS_CODE_BRANCH_ELSE_2,
+        XS_CODE_BRANCH_IF_1,
+        XS_CODE_BRANCH_IF_2,
+        XS_CODE_BRANCH_COALESCE_1,
+        XS_CODE_BRANCH_COALESCE_2,
     )
 }
 
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{:02x}", x)).collect::<Vec<_>>().join(" ")
+    b.iter()
+        .map(|x| format!("{:02x}", x))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Whether `src` is a strict program declaring a top-level `var` or
@@ -178,7 +287,10 @@ fn assert_identical(corpus: &[&str]) {
                     diff
                 ));
             }
-            Err(e) => fails.push(format!("{src:?}: compile error {e:?} (want {})", hex(&want))),
+            Err(e) => fails.push(format!(
+                "{src:?}: compile error {e:?} (want {})",
+                hex(&want)
+            )),
         }
     }
     if !fails.is_empty() {
@@ -211,7 +323,11 @@ fn assert_both_reject(corpus: &[&str]) {
         }
     }
     if !fails.is_empty() {
-        panic!("{} reject-disagreement(s):\n{}", fails.len(), fails.join("\n"));
+        panic!(
+            "{} reject-disagreement(s):\n{}",
+            fails.len(),
+            fails.join("\n")
+        );
     }
 }
 
@@ -251,12 +367,7 @@ fn string_escape_validation_rejects() {
 // compile byte-identically to the oracle when strict mode is off.
 #[test]
 fn legacy_octal_sloppy_accepts() {
-    assert_identical(&[
-        r#""\052""#,
-        r#""\7""#,
-        r#""\8""#,
-        r#""abc\052def""#,
-    ]);
+    assert_identical(&[r#""\052""#, r#""\7""#, r#""\8""#, r#""abc\052def""#]);
 }
 
 // A `const` (or `using`) declaration with no initializer is a SyntaxError
@@ -418,20 +529,71 @@ fn eval_in_parameter_default() {
 fn literals_and_operators() {
     assert_identical(&[
         // literals of every scalar kind
-        "1", "0", "-0", "300", "70000", "2147483647", "1.5", "0.1", "1e300",
-        "true", "false", "null", "\"\"", "\"hi\"", "\"a b c\"",
+        "1",
+        "0",
+        "-0",
+        "300",
+        "70000",
+        "2147483647",
+        "1.5",
+        "0.1",
+        "1e300",
+        "true",
+        "false",
+        "null",
+        "\"\"",
+        "\"hi\"",
+        "\"a b c\"",
         // bigint literals (limb encoding)
-        "0n", "1n", "255n", "256n", "10n", "0xdeadbeefn", "4294967295n",
-        "4294967296n", "18446744073709551616n", "0o17n", "0b1010n",
+        "0n",
+        "1n",
+        "255n",
+        "256n",
+        "10n",
+        "0xdeadbeefn",
+        "4294967295n",
+        "4294967296n",
+        "18446744073709551616n",
+        "0o17n",
+        "0b1010n",
         // arithmetic / precedence
-        "1+2", "1-2", "1*2", "1/2", "1%2", "2**3", "1+2*3", "1*2+3", "(1+2)*3",
-        "2**3**2", "1-2-3",
+        "1+2",
+        "1-2",
+        "1*2",
+        "1/2",
+        "1%2",
+        "2**3",
+        "1+2*3",
+        "1*2+3",
+        "(1+2)*3",
+        "2**3**2",
+        "1-2-3",
         // bitwise / shift
-        "1&2", "1|2", "1^2", "~5", "1<<2", "8>>1", "8>>>1",
+        "1&2",
+        "1|2",
+        "1^2",
+        "~5",
+        "1<<2",
+        "8>>1",
+        "8>>>1",
         // relational / equality
-        "1<2", "1>2", "1<=2", "1>=2", "1==2", "1!=2", "1===2", "1!==2",
+        "1<2",
+        "1>2",
+        "1<=2",
+        "1>=2",
+        "1==2",
+        "1!=2",
+        "1===2",
+        "1!==2",
         // unary
-        "-3", "+3", "!0", "!1", "~0", "void 0", "typeof 1", "typeof \"x\"",
+        "-3",
+        "+3",
+        "!0",
+        "!1",
+        "~0",
+        "void 0",
+        "typeof 1",
+        "typeof \"x\"",
     ]);
 }
 
@@ -464,27 +626,56 @@ fn hashbang_comment() {
 fn strings_cesu8_astral_and_surrogates() {
     assert_identical(&[
         // astral scalar, literal in (UTF-8) source: 𝒜 = U+1D49C = D835 DC9C
-        "\"𝒜\"", "\"a𝒜b\"", "\"𝒜𝒷𝒜𝒷\"",
+        "\"𝒜\"",
+        "\"a𝒜b\"",
+        "\"𝒜𝒷𝒜𝒷\"",
         // astral via \u{…} and via a combined surrogate-pair escape
-        "\"\\u{1D49C}\"", "\"\\uD835\\uDC9C\"", "\"a\\u{1D49C}b\"",
+        "\"\\u{1D49C}\"",
+        "\"\\uD835\\uDC9C\"",
+        "\"a\\u{1D49C}b\"",
         // lone surrogates (WTF-16 — a JS string need not be well-formed)
-        "\"\\uD834\"", "\"\\uDD1E\"", "\"A\\uD800B\"", "\"\\uD800\\uD801\"",
+        "\"\\uD834\"",
+        "\"\\uDD1E\"",
+        "\"A\\uD800B\"",
+        "\"\\uD800\\uD801\"",
         // a lone high surrogate NOT combined (no low surrogate follows)
-        "\"\\uD834x\"", "\"\\uD835\\u0041\"",
+        "\"\\uD834x\"",
+        "\"\\uD835\\u0041\"",
         // BMP two-byte / three-byte CESU-8 boundaries
-        "\"\\u00A9\"", "\"\\u07FF\"", "\"\\u0800\"", "\"é\"", "\"€\"",
+        "\"\\u00A9\"",
+        "\"\\u07FF\"",
+        "\"\\u0800\"",
+        "\"é\"",
+        "\"€\"",
         // embedded NUL → overlong 0xC0 0x80 (not a raw 0x00 terminator)
-        "\"a\\x00b\"", "\"\\0\"", "\"\\u0000z\"",
+        "\"a\\x00b\"",
+        "\"\\0\"",
+        "\"\\u0000z\"",
     ]);
 }
 
 #[test]
 fn logical_conditional_sequence() {
     assert_identical(&[
-        "1&&2", "1||2", "1??2", "1&&2&&3", "1||2||3", "1&&2||3", "1??2??3",
-        "1?2:3", "true?1:0", "0?1:2?3:4", "1?2?3:4:5",
-        "1,2", "1,2,3", "(1,2)", "(1,2)+3", "1,2?3:4",
-        "1&&(2||3)", "(1||2)&&3", "1?2:3,4",
+        "1&&2",
+        "1||2",
+        "1??2",
+        "1&&2&&3",
+        "1||2||3",
+        "1&&2||3",
+        "1??2??3",
+        "1?2:3",
+        "true?1:0",
+        "0?1:2?3:4",
+        "1?2?3:4:5",
+        "1,2",
+        "1,2,3",
+        "(1,2)",
+        "(1,2)+3",
+        "1,2?3:4",
+        "1&&(2||3)",
+        "(1||2)&&3",
+        "1?2:3,4",
     ]);
 }
 
@@ -540,12 +731,27 @@ fn tail_call_run_tail() {
 #[test]
 fn statements_if_block() {
     assert_identical(&[
-        "1;", "1;2;", "1;2;3;", ";", ";;", "1;;2;",
-        "{}", "{1;}", "{1;2;}", "{{1;}}", "{;}",
-        "if(1)2;", "if(0)2;", "if(1)2;else 3;", "if(1){2;}else{3;}",
-        "if(1)if(2)3;else 4;", "if(1)2;else if(3)4;else 5;",
-        "if(1&&2)3;else 4;", "if(1?2:3)4;",
-        "{if(1)2;}", "if(1){}",
+        "1;",
+        "1;2;",
+        "1;2;3;",
+        ";",
+        ";;",
+        "1;;2;",
+        "{}",
+        "{1;}",
+        "{1;2;}",
+        "{{1;}}",
+        "{;}",
+        "if(1)2;",
+        "if(0)2;",
+        "if(1)2;else 3;",
+        "if(1){2;}else{3;}",
+        "if(1)if(2)3;else 4;",
+        "if(1)2;else if(3)4;else 5;",
+        "if(1&&2)3;else 4;",
+        "if(1?2:3)4;",
+        "{if(1)2;}",
+        "if(1){}",
     ]);
 }
 
@@ -558,15 +764,26 @@ fn statements_if_block() {
 fn control_flow_loops() {
     assert_identical(&[
         // while / do-while
-        "while(0)2;", "while(0);", "while(0){2;}", "while(1)break;",
-        "while(0)continue;", "do 1;while(0);", "do{1;}while(0);",
-        "do break;while(1);", "do continue;while(0);",
+        "while(0)2;",
+        "while(0);",
+        "while(0){2;}",
+        "while(1)break;",
+        "while(0)continue;",
+        "do 1;while(0);",
+        "do{1;}while(0);",
+        "do break;while(1);",
+        "do continue;while(0);",
         // C-style for
-        "for(;;)break;", "for(;1;)break;", "for(;0;)1;",
-        "for(1;;)break;", "for(1;0;2)3;", "for(;;){1;break;}",
+        "for(;;)break;",
+        "for(;1;)break;",
+        "for(;0;)1;",
+        "for(1;;)break;",
+        "for(1;0;2)3;",
+        "for(;;){1;break;}",
         "for(;0;)continue;",
         // nested loops + break/continue
-        "while(1){while(2)break;break;}", "while(0){while(2)break;continue;}",
+        "while(1){while(2)break;break;}",
+        "while(0){while(2)break;continue;}",
         "for(;;){for(;;)break;break;}",
     ]);
 }
@@ -574,11 +791,17 @@ fn control_flow_loops() {
 #[test]
 fn control_flow_labels() {
     assert_identical(&[
-        "a:while(1)break a;", "a:while(0)continue a;",
-        "a:for(;;)break a;", "a:for(;0;)continue a;",
-        "a:b:while(1)break a;", "a:b:while(0)continue b;",
-        "a:while(1)while(2)break a;", "a:while(0)while(2)continue a;",
-        "a:1;", "a:{1;}", "a:{break a;}",
+        "a:while(1)break a;",
+        "a:while(0)continue a;",
+        "a:for(;;)break a;",
+        "a:for(;0;)continue a;",
+        "a:b:while(1)break a;",
+        "a:b:while(0)continue b;",
+        "a:while(1)while(2)break a;",
+        "a:while(0)while(2)continue a;",
+        "a:1;",
+        "a:{1;}",
+        "a:{break a;}",
         "foo:while(0){continue foo;}",
     ]);
 }
@@ -586,9 +809,11 @@ fn control_flow_labels() {
 #[test]
 fn control_flow_switch() {
     assert_identical(&[
-        "switch(1){}", "switch(1){case 1:break;}",
+        "switch(1){}",
+        "switch(1){case 1:break;}",
         "switch(1){case 1:2;break;case 2:3;}",
-        "switch(1){default:1;}", "switch(1){case 1:break;default:2;}",
+        "switch(1){default:1;}",
+        "switch(1){case 1:break;default:2;}",
         "switch(1){case 1:case 2:3;break;default:4;}",
         "switch(1){case 1:{2;}break;}",
         "switch(1){case 1:while(2)break;break;}",
@@ -598,17 +823,29 @@ fn control_flow_switch() {
 #[test]
 fn control_flow_throw_debugger() {
     assert_identical(&[
-        "throw 1;", "throw 1+2;", "throw\"x\";", "debugger;",
-        "if(1)throw 2;", "while(1)throw 2;",
+        "throw 1;",
+        "throw 1+2;",
+        "throw\"x\";",
+        "debugger;",
+        "if(1)throw 2;",
+        "while(1)throw 2;",
     ]);
 }
 
 #[test]
 fn this_and_regexp() {
     assert_identical(&[
-        "this;", "this,1;", "typeof this;", "this===this;",
-        "/abc/;", "/abc/g;", "/a.c/gi;", "/x/;", "/[0-9]+/m;",
-        "/a/,/b/;", "if(1)/x/;",
+        "this;",
+        "this,1;",
+        "typeof this;",
+        "this===this;",
+        "/abc/;",
+        "/abc/g;",
+        "/a.c/gi;",
+        "/x/;",
+        "/[0-9]+/m;",
+        "/a/,/b/;",
+        "if(1)/x/;",
     ]);
 }
 
@@ -616,16 +853,34 @@ fn this_and_regexp() {
 fn global_access_and_member() {
     assert_identical(&[
         // free (global) identifier references → EVAL_REFERENCE + GET_VARIABLE
-        "x;", "foo;", "x,y;", "x+y;", "x*y+z;", "typeof x;", "-x;",
+        "x;",
+        "foo;",
+        "x,y;",
+        "x+y;",
+        "x*y+z;",
+        "typeof x;",
+        "-x;",
         // member access → GET_PROPERTY (symbol IDs from the atom table)
-        "a.b;", "a.b.c;", "foo.bar;", "x.length;", "o.a+o.b;",
-        "a.b,c.d;", "obj.prototype;", "x.y.z.w;",
+        "a.b;",
+        "a.b.c;",
+        "foo.bar;",
+        "x.length;",
+        "o.a+o.b;",
+        "a.b,c.d;",
+        "obj.prototype;",
+        "x.y.z.w;",
         // mix with built-in-symbol collisions (length/name/prototype seeded)
-        "a.name;", "a.length;", "a.constructor;", "x.value.done;",
+        "a.name;",
+        "a.length;",
+        "a.constructor;",
+        "x.value.done;",
         // identifiers that are also seeded symbols used as globals
-        "undefined;", "NaN;", "Infinity;",
+        "undefined;",
+        "NaN;",
+        "Infinity;",
         // longer symbol sets to exercise multi-symbol ID ordering
-        "alpha.beta+gamma.delta;", "one.two.three;",
+        "alpha.beta+gamma.delta;",
+        "one.two.three;",
     ]);
 }
 
@@ -633,14 +888,31 @@ fn global_access_and_member() {
 fn calls_and_computed_member() {
     assert_identical(&[
         // computed member access (symbol-free AT / GET_PROPERTY_AT)
-        "a[b];", "a[0];", "a[\"k\"];", "a[b][c];", "o[i+1];", "a.b[c];",
+        "a[b];",
+        "a[0];",
+        "a[\"k\"];",
+        "a[b][c];",
+        "o[i+1];",
+        "a.b[c];",
         // global calls → CALL + RUN_1
-        "f();", "f(1);", "f(1,2);", "f(1,2,3);", "g(x);", "h(x,y);",
+        "f();",
+        "f(1);",
+        "f(1,2);",
+        "f(1,2,3);",
+        "g(x);",
+        "h(x,y);",
         // method calls (receiver via DUB + GET_PROPERTY)
-        "a.b();", "a.b(1);", "o.m(x,y);", "a.b.c();",
+        "a.b();",
+        "a.b(1);",
+        "o.m(x,y);",
+        "a.b.c();",
         // computed-member calls, nested calls, call results
-        "a[b]();", "f()();", "f(g(1));", "a.b(c.d);",
-        "console.log(1);", "Math.max(1,2,3);",
+        "a[b]();",
+        "f()();",
+        "f(g(1));",
+        "a.b(c.d);",
+        "console.log(1);",
+        "Math.max(1,2,3);",
     ]);
 }
 
@@ -648,17 +920,45 @@ fn calls_and_computed_member() {
 fn assignment_and_new() {
     assert_identical(&[
         // plain assignment to a global / member / computed member
-        "x=1;", "x=y;", "a.b=1;", "a.b=c;", "o.x=o.y;", "a[b]=1;",
-        "a[0]=x;", "x=y=1;", "a.b.c=1;", "x=1+2;",
+        "x=1;",
+        "x=y;",
+        "a.b=1;",
+        "a.b=c;",
+        "o.x=o.y;",
+        "a[b]=1;",
+        "a[0]=x;",
+        "x=y=1;",
+        "a.b.c=1;",
+        "x=1+2;",
         // compound assignment
-        "x+=1;", "x-=2;", "x*=3;", "x/=2;", "x%=2;", "x**=2;",
-        "x&=1;", "x|=2;", "x^=3;", "x<<=1;", "x>>=1;", "x>>>=1;",
-        "a.b+=1;", "a[b]+=c;", "o.count+=1;",
+        "x+=1;",
+        "x-=2;",
+        "x*=3;",
+        "x/=2;",
+        "x%=2;",
+        "x**=2;",
+        "x&=1;",
+        "x|=2;",
+        "x^=3;",
+        "x<<=1;",
+        "x>>=1;",
+        "x>>>=1;",
+        "a.b+=1;",
+        "a[b]+=c;",
+        "o.count+=1;",
         // short-circuit assignment
-        "x&&=1;", "x||=2;", "x??=3;", "a.b||=c;",
+        "x&&=1;",
+        "x||=2;",
+        "x??=3;",
+        "a.b||=c;",
         // new
-        "new X;", "new X();", "new X(1);", "new X(1,2);",
-        "new a.b();", "new a.b.c(1);", "x=new Y(1);",
+        "new X;",
+        "new X();",
+        "new X(1);",
+        "new X(1,2);",
+        "new a.b();",
+        "new a.b.c(1);",
+        "x=new Y(1);",
     ]);
 }
 
@@ -666,14 +966,28 @@ fn assignment_and_new() {
 fn increment_decrement_delete() {
     assert_identical(&[
         // postfix / prefix on variable, member, computed member
-        "x++;", "x--;", "++x;", "--x;",
-        "a.b++;", "a.b--;", "++a.b;", "--a.b;",
-        "a[b]++;", "++a[b];", "o.count++;",
+        "x++;",
+        "x--;",
+        "++x;",
+        "--x;",
+        "a.b++;",
+        "a.b--;",
+        "++a.b;",
+        "--a.b;",
+        "a[b]++;",
+        "++a[b];",
+        "o.count++;",
         // as sub-expressions (value used)
-        "y=x++;", "y=++x;", "f(x++);", "x++ + 1;",
+        "y=x++;",
+        "y=++x;",
+        "f(x++);",
+        "x++ + 1;",
         // delete
-        "delete a.b;", "delete a[b];", "delete a.b.c;",
-        "delete x;", "delete o[i];",
+        "delete a.b;",
+        "delete a[b];",
+        "delete a.b.c;",
+        "delete x;",
+        "delete o[i];",
     ]);
 }
 
@@ -681,25 +995,49 @@ fn increment_decrement_delete() {
 fn object_and_array_literals() {
     assert_identical(&[
         // object data properties (identifier keys)
-        "({});", "({a:1});", "({a:1,b:2});", "({a:x,b:y});",
-        "({a:1+2,b:c.d});", "({outer:{inner:1}});",
+        "({});",
+        "({a:1});",
+        "({a:1,b:2});",
+        "({a:x,b:y});",
+        "({a:1+2,b:c.d});",
+        "({outer:{inner:1}});",
         // computed keys
-        "({[a]:1});", "({[a+b]:c});", "({x:1,[y]:2});",
+        "({[a]:1});",
+        "({[a+b]:c});",
+        "({x:1,[y]:2});",
         // arrays
-        "[];", "[1];", "[1,2,3];", "[a,b];", "[1+2,c.d];",
-        "[[1],[2]];", "[a,,b];", "[,,1];", "[1,,];",
+        "[];",
+        "[1];",
+        "[1,2,3];",
+        "[a,b];",
+        "[1+2,c.d];",
+        "[[1],[2]];",
+        "[a,,b];",
+        "[,,1];",
+        "[1,,];",
         // mixed / nested
-        "[{a:1}];", "({list:[1,2]});", "f([1,2],{a:3});",
+        "[{a:1}];",
+        "({list:[1,2]});",
+        "f([1,2],{a:3});",
     ]);
 }
 
 #[test]
 fn untagged_templates() {
     assert_identical(&[
-        "``;", "`abc`;", "`a\nb`;",
-        "`${1}`;", "`a${1}`;", "`${1}b`;", "`a${1}b`;",
-        "`a${1}b${2}c`;", "`${1}${2}`;", "`x${1+2}y`;",
-        "`${true}`;", "`${\"s\"}`;", "`v=${1?2:3}`;",
+        "``;",
+        "`abc`;",
+        "`a\nb`;",
+        "`${1}`;",
+        "`a${1}`;",
+        "`${1}b`;",
+        "`a${1}b`;",
+        "`a${1}b${2}c`;",
+        "`${1}${2}`;",
+        "`x${1+2}y`;",
+        "`${true}`;",
+        "`${\"s\"}`;",
+        "`v=${1?2:3}`;",
     ]);
 }
 
@@ -739,9 +1077,12 @@ fn tagged_templates() {
 #[test]
 fn control_flow_try() {
     assert_identical(&[
-        "try{1;}catch{2;}", "try{1;}finally{2;}",
-        "try{1;}catch{2;}finally{3;}", "try{}catch{}",
-        "try{}finally{}", "try{throw 1;}catch{2;}",
+        "try{1;}catch{2;}",
+        "try{1;}finally{2;}",
+        "try{1;}catch{2;}finally{3;}",
+        "try{}catch{}",
+        "try{}finally{}",
+        "try{throw 1;}catch{2;}",
         "try{1;}catch{}finally{}",
         // break/continue crossing a finally (target finalization)
         "while(1){try{break;}finally{1;}}",
@@ -762,12 +1103,22 @@ fn control_flow_try() {
 fn declarations_var_sloppy() {
     assert_identical(&[
         // bare + initialized `var`, single and multiple declarators
-        "var x;", "var x=1;", "var x=1,y=2;", "var a=1,b=2,c=3;",
+        "var x;",
+        "var x=1;",
+        "var x=1,y=2;",
+        "var a=1,b=2,c=3;",
         // access, assignment, compound, delete of a hoisted var
-        "var x; x;", "var x=1; x;", "var x=1; x=2;", "var x=1; x+=2;",
-        "var x=1; x++;", "var x=1; delete x;", "var p=1; p=p+1;",
+        "var x; x;",
+        "var x=1; x;",
+        "var x=1; x=2;",
+        "var x=1; x+=2;",
+        "var x=1; x++;",
+        "var x=1; delete x;",
+        "var p=1; p=p+1;",
         // interplay with expressions the earlier slices code
-        "var a=1,b=2; a+b;", "var x=1; typeof x;", "var o; o=1; o;",
+        "var a=1,b=2; a+b;",
+        "var x=1; typeof x;",
+        "var o; o=1; o;",
     ]);
 }
 
@@ -776,13 +1127,24 @@ fn declarations_let_const_lexical() {
     assert_identical(&[
         // program-scope lexicals bind to slots (eval program → LOCAL, not
         // the program-scope CLOSURE marking)
-        "let x=1;", "const x=1;", "let x;", "let x=1,y=2;",
-        "const a=1,b=2;", "let x=1; x;", "const y=2; y;", "let x; x;",
+        "let x=1;",
+        "const x=1;",
+        "let x;",
+        "let x=1,y=2;",
+        "const a=1,b=2;",
+        "let x=1; x;",
+        "const y=2; y;",
+        "let x; x;",
         // store / compound-store / delete into a lexical slot
-        "let x=1; x=2;", "let x=1; x+=2;", "let x=1; delete x;",
-        "let a=1,b=2,c=3; a+b+c;", "const a=1,b=2; a*b;",
+        "let x=1; x=2;",
+        "let x=1; x+=2;",
+        "let x=1; delete x;",
+        "let a=1,b=2,c=3; a+b+c;",
+        "const a=1,b=2; a*b;",
         // lexicals feeding the expression / control-flow surface
-        "let x=1; if(x)x;", "let x=1,y=2; [x,y];", "let x=1; x?x:0;",
+        "let x=1; if(x)x;",
+        "let x=1,y=2; [x,y];",
+        "let x=1; x?x:0;",
     ]);
 }
 
@@ -792,14 +1154,20 @@ fn declarations_strict_and_blocks() {
         // a `"use strict"` prologue makes the eval program strict: `var`
         // reserves and binds a slot up front like a lexical (the eval
         // goal; the Script goal hoists it — see the test below)
-        "\"use strict\"; var x=1; x;", "\"use strict\"; let x=1; x;",
-        "\"use strict\"; const y=2; y;", "\"use strict\"; var x=1; x=2; x;",
+        "\"use strict\"; var x=1; x;",
+        "\"use strict\"; let x=1; x;",
+        "\"use strict\"; const y=2; y;",
+        "\"use strict\"; var x=1; x=2; x;",
         "\"use strict\"; let a=1,b=2; a+b;",
         // block-scoped lexicals: the block header codes NEW_LOCAL and the
         // block tail UNWINDs the slots
-        "{ let x=1; x; }", "{ const y=2; y; }", "{ let a=1,b=2; a+b; }",
-        "{ let x=1; } { let x=2; }", "if(1){ let x=1; x; }",
-        "while(0){ let x=1; }", "{ { let x=1; x; } }",
+        "{ let x=1; x; }",
+        "{ const y=2; y; }",
+        "{ let a=1,b=2; a+b; }",
+        "{ let x=1; } { let x=2; }",
+        "if(1){ let x=1; x; }",
+        "while(0){ let x=1; }",
+        "{ { let x=1; x; } }",
     ]);
 }
 
@@ -820,25 +1188,53 @@ fn declarations_strict_and_blocks() {
 #[test]
 fn strict_script_hoists_top_level_declarations() {
     let cases: &[(&str, &str)] = &[
-        ("'use strict'; var g = 1; g = 2; g", "'use_strict'; var g = 1; g = 2; g"),
-        ("'use strict'; var g = 1; globalThis.g", "'use_strict'; var g = 1; globalThis.g"),
+        (
+            "'use strict'; var g = 1; g = 2; g",
+            "'use_strict'; var g = 1; g = 2; g",
+        ),
+        (
+            "'use strict'; var g = 1; globalThis.g",
+            "'use_strict'; var g = 1; globalThis.g",
+        ),
         // Lexicals ride along in the hoist shape's lexical loop.
-        ("'use strict'; var g = 1; let h = 2; g + h", "'use_strict'; var g = 1; let h = 2; g + h"),
-        ("#!shebang\n\"use strict\"; var y = 3; y;", "#!shebang\n\"use_strict\"; var y = 3; y;"),
+        (
+            "'use strict'; var g = 1; let h = 2; g + h",
+            "'use_strict'; var g = 1; let h = 2; g + h",
+        ),
+        (
+            "#!shebang\n\"use strict\"; var y = 3; y;",
+            "#!shebang\n\"use_strict\"; var y = 3; y;",
+        ),
     ];
     for &(strict_src, sloppy_twin) in cases {
-        assert!(strict_with_top_level_declarations(strict_src), "{strict_src:?}");
+        assert!(
+            strict_with_top_level_declarations(strict_src),
+            "{strict_src:?}"
+        );
         let script = compile(strict_src).expect("script goal compiles");
         let eval = compile_with(strict_src, false).expect("eval goal compiles");
         let oracle = xs_oracle::run(strict_src).expect("oracle runs").bytecode;
-        assert_eq!(hex(&eval), hex(&oracle), "{strict_src:?}: eval goal must match the oracle");
+        assert_eq!(
+            hex(&eval),
+            hex(&oracle),
+            "{strict_src:?}: eval goal must match the oracle"
+        );
         // The sloppy twin's oracle bytes, re-stamped strict.
-        let twin = xs_oracle::run(sloppy_twin).expect("oracle runs twin").bytecode;
-        assert_eq!(twin[0] as i32, opcodes::XS_CODE_BEGIN_SLOPPY, "{sloppy_twin:?} is sloppy");
+        let twin = xs_oracle::run(sloppy_twin)
+            .expect("oracle runs twin")
+            .bytecode;
+        assert_eq!(
+            twin[0] as i32,
+            opcodes::XS_CODE_BEGIN_SLOPPY,
+            "{sloppy_twin:?} is sloppy"
+        );
         let mut want = twin.clone();
         want[0] = opcodes::XS_CODE_BEGIN_STRICT as u8;
         let needle = b"use_strict";
-        let at = want.windows(needle.len()).position(|w| w == needle).expect("prologue string");
+        let at = want
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("prologue string");
         want[at..at + needle.len()].copy_from_slice(b"use strict");
         assert_eq!(
             hex(&script),
@@ -847,10 +1243,17 @@ fn strict_script_hoists_top_level_declarations() {
             disasm(&script).join(" | "),
             disasm(&want).join(" | ")
         );
-        assert_ne!(hex(&script), hex(&eval), "{strict_src:?}: the two goals must differ");
+        assert_ne!(
+            hex(&script),
+            hex(&eval),
+            "{strict_src:?}: the two goals must differ"
+        );
     }
     // A strict Script with nothing to hoist keeps XS's strict shape exactly.
-    for src in ["'use strict'; let x = 1; x", "'use strict'; (function(){ return arguments; })"] {
+    for src in [
+        "'use strict'; let x = 1; x",
+        "'use strict'; (function(){ return arguments; })",
+    ] {
         assert!(!strict_with_top_level_declarations(src), "{src:?}");
         let oracle = xs_oracle::run(src).expect("oracle runs").bytecode;
         assert_eq!(hex(&compile(src).unwrap()), hex(&oracle), "{src:?}");
@@ -865,9 +1268,16 @@ fn strict_script_hoists_top_level_declarations() {
 #[test]
 fn with_statement() {
     assert_identical(&[
-        "with({})1;", "with(o)1;", "with(o)x;", "with(o){x;}",
-        "with(o){x=1;}", "with(o)o.a;", "with({a:1})a;", "with(o)x+y;",
-        "with(o){ while(0)break; }", "with(a)with(b)1;",
+        "with({})1;",
+        "with(o)1;",
+        "with(o)x;",
+        "with(o){x;}",
+        "with(o){x=1;}",
+        "with(o)o.a;",
+        "with({a:1})a;",
+        "with(o)x+y;",
+        "with(o){ while(0)break; }",
+        "with(a)with(b)1;",
         "var o={}; with(o)a;",
     ]);
 }
@@ -885,19 +1295,34 @@ fn with_statement() {
 fn function_expressions_and_declarations() {
     assert_identical(&[
         // anonymous function expressions, empty and simple bodies
-        "(function(){});", "(function(){return 1;});", "(function(){1;});",
-        "(function(){return;});", "(function(){1;2;});", "(function(){return 1+2;});",
-        "(function(){a;b;c;});", "(function(){return a+b;});",
+        "(function(){});",
+        "(function(){return 1;});",
+        "(function(){1;});",
+        "(function(){return;});",
+        "(function(){1;2;});",
+        "(function(){return 1+2;});",
+        "(function(){a;b;c;});",
+        "(function(){return a+b;});",
         // arrow functions
-        "(()=>{});", "(()=>1);", "(()=>{return 2;});", "(()=>{1;});", "(()=>x);",
+        "(()=>{});",
+        "(()=>1);",
+        "(()=>{return 2;});",
+        "(()=>{1;});",
+        "(()=>x);",
         // function declarations (hoisted) and their access order
-        "function f(){}", "f;function f(){}", "function g(){return 3;}",
-        "function f(){}function g(){}", "function k(){return \"hi\";}",
+        "function f(){}",
+        "f;function f(){}",
+        "function g(){return 3;}",
+        "function f(){}function g(){}",
+        "function k(){return \"hi\";}",
         // function as a value in non-naming positions
-        "[function(){}];", "f(function(){});", "(function(){})();",
+        "[function(){}];",
+        "f(function(){});",
+        "(function(){})();",
         "(function(){return 1;})();",
         // strict function expressions
-        "\"use strict\";(function(){});", "\"use strict\";(()=>{});",
+        "\"use strict\";(function(){});",
+        "\"use strict\";(()=>{});",
     ]);
 }
 
@@ -911,13 +1336,21 @@ fn function_expressions_and_declarations() {
 fn function_parameters() {
     assert_identical(&[
         // single and multiple positional parameters, used and unused
-        "(function(a){});", "(function(a){return a;});", "(function(a){a;});",
-        "(function(a,b){return a;});", "(function(a,b){b;a;});",
-        "(function(a,b,c){return a+b+c;});", "(function(first,second){return second;});",
+        "(function(a){});",
+        "(function(a){return a;});",
+        "(function(a){a;});",
+        "(function(a,b){return a;});",
+        "(function(a,b){b;a;});",
+        "(function(a,b,c){return a+b+c;});",
+        "(function(first,second){return second;});",
         // parameters feeding expressions
-        "(function(a){return a+1;});", "(function(x){return x*x;});",
+        "(function(a){return a+1;});",
+        "(function(x){return x*x;});",
         // arrow parameters
-        "(a=>a);", "(a=>a+1);", "((a,b)=>a);", "(a=>{return a;});",
+        "(a=>a);",
+        "(a=>a+1);",
+        "((a,b)=>a);",
+        "(a=>{return a;});",
         // called (argument binding exercised end to end)
         "(function(x){return x;})(5);",
     ]);
@@ -933,13 +1366,21 @@ fn function_parameters() {
 fn function_name_inference() {
     assert_identical(&[
         // binding initializers
-        "var f=function(){};", "let g=function(){};", "const c=function(){};",
-        "var f=function(){return 1;};", "var fn=function(a,b){return a+b;};",
-        "var a=function(){},b=function(){};", "var f=(function(){});",
+        "var f=function(){};",
+        "let g=function(){};",
+        "const c=function(){};",
+        "var f=function(){return 1;};",
+        "var fn=function(a,b){return a+b;};",
+        "var a=function(){},b=function(){};",
+        "var f=(function(){});",
         // arrow bindings
-        "let h=()=>1;", "var k=()=>{};", "let m=(a)=>a;", "let id=x=>x;",
+        "let h=()=>1;",
+        "var k=()=>{};",
+        "let m=(a)=>a;",
+        "let id=x=>x;",
         // assignment to an identifier
-        "x=function(){};", "x=()=>{};",
+        "x=function(){};",
+        "x=()=>{};",
     ]);
 }
 
@@ -955,26 +1396,36 @@ fn function_name_inference() {
 fn destructuring_default_name_inference() {
     assert_identical(&[
         // object binding-pattern defaults, all four value kinds
-        "var {a=function(){}}=({});", "let {b=()=>{}}=({});",
-        "const {c=class{}}=({});", "var {d=function*(){}}=({});",
-        "var {e=async function(){}}=({});", "let {f=async()=>{}}=({});",
+        "var {a=function(){}}=({});",
+        "let {b=()=>{}}=({});",
+        "const {c=class{}}=({});",
+        "var {d=function*(){}}=({});",
+        "var {e=async function(){}}=({});",
+        "let {f=async()=>{}}=({});",
         // array binding-pattern defaults
-        "var [g=function(){}]=[];", "let [h=()=>{}]=[];", "const [i=class{}]=[];",
+        "var [g=function(){}]=[];",
+        "let [h=()=>{}]=[];",
+        "const [i=class{}]=[];",
         // renamed object property with a defaulted anonymous value
-        "var {p:q=function(){}}=({});", "let {p:r=()=>{}}=({});",
+        "var {p:q=function(){}}=({});",
+        "let {p:r=()=>{}}=({});",
         // parenthesized initializer forwards to its inner value
         "var {s=(function(){})}=({});",
         // catch parameter pattern default
         "try{throw {};}catch({arrow=()=>{}}){}",
         "try{throw {};}catch({fn=function(){}}){}",
         // function parameter pattern defaults
-        "(function({a=function(){}}){});", "(({b=()=>{}})=>{});",
+        "(function({a=function(){}}){});",
+        "(({b=()=>{}})=>{});",
         "(function([c=class{}]){});",
         // assignment-pattern (not declaration) defaults
-        "({a=function(){}}={});", "[b=()=>{}]=[];", "({c=class{}}={});",
+        "({a=function(){}}={});",
+        "[b=()=>{}]=[];",
+        "({c=class{}}={});",
         "({p:q=function(){}}={});",
         // for-of / for-in heads with a defaulted pattern binding
-        "for(var {a=()=>{}} of []){}", "for(let [b=function(){}] of []){}",
+        "for(var {a=()=>{}} of []){}",
+        "for(let [b=function(){}] of []){}",
         "for(const {c=class{}} of []){}",
         // NOT named: a nested-pattern target leaves the value anonymous
         "var {a:{b}={c:function(){}}}=({b:1});",
@@ -994,12 +1445,17 @@ fn destructuring_default_name_inference() {
 fn function_control_flow_bodies() {
     assert_identical(&[
         // loops / break / continue / return threaded to END
-        "(function(){while(0)break;});", "(()=>{for(;;)break;});",
-        "(function(){while(1)return;});", "(function(){for(;;)return 1;});",
-        "(function(){do break;while(0);});", "(function(){label:while(1)break label;});",
+        "(function(){while(0)break;});",
+        "(()=>{for(;;)break;});",
+        "(function(){while(1)return;});",
+        "(function(){for(;;)return 1;});",
+        "(function(){do break;while(0);});",
+        "(function(){label:while(1)break label;});",
         // if / return
-        "(function(){if(1)return 1;});", "(function(){if(1)return 1;else return 2;});",
-        "(function(a){if(a)return a;return 0;});", "(()=>{if(1)return 1;});",
+        "(function(){if(1)return 1;});",
+        "(function(){if(1)return 1;else return 2;});",
+        "(function(a){if(a)return a;return 0;});",
+        "(()=>{if(1)return 1;});",
         // switch / try-finally
         "(function(){switch(1){case 1:break;}});",
         "(function(){switch(1){case 1:return 1;default:return 0;}});",
@@ -1011,14 +1467,20 @@ fn function_control_flow_bodies() {
 fn function_declaring_bodies() {
     assert_identical(&[
         // var / let / const in a function body
-        "(function(){var x=1;});", "(function(){var x=1;return x;});",
-        "(function(){let x=1;return x;});", "(function(){const c=2;return c;});",
-        "(function(){var x=1,y=2;return x+y;});", "(()=>{let a=1;return a;});",
-        "(function(a){var x=a;return x;});", "(function(){{let x=1;}});",
+        "(function(){var x=1;});",
+        "(function(){var x=1;return x;});",
+        "(function(){let x=1;return x;});",
+        "(function(){const c=2;return c;});",
+        "(function(){var x=1,y=2;return x+y;});",
+        "(()=>{let a=1;return a;});",
+        "(function(a){var x=a;return x;});",
+        "(function(){{let x=1;}});",
         // the store-and-pop fusion (SET_LOCAL;POP => PULL_LOCAL)
-        "(function(){var x;x=1;return x;});", "(function(a){a=a+1;return a;});",
+        "(function(){var x;x=1;return x;});",
+        "(function(a){a=a+1;return a;});",
         // the no-value increment / compound optimization
-        "(function(){let x=0;x++;return x;});", "(function(){var x=0;x+=1;return x;});",
+        "(function(){let x=0;x++;return x;});",
+        "(function(){var x=0;x+=1;return x;});",
         // declarations + control flow together
         "(function(){var x=1;while(x)break;return x;});",
         "(function(a,b){if(a>b)return a;return b;});",
@@ -1032,9 +1494,13 @@ fn function_declaring_bodies() {
 #[test]
 fn catch_parameter_bindings() {
     assert_identical(&[
-        "try{}catch(e){}", "try{1;}catch(e){e;}", "try{throw 1;}catch(e){e;}",
-        "try{}catch(e){}finally{}", "try{}catch(err){throw err;}",
-        "try{f();}catch(e){g(e);}", "try{}catch(e){let x=1;e;}",
+        "try{}catch(e){}",
+        "try{1;}catch(e){e;}",
+        "try{throw 1;}catch(e){e;}",
+        "try{}catch(e){}finally{}",
+        "try{}catch(err){throw err;}",
+        "try{f();}catch(e){g(e);}",
+        "try{}catch(e){let x=1;e;}",
         "function h(){try{return 1;}catch(e){return e;}}",
     ]);
 }
@@ -1062,7 +1528,8 @@ fn captured_closures() {
         "(function(a){var b=a;return function(){return b;};});",
         "(function(a){return function(b){return a+b;};});",
         // arrow closures (no this/super), mutation of a captured binding
-        "(function(a){return()=>a;});", "function h(){let c=0;return()=>c;}",
+        "(function(a){return()=>a;});",
+        "function h(){let c=0;return()=>c;}",
         "function counter(){var n=0;return function(){n=n+1;return n;};}",
         "(function(a){return function(){a=1;return a;};});",
         // capture inside control flow
@@ -1077,10 +1544,14 @@ fn captured_closures() {
 #[test]
 fn named_function_expressions() {
     assert_identical(&[
-        "(function g(){});", "(function g(){return g;});",
-        "(function g(){return 1;});", "(function fact(n){return fact;});",
-        "var f=function g(){};", "(function g(a){return a;});",
-        "[function g(){}];", "(function g(){return g();});",
+        "(function g(){});",
+        "(function g(){return g;});",
+        "(function g(){return 1;});",
+        "(function fact(n){return fact;});",
+        "var f=function g(){};",
+        "(function g(a){return a;});",
+        "[function g(){}];",
+        "(function g(){return g();});",
     ]);
 }
 
@@ -1095,15 +1566,25 @@ fn named_function_expressions() {
 fn for_in_of_iteration() {
     assert_identical(&[
         // for-of / for-in over a reference or literal, used and empty body
-        "for(x of a)x;", "for(x in a)x;", "for(x of[1,2,3])x;",
-        "for(k in o)k;", "for(x of a){}", "for(x of a);", "for(x of a)f(x);",
+        "for(x of a)x;",
+        "for(x in a)x;",
+        "for(x of[1,2,3])x;",
+        "for(k in o)k;",
+        "for(x of a){}",
+        "for(x of a);",
+        "for(x of a)f(x);",
         // break / continue / labeled break / throw crossing the iterator close
-        "for(x of a)break;", "for(x of a)continue;", "for(x of a){if(x)break;}",
-        "L:for(x of a)break L;", "for(x of a)throw x;",
+        "for(x of a)break;",
+        "for(x of a)continue;",
+        "for(x of a){if(x)break;}",
+        "L:for(x of a)break L;",
+        "for(x of a)throw x;",
         // member / computed targets
-        "for(o.p of a)o.p;", "for(a[i] of b)a[i];",
+        "for(o.p of a)o.p;",
+        "for(a[i] of b)a[i];",
         // nesting and inside a function (return crosses the close)
-        "for(x of a)for(y of b)x;", "(function(){for(x of a)return x;});",
+        "for(x of a)for(y of b)x;",
+        "(function(){for(x of a)return x;});",
         "(function(){for(x of a){if(x)continue;}});",
     ]);
 }
@@ -1118,14 +1599,22 @@ fn for_in_of_iteration() {
 fn object_methods_and_accessors() {
     assert_identical(&[
         // concise methods
-        "({m(){}});", "({m(a){return a;}});", "({m(a,b){return a+b;}});",
-        "({m(){return 42;}});", "({m(){var x=1;return x;}});", "({m(){},n(){}});",
+        "({m(){}});",
+        "({m(a){return a;}});",
+        "({m(a,b){return a+b;}});",
+        "({m(){return 42;}});",
+        "({m(){var x=1;return x;}});",
+        "({m(){},n(){}});",
         // getters / setters
-        "({get x(){return 1;}});", "({set x(v){}});",
-        "({get x(){return 1;},set x(v){}});", "({get x(){return this;}});",
+        "({get x(){return 1;}});",
+        "({set x(v){}});",
+        "({get x(){return 1;},set x(v){}});",
+        "({get x(){return this;}});",
         // mixed with data properties, and computed keys
-        "({a:1,m(){}});", "({m(){},a:1,get g(){return 2;}});",
-        "({[k](){}});", "({get[k](){return 1;}});",
+        "({a:1,m(){}});",
+        "({m(){},a:1,get g(){return 2;}});",
+        "({[k](){}});",
+        "({get[k](){return 1;}});",
     ]);
 }
 
@@ -1137,9 +1626,15 @@ fn object_methods_and_accessors() {
 #[test]
 fn for_in_of_declaring_heads() {
     assert_identical(&[
-        "for(let x of a)x;", "for(const x of a)x;", "for(let x in a)x;",
-        "for(let x of[1,2,3])x;", "for(let x of a){}", "for(let x of a)f(x);",
-        "for(let x of a)break;", "for(let k in o){k;}", "for(const c of a)c*2;",
+        "for(let x of a)x;",
+        "for(const x of a)x;",
+        "for(let x in a)x;",
+        "for(let x of[1,2,3])x;",
+        "for(let x of a){}",
+        "for(let x of a)f(x);",
+        "for(let x of a)break;",
+        "for(let k in o){k;}",
+        "for(const c of a)c*2;",
         "for(let x of a)for(let y of b)x+y;",
         "(function(){for(let x of a)return x;});",
     ]);
@@ -1155,13 +1650,16 @@ fn for_in_of_declaring_heads() {
 #[test]
 fn arguments_object() {
     assert_identical(&[
-        "(function(){return arguments;});", "(function(){arguments[0];});",
-        "(function(){var x=arguments;return x;});", "(function(){f(arguments);});",
+        "(function(){return arguments;});",
+        "(function(){arguments[0];});",
+        "(function(){var x=arguments;return x;});",
+        "(function(){f(arguments);});",
         "(function(){return arguments[0]+arguments[1];});",
         "(function(){return arguments.length;});",
         "(function(){return function(){return arguments;};});",
         // mapped `arguments` with parameters → the parameters are closures
-        "(function(a){return arguments;});", "(function(a){a;return arguments;});",
+        "(function(a){return arguments;});",
+        "(function(a){a;return arguments;});",
         "(function(a,b){return arguments.length;});",
         "(function(a,b,c){return arguments[0]+a;});",
         // strict `arguments` stays unmapped, so parameters remain local
@@ -1178,9 +1676,14 @@ fn arguments_object() {
 #[test]
 fn for_in_of_var_head() {
     assert_identical(&[
-        "for(var x of a)x;", "for(var x in a)x;", "for(var x of[1,2,3])x;",
-        "for(var k in o){k;}", "for(var x of a)break;", "for(var x of a);",
-        "for(var x of a)f(x);", "(function(){for(var x of a)return x;});",
+        "for(var x of a)x;",
+        "for(var x in a)x;",
+        "for(var x of[1,2,3])x;",
+        "for(var k in o){k;}",
+        "for(var x of a)break;",
+        "for(var x of a);",
+        "for(var x of a)f(x);",
+        "(function(){for(var x of a)return x;});",
     ]);
 }
 
@@ -1210,13 +1713,23 @@ fn for_await_of() {
 fn object_destructuring() {
     assert_identical(&[
         // assignment form (global and member-source targets)
-        "({a,b}=x);", "({a}=x);", "({a,b,c}=o);", "({first,second}=pair);",
-        "({a:p,b:q}=x);", "({a,b}=f());",
+        "({a,b}=x);",
+        "({a}=x);",
+        "({a,b,c}=o);",
+        "({first,second}=pair);",
+        "({a:p,b:q}=x);",
+        "({a,b}=f());",
         // lexical / var binding form
-        "let{a,b}=x;", "var{a,b}=x;", "const{a}=x;", "let{a}=obj;",
-        "let{x,y,z}=p;", "let{a:p}=x;", "let{a}=x,{b}=y;",
+        "let{a,b}=x;",
+        "var{a,b}=x;",
+        "const{a}=x;",
+        "let{a}=obj;",
+        "let{x,y,z}=p;",
+        "let{a:p}=x;",
+        "let{a}=x,{b}=y;",
         // `= default` elements, and inside a function body
-        "({a=1}=x);", "let{a=1,b=2}=x;",
+        "({a=1}=x);",
+        "let{a=1,b=2}=x;",
         "(function(){let{a,b}=x;return a+b;});",
     ]);
 }
@@ -1231,13 +1744,20 @@ fn object_destructuring() {
 fn array_destructuring() {
     assert_identical(&[
         // assignment form
-        "[a,b]=x;", "[a]=x;", "([a,b]=f());",
+        "[a,b]=x;",
+        "[a]=x;",
+        "([a,b]=f());",
         // elision holes and rest
-        "[a,,b]=x;", "[,a]=x;", "[a,...r]=x;",
+        "[a,,b]=x;",
+        "[,a]=x;",
+        "[a,...r]=x;",
         // = default elements
         "[a=1]=x;",
         // lexical / var binding form
-        "let[a,b]=x;", "var[a,b,c]=x;", "let[a,...r]=x;", "let[a]=x,[b]=y;",
+        "let[a,b]=x;",
+        "var[a,b,c]=x;",
+        "let[a,...r]=x;",
+        "let[a]=x,[b]=y;",
         // inside a function body
         "(function(){let[a,b]=x;return a+b;});",
     ]);
@@ -1251,11 +1771,16 @@ fn array_destructuring() {
 #[test]
 fn destructuring_parameters() {
     assert_identical(&[
-        "(function([a,b]){});", "(function({a,b}){});",
-        "(function([a,b]){return a+b;});", "(function({a,b}){return a;});",
-        "(function([a],b){return b;});", "(function(a,[b,c]){return b;});",
-        "(function([a,...r]){return r;});", "(function({a:p}){return p;});",
-        "(function([a=1]){return a;});", "(([a,b])=>a);",
+        "(function([a,b]){});",
+        "(function({a,b}){});",
+        "(function([a,b]){return a+b;});",
+        "(function({a,b}){return a;});",
+        "(function([a],b){return b;});",
+        "(function(a,[b,c]){return b;});",
+        "(function([a,...r]){return r;});",
+        "(function({a:p}){return p;});",
+        "(function([a=1]){return a;});",
+        "(([a,b])=>a);",
     ]);
 }
 
@@ -1269,11 +1794,17 @@ fn destructuring_parameters() {
 fn object_destructuring_rest_and_computed() {
     assert_identical(&[
         // rest
-        "({...r}=x);", "let{a,...r}=x;", "({a,...rest}=o);",
-        "let{p,q,...r}=x;", "let{a,b,...rest}=obj;",
+        "({...r}=x);",
+        "let{a,...r}=x;",
+        "({a,...rest}=o);",
+        "let{p,q,...r}=x;",
+        "let{a,b,...rest}=obj;",
         // computed keys
-        "({[k]:v}=x);", "let{[k]:v}=x;", "let{[key]:val}=obj;",
-        "({[a]:x,[b]:y}=o);", "({[k1]:a,[k2]:b}=o);",
+        "({[k]:v}=x);",
+        "let{[k]:v}=x;",
+        "let{[key]:val}=obj;",
+        "({[a]:x,[b]:y}=o);",
+        "({[k1]:a,[k2]:b}=o);",
     ]);
 }
 
@@ -1288,17 +1819,24 @@ fn object_destructuring_rest_and_computed() {
 fn super_in_methods_and_arrows() {
     assert_identical(&[
         // super member read / call / store / delete / computed, in methods
-        "({m(){return super.x;}});", "({m(){super.f();}});",
-        "({m(){super.a=1;}});", "({m(){return super[k];}});",
-        "({get g(){return super.v;}});", "({m(){return super.a+super.b;}});",
+        "({m(){return super.x;}});",
+        "({m(){super.f();}});",
+        "({m(){super.a=1;}});",
+        "({m(){return super[k];}});",
+        "({get g(){return super.v;}});",
+        "({m(){return super.a+super.b;}});",
         "({m(){delete super.x;}});",
         // super in async / generator methods, and multiple methods
-        "({async m(){return super.x;}});", "({*m(){return super.x;}});",
+        "({async m(){return super.x;}});",
+        "({*m(){return super.x;}});",
         "({m(){return super.x;},n(){return super.y;}});",
         // arrow capturing this / super / target (the arrow-default path)
-        "({m(){return()=>super.x;}});", "({m(){return()=>this;}});",
-        "({m(){return()=>this.x;}});", "({m(){return()=>super.f();}});",
-        "({m(a){return()=>a+super.x;}});", "({m(){return()=>()=>this;}});",
+        "({m(){return()=>super.x;}});",
+        "({m(){return()=>this;}});",
+        "({m(){return()=>this.x;}});",
+        "({m(){return()=>super.f();}});",
+        "({m(a){return()=>a+super.x;}});",
+        "({m(){return()=>()=>this;}});",
         "(function(){return()=>this;});",
     ]);
 }
@@ -1315,16 +1853,21 @@ fn super_in_methods_and_arrows() {
 fn base_classes() {
     assert_identical(&[
         // empty class and a synthesized vs explicit constructor
-        "(class{});", "(class{constructor(){}});",
-        "(class{constructor(a){this.a=a;}});", "(class{m(a,b){return a+b;}});",
+        "(class{});",
+        "(class{constructor(){}});",
+        "(class{constructor(a){this.a=a;}});",
+        "(class{m(a,b){return a+b;}});",
         // methods, accessors, and multiple members (no commas)
-        "(class{m(){}});", "(class{m(){}n(){}});",
+        "(class{m(){}});",
+        "(class{m(){}n(){}});",
         "(class{get x(){return 1;}set x(v){}});",
         // static members
-        "(class{static m(){}});", "(class{static m(){}i(){}});",
+        "(class{static m(){}});",
+        "(class{static m(){}i(){}});",
         "(class{static get s(){return 1;}});",
         // generator / async / super-using methods
-        "(class{*g(){}});", "(class{async m(){}});",
+        "(class{*g(){}});",
+        "(class{async m(){}});",
         "(class{m(){return super.x;}});",
     ]);
 }
@@ -1340,13 +1883,16 @@ fn base_classes() {
 #[test]
 fn derived_classes() {
     assert_identical(&[
-        "(class extends A{});", "(class extends A{constructor(){super();}});",
+        "(class extends A{});",
+        "(class extends A{constructor(){super();}});",
         "(class extends A{constructor(a){super(a);}});",
         "(class extends A{constructor(a,b){super(a,b);}});",
         "(class extends A{constructor(){super();this.x=1;}});",
         "(class extends A{constructor(){super();return this;}});",
-        "(class extends A{m(){}});", "(class extends B{static m(){}});",
-        "(class extends(f()){});", "(class extends A{m(){return super.x;}});",
+        "(class extends A{m(){}});",
+        "(class extends B{static m(){}});",
+        "(class extends(f()){});",
+        "(class extends A{m(){return super.x;}});",
     ]);
 }
 
@@ -1392,12 +1938,15 @@ fn cross_construct_integration() {
 #[test]
 fn static_blocks() {
     assert_identical(&[
-        "(class{static{}});", "(class{static{x;}});",
-        "(class{static{a;}static{b;}});", "(class{static{this.x=1;}});",
+        "(class{static{}});",
+        "(class{static{x;}});",
+        "(class{static{a;}static{b;}});",
+        "(class{static{this.x=1;}});",
         "(class{static x=1;static{y;}});",
         "(class{static x=1;static y=2;static{z;}});",
         "(class extends A{static{super.x;}});",
-        "(class{m(){}static{this.n=1;}});", "(class{static{for(;;)break;}});",
+        "(class{m(){}static{this.n=1;}});",
+        "(class{static{for(;;)break;}});",
     ]);
 }
 
@@ -1407,8 +1956,16 @@ fn wide_operands_and_branch_widths() {
     // padding the then-arm with many statements.
     let long_then = format!("if(1){{{}}}else 2;", "3;".repeat(120));
     assert_identical(&[
-        "127", "128", "255", "256", "32767", "32768", "-128", "-129",
-        "-32768", "-32769",
+        "127",
+        "128",
+        "255",
+        "256",
+        "32767",
+        "32768",
+        "-128",
+        "-129",
+        "-32768",
+        "-32769",
         long_then.as_str(),
     ]);
 }
@@ -1416,17 +1973,23 @@ fn wide_operands_and_branch_widths() {
 #[test]
 fn function_default_parameters() {
     assert_identical(&[
-        "((a=1)=>a);", "((a,b=2)=>a+b);", "(function(a=1){return a;});",
-        "(function(a,b=2){return a+b;});", "(function(a=1,b=2){return a+b;});",
-        "((a=1,b=a)=>a+b);", "(function(x,y=x+1){return y;});",
+        "((a=1)=>a);",
+        "((a,b=2)=>a+b);",
+        "(function(a=1){return a;});",
+        "(function(a,b=2){return a+b;});",
+        "(function(a=1,b=2){return a+b;});",
+        "((a=1,b=a)=>a+b);",
+        "(function(x,y=x+1){return y;});",
     ]);
 }
 
 #[test]
 fn function_rest_parameters() {
     assert_identical(&[
-        "(function(...a){return a;});", "(function(a,...b){return b;});",
-        "((...xs)=>xs);", "((a,b,...rest)=>rest);",
+        "(function(...a){return a;});",
+        "(function(a,...b){return b;});",
+        "((...xs)=>xs);",
+        "((a,b,...rest)=>rest);",
         "(function(x,...ys){return ys;});",
     ]);
 }
@@ -1434,8 +1997,11 @@ fn function_rest_parameters() {
 #[test]
 fn object_property_name_inference() {
     assert_identical(&[
-        "({f:function(){}});", "({g:()=>1});", "({f:function(){},g:()=>2});",
-        "({[k]:function(){}});", "({a:1,f:function(){}});",
+        "({f:function(){}});",
+        "({g:()=>1});",
+        "({f:function(){},g:()=>2});",
+        "({[k]:function(){}});",
+        "({a:1,f:function(){}});",
         // named values keep their own name (no inference flag)
         "({f:function named(){}});",
         // non-function values unaffected
@@ -1446,42 +2012,64 @@ fn object_property_name_inference() {
 #[test]
 fn object_shorthand() {
     assert_identical(&[
-        "({x});", "({x,y});", "({a,b,c});",
-        "let x=1;({x});", "let a=1,b=2;({a,b});",
-        "({x,y:2});", "({a:1,b});",
+        "({x});",
+        "({x,y});",
+        "({a,b,c});",
+        "let x=1;({x});",
+        "let a=1,b=2;({a,b});",
+        "({x,y:2});",
+        "({a:1,b});",
     ]);
 }
 
 #[test]
 fn object_spread() {
     assert_identical(&[
-        "({...a});", "({...a,...b});", "({x:1,...a});", "({...a,x:1});",
-        "({a:1,...b,c:3});", "let o={x:1};({...o});",
+        "({...a});",
+        "({...a,...b});",
+        "({x:1,...a});",
+        "({...a,x:1});",
+        "({a:1,...b,c:3});",
+        "let o={x:1};({...o});",
     ]);
 }
 
 #[test]
 fn array_spread() {
     assert_identical(&[
-        "[...a];", "[1,...a];", "[...a,2];", "[1,...a,2];",
-        "[...a,...b];", "[...a,,b];", "let a=[1];[...a,2];",
+        "[...a];",
+        "[1,...a];",
+        "[...a,2];",
+        "[1,...a,2];",
+        "[...a,...b];",
+        "[...a,,b];",
+        "let a=[1];[...a,2];",
     ]);
 }
 
 #[test]
 fn call_new_spread() {
     assert_identical(&[
-        "f(...a);", "f(1,...a);", "f(...a,2);", "f(...a,...b);",
-        "f(1,...a,2);", "new X(...a);", "new X(1,...a);",
-        "a.m(...b);", "let a=[1];f(...a);",
+        "f(...a);",
+        "f(1,...a);",
+        "f(...a,2);",
+        "f(...a,...b);",
+        "f(1,...a,2);",
+        "new X(...a);",
+        "new X(1,...a);",
+        "a.m(...b);",
+        "let a=[1];f(...a);",
     ]);
 }
 
 #[test]
 fn object_proto() {
     assert_identical(&[
-        "({__proto__:null});", "({__proto__:x});", "({__proto__:x,a:1});",
-        "({a:1,__proto__:x});", "let x={};({__proto__:x});",
+        "({__proto__:null});",
+        "({__proto__:x});",
+        "({__proto__:x,a:1});",
+        "({a:1,__proto__:x});",
+        "let x={};({__proto__:x});",
         // a shorthand or computed __proto__ is a NORMAL property (not the setter)
         "({['__proto__']:1});",
     ]);
@@ -1490,9 +2078,13 @@ fn object_proto() {
 #[test]
 fn generator_functions() {
     assert_identical(&[
-        "(function*(){});", "(function*(){yield 1;});", "(function*(){yield;});",
-        "(function*(){yield 1;yield 2;});", "(function*(a){yield a;});",
-        "(function*(){return 1;});", "(function*(){let x=yield 1;return x;});",
+        "(function*(){});",
+        "(function*(){yield 1;});",
+        "(function*(){yield;});",
+        "(function*(){yield 1;yield 2;});",
+        "(function*(a){yield a;});",
+        "(function*(){return 1;});",
+        "(function*(){let x=yield 1;return x;});",
         "function*g(){yield 1;}",
     ]);
 }
@@ -1500,9 +2092,12 @@ fn generator_functions() {
 #[test]
 fn async_functions() {
     assert_identical(&[
-        "(async function(){});", "(async function(){await 1;});",
-        "(async function(){return await 1;});", "(async function(a){await a;});",
-        "(async ()=>await 1);", "(async ()=>{await 1;await 2;});",
+        "(async function(){});",
+        "(async function(){await 1;});",
+        "(async function(){return await 1;});",
+        "(async function(a){await a;});",
+        "(async ()=>await 1);",
+        "(async ()=>{await 1;await 2;});",
         "async function f(){await 1;}",
         "(async function(){let x=await 1;return x;});",
     ]);
@@ -1511,16 +2106,20 @@ fn async_functions() {
 #[test]
 fn async_generators() {
     assert_identical(&[
-        "(async function*(){});", "(async function*(){yield 1;});",
-        "(async function*(){yield await 1;});", "(async function*(){await 1;yield 2;});",
-        "async function*g(){yield 1;}", "(async function*(a){yield a;});",
+        "(async function*(){});",
+        "(async function*(){yield 1;});",
+        "(async function*(){yield await 1;});",
+        "(async function*(){await 1;yield 2;});",
+        "async function*g(){yield 1;}",
+        "(async function*(a){yield a;});",
     ]);
 }
 
 #[test]
 fn yield_star_delegate() {
     assert_identical(&[
-        "(function*(){yield* a;});", "(function*(){yield* [1,2];});",
+        "(function*(){yield* a;});",
+        "(function*(){yield* [1,2];});",
         "(function*(){yield 1;yield* a;yield 2;});",
         "(async function*(){yield* a;});",
         "function*g(){yield* h();}",
@@ -1530,34 +2129,53 @@ fn yield_star_delegate() {
 #[test]
 fn direct_eval() {
     assert_identical(&[
-        "eval(x);", "eval(1);", "eval(1,2);", "eval();",
-        "eval(a,b,c);", "eval(x+1);",
+        "eval(x);",
+        "eval(1);",
+        "eval(1,2);",
+        "eval();",
+        "eval(a,b,c);",
+        "eval(x+1);",
         // eval spread + eval as sub-expression
-        "eval(...a);", "eval(1,...a);", "y=eval(x);",
+        "eval(...a);",
+        "eval(1,...a);",
+        "y=eval(x);",
         // NOT direct eval: member call / shadowed-by-property
-        "a.eval(x);", "o.eval(1,2);",
+        "a.eval(x);",
+        "o.eval(1,2);",
         // eval-poisoned scope with declarations (program/block level) still matches
-        "let y=1;eval(y);", "{let z=1;eval(z);}", "var v=1;eval(v);",
+        "let y=1;eval(y);",
+        "{let z=1;eval(z);}",
+        "var v=1;eval(v);",
     ]);
 }
 
 #[test]
 fn named_classes() {
     assert_identical(&[
-        "(class C{});", "class C{}", "(class C{m(){}});",
-        "(class C{m(){}n(){}});", "(class C{static s(){}});",
-        "(class C{get x(){}set x(v){}});", "(class C{constructor(){}});",
-        "let K=class C{};", "(class C{*g(){}async a(){}});",
+        "(class C{});",
+        "class C{}",
+        "(class C{m(){}});",
+        "(class C{m(){}n(){}});",
+        "(class C{static s(){}});",
+        "(class C{get x(){}set x(v){}});",
+        "(class C{constructor(){}});",
+        "let K=class C{};",
+        "(class C{*g(){}async a(){}});",
         // class body references its own name (USE_CLOSURE)
-        "(class C{m(){return C;}});", "(class C{static s(){return C;}});",
+        "(class C{m(){return C;}});",
+        "(class C{static s(){return C;}});",
     ]);
 }
 
 #[test]
 fn class_computed_method_keys() {
     assert_identical(&[
-        "(class{[k](){}});", "(class{static [k](){}});", "(class{[k+1](){}});",
-        "(class{[k](){}m(){}});", "(class{get [k](){}});", "(class{*[k](){}});",
+        "(class{[k](){}});",
+        "(class{static [k](){}});",
+        "(class{[k+1](){}});",
+        "(class{[k](){}m(){}});",
+        "(class{get [k](){}});",
+        "(class{*[k](){}});",
         "(class C{[k](){}});",
     ]);
 }
@@ -1565,8 +2183,12 @@ fn class_computed_method_keys() {
 #[test]
 fn anonymous_class_name_inference() {
     assert_identical(&[
-        "let C=class{};", "const D=class{};", "var E=class{};",
-        "x=class{};", "let C=class{m(){}};", "let C=class extends B{};",
+        "let C=class{};",
+        "const D=class{};",
+        "var E=class{};",
+        "x=class{};",
+        "let C=class{m(){}};",
+        "let C=class extends B{};",
         // a named class keeps its own name (no inference)
         "let K=class C{};",
     ]);
@@ -1575,9 +2197,12 @@ fn anonymous_class_name_inference() {
 #[test]
 fn class_static_fields() {
     assert_identical(&[
-        "(class{static x=1;});", "(class{static x=1;static y=2;});",
-        "(class{static x;});", "(class{static m(){}static x=1;});",
-        "(class C{static x=1;});", "(class{static x=1+2;});",
+        "(class{static x=1;});",
+        "(class{static x=1;static y=2;});",
+        "(class{static x;});",
+        "(class{static m(){}static x=1;});",
+        "(class C{static x=1;});",
+        "(class{static x=1+2;});",
         "(class{static f=function(){};});",
     ]);
 }
@@ -1585,10 +2210,16 @@ fn class_static_fields() {
 #[test]
 fn class_instance_fields() {
     assert_identical(&[
-        "(class{x=1;});", "(class{x;});", "(class{x=1;y=2;});",
-        "(class C{x=1;});", "(class{x=1+2;});", "(class{x=this;});",
-        "(class{f=function(){};});", "(class{m(){}x=1;});",
-        "(class{x=1;m(){}y=2;});", "class C{x=1;}",
+        "(class{x=1;});",
+        "(class{x;});",
+        "(class{x=1;y=2;});",
+        "(class C{x=1;});",
+        "(class{x=1+2;});",
+        "(class{x=this;});",
+        "(class{f=function(){};});",
+        "(class{m(){}x=1;});",
+        "(class{x=1;m(){}y=2;});",
+        "class C{x=1;}",
         // instance and static fields interleaved
         "(class{static a=1;b=2;static c=3;d=4;});",
         "(class{x=1;static y=2;});",
@@ -1598,7 +2229,8 @@ fn class_instance_fields() {
 #[test]
 fn class_instance_fields_derived() {
     assert_identical(&[
-        "(class extends Object{x=1;});", "(class C extends Object{x=1;});",
+        "(class extends Object{x=1;});",
+        "(class C extends Object{x=1;});",
         "(class extends Object{x=1;y=2;});",
         "(class extends Object{constructor(){super();}x=1;});",
         "(class extends Object{constructor(a){super(a);}x=a;});",
@@ -1618,12 +2250,19 @@ fn class_instance_fields_derived() {
 #[test]
 fn class_computed_fields() {
     assert_identical(&[
-        "(class{[k]=1;});", "(class{[k]=1;[j]=2;});", "(class{[k+1]=2;});",
-        "(class{[k]=this;});", "(class{[k];});",
+        "(class{[k]=1;});",
+        "(class{[k]=1;[j]=2;});",
+        "(class{[k+1]=2;});",
+        "(class{[k]=this;});",
+        "(class{[k];});",
         // interleaved with a plain field, a method, and a static field
-        "(class{x=1;[k]=2;});", "(class{[k]=1;m(){}});", "(class{[k]=1;static y=2;});",
+        "(class{x=1;[k]=2;});",
+        "(class{[k]=1;m(){}});",
+        "(class{[k]=1;static y=2;});",
         // named / derived / static computed key
-        "(class C{[k]=1;});", "(class extends A{[k]=1;});", "(class{static [k]=1;});",
+        "(class C{[k]=1;});",
+        "(class extends A{[k]=1;});",
+        "(class{static [k]=1;});",
     ]);
 }
 
@@ -1633,11 +2272,17 @@ fn class_computed_fields() {
 #[test]
 fn class_private_fields() {
     assert_identical(&[
-        "(class{#x=1;});", "(class{#x;});", "(class{#x=1;#y=2;});",
-        "(class{#x=this;});", "(class{#x=function(){};});",
+        "(class{#x=1;});",
+        "(class{#x;});",
+        "(class{#x=1;#y=2;});",
+        "(class{#x=this;});",
+        "(class{#x=function(){};});",
         // interleaved with public data / method / static members
-        "(class{x=1;#y=2;});", "(class{#x=1;m(){}});", "(class{#x=1;static #y=2;});",
-        "(class C{#x=1;});", "(class extends A{#x=1;constructor(){super();}});",
+        "(class{x=1;#y=2;});",
+        "(class{#x=1;m(){}});",
+        "(class{#x=1;static #y=2;});",
+        "(class C{#x=1;});",
+        "(class extends A{#x=1;constructor(){super();}});",
         "(class{static #x=1;});",
     ]);
 }
@@ -1651,8 +2296,12 @@ fn class_private_fields() {
 #[test]
 fn class_private_methods() {
     assert_identical(&[
-        "(class{#m(){}});", "(class{#m(){}#n(){}});", "(class{get #g(){}});",
-        "(class{set #s(v){}});", "(class{#m(){}#x=1;});", "(class{static #m(){}});",
+        "(class{#m(){}});",
+        "(class{#m(){}#n(){}});",
+        "(class{get #g(){}});",
+        "(class{set #s(v){}});",
+        "(class{#m(){}#x=1;});",
+        "(class{static #m(){}});",
         "(class{#m(){}m(){}});",
     ]);
 }
@@ -1751,15 +2400,20 @@ fn class_private_accessor_pair_shares_brand() {
 fn class_field_value_functions() {
     assert_identical(&[
         // arrow field values (the `mxFieldFlag | mxArrowFlag` flavor)
-        "(class{f=()=>1;});", "(class{f=()=>this;});", "(class{f=(a)=>a;});",
-        "(class{static f=()=>1;});", "(class{#f=()=>1;});",
+        "(class{f=()=>1;});",
+        "(class{f=()=>this;});",
+        "(class{f=(a)=>a;});",
+        "(class{static f=()=>1;});",
+        "(class{#f=()=>1;});",
         "(class{static #f=()=>this;});",
         // async arrow field value
-        "(class{f=async()=>1;});", "(class{f=async(a)=>await a;});",
+        "(class{f=async()=>1;});",
+        "(class{f=async(a)=>await a;});",
         // arrow field reading the instance via a captured `this`
         "(class{x=1;f=()=>this.x;});",
         // named/derived shapes
-        "(class C{f=()=>1;});", "(class extends A{f=()=>this;constructor(){super();}});",
+        "(class C{f=()=>1;});",
+        "(class extends A{f=()=>this;constructor(){super();}});",
         // interleaved with a plain field and a method
         "(class{a=1;f=()=>2;m(){}});",
     ]);
@@ -1897,11 +2551,18 @@ fn assert_identical_module(corpus: &[&str]) {
                     diff
                 ));
             }
-            Err(e) => fails.push(format!("{src:?}: compile_module error {e:?} (want {})", hex(&want))),
+            Err(e) => fails.push(format!(
+                "{src:?}: compile_module error {e:?} (want {})",
+                hex(&want)
+            )),
         }
     }
     if !fails.is_empty() {
-        panic!("{} module divergence(s):\n{}", fails.len(), fails.join("\n"));
+        panic!(
+            "{} module divergence(s):\n{}",
+            fails.len(),
+            fails.join("\n")
+        );
     }
 }
 
@@ -2095,11 +2756,11 @@ fn class_accessor_numeric_key_canonicalization() {
 #[test]
 fn numeric_property_key_index_boundary() {
     assert_identical(&[
-        "({ 4294967294: 1 })", // index, > i32::MAX → NUMBER node
-        "({ 4294967295: 1 })", // == sentinel → NOT an index → symbol
-        "({ 4294967296: 1 })", // > sentinel → symbol
-        "({ 2147483648: 1 })", // 2^31, index, wraps i32 → NUMBER node
-        "({ 2147483647: 1 })", // i32::MAX, index → INTEGER node
+        "({ 4294967294: 1 })",   // index, > i32::MAX → NUMBER node
+        "({ 4294967295: 1 })",   // == sentinel → NOT an index → symbol
+        "({ 4294967296: 1 })",   // > sentinel → symbol
+        "({ 2147483648: 1 })",   // 2^31, index, wraps i32 → NUMBER node
+        "({ 2147483647: 1 })",   // i32::MAX, index → INTEGER node
         "({ 4294967294() {} })", // same boundary as a method key
         "({ 2147483648() {} })",
     ]);

@@ -73,8 +73,7 @@ fn scenario(store: &mut dyn HeapStore) {
         "true",
         "fresh site identity and its internal key survive a second resume"
     );
-    checkpoint_to_store(&mut resumed_again, &sig(), store)
-        .expect("checkpoint after second resume");
+    checkpoint_to_store(&mut resumed_again, &sig(), store).expect("checkpoint after second resume");
     validate_store(store, &sig()).expect("store remains valid");
 }
 

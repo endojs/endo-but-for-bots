@@ -55,7 +55,11 @@ fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
 /// Run crank 1 and the observation cranks uninterrupted, and the same
 /// cranks across a checkpoint/resume split on `store`; assert the
 /// observations agree pairwise and return the continuous ones.
-fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
+fn twin(
+    crank1: &str,
+    observations: &[&str],
+    store: &mut dyn HeapStore,
+) -> Vec<(bool, String, String, u64)> {
     let (b1, n1) = compile(crank1);
 
     let mut cont = Interp::new();
@@ -75,7 +79,10 @@ fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(
         .iter()
         .map(|s| crank(session.machine_mut(), s))
         .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
+    assert_eq!(
+        continuous, resumed,
+        "resumed observes exactly as uninterrupted"
+    );
     checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
     validate_store(store, &sig()).expect("post-crank store validates");
     continuous
@@ -88,7 +95,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     let got: Vec<&str> = seen.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -105,9 +115,7 @@ fn resumed_collator_compares_like_uninterrupted() {
         "ih-intl-twin-collator",
         "var c = 0; var t = 0; \
          c = new Intl.Collator('en', { sensitivity: 'base' }); t = 7; t",
-        &[
-            "var c; var t; t = c.compare('a', 'B') + ':' + c.resolvedOptions().sensitivity; t",
-        ],
+        &["var c; var t; t = c.compare('a', 'B') + ':' + c.resolvedOptions().sensitivity; t"],
         &["-1:base"],
     );
 }
@@ -276,9 +284,7 @@ fn malformed_intl_bound_function_rows_are_refused() {
     assert_eq!(image.intl_bound_functions.len(), 1);
     image.intl_bound_functions[0].kind = 9;
     match from_snapshot_bytes(&write_machine(&image), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "Intl bound-function state: unknown kind",
-        )) => {}
+        Err(SnapshotError::Corrupt("Intl bound-function state: unknown kind")) => {}
         Err(other) => panic!("wrong Intl-bound refusal: {other:?}"),
         Ok(_) => panic!("unknown Intl bound-function kind must not restore"),
     }
@@ -351,7 +357,11 @@ fn a_guest_bind_over_an_intl_bound_function_resumes_on_every_path() {
     );
     let mut session =
         ironhorse_snapshot::machine::resume_from_store_lazy(store.clone(), &sig()).expect("lazy");
-    assert_eq!(crank(session.machine_mut(), obs), continuous, "lazy twin agrees");
+    assert_eq!(
+        crank(session.machine_mut(), obs),
+        continuous,
+        "lazy twin agrees"
+    );
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut())
         .expect("checkpoint after lazy resume");
 }

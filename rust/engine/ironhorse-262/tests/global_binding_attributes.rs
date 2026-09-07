@@ -125,9 +125,20 @@ fn the_script_declared_global_attribute_diverges_from_the_eval_framed_oracle() {
         ("y = 1; var y; delete globalThis.y", "false", "true"),
     ] {
         let run = dual_run(source).expect("the XS oracle machine must start");
-        assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {:?}", run.ironhorse_halt);
-        assert_eq!(run.ironhorse_result, ironhorse, "{source}: ironhorse (Script `D = false`)");
-        assert_eq!(run.oracle_result, oracle, "{source}: oracle (eval-framed `D = true`)");
+        assert_eq!(
+            run.agreement,
+            Agreement::BothComplete,
+            "{source}: {:?}",
+            run.ironhorse_halt
+        );
+        assert_eq!(
+            run.ironhorse_result, ironhorse,
+            "{source}: ironhorse (Script `D = false`)"
+        );
+        assert_eq!(
+            run.oracle_result, oracle,
+            "{source}: oracle (eval-framed `D = true`)"
+        );
     }
 
     // Where the two goals agree, they must keep agreeing. An unqualified

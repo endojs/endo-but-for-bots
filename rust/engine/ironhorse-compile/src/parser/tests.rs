@@ -12,7 +12,9 @@ use crate::parser::{ParseErrorKind, Parser};
 /// Parse `src` as a whole Script (sloppy) and dump the `Program` tree.
 fn prog(src: &str) -> String {
     let mut p = Parser::new(src, false, false).unwrap_or_else(|e| panic!("lex {src:?}: {e}"));
-    let item = p.parse_program(false).unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
+    let item = p
+        .parse_program(false)
+        .unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
     dump(&item)
 }
 
@@ -20,21 +22,28 @@ fn prog(src: &str) -> String {
 fn check_prog(cases: &[(&str, &str)]) {
     for (src, want) in cases {
         let got = prog(src);
-        assert_eq!(&got, want, "\n  source:   {src}\n  expected: {want}\n  got:      {got}");
+        assert_eq!(
+            &got, want,
+            "\n  source:   {src}\n  expected: {want}\n  got:      {got}"
+        );
     }
 }
 
 /// Parse `src` as an assignment expression (sloppy mode) and dump it.
 fn expr(src: &str) -> String {
     let mut p = Parser::new(src, false, false).unwrap_or_else(|e| panic!("lex {src:?}: {e}"));
-    let item = p.parse_assignment_expression().unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
+    let item = p
+        .parse_assignment_expression()
+        .unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
     dump(&item)
 }
 
 /// Parse `src` as a comma expression (sloppy) and dump it.
 fn comma(src: &str) -> String {
     let mut p = Parser::new(src, false, false).unwrap();
-    let item = p.parse_comma_expression().unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
+    let item = p
+        .parse_comma_expression()
+        .unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
     dump(&item)
 }
 
@@ -42,7 +51,10 @@ fn comma(src: &str) -> String {
 fn check(cases: &[(&str, &str)]) {
     for (src, want) in cases {
         let got = expr(src);
-        assert_eq!(&got, want, "\n  source:   {src}\n  expected: {want}\n  got:      {got}");
+        assert_eq!(
+            &got, want,
+            "\n  source:   {src}\n  expected: {want}\n  got:      {got}"
+        );
     }
 }
 
@@ -75,12 +87,24 @@ fn member_and_call() {
         ("x.y", "(Member (Access #x) #y)"),
         ("x.y.z", "(Member (Member (Access #x) #y) #z)"),
         ("x[0]", "(MemberAt (Access #x) (Integer 0))"),
-        ("x[a+b]", "(MemberAt (Access #x) (Add (Access #a) (Access #b)))"),
+        (
+            "x[a+b]",
+            "(MemberAt (Access #x) (Add (Access #a) (Access #b)))",
+        ),
         ("x.#p", "(PrivateMember ##p (Access #x))"),
         ("f()", "(Call (Access #f) (Params []))"),
-        ("f(1, 2)", "(Call (Access #f) (Params [(Integer 1) (Integer 2)]))"),
-        ("f(...a)", "(Call (Access #f) (Params :spread [(Spread (Access #a))]))"),
-        ("a.b(c)", "(Call (Member (Access #a) #b) (Params [(Access #c)]))"),
+        (
+            "f(1, 2)",
+            "(Call (Access #f) (Params [(Integer 1) (Integer 2)]))",
+        ),
+        (
+            "f(...a)",
+            "(Call (Access #f) (Params :spread [(Spread (Access #a))]))",
+        ),
+        (
+            "a.b(c)",
+            "(Call (Member (Access #a) #b) (Params [(Access #c)]))",
+        ),
     ]);
 }
 
@@ -90,8 +114,14 @@ fn new_expressions() {
         ("new X", "(New (Access #X) (Params []))"),
         ("new X()", "(New (Access #X) (Params []))"),
         ("new X(1)", "(New (Access #X) (Params [(Integer 1)]))"),
-        ("new a.b(1)", "(New (Member (Access #a) #b) (Params [(Integer 1)]))"),
-        ("new X(1).y", "(Member (New (Access #X) (Params [(Integer 1)])) #y)"),
+        (
+            "new a.b(1)",
+            "(New (Member (Access #a) #b) (Params [(Integer 1)]))",
+        ),
+        (
+            "new X(1).y",
+            "(Member (New (Access #X) (Params [(Integer 1)])) #y)",
+        ),
     ]);
 }
 
@@ -110,7 +140,10 @@ fn import_forms() {
     check(&[
         ("import.meta", "(ImportMeta)"),
         ("import(\"m\")", "(ImportCall (String \"m\") ())"),
-        ("import(\"m\", o)", "(ImportCall (String \"m\") (Access #o))"),
+        (
+            "import(\"m\", o)",
+            "(ImportCall (String \"m\") (Access #o))",
+        ),
     ]);
 }
 
@@ -118,8 +151,14 @@ fn import_forms() {
 fn optional_chaining() {
     check(&[
         ("a?.b", "(Chain (Member (Option (Access #a)) #b))"),
-        ("a?.b.c", "(Chain (Member (Member (Option (Access #a)) #b) #c))"),
-        ("a?.[0]", "(Chain (MemberAt (Option (Access #a)) (Integer 0)))"),
+        (
+            "a?.b.c",
+            "(Chain (Member (Member (Option (Access #a)) #b) #c))",
+        ),
+        (
+            "a?.[0]",
+            "(Chain (MemberAt (Option (Access #a)) (Integer 0)))",
+        ),
         ("a?.()", "(Chain (Call (Option (Access #a)) (Params [])))"),
         ("a?.#p", "(Chain (PrivateMember ##p (Option (Access #a))))"),
     ]);
@@ -129,12 +168,24 @@ fn optional_chaining() {
 fn operators_precedence_and_associativity() {
     check(&[
         // multiplicative binds tighter than additive
-        ("a+b*c", "(Add (Access #a) (Multiply (Access #b) (Access #c)))"),
-        ("a*b+c", "(Add (Multiply (Access #a) (Access #b)) (Access #c))"),
+        (
+            "a+b*c",
+            "(Add (Access #a) (Multiply (Access #b) (Access #c)))",
+        ),
+        (
+            "a*b+c",
+            "(Add (Multiply (Access #a) (Access #b)) (Access #c))",
+        ),
         // exponentiation is right-associative
-        ("a**b**c", "(Exponent (Access #a) (Exponent (Access #b) (Access #c)))"),
+        (
+            "a**b**c",
+            "(Exponent (Access #a) (Exponent (Access #b) (Access #c)))",
+        ),
         // additive is left-associative
-        ("a-b-c", "(Subtract (Subtract (Access #a) (Access #b)) (Access #c))"),
+        (
+            "a-b-c",
+            "(Subtract (Subtract (Access #a) (Access #b)) (Access #c))",
+        ),
         ("a%b", "(Modulo (Access #a) (Access #b))"),
         ("a<<b", "(LeftShift (Access #a) (Access #b))"),
         ("a>>b", "(SignedRightShift (Access #a) (Access #b))"),
@@ -154,7 +205,10 @@ fn operators_precedence_and_associativity() {
         ("a&&b||c", "(Or (And (Access #a) (Access #b)) (Access #c))"),
         ("a??b", "(Coalesce (Access #a) (Access #b))"),
         // relational binds tighter than equality
-        ("a<b==c", "(Equal (Less (Access #a) (Access #b)) (Access #c))"),
+        (
+            "a<b==c",
+            "(Equal (Less (Access #a) (Access #b)) (Access #c))",
+        ),
     ]);
 }
 
@@ -185,10 +239,16 @@ fn unary_update() {
 #[test]
 fn conditional_and_assignment() {
     check(&[
-        ("a?b:c", "(QuestionMark (Access #a) (Access #b) (Access #c))"),
+        (
+            "a?b:c",
+            "(QuestionMark (Access #a) (Access #b) (Access #c))",
+        ),
         ("a=b", "(Assign (Access #a) (Access #b))"),
         // assignment is right-associative
-        ("a=b=c", "(Assign (Access #a) (Assign (Access #b) (Access #c)))"),
+        (
+            "a=b=c",
+            "(Assign (Access #a) (Assign (Access #b) (Access #c)))",
+        ),
         ("a+=b", "(AddAssign (Access #a) (Access #b))"),
         ("a-=b", "(SubtractAssign (Access #a) (Access #b))"),
         ("a*=b", "(MultiplyAssign (Access #a) (Access #b))"),
@@ -196,16 +256,25 @@ fn conditional_and_assignment() {
         ("a&&=b", "(AndAssign (Access #a) (Access #b))"),
         ("a||=b", "(OrAssign (Access #a) (Access #b))"),
         ("a??=b", "(CoalesceAssign (Access #a) (Access #b))"),
-        ("a>>>=b", "(UnsignedRightShiftAssign (Access #a) (Access #b))"),
+        (
+            "a>>>=b",
+            "(UnsignedRightShiftAssign (Access #a) (Access #b))",
+        ),
         // member and computed targets are valid references
         ("a.b=c", "(Assign (Member (Access #a) #b) (Access #c))"),
-        ("a[i]=c", "(Assign (MemberAt (Access #a) (Access #i)) (Access #c))"),
+        (
+            "a[i]=c",
+            "(Assign (MemberAt (Access #a) (Access #i)) (Access #c))",
+        ),
     ]);
 }
 
 #[test]
 fn comma_expressions() {
-    assert_eq!(comma("a,b,c"), "(Expressions [(Access #a) (Access #b) (Access #c)])");
+    assert_eq!(
+        comma("a,b,c"),
+        "(Expressions [(Access #a) (Access #b) (Access #c)])"
+    );
     // a lone expression through the comma entry is not wrapped
     assert_eq!(comma("a"), "(Access #a)");
 }
@@ -215,7 +284,10 @@ fn parenthesized() {
     check(&[
         ("(a)", "(Expressions [(Access #a)])"),
         ("(a,b)", "(Expressions [(Access #a) (Access #b)])"),
-        ("(a+b)*c", "(Multiply (Expressions [(Add (Access #a) (Access #b))]) (Access #c))"),
+        (
+            "(a+b)*c",
+            "(Multiply (Expressions [(Add (Access #a) (Access #b))]) (Access #c))",
+        ),
     ]);
     // a parenthesized single reference is a valid assignment target
     // (fxCheckReference unwraps the cover).
@@ -242,29 +314,59 @@ fn array_literals() {
 fn object_literals() {
     check(&[
         ("({})", "(Expressions [(Object [])])"),
-        ("({a: 1})", "(Expressions [(Object [(Property #a (Integer 1))])])"),
-        ("({b})", "(Expressions [(Object [(Property :shorthand #b (Access #b))])])"),
+        (
+            "({a: 1})",
+            "(Expressions [(Object [(Property #a (Integer 1))])])",
+        ),
+        (
+            "({b})",
+            "(Expressions [(Object [(Property :shorthand #b (Access #b))])])",
+        ),
         (
             "({c = 2})",
             "(Expressions [(Object [(Property :shorthand #c (Binding (Access #c) (Integer 2)))])])",
         ),
-        ("({[d]: 3})", "(Expressions [(Object [(PropertyAt (Access #d) (Integer 3))])])"),
-        ("({\"s\": 1})", "(Expressions [(Object [(Property #s (Integer 1))])])"),
-        ("({0: 1})", "(Expressions [(Object [(PropertyAt (Integer 0) (Integer 1))])])"),
+        (
+            "({[d]: 3})",
+            "(Expressions [(Object [(PropertyAt (Access #d) (Integer 3))])])",
+        ),
+        (
+            "({\"s\": 1})",
+            "(Expressions [(Object [(Property #s (Integer 1))])])",
+        ),
+        (
+            "({0: 1})",
+            "(Expressions [(Object [(PropertyAt (Integer 0) (Integer 1))])])",
+        ),
         // `fxStringToIndex`: a string key that is a canonical array index
         // codes through the integer (`PropertyAt`) path, exactly as `0`
         // does; a non-canonical string stays a symbol (`Property`).
-        ("({\"1\": 1})", "(Expressions [(Object [(PropertyAt (Integer 1) (Integer 1))])])"),
-        ("({\"0\": 1})", "(Expressions [(Object [(PropertyAt (Integer 0) (Integer 1))])])"),
+        (
+            "({\"1\": 1})",
+            "(Expressions [(Object [(PropertyAt (Integer 1) (Integer 1))])])",
+        ),
+        (
+            "({\"0\": 1})",
+            "(Expressions [(Object [(PropertyAt (Integer 0) (Integer 1))])])",
+        ),
         // Negative cases: a leading zero, a fractional string, and the
         // 2^32-1 sentinel are NOT canonical indexes — they stay symbols.
-        ("({\"01\": 1})", "(Expressions [(Object [(Property #01 (Integer 1))])])"),
-        ("({\"1.5\": 1})", "(Expressions [(Object [(Property #1.5 (Integer 1))])])"),
+        (
+            "({\"01\": 1})",
+            "(Expressions [(Object [(Property #01 (Integer 1))])])",
+        ),
+        (
+            "({\"1.5\": 1})",
+            "(Expressions [(Object [(Property #1.5 (Integer 1))])])",
+        ),
         (
             "({\"4294967295\": 1})",
             "(Expressions [(Object [(Property #4294967295 (Integer 1))])])",
         ),
-        ("({...e})", "(Expressions [(Object [(Spread (Access #e))])])"),
+        (
+            "({...e})",
+            "(Expressions [(Object [(Spread (Access #e))])])",
+        ),
     ]);
 }
 
@@ -328,18 +430,32 @@ fn formerly_deferred_constructs_now_parse() {
     // destructuring assignment targets were deferred by child 2; child 3
     // (this crate's statement grammar) parses them. They must now yield a
     // tree, not [`ParseErrorKind::Unsupported`].
-    for src in ["x => x", "(a, b) => a", "function () {}", "class {}", "({ m() {} })", "[a] = b"] {
+    for src in [
+        "x => x",
+        "(a, b) => a",
+        "function () {}",
+        "class {}",
+        "({ m() {} })",
+        "[a] = b",
+    ] {
         let mut p = Parser::new(src, false, false).unwrap();
-        let item = p.parse_assignment_expression().unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
+        let item = p
+            .parse_assignment_expression()
+            .unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
         let _ = dump(&item);
     }
 }
 
 #[test]
 fn valid_unported_import_attributes_are_unsupported() {
-    for source in ["import value from 'm' with { type: 'json' };", "export * from 'm' with { type: 'json' };"] {
+    for source in [
+        "import value from 'm' with { type: 'json' };",
+        "export * from 'm' with { type: 'json' };",
+    ] {
         let mut parser = Parser::new(source, true, false).unwrap();
-        let error = parser.parse_module().expect_err("import attributes are not yet ported");
+        let error = parser
+            .parse_module()
+            .expect_err("import attributes are not yet ported");
         assert_eq!(error.kind, ParseErrorKind::Unsupported);
         assert!(error.message.contains("import attributes"));
     }
@@ -349,7 +465,21 @@ fn valid_unported_import_attributes_are_unsupported() {
 fn malformed_input_never_panics() {
     // The fuzz target (a later child) depends on this: every byte
     // sequence yields a Result, never a panic.
-    for src in ["", "(", ")", "1 +", "a.", "a?.", "[", "{", "`", "/", "@#$", "1n.2", "a ** ** b"] {
+    for src in [
+        "",
+        "(",
+        ")",
+        "1 +",
+        "a.",
+        "a?.",
+        "[",
+        "{",
+        "`",
+        "/",
+        "@#$",
+        "1n.2",
+        "a ** ** b",
+    ] {
         let mut p = match Parser::new(src, false, false) {
             Ok(p) => p,
             Err(_) => continue, // a lex error before the first token is fine
@@ -379,7 +509,10 @@ fn await_in_module_context() {
     // builds — so the dump faithfully shows `:strict :async`.
     let mut p = Parser::new("await x", false, true).unwrap();
     let item = p.parse_assignment_expression().unwrap();
-    assert_eq!(dump(&item), "(Await :strict :async (Access :strict :async #x))");
+    assert_eq!(
+        dump(&item),
+        "(Await :strict :async (Access :strict :async #x))"
+    );
 }
 
 #[test]
@@ -401,7 +534,9 @@ fn no_reference_is_a_syntax_error() {
 /// Parse `src` as a Module and dump the `Module` tree.
 fn module(src: &str) -> String {
     let mut p = Parser::new(src, false, true).unwrap_or_else(|e| panic!("lex {src:?}: {e}"));
-    let item = p.parse_module().unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
+    let item = p
+        .parse_module()
+        .unwrap_or_else(|e| panic!("parse {src:?}: {e}"));
     dump(&item)
 }
 
@@ -627,7 +762,10 @@ fn module_exports() {
 fn check_prog_module(cases: &[(&str, &str)]) {
     for (src, want) in cases {
         let got = module(src);
-        assert_eq!(&got, want, "\n  source:   {src}\n  expected: {want}\n  got:      {got}");
+        assert_eq!(
+            &got, want,
+            "\n  source:   {src}\n  expected: {want}\n  got:      {got}"
+        );
     }
 }
 
@@ -661,7 +799,11 @@ fn strict_delete_identifier_is_an_early_error() {
     ] {
         let err = prog_err(src);
         assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");
-        assert!(err.message.contains("invalid delete"), "{src:?}: {}", err.message);
+        assert!(
+            err.message.contains("invalid delete"),
+            "{src:?}: {}",
+            err.message
+        );
     }
     prog_ok("delete name;");
     prog_ok(r#""use strict"; delete object.name;"#);
@@ -670,7 +812,17 @@ fn strict_delete_identifier_is_an_early_error() {
 #[test]
 fn program_never_panics_on_garbage() {
     // The whole-program entry upholds the fuzz invariant too.
-    for src in ["}", "for(", "class", "function(", "if", "case 1:", "{{{{", "export", "import"] {
+    for src in [
+        "}",
+        "for(",
+        "class",
+        "function(",
+        "if",
+        "case 1:",
+        "{{{{",
+        "export",
+        "import",
+    ] {
         let mut p = match Parser::new(src, false, false) {
             Ok(p) => p,
             Err(_) => continue,
@@ -710,7 +862,11 @@ fn nonsimple_params_with_use_strict_body_is_error() {
     ] {
         let err = prog_err(src);
         assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");
-        assert!(err.message.contains("invalid directive"), "{src:?}: {}", err.message);
+        assert!(
+            err.message.contains("invalid directive"),
+            "{src:?}: {}",
+            err.message
+        );
     }
     // A simple parameter list with a `"use strict"` body stays legal.
     prog_ok(r#"function f(a, b) { "use strict"; }"#);
@@ -731,7 +887,11 @@ fn arguments_in_class_field_initializer_is_error() {
     ] {
         let err = prog_err(src);
         assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");
-        assert!(err.message.contains("invalid arguments"), "{src:?}: {}", err.message);
+        assert!(
+            err.message.contains("invalid arguments"),
+            "{src:?}: {}",
+            err.message
+        );
     }
     // A nested ordinary function has its own `arguments`, so it is legal.
     prog_ok("class C { x = function () { return arguments; }; }");
@@ -745,13 +905,13 @@ fn untagged_template_illegal_escape_is_error() {
     // position) is a SyntaxError. A *tagged* template accepts the same source
     // (its cooked slot becomes `undefined`), so the tag makes it legal.
     for src in [
-        "`\\x0`;",          // truncated hex
-        "`\\u0`;",          // truncated unicode
-        "`\\unicode`;",     // non-hex after \u
-        "`\\u{g`;",         // bad code point
-        "`\\u{1F_639}`;",   // numeric separator not allowed in \u{}
-        "`\\00`;",          // legacy octal in template
-        "`a${1}\\xZZ`;",    // error in a later template part
+        "`\\x0`;",        // truncated hex
+        "`\\u0`;",        // truncated unicode
+        "`\\unicode`;",   // non-hex after \u
+        "`\\u{g`;",       // bad code point
+        "`\\u{1F_639}`;", // numeric separator not allowed in \u{}
+        "`\\00`;",        // legacy octal in template
+        "`a${1}\\xZZ`;",  // error in a later template part
     ] {
         let err = prog_err(src);
         assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");

@@ -63,9 +63,7 @@ fn a_non_string_argument_is_coerced_before_it_is_stored() {
     );
     // `ToString` of a Symbol throws, so the description never becomes one.
     assert_eq!(
-        eval(
-            "var c = ''; try { Symbol(Symbol()) } catch (e) { c = e.constructor.name } '' + c"
-        ),
+        eval("var c = ''; try { Symbol(Symbol()) } catch (e) { c = e.constructor.name } '' + c"),
         "TypeError"
     );
 }

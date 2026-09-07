@@ -267,8 +267,7 @@ impl Version {
         // encodings), while a NEWER one is refused — its atoms may
         // carry state this reader would silently skip (review
         // finding 1).
-        if !(IRONHORSE_FORMAT_VERSION_MIN_READ..=IRONHORSE_FORMAT_VERSION)
-            .contains(&format_version)
+        if !(IRONHORSE_FORMAT_VERSION_MIN_READ..=IRONHORSE_FORMAT_VERSION).contains(&format_version)
         {
             return Err(VersionError::UnsupportedVersion(format_version));
         }
@@ -312,7 +311,10 @@ pub enum VersionError {
     /// a foreign (e.g. XS) snapshot, whose import is out of scope.
     NotIronhorse([u8; 4]),
     UnsupportedVersion(u32),
-    SlotWidthMismatch { expected: u8, found: u8 },
+    SlotWidthMismatch {
+        expected: u8,
+        found: u8,
+    },
     UnsupportedEndian(u8),
 }
 
@@ -403,12 +405,18 @@ pub enum SnapshotError {
     Signature(SignatureError),
     /// The host's current signature does not match the snapshot's — the
     /// callback table changed layout since the snapshot was written.
-    SignatureMismatch { expected: Signature, found: Signature },
+    SignatureMismatch {
+        expected: Signature,
+        found: Signature,
+    },
     /// The snapshot's cost-table version does not match this engine's
     /// frozen table ([`ironhorse_vm::COST_TABLE_VERSION`]) — resuming would
     /// continue a meter under changed weights. Fails closed, the metering
     /// analogue of [`SnapshotError::SignatureMismatch`] (design row 6).
-    CostTableMismatch { expected: String, found: String },
+    CostTableMismatch {
+        expected: String,
+        found: String,
+    },
     /// A required atom (`VERS`, `SIGN`, `HEAP`, …) was absent.
     MissingAtom(FourCc),
     /// A structural payload was malformed (wrong length, bad slot record).
@@ -482,7 +490,10 @@ mod tests {
     /// private elements, disposable stacks, and generators.
     #[test]
     fn the_write_stamp_is_past_the_side_table_addition() {
-        assert!(IRONHORSE_FORMAT_VERSION >= 10, "the generator atom is a format bump");
+        assert!(
+            IRONHORSE_FORMAT_VERSION >= 10,
+            "the generator atom is a format bump"
+        );
         assert_eq!(Version::current().format_version, IRONHORSE_FORMAT_VERSION);
     }
 
@@ -501,7 +512,9 @@ mod tests {
     fn version_rejects_a_future_format() {
         assert_eq!(
             Version::decode(&stamped(IRONHORSE_FORMAT_VERSION + 1)),
-            Err(VersionError::UnsupportedVersion(IRONHORSE_FORMAT_VERSION + 1))
+            Err(VersionError::UnsupportedVersion(
+                IRONHORSE_FORMAT_VERSION + 1
+            ))
         );
     }
 

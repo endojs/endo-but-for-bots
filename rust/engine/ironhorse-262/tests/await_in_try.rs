@@ -101,7 +101,12 @@ fn async_generator_body_throw_before_first_yield_rejects_not_catches() {
                   try { it = ag(); it.next(); g = 'after'; } \
                   catch (e) { g = 'caught:' + e; }";
     let a = dual_run_async(source, "g").expect("the XS oracle machine must start");
-    assert_eq!(a.run.agreement, Agreement::BothComplete, "{:?}", a.run.ironhorse_halt);
+    assert_eq!(
+        a.run.agreement,
+        Agreement::BothComplete,
+        "{:?}",
+        a.run.ironhorse_halt
+    );
     assert_eq!(a.ironhorse_signal.as_deref(), Some("after"));
     assert_eq!(
         a.run.ironhorse_computrons as i64 - a.run.oracle_computrons as i64,

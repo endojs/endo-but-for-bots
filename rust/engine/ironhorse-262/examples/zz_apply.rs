@@ -7,12 +7,19 @@ fn main() {
         ("native apply no-array",   "var n=0; var a=0; a=[1,2]; n=a.push; n.apply(a); a.length"),
         ("call control x64",        "var f=0; f=function(x){return x;}; var s=0; for (var i=0;i<64;i++){ s=f.call(null,i); } s"),
     ];
-    let mut bad=0;
-    for (name,src) in cases {
+    let mut bad = 0;
+    for (name, src) in cases {
         match ironhorse_262::dual_run(src) {
-            Some(dr) => { let d = dr.ironhorse_computrons as i64 - dr.oracle_computrons as i64;
-                if d!=0 {bad+=1;}
-                println!("{:26} oracle={:6} iron={:6} delta={:+}", name, dr.oracle_computrons, dr.ironhorse_computrons, d); }
+            Some(dr) => {
+                let d = dr.ironhorse_computrons as i64 - dr.oracle_computrons as i64;
+                if d != 0 {
+                    bad += 1;
+                }
+                println!(
+                    "{:26} oracle={:6} iron={:6} delta={:+}",
+                    name, dr.oracle_computrons, dr.ironhorse_computrons, d
+                );
+            }
             None => println!("{name:26} ORACLE FAILED"),
         }
     }

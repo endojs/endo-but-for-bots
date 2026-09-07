@@ -135,7 +135,10 @@ fn frozen_intrinsic_surfaces_and_deleted_symbols_survive_restore() {
     let mut resumed = from_snapshot_bytes(&bytes, &signature).unwrap();
     let probe = "Array.prototype[Symbol.unscopables]; Array.prototype['to' + 'Sorted']; Object.isFrozen(Array.prototype) && Array.prototype[symbol] === undefined";
     assert_eq!(crank(&mut machine, probe), crank(&mut resumed, probe));
-    assert_eq!(crank(&mut resumed, "Object.isFrozen(Array.prototype)").0, "true");
+    assert_eq!(
+        crank(&mut resumed, "Object.isFrozen(Array.prototype)").0,
+        "true"
+    );
 }
 
 #[test]

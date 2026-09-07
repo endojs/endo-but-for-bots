@@ -46,7 +46,10 @@ const NON_WRITABLE: &str = "var o = {}; Object.defineProperty(o, 'p', \
 
 #[test]
 fn a_strict_callee_throws_on_a_refused_with_binding_store() {
-    assert_eq!(caught_in_with(FROZEN, "'use strict';", "p = 2"), "TypeError");
+    assert_eq!(
+        caught_in_with(FROZEN, "'use strict';", "p = 2"),
+        "TypeError"
+    );
     assert_eq!(
         caught_in_with(NON_WRITABLE, "'use strict';", "p = 2"),
         "TypeError"

@@ -69,23 +69,21 @@ fn refuses(path: &std::path::Path, probe: Probe) -> bool {
     match probe {
         Probe::Validate => validate_store(&store, &sig()).is_err(),
         Probe::EagerResume => resume_from_store(&store, &sig()).is_err(),
-        Probe::LazyResumeAndRead => {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let store = Rc::new(RefCell::new(store));
-                match resume_from_store_lazy(store, &sig()) {
-                    Err(_) => true,
-                    Ok(mut session) => {
-                        let (bytecode, names) = compile("var sentinel; sentinel.deep");
-                        let bytecode = session
-                            .machine_mut()
-                            .relink_crank(&bytecode, &names)
-                            .expect("oracle relinks");
-                        !session.machine_mut().run(&bytecode).completed
-                    }
+        Probe::LazyResumeAndRead => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let store = Rc::new(RefCell::new(store));
+            match resume_from_store_lazy(store, &sig()) {
+                Err(_) => true,
+                Ok(mut session) => {
+                    let (bytecode, names) = compile("var sentinel; sentinel.deep");
+                    let bytecode = session
+                        .machine_mut()
+                        .relink_crank(&bytecode, &names)
+                        .expect("oracle relinks");
+                    !session.machine_mut().run(&bytecode).completed
                 }
-            }))
-            .unwrap_or(true)
-        }
+            }
+        }))
+        .unwrap_or(true),
     }
 }
 

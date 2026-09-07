@@ -60,7 +60,9 @@ fn file_store_lazy_resume_faults_only_the_working_set() {
 
 #[test]
 fn file_store_twins_agree_after_a_boundary_collection() {
-    with_file_stores("boundary-collection", |fresh| boundary_collection_twins(fresh));
+    with_file_stores("boundary-collection", |fresh| {
+        boundary_collection_twins(fresh)
+    });
 }
 
 /// Frozen golden vector (collaborator-review follow-up): every other
@@ -72,9 +74,7 @@ fn file_store_twins_agree_after_a_boundary_collection() {
 /// with a commit message saying why.
 #[test]
 fn golden_vector_pins_canonical_bytes_and_seal() {
-    use ironhorse_snapshot::machine::{
-        begin_store_session, checkpoint_to_store, MachineSnapshot,
-    };
+    use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, MachineSnapshot};
     use ironhorse_snapshot::sha256::hex_sha256;
     use ironhorse_snapshot::store::HeapStore;
     use ironhorse_snapshot::Signature;
@@ -103,7 +103,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     }
 
     assert_eq!(
-        hex_sha256(&session.machine().write_snapshot(&sig).expect("quiescent machine snapshots")),
+        hex_sha256(
+            &session
+                .machine()
+                .write_snapshot(&sig)
+                .expect("quiescent machine snapshots")
+        ),
         // Re-pinned 2026-08-26 (llm rebase): the boot heap changed on BOTH
         // sides — the deferred pass chained native instances to
         // %Function.prototype% (the detached-.call fix), and the llm

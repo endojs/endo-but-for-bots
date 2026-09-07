@@ -340,9 +340,7 @@ impl ModuleGraph {
                     import_name,
                 } if en == export_name => {
                     return match self.resolve(module_request) {
-                        Ok(imported) => {
-                            self.resolve_export(imported, import_name, resolve_set)
-                        }
+                        Ok(imported) => self.resolve_export(imported, import_name, resolve_set),
                         Err(_) => Resolution::NotFound,
                     };
                 }
@@ -512,9 +510,7 @@ impl ModuleGraph {
         for e in &rec.exports {
             match e {
                 ExportEntry::Indirect { module_request, .. }
-                | ExportEntry::Star { module_request } => {
-                    push(module_request, &mut out, &mut seen)
-                }
+                | ExportEntry::Star { module_request } => push(module_request, &mut out, &mut seen),
                 ExportEntry::Local { .. } => {}
             }
         }
@@ -586,9 +582,10 @@ impl ModuleGraph {
             let source = self.resolve(&imp.module_request)?;
             match &imp.import_name {
                 ImportName::Namespace => {
-                    let cell = self
-                        .alloc_cell(CellState::Ready(ModuleValue::Namespace(source)));
-                    self.modules[module.0].env.insert(imp.local_name.clone(), cell);
+                    let cell = self.alloc_cell(CellState::Ready(ModuleValue::Namespace(source)));
+                    self.modules[module.0]
+                        .env
+                        .insert(imp.local_name.clone(), cell);
                 }
                 ImportName::Named(name) => {
                     let mut set = BTreeSet::new();
@@ -609,7 +606,9 @@ impl ModuleGraph {
                     };
                     // Live indirect binding: the importer's local name
                     // shares the exporter's cell.
-                    self.modules[module.0].env.insert(imp.local_name.clone(), cell);
+                    self.modules[module.0]
+                        .env
+                        .insert(imp.local_name.clone(), cell);
                 }
             }
         }
@@ -1129,7 +1128,12 @@ mod tests {
         // a's dependency b executes first; b reads a's `x` before a's body
         // ran, so the live binding is still in TDZ.
         let err = g.evaluate(a).unwrap_err();
-        assert_eq!(err, ModuleError::Tdz { name: "x".to_string() });
+        assert_eq!(
+            err,
+            ModuleError::Tdz {
+                name: "x".to_string()
+            }
+        );
     }
 
     /// A cyclic graph whose first-executed module does not read across the
@@ -1231,9 +1235,8 @@ mod tests {
         // `dup` is ambiguous → excluded from the namespace.
         assert!(ns.own_string_keys().is_empty());
         // Directly importing the ambiguous name fails to link.
-        let importer = g.insert(
-            ModuleRecord::new("importer").with_import(named("agg", "dup", "d")),
-        );
+        let importer =
+            g.insert(ModuleRecord::new("importer").with_import(named("agg", "dup", "d")));
         let err = g.instantiate(importer).unwrap_err();
         assert_eq!(
             err,
@@ -1253,8 +1256,7 @@ mod tests {
                 .with_export(local_export("a", "a"))
                 .with_body(init("a", Slot::integer(1))),
         );
-        let importer =
-            g.insert(ModuleRecord::new("importer").with_import(named("m", "b", "b")));
+        let importer = g.insert(ModuleRecord::new("importer").with_import(named("m", "b", "b")));
         let err = g.instantiate(importer).unwrap_err();
         assert_eq!(
             err,
@@ -1271,10 +1273,7 @@ mod tests {
         let mut g = ModuleGraph::new();
         let m = g.insert(ModuleRecord::new("m").with_import(named("nope", "x", "x")));
         let err = g.instantiate(m).unwrap_err();
-        assert_eq!(
-            err,
-            ModuleError::UnresolvedSpecifier("nope".to_string())
-        );
+        assert_eq!(err, ModuleError::UnresolvedSpecifier("nope".to_string()));
     }
 
     /// `ModuleSource` reflects a module's declared bindings without

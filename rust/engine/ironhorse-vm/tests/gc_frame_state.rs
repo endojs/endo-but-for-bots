@@ -140,8 +140,10 @@ fn from_async_this_arg_survives_chunk_compaction() {
 /// must not sweep it. A no-collect control pins the expected answer.
 #[test]
 fn pending_intl_format_getter_survives_a_collection_before_first_reference() {
-    let (b1, n1) = compile("var churn = 0; var i = 0; \
-                            for (i = 0; i < 64; i++) { churn = { a: i }; } 0;");
+    let (b1, n1) = compile(
+        "var churn = 0; var i = 0; \
+                            for (i = 0; i < 64; i++) { churn = { a: i }; } 0;",
+    );
     let crank2 = "var churn; var i; var nf = 0; var t = 0; \
                   for (i = 0; i < 64; i++) { churn = { b: i }; } \
                   nf = new Intl.NumberFormat(); t = typeof nf.format; t";

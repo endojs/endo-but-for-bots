@@ -35,7 +35,9 @@ fn shared_array_buffer_basics() {
     assert_result_agrees("new SharedArrayBuffer(8).byteLength");
     assert_result_agrees("new SharedArrayBuffer(0).byteLength");
     assert_result_agrees("var s = new SharedArrayBuffer(16); new Int32Array(s).length");
-    assert_result_agrees("var s = new SharedArrayBuffer(16); var a = new Int32Array(s); a[0] = 7; a[0]");
+    assert_result_agrees(
+        "var s = new SharedArrayBuffer(16); var a = new Int32Array(s); a[0] = 7; a[0]",
+    );
     assert_result_agrees("typeof SharedArrayBuffer");
     assert_result_agrees("new DataView(new SharedArrayBuffer(8)).byteLength");
 }
@@ -46,23 +48,37 @@ fn shared_array_buffer_basics() {
 
 #[test]
 fn atomics_load_store() {
-    assert_result_agrees("var a = new Int32Array(new SharedArrayBuffer(16)); Atomics.store(a, 0, 5)");
+    assert_result_agrees(
+        "var a = new Int32Array(new SharedArrayBuffer(16)); Atomics.store(a, 0, 5)",
+    );
     assert_result_agrees("var a = new Int32Array(new SharedArrayBuffer(16)); Atomics.store(a, 0, 5); Atomics.load(a, 0)");
     // store returns the coerced value, not the wrapped element.
-    assert_result_agrees("var a = new Int8Array(new SharedArrayBuffer(4)); Atomics.store(a, 0, 256)");
+    assert_result_agrees(
+        "var a = new Int8Array(new SharedArrayBuffer(4)); Atomics.store(a, 0, 256)",
+    );
     // the wrapped element read back.
-    assert_result_agrees("var a = new Int8Array(new SharedArrayBuffer(4)); Atomics.store(a, 0, 256); a[0]");
+    assert_result_agrees(
+        "var a = new Int8Array(new SharedArrayBuffer(4)); Atomics.store(a, 0, 256); a[0]",
+    );
 }
 
 #[test]
 fn atomics_rmw_returns_old() {
-    assert_result_agrees("var a = new Int32Array(new SharedArrayBuffer(16)); a[0] = 10; Atomics.add(a, 0, 5)");
-    assert_result_agrees("var a = new Int32Array(new SharedArrayBuffer(16)); a[0] = 10; Atomics.add(a, 0, 5); a[0]");
-    assert_result_agrees("var a = new Int32Array(new SharedArrayBuffer(16)); a[0] = 10; Atomics.sub(a, 0, 3); a[0]");
+    assert_result_agrees(
+        "var a = new Int32Array(new SharedArrayBuffer(16)); a[0] = 10; Atomics.add(a, 0, 5)",
+    );
+    assert_result_agrees(
+        "var a = new Int32Array(new SharedArrayBuffer(16)); a[0] = 10; Atomics.add(a, 0, 5); a[0]",
+    );
+    assert_result_agrees(
+        "var a = new Int32Array(new SharedArrayBuffer(16)); a[0] = 10; Atomics.sub(a, 0, 3); a[0]",
+    );
     assert_result_agrees("var a = new Uint8Array(new SharedArrayBuffer(4)); a[0] = 0xF0; Atomics.and(a, 0, 0x0F); a[0]");
     assert_result_agrees("var a = new Uint8Array(new SharedArrayBuffer(4)); a[0] = 0xF0; Atomics.or(a, 0, 0x0F); a[0]");
     assert_result_agrees("var a = new Uint8Array(new SharedArrayBuffer(4)); a[0] = 0xFF; Atomics.xor(a, 0, 0x0F); a[0]");
-    assert_result_agrees("var a = new Int16Array(new SharedArrayBuffer(8)); a[0] = 42; Atomics.exchange(a, 0, 99)");
+    assert_result_agrees(
+        "var a = new Int16Array(new SharedArrayBuffer(8)); a[0] = 42; Atomics.exchange(a, 0, 99)",
+    );
     assert_result_agrees("var a = new Int16Array(new SharedArrayBuffer(8)); a[0] = 42; Atomics.exchange(a, 0, 99); a[0]");
 }
 

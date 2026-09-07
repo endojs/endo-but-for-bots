@@ -68,7 +68,10 @@ fn twin(cranks: [&str; 2], store: &mut dyn HeapStore) -> (String, String) {
 fn assert_twin(name: &str, cranks: [&str; 2], expect: &str) {
     let mut mem = MemoryStore::new();
     let (uninterrupted, resumed) = twin(cranks, &mut mem);
-    assert_eq!(uninterrupted, expect, "uninterrupted answer is the real one");
+    assert_eq!(
+        uninterrupted, expect,
+        "uninterrupted answer is the real one"
+    );
     assert_eq!(resumed, expect, "resumed equals uninterrupted (memory)");
 
     let dir = TempDir::new(name);
@@ -186,7 +189,10 @@ fn lazy_resumed_tables_survive_a_full_collect() {
     session.machine_mut().collect_garbage();
     let resumed = session.machine_mut().run(&compiled[1].0);
     assert!(resumed.completed, "resumed crank 2: {:?}", resumed.halt);
-    assert_eq!(resumed.result, "58", "lazy resume + collect equals uninterrupted");
+    assert_eq!(
+        resumed.result, "58",
+        "lazy resume + collect equals uninterrupted"
+    );
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     validate_store(&*store.borrow(), &sig()).expect("validates");
 }
@@ -327,7 +333,10 @@ fn relink_extends_past_minted_symbol_keys_and_refuses_malformed_bytecode() {
     let relinked3 = m.relink_crank(&b3, &n3).expect("relinks");
     let o3 = m.run(&relinked3);
     assert!(o3.completed, "post-extension read: {:?}", o3.halt);
-    assert_eq!(o3.result, "5", "symbol-keyed slot kept its id across extension");
+    assert_eq!(
+        o3.result, "5",
+        "symbol-keyed slot kept its id across extension"
+    );
 
     // Malformed: bytecode compiled against ONE name, relinked with an
     // EMPTY claimed table — its id 1 has no mapping.
@@ -385,7 +394,10 @@ fn interned_property_keys_round_trip_through_the_store() {
     let mut resumed = resume_from_store(&store, &sig()).expect("symbol keys resume");
     let r = resumed.machine_mut().run(&b_read);
     assert!(r.completed, "resumed read: {:?}", r.halt);
-    assert_eq!(r.result, "1", "the stored symbol id re-binds to the same descriptor");
+    assert_eq!(
+        r.result, "1",
+        "the stored symbol id re-binds to the same descriptor"
+    );
 
     // Computed STRING key across an incremental checkpoint: the minted
     // name rides the NAME table.
@@ -407,7 +419,10 @@ fn interned_property_keys_round_trip_through_the_store() {
     let (b2, _) = compile("var o; var k; var t2; t2 = o[k]; t2");
     let r = resumed.machine_mut().run(&b2);
     assert!(r.completed, "resumed read: {:?}", r.halt);
-    assert_eq!(r.result, "5", "the minted name resolved to the same id after resume");
+    assert_eq!(
+        r.result, "5",
+        "the minted name resolved to the same id after resume"
+    );
 }
 
 /// Review wave 5: interning happens on a LOOKUP, so a program that
@@ -424,9 +439,7 @@ fn interned_property_keys_round_trip_through_the_store() {
 /// stayed refused forever after one `hasOwnProperty` miss.
 #[test]
 fn a_read_miss_mints_an_id_but_stores_none_so_it_still_persists() {
-    let (b0, n0) = compile(
-        "var o = 0; var t = 0; o = {}; t = o.hasOwnProperty('zzz'); t",
-    );
+    let (b0, n0) = compile("var o = 0; var t = 0; o = {}; t = o.hasOwnProperty('zzz'); t");
     let mut m = Interp::new();
     m.link_intrinsics(&n0);
     let o = m.run(&b0);
@@ -480,7 +493,11 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     m.link_intrinsics(&n0);
     assert!(m.run(&b0).completed);
     let clean: MachineImage = m.snapshot_image(&sig()).expect("gated image");
-    assert_eq!(clean.stored_unregistered_key_id(), None, "the fixture is clean");
+    assert_eq!(
+        clean.stored_unregistered_key_id(),
+        None,
+        "the fixture is clean"
+    );
 
     // Poison one LIVE slot's key id past the program table — the shape
     // a machine that stored `o[expr]` would have had, and the shape an
@@ -503,7 +520,11 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     let mut freed = poisoned.clone();
     freed.slot_free.push(victim as u32);
     freed.slot_live -= 1;
-    assert_eq!(freed.stored_unregistered_key_id(), None, "a free slot names nothing");
+    assert_eq!(
+        freed.stored_unregistered_key_id(),
+        None,
+        "a free slot names nothing"
+    );
 
     let poisoned_bytes = write_machine(&poisoned);
     assert_eq!(
@@ -517,11 +538,7 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     // The blob→store adoption path refuses it too.
     let mut store = MemoryStore::new();
     assert_eq!(
-        ironhorse_snapshot::store::import_from_container(
-            &poisoned_bytes,
-            &sig(),
-            &mut store,
-        ),
+        ironhorse_snapshot::store::import_from_container(&poisoned_bytes, &sig(), &mut store,),
         Err(StoreError::Snapshot(
             ironhorse_snapshot::format::SnapshotError::Corrupt(
                 "stored property id outside the name and symbol-key tables",
@@ -568,7 +585,11 @@ fn relink_binds_newly_referenced_intrinsics() {
             "1",
         ),
         // A constructor global reached via typeof.
-        ("var x = 5; x", "var x; var t; t = typeof Symbol; t", "function"),
+        (
+            "var x = 5; x",
+            "var x; var t; t = typeof Symbol; t",
+            "function",
+        ),
     ];
     for (c1, c2, expect) in cases {
         let (b1, n1) = compile(c1);
@@ -580,6 +601,9 @@ fn relink_binds_newly_referenced_intrinsics() {
         let relinked = m.relink_crank(&b2, &n2).expect("relink");
         let got = m.run(&relinked);
         assert!(got.completed, "relinked {c2}: {:?}", got.halt);
-        assert_eq!(got.result, expect, "relinked crank binds the built-in: {c2}");
+        assert_eq!(
+            got.result, expect,
+            "relinked crank binds the built-in: {c2}"
+        );
     }
 }

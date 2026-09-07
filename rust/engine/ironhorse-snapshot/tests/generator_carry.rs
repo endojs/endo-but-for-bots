@@ -41,7 +41,12 @@ fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
     let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
+    (
+        outcome.completed,
+        format!("{:?}", outcome.halt),
+        outcome.result,
+        outcome.computrons,
+    )
 }
 
 fn twin(
@@ -72,7 +77,10 @@ fn twin(
         .iter()
         .map(|source| crank(resumed.machine_mut(), source))
         .collect();
-    assert_eq!(actual, expected, "resumed generator walks exactly as uninterrupted");
+    assert_eq!(
+        actual, expected,
+        "resumed generator walks exactly as uninterrupted"
+    );
     expected
 }
 
@@ -83,7 +91,9 @@ fn assert_memory_and_file(name: &str, first: &str, observations: &[&str], expect
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     assert_eq!(
-        seen.iter().map(|(_, _, value, _)| value.as_str()).collect::<Vec<_>>(),
+        seen.iter()
+            .map(|(_, _, value, _)| value.as_str())
+            .collect::<Vec<_>>(),
         expected,
         "the continuous observations are the real answers"
     );
@@ -183,10 +193,8 @@ fn generator_return_runs_a_pre_checkpoint_finally_after_resume() {
         "var it = 0; var cleaned = 0; var t = 0; \
          function* g() { try { yield 1; yield 2; } finally { cleaned = 'ran'; } } \
          it = g(); it.next(); t = 7; t",
-        &[
-            "var it; var cleaned; var t; var r = 0; \
-             r = it.return(9); t = r.value + ':' + r.done + ':' + cleaned; t",
-        ],
+        &["var it; var cleaned; var t; var r = 0; \
+             r = it.return(9); t = r.value + ':' + r.done + ':' + cleaned; t"],
         &["9:true:ran"],
     );
 }
@@ -200,9 +208,7 @@ fn sibling_generators_keep_independent_frames() {
         "var a = 0; var b = 0; var t = 0; \
          function* g(start) { var n = start; while (true) { n = n + (yield n); } } \
          a = g(100); b = g(200); a.next(); b.next(); a.next(1); t = 7; t",
-        &[
-            "var a; var b; var t; t = a.next(1).value + ':' + b.next(5).value; t",
-        ],
+        &["var a; var b; var t; t = a.next(1).value + ':' + b.next(5).value; t"],
         &["102:205"],
     );
 }
@@ -221,7 +227,11 @@ fn blob_resume_continues_a_generator() {
     let bytes = machine.write_snapshot(&sig()).expect("snapshot");
     let mut resumed = from_snapshot_bytes(&bytes, &sig()).expect("restore");
     assert_eq!(
-        crank(&mut resumed, "var it; var t; var r = 0; r = it.next(); t = r.value + ':' + r.done; t").2,
+        crank(
+            &mut resumed,
+            "var it; var t; var r = 0; r = it.next(); t = r.value + ':' + r.done; t"
+        )
+        .2,
         "2:false"
     );
 }
@@ -274,7 +284,11 @@ fn malformed_generator_rows_are_refused() {
     assert!(machine.run(&bytecode).completed);
     let bytes = machine.write_snapshot(&sig()).expect("snapshot");
     let image = read_machine(&bytes, &sig()).expect("read GENR");
-    assert_eq!(image.generators.len(), 1, "the fixture persisted its generator row");
+    assert_eq!(
+        image.generators.len(),
+        1,
+        "the fixture persisted its generator row"
+    );
 
     let expect = |crafted: &ironhorse_snapshot::image::MachineImage, want: &'static str| {
         match from_snapshot_bytes(&write_machine(crafted), &sig()) {
@@ -342,7 +356,10 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
         starts.push(pc as u64);
         pc += ironhorse_vm::instruction_len(code, pc).expect("honest body sizes");
     }
-    assert!(starts.len() > 2, "the fixture body has several instructions");
+    assert!(
+        starts.len() > 2,
+        "the fixture body has several instructions"
+    );
 
     // A sibling body in the SAME segment, and one of its starts that
     // is not also a start of ours.

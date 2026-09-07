@@ -23,16 +23,18 @@ fn sig() -> Signature {
 }
 
 const PROG_A: [u8; 44] = [
-    0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x13, 0x0b, 0x01, 0x9e, 0x01, 0x86, 0x01,
-    0x00, 0x02, 0x00, 0xe6, 0x01, 0x92, 0x5c, 0x01, 0x72, 0x01, 0x01, 0xbb, 0x44, 0x58, 0x92,
-    0x42, 0xe0, 0x89, 0x02, 0x00, 0x72, 0x04, 0x28, 0x72, 0x05, 0xab, 0x01, 0xbb, 0xa9,
+    0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x13, 0x0b, 0x01, 0x9e, 0x01, 0x86, 0x01, 0x00,
+    0x02, 0x00, 0xe6, 0x01, 0x92, 0x5c, 0x01, 0x72, 0x01, 0x01, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0,
+    0x89, 0x02, 0x00, 0x72, 0x04, 0x28, 0x72, 0x05, 0xab, 0x01, 0xbb, 0xa9,
 ];
 
 /// Epoch 1+2 through the machine path (epoch 1 seeds the cache via
 /// the slow path, the epoch-2 checkpoint advances it via the fast
 /// one), returning the live store and the machine's image for
 /// hand-built successor batches.
-fn two_epochs(path: &std::path::Path) -> (SqliteHeapStore, ironhorse_snapshot::image::MachineImage) {
+fn two_epochs(
+    path: &std::path::Path,
+) -> (SqliteHeapStore, ironhorse_snapshot::image::MachineImage) {
     let mut store = SqliteHeapStore::open(path).unwrap();
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
@@ -40,8 +42,14 @@ fn two_epochs(path: &std::path::Path) -> (SqliteHeapStore, ironhorse_snapshot::i
         .map_err(|(_, e)| e)
         .expect("begin");
     assert!(session.machine_mut().run(&PROG_A).completed);
-    assert_eq!(checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(), 2);
-    let image = session.machine().snapshot_image(&sig()).expect("gated image");
+    assert_eq!(
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(),
+        2
+    );
+    let image = session
+        .machine()
+        .snapshot_image(&sig())
+        .expect("gated image");
     (store, image)
 }
 
@@ -91,13 +99,19 @@ fn warm_refusal_drops_the_cache_and_recovers() {
         Err(StoreError::BaselineMismatch { .. }) => {}
         other => panic!("expected the fast path to refuse the root, got {other:?}"),
     }
-    assert_eq!(store.manifest().unwrap().epoch, 2, "refused batch left no trace");
+    assert_eq!(
+        store.manifest().unwrap().epoch,
+        2,
+        "refused batch left no trace"
+    );
 
     // The refusal dropped the cache; the honest successor lands via
     // the slow path (full recombination over the real rows), and one
     // more lands via the re-armed fast path.
     let honest3 = image_to_batch(&image, 3, &seal2);
-    store.commit(&honest3).expect("honest successor after a refusal");
+    store
+        .commit(&honest3)
+        .expect("honest successor after a refusal");
     let honest4 = image_to_batch(&image, 4, &store.manifest().unwrap().seal);
     store.commit(&honest4).expect("fast path re-armed");
     validate_store(&store, &sig()).expect("chain stays valid");

@@ -337,15 +337,15 @@ fn compaction_slide_checkpoint_cost() {
             let mut session = begin_store_session(m, &sig(), &mut store)
                 .map_err(|(_, e)| e)
                 .unwrap();
-            let extents_before =
-                (store.manifest().unwrap().chunk_len as usize).div_ceil(CHUNK_EXTENT_BYTES as usize);
+            let extents_before = (store.manifest().unwrap().chunk_len as usize)
+                .div_ceil(CHUNK_EXTENT_BYTES as usize);
             session.machine_mut().collect_garbage();
             let t0 = Instant::now();
             checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
             let ms = t0.elapsed().as_secs_f64() * 1e3;
             let stats = store.last_commit_stats();
-            let extents_after =
-                (store.manifest().unwrap().chunk_len as usize).div_ceil(CHUNK_EXTENT_BYTES as usize);
+            let extents_after = (store.manifest().unwrap().chunk_len as usize)
+                .div_ceil(CHUNK_EXTENT_BYTES as usize);
             println!(
                 "chunks n={n:>5} {label}: extents {extents_before:>4}→{extents_after:>4} | \
                  extent rows written {:>4} | slot pages written {:>4} | checkpoint {ms:>7.3} ms",

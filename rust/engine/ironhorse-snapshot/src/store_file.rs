@@ -43,8 +43,8 @@ use std::path::PathBuf;
 
 use crate::format::SnapshotError;
 use crate::store::{
-    check_succession, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore,
-    StoreError, StoreManifest,
+    check_succession, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore, StoreError,
+    StoreManifest,
 };
 
 /// The file-format discriminator — the LAYOUT version. A layout
@@ -316,9 +316,7 @@ impl FileStore {
             ));
         }
         if free_segs.len() != crate::store::free_seg_count(manifest.free_len) as usize {
-            return Err(corrupt(
-                "file store free segments disagree with geometry",
-            ));
+            return Err(corrupt("file store free segments disagree with geometry"));
         }
 
         Ok(Loaded {
@@ -397,14 +395,9 @@ impl HeapStore for FileStore {
             return Err(StoreError::Empty);
         }
         let mut bytes = std::fs::read(&self.path).map_err(io_err)?;
-        let old_len = u32::from_be_bytes(
-            bytes
-                .get(8..12)
-                .and_then(|b| b.try_into().ok())
-                .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store file header truncated",
-                )))?,
-        ) as usize;
+        let old_len = u32::from_be_bytes(bytes.get(8..12).and_then(|b| b.try_into().ok()).ok_or(
+            StoreError::Snapshot(SnapshotError::Corrupt("store file header truncated")),
+        )?) as usize;
         let new_manifest = manifest.encode();
         if new_manifest.len() != old_len {
             return Err(StoreError::Io(
@@ -442,7 +435,8 @@ impl HeapStore for FileStore {
             return Err(StoreError::Empty);
         }
         let old = std::fs::read(&self.path).map_err(io_err)?;
-        let truncated = || StoreError::Snapshot(SnapshotError::Corrupt("store file header truncated"));
+        let truncated =
+            || StoreError::Snapshot(SnapshotError::Corrupt("store file header truncated"));
         let read_u32 = |at: usize| -> Result<usize, StoreError> {
             Ok(u32::from_be_bytes(
                 old.get(at..at + 4)
@@ -681,8 +675,8 @@ impl HeapStore for FileStore {
             }
         }
         free_segs.truncate(n_free_segs);
-        let free_bytes: u64 = 4 + free_segs.iter().map(|b| 4 + b.len() as u64).sum::<u64>()
-            + 32 * n_free_segs as u64;
+        let free_bytes: u64 =
+            4 + free_segs.iter().map(|b| 4 + b.len() as u64).sum::<u64>() + 32 * n_free_segs as u64;
         let edges_bytes: u64 = edges.iter().map(|ts| 4 + 4 * ts.len() as u64).sum();
 
         // Lay the file out: header, manifest, small, counts, dirs,
@@ -740,7 +734,8 @@ impl HeapStore for FileStore {
                 tmp.write_all(l).map_err(io_err)?;
             }
             for ts in &edges {
-                tmp.write_all(&(ts.len() as u32).to_be_bytes()).map_err(io_err)?;
+                tmp.write_all(&(ts.len() as u32).to_be_bytes())
+                    .map_err(io_err)?;
                 for t in ts {
                     tmp.write_all(&t.to_be_bytes()).map_err(io_err)?;
                 }
@@ -748,7 +743,8 @@ impl HeapStore for FileStore {
             tmp.write_all(&(free_segs.len() as u32).to_be_bytes())
                 .map_err(io_err)?;
             for b in &free_segs {
-                tmp.write_all(&(b.len() as u32).to_be_bytes()).map_err(io_err)?;
+                tmp.write_all(&(b.len() as u32).to_be_bytes())
+                    .map_err(io_err)?;
                 tmp.write_all(b).map_err(io_err)?;
             }
             for l in &leaf_frees {
@@ -820,8 +816,7 @@ mod tests {
     use crate::image::write_machine;
     use crate::machine::MachineSnapshot;
     use crate::store::{
-        export_to_container, image_to_batch, import_from_container, store_to_image,
-        validate_store,
+        export_to_container, image_to_batch, import_from_container, store_to_image, validate_store,
     };
     use ironhorse_vm::Interp;
 
@@ -1029,9 +1024,10 @@ mod tests {
         store.commit(&image_to_batch(&image, 1, "")).unwrap();
 
         let mut grown = image.clone();
-        grown
-            .chunks
-            .extend(std::iter::repeat_n(7u8, crate::store::CHUNK_EXTENT_BYTES as usize));
+        grown.chunks.extend(std::iter::repeat_n(
+            7u8,
+            crate::store::CHUNK_EXTENT_BYTES as usize,
+        ));
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch(&grown, 2, &prev);
         batch.chunk_extents.pop(); // drop the newest extent's row

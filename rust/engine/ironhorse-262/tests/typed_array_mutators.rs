@@ -21,8 +21,12 @@ fn assert_result_agrees(source: &str) {
 
 #[test]
 fn copy_within_coerces_indices_and_snapshots_overlap() {
-    assert_result_agrees("var a=new Uint8Array([1,2,3,4]); a.copyWithin(1,0,3); a[0]+','+a[1]+','+a[2]+','+a[3]");
-    assert_result_agrees("var a=new Uint8Array([1,2,3,4]); a.copyWithin(0,1,4); a[0]+','+a[1]+','+a[2]+','+a[3]");
+    assert_result_agrees(
+        "var a=new Uint8Array([1,2,3,4]); a.copyWithin(1,0,3); a[0]+','+a[1]+','+a[2]+','+a[3]",
+    );
+    assert_result_agrees(
+        "var a=new Uint8Array([1,2,3,4]); a.copyWithin(0,1,4); a[0]+','+a[1]+','+a[2]+','+a[3]",
+    );
     assert_result_agrees("var a=new Uint8Array([1,2,3,4]); a.copyWithin('-2', true); a[0]+','+a[1]+','+a[2]+','+a[3]");
     assert_result_agrees("var a=new Uint8Array([1,2,3]); var n=0; a.copyWithin({valueOf:function(){n++;return 1}},0,2); a[0]+','+a[1]+','+a[2]+':'+n");
 }
@@ -30,9 +34,15 @@ fn copy_within_coerces_indices_and_snapshots_overlap() {
 #[test]
 fn fill_coerces_once_and_respects_element_domain() {
     assert_result_agrees("var a=new Int8Array(4); var n=0; a.fill({valueOf:function(){n++;return '258'}},1,3); a[0]+','+a[1]+','+a[2]+','+a[3]+':'+n");
-    assert_result_agrees("var a=new BigInt64Array(3); a.fill('7',-2); a[0]===0n && a[1]===7n && a[2]===7n");
-    assert_result_agrees("var a=new Uint8Array(1); try { a.fill(1n); false } catch(e) { e instanceof TypeError }");
-    assert_result_agrees("var a=new BigInt64Array(1); try { a.fill(1); false } catch(e) { e instanceof TypeError }");
+    assert_result_agrees(
+        "var a=new BigInt64Array(3); a.fill('7',-2); a[0]===0n && a[1]===7n && a[2]===7n",
+    );
+    assert_result_agrees(
+        "var a=new Uint8Array(1); try { a.fill(1n); false } catch(e) { e instanceof TypeError }",
+    );
+    assert_result_agrees(
+        "var a=new BigInt64Array(1); try { a.fill(1); false } catch(e) { e instanceof TypeError }",
+    );
     assert_result_agrees("var a=new BigInt64Array(3); var n=1n; a.fill({valueOf:function(){return n++}}); n+':'+a[0]+':'+a[1]+':'+a[2]");
 }
 
@@ -42,7 +52,9 @@ fn set_handles_typed_array_array_like_overlap_and_domain_mismatch() {
     assert_result_agrees("var a=new Int16Array(4); a.set({0:'257',1:true,length:2},1); a[0]+','+a[1]+','+a[2]+','+a[3]");
     assert_result_agrees("var a=new Uint8Array(3); a.set('42',1); a[0]+','+a[1]+','+a[2]");
     assert_result_agrees("var a=new Uint8Array(1); a.set(true); a[0]");
-    assert_result_agrees("var a=new Uint8Array(3); a.set(new Int16Array([257,-1]),1); a[0]+','+a[1]+','+a[2]");
+    assert_result_agrees(
+        "var a=new Uint8Array(3); a.set(new Int16Array([257,-1]),1); a[0]+','+a[1]+','+a[2]",
+    );
     assert_result_agrees("var a=new Uint8Array(1); try { a.set(new BigInt64Array(1)); false } catch(e) { e instanceof TypeError }");
     assert_result_agrees("var a=new BigInt64Array(1); try { a.set(new Int8Array(1)); false } catch(e) { e instanceof TypeError }");
     assert_result_agrees("var a=new Uint8Array(1); try { a.set([1],-1); false } catch(e) { e instanceof RangeError }");
@@ -50,8 +62,12 @@ fn set_handles_typed_array_array_like_overlap_and_domain_mismatch() {
 
 #[test]
 fn reverse_swaps_raw_elements_for_number_and_bigint_views() {
-    assert_result_agrees("var a=new Float64Array([1,-0,NaN]); a.reverse(); String(a[0])+':'+(1/a[1])+':'+a[2]");
-    assert_result_agrees("var a=new BigInt64Array([1n,-2n,3n]); a.reverse(); a[0]===3n && a[1]===-2n && a[2]===1n");
+    assert_result_agrees(
+        "var a=new Float64Array([1,-0,NaN]); a.reverse(); String(a[0])+':'+(1/a[1])+':'+a[2]",
+    );
+    assert_result_agrees(
+        "var a=new BigInt64Array([1n,-2n,3n]); a.reverse(); a[0]===3n && a[1]===-2n && a[2]===1n",
+    );
 }
 
 #[test]

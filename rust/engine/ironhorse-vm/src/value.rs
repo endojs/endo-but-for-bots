@@ -101,7 +101,10 @@ struct SlotBacking {
 impl SlotBacking {
     #[inline]
     fn get(&self, i: usize) -> Slot {
-        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        assert!(
+            i < self.count.get() as usize,
+            "slot index {i} out of bounds"
+        );
         let pages = self.pages.borrow();
         match &pages[i / SLOTS_PER_PAGE as usize] {
             Some(p) => p[i % SLOTS_PER_PAGE as usize].get(),
@@ -111,18 +114,24 @@ impl SlotBacking {
 
     /// Write one record through `&self`, materializing its page.
     fn set(&self, i: usize, s: Slot) {
-        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        assert!(
+            i < self.count.get() as usize,
+            "slot index {i} out of bounds"
+        );
         let mut pages = self.pages.borrow_mut();
-        pages[i / SLOTS_PER_PAGE as usize]
-            .get_or_insert_with(materialized_page)[i % SLOTS_PER_PAGE as usize]
+        pages[i / SLOTS_PER_PAGE as usize].get_or_insert_with(materialized_page)
+            [i % SLOTS_PER_PAGE as usize]
             .set(s);
     }
 
     fn get_mut(&mut self, i: usize) -> &mut Slot {
-        assert!(i < self.count.get() as usize, "slot index {i} out of bounds");
+        assert!(
+            i < self.count.get() as usize,
+            "slot index {i} out of bounds"
+        );
         let pages = self.pages.get_mut();
-        pages[i / SLOTS_PER_PAGE as usize]
-            .get_or_insert_with(materialized_page)[i % SLOTS_PER_PAGE as usize]
+        pages[i / SLOTS_PER_PAGE as usize].get_or_insert_with(materialized_page)
+            [i % SLOTS_PER_PAGE as usize]
             .get_mut()
     }
 
@@ -141,7 +150,9 @@ impl SlotBacking {
 /// One freshly materialized sparse page: every record the placeholder,
 /// exactly what dense storage held for a not-yet-faulted page.
 fn materialized_page() -> Box<[Cell<Slot>]> {
-    (0..SLOTS_PER_PAGE).map(|_| Cell::new(Slot::undefined())).collect()
+    (0..SLOTS_PER_PAGE)
+        .map(|_| Cell::new(Slot::undefined()))
+        .collect()
 }
 
 /// Handle into the slot arena. `u32::MAX` is the null sentinel
@@ -987,7 +998,9 @@ impl SlotArena {
     /// [`SlotArena::page_records`] instead.
     pub fn records(&self) -> Vec<Slot> {
         self.ensure_all_resident();
-        (0..self.capacity() as usize).map(|i| self.read(i)).collect()
+        (0..self.capacity() as usize)
+            .map(|i| self.read(i))
+            .collect()
     }
 
     /// Read one record WITHOUT faulting (both storages answer the
@@ -1273,7 +1286,9 @@ impl ChunkArena {
         let first = start / per;
         let last = (end.min(*snapshot_len) - 1) / per;
         for ext in first..=last {
-            let Some(bit) = resident.get(ext) else { continue };
+            let Some(bit) = resident.get(ext) else {
+                continue;
+            };
             if bit.get() {
                 continue;
             }
@@ -1461,7 +1476,6 @@ impl ChunkArena {
         }
     }
 
-
     /// Append bytes behind a length header, returning the offset of the
     /// payload (not the header). Strings are stored as UTF-16 big-endian code
     /// units (revised 2026-07-06 from CESU-8; resolved question 4), so a byte-
@@ -1539,7 +1553,10 @@ impl ChunkArena {
     /// caller applies to every live `ChunkOffset` (design § Value and
     /// heap model: "offsets are rewritten exactly where XS rewrites
     /// pointers"). Duplicate/unknown offsets in `live` are ignored.
-    pub fn compact(&mut self, live: &[ChunkOffset]) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
+    pub fn compact(
+        &mut self,
+        live: &[ChunkOffset],
+    ) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
         use std::collections::{HashMap, HashSet};
         // Compaction reads every live block, so it is the amortized
         // full reifier on a lazy arena (design decision 4); after it,
@@ -1572,7 +1589,10 @@ impl ChunkArena {
                 let h = (old.0 as usize)
                     .checked_sub(CHUNK_HEADER)
                     .expect("chunk offset below header (corrupt heap)");
-                assert!(h + CHUNK_HEADER <= total, "chunk header out of range (corrupt heap)");
+                assert!(
+                    h + CHUNK_HEADER <= total,
+                    "chunk header out of range (corrupt heap)"
+                );
                 let len = self.len_of(old);
                 // checked_add, not `+`: on a 32-bit usize a corrupt
                 // u32 length can wrap the sum past the guard, and the
