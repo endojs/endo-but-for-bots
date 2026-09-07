@@ -312,3 +312,127 @@ test('factory.help() returns descriptive text', async t => {
   const unknown = await E(factory).help('nonexistent');
   t.regex(unknown, /No documentation/);
 });
+
+/**
+ * A policy request the guard admits, so these tests exercise the
+ * factory's routing rather than `assertSlicePolicyRequest`, which
+ * `test/policy.test.js` covers.
+ */
+const stubPolicyRequest = harden({
+  profile: /** @type {const} */ ('hosted-agent-v1'),
+  imageDigest: `sha256:${'a1'.repeat(32)}`,
+  uid: 1000,
+  gid: 1000,
+  brokerSidecar: harden({ container: 'broker-sidecar-s1' }),
+  resources: harden({
+    memoryBytes: 4n * 1024n * 1024n * 1024n,
+    pids: 512,
+    cpuCores: 4,
+    openFiles: 4096,
+    coreBytes: 0n,
+    writableBytes: 1024n * 1024n,
+  }),
+  mounts: harden([
+    harden({
+      role: 'scratch',
+      kind: /** @type {const} */ ('tmpfs'),
+      destination: '/scratch',
+      sizeBytes: 1024n * 1024n,
+    }),
+  ]),
+  attestationArgv: harden(['/bin/sleep', 'infinity']),
+});
+
+/**
+ * @param {{ attests?: boolean }} [options]
+ */
+const makePolicyStubDriver = ({ attests = true } = {}) => {
+  /** @type {any} */
+  const driver = {
+    name: /** @type {const} */ ('podman'),
+    probe: async () => harden({ available: true, details: lifecycleProbe }),
+    prepareSlice: async (/** @type {any} */ spec) => harden({ spec }),
+    spawn: async () => {
+      throw new Error('not used');
+    },
+    teardown: async () => {},
+  };
+  if (attests) {
+    driver.policy = async (/** @type {any} */ slice) =>
+      harden({
+        version: 'SlicePolicyAttestationV1',
+        network: 'broker-only',
+        imageDigest: slice.spec.policy.imageDigest,
+      });
+  }
+  return harden(driver);
+};
+
+test('a policy reaches the driver and its attestation reaches the caller', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([makePolicyStubDriver()]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  const handle = await E(factory).make(
+    harden({
+      rootfs: { kind: 'oci', ref: `alpine@${stubPolicyRequest.imageDigest}` },
+      network: /** @type {const} */ ('broker-only'),
+      policy: stubPolicyRequest,
+    }),
+  );
+  const attestation = await E(handle).policy();
+  t.is(attestation.version, 'SlicePolicyAttestationV1');
+  t.is(attestation.imageDigest, stubPolicyRequest.imageDigest);
+});
+
+test('a backend that cannot attest a policy is refused the slice', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([makePolicyStubDriver({ attests: false })]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  // Rejecting at `make()` rather than at `policy()` is the point: a
+  // slice that cannot prove its confinement must not exist and then
+  // decline to describe itself.
+  await t.throwsAsync(
+    E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: `alpine@${stubPolicyRequest.imageDigest}` },
+        network: /** @type {const} */ ('broker-only'),
+        policy: stubPolicyRequest,
+      }),
+    ),
+    { message: /cannot enforce or attest a slice policy/ },
+  );
+});
+
+test('a slice created without a policy has no attestation to report', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([makePolicyStubDriver({ attests: false })]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  const handle = await E(factory).make(
+    harden({
+      rootfs: { kind: 'oci', ref: 'alpine:3.19' },
+      network: /** @type {const} */ ('none'),
+    }),
+  );
+  await t.throwsAsync(E(handle).policy(), {
+    message: /cannot attest a slice policy/,
+  });
+});
+
+test('a disposed slice does not attest to a confinement it no longer has', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([makePolicyStubDriver()]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  const handle = await E(factory).make(
+    harden({
+      rootfs: { kind: 'oci', ref: `alpine@${stubPolicyRequest.imageDigest}` },
+      network: /** @type {const} */ ('broker-only'),
+      policy: stubPolicyRequest,
+    }),
+  );
+  await E(handle).dispose();
+  await t.throwsAsync(E(handle).policy(), { message: /disposed/ });
+});

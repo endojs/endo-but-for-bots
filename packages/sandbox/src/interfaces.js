@@ -14,12 +14,12 @@ import { M } from '@endo/patterns';
 
 const NetworkProfileShape = M.or(
   'none',
+  'broker-only',
   'private',
   'host-loopback',
   'host-lan',
   'host-net',
 );
-harden(NetworkProfileShape);
 
 const BackendNameShape = M.or(
   'bwrap',
@@ -28,16 +28,12 @@ const BackendNameShape = M.or(
   'containerization',
   'wsl',
 );
-harden(BackendNameShape);
 
 const BackendSelectorShape = M.or('auto', BackendNameShape);
-harden(BackendSelectorShape);
 
 const MountModeShape = M.or('ro', 'rw');
-harden(MountModeShape);
 
 const EnvShape = M.recordOf(M.string(), M.string());
-harden(EnvShape);
 
 const RootfsSpecShape = M.or(
   M.remotable('Mount'),
@@ -45,7 +41,6 @@ const RootfsSpecShape = M.or(
   M.splitRecord({ kind: 'minimal' }),
   M.splitRecord({ kind: 'oci', ref: M.string() }),
 );
-harden(RootfsSpecShape);
 
 const MountSpecShape = M.splitRecord(
   {
@@ -56,14 +51,12 @@ const MountSpecShape = M.splitRecord(
     mode: MountModeShape,
   },
 );
-harden(MountSpecShape);
 
 const SeccompPolicyShape = M.or(
   'default',
   'unconfined',
   M.splitRecord({ profile: M.any() }),
 );
-harden(SeccompPolicyShape);
 
 // `kill()` always begins terminal cancellation of the whole process
 // tree, so only the termination signals the supervisor supports are
@@ -77,7 +70,6 @@ const TerminationSignalShape = M.or(
   'SIGQUIT',
   'SIGKILL',
 );
-harden(TerminationSignalShape);
 
 const ResourceLimitsShape = M.splitRecord(
   {},
@@ -90,7 +82,49 @@ const ResourceLimitsShape = M.splitRecord(
     core: M.number(),
   },
 );
-harden(ResourceLimitsShape);
+
+/**
+ * Shape of an enforced deployment policy. The guard admits the record;
+ * `assertSlicePolicyRequest` in `./policy.js` is what insists on exact
+ * key sets, portable names, and a mount table whose ceilings add up,
+ * because those are policy questions rather than marshalling ones.
+ */
+const SlicePolicyMountShape = M.or(
+  M.splitRecord({
+    role: M.string(),
+    kind: 'tmpfs',
+    destination: M.string(),
+    sizeBytes: M.nat(),
+  }),
+  M.splitRecord({
+    role: M.string(),
+    kind: 'volume',
+    source: M.string(),
+    destination: M.string(),
+    sizeBytes: M.nat(),
+  }),
+);
+
+const SlicePolicyRequestShape = M.splitRecord({
+  profile: 'hosted-agent-v1',
+  imageDigest: M.string(),
+  uid: M.number(),
+  gid: M.number(),
+  brokerSidecar: M.or(
+    M.splitRecord({ container: M.string() }),
+    M.splitRecord({ netnsPath: M.string() }),
+  ),
+  resources: M.splitRecord({
+    memoryBytes: M.nat(),
+    pids: M.number(),
+    cpuCores: M.number(),
+    openFiles: M.number(),
+    coreBytes: M.nat(),
+    writableBytes: M.nat(),
+  }),
+  mounts: M.arrayOf(SlicePolicyMountShape),
+  attestationArgv: M.arrayOf(M.string()),
+});
 
 const SandboxMakeOptsShape = M.splitRecord(
   {
@@ -104,9 +138,9 @@ const SandboxMakeOptsShape = M.splitRecord(
     env: EnvShape,
     cwd: M.string(),
     limits: ResourceLimitsShape,
+    policy: SlicePolicyRequestShape,
   },
 );
-harden(SandboxMakeOptsShape);
 
 const SpawnOptsShape = M.splitRecord(
   {},
@@ -126,7 +160,6 @@ const SpawnOptsShape = M.splitRecord(
     timeoutMs: M.and(M.number(), M.gte(1), M.lte(0x7fff_ffff)),
   },
 );
-harden(SpawnOptsShape);
 
 const BackendProbeDetailsShape = M.splitRecord(
   {},
@@ -143,7 +176,6 @@ const BackendProbeDetailsShape = M.splitRecord(
     rootless: M.splitRecord({ available: M.boolean() }, { reason: M.string() }),
   },
 );
-harden(BackendProbeDetailsShape);
 
 const BackendProbeShape = M.splitRecord(
   {
@@ -156,7 +188,6 @@ const BackendProbeShape = M.splitRecord(
     details: BackendProbeDetailsShape,
   },
 );
-harden(BackendProbeShape);
 
 const ExitStatusShape = harden({
   code: M.or(M.number(), M.null()),
@@ -176,7 +207,6 @@ export const SandboxFactoryInterface = M.interface('SandboxFactory', {
   listBackends: M.call().returns(M.promise()),
   make: M.call(SandboxMakeOptsShape).returns(M.promise()),
 });
-harden(SandboxFactoryInterface);
 
 /**
  * A live sandbox slice — pinned by the formula that minted it.
@@ -186,6 +216,7 @@ export const SandboxHandleInterface = M.interface('SandboxHandle', {
   spawn: M.call(M.arrayOf(M.string()))
     .optional(SpawnOptsShape)
     .returns(M.promise()),
+  policy: M.call().returns(M.promise()),
   mount: M.call(M.remotable('Mount'), M.string())
     .optional(MountModeShape)
     .returns(M.promise()),
@@ -195,7 +226,6 @@ export const SandboxHandleInterface = M.interface('SandboxHandle', {
   reset: M.call().returns(M.promise()),
   dispose: M.call().returns(M.promise()),
 });
-harden(SandboxHandleInterface);
 
 /**
  * A process running inside a slice. Stdio uses Endo's existing
@@ -210,7 +240,6 @@ export const ProcessHandleInterface = M.interface('SandboxProcess', {
   wait: M.call().returns(M.promise()),
   kill: M.call().optional(TerminationSignalShape).returns(M.promise()),
 });
-harden(ProcessHandleInterface);
 
 /**
  * A mount bound into a slice.
@@ -222,7 +251,6 @@ export const MountHandleInterface = M.interface('SandboxMount', {
   mode: M.call().returns(MountModeShape),
   unmount: M.call().returns(M.promise()),
 });
-harden(MountHandleInterface);
 
 // ---------------------------------------------------------------------------
 // Re-exported shape fragments — useful for tests / driver authors
@@ -242,6 +270,8 @@ export {
   RootfsSpecShape,
   SandboxMakeOptsShape,
   SeccompPolicyShape,
+  SlicePolicyMountShape,
+  SlicePolicyRequestShape,
   SpawnOptsShape,
   TerminationSignalShape,
 };
