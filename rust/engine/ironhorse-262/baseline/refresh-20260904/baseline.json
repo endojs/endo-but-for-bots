@@ -1,5 +1,5 @@
 {
- "note": "Ratchet refresh snapshot (2026-09-04, round 2): the authoritative whole-corpus totals measured at this PR head (round 2, PR #1113), endo_sha in provenance below. Supersedes ../refresh-20260829 as the ratchet floor: no path in covered.txt may regress, and the `failures` list below is the complete permitted ironhorse-failure set (empty at this refresh).",
+ "note": "Historical round-2 measurement at provenance.endo_sha, before the final iterator fix and September 7 rebase. These totals are comparison evidence, not a measurement or zero-failure certification of the current PR head. Current runner verdict semantics differ.",
  "provenance": {
   "corpus_verified": true,
   "runner": "endot-ih",
