@@ -2,6 +2,11 @@
 
 import harden from '@endo/harden';
 import { q } from '@endo/errors';
+
+import {
+  cancelPendingIterator,
+  makeCancelableIterator,
+} from './cancelable-iterator.js';
 import { isPetName, assertName } from './pet-name.js';
 import { parseId } from './formula-identifier.js';
 
@@ -55,19 +60,32 @@ export const makePetSitter = (controller, specialNames) => {
   };
 
   /** @type {StoreController['followNameChanges']} */
-  const followNameChanges = async function* currentAndSubsequentNames() {
-    const specialKeys =
-      /** @type {SpecialName[]} */
-      (Object.keys(specialNames).sort());
-    for (const name of specialKeys) {
-      const idRecord = idRecordForName(name);
-      yield /** @type {{ add: Name, value: IdRecord }} */ ({
-        add: name,
-        value: idRecord,
-      });
-    }
-    yield* controller.followNameChanges();
-  };
+  const followNameChanges = () =>
+    makeCancelableIterator(
+      async function* currentAndSubsequentNames(setCancelPending) {
+        const subscription = controller.followNameChanges();
+        try {
+          const cancellation = setCancelPending(() =>
+            cancelPendingIterator(subscription),
+          );
+          if (cancellation !== undefined) await cancellation;
+          const specialKeys =
+            /** @type {SpecialName[]} */
+            (Object.keys(specialNames).sort());
+          for (const name of specialKeys) {
+            const idRecord = idRecordForName(name);
+            yield /** @type {{ add: Name, value: IdRecord }} */ ({
+              add: name,
+              value: idRecord,
+            });
+          }
+          yield* subscription;
+        } finally {
+          await subscription.return(undefined);
+        }
+        return undefined;
+      },
+    );
 
   /** @type {StoreController['followIdNameChanges']} */
   const followIdNameChanges = async function* currentAndSubsequentIds(id) {

@@ -8,6 +8,11 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { Fail, q } from '@endo/errors';
 import { mustMatch, M } from '@endo/patterns';
 import { makeMarshal } from '@endo/marshal';
+
+import {
+  cancelPendingIterator,
+  makeCancelableIterator,
+} from './cancelable-iterator.js';
 import { makeChangeTopic } from './pubsub.js';
 import {
   assertFormulaNumber,
@@ -262,15 +267,27 @@ export const makeMailboxMaker = ({
     };
 
     /** @type {Mail['followMessages']} */
-    const followMessages = async function* currentAndSubsequentMessages() {
-      const subsequentRequests = messagesTopic.subscribe();
-      for (const message of messages.values()) {
-        yield await externalizeMessage(message);
-      }
-      for await (const message of subsequentRequests) {
-        yield await externalizeMessage(message);
-      }
-    };
+    const followMessages = () =>
+      makeCancelableIterator(
+        async function* currentAndSubsequentMessages(setCancelPending) {
+          const subsequentRequests = messagesTopic.subscribe();
+          try {
+            const cancellation = setCancelPending(() =>
+              cancelPendingIterator(subsequentRequests),
+            );
+            if (cancellation !== undefined) await cancellation;
+            for (const message of messages.values()) {
+              yield await externalizeMessage(message);
+            }
+            for await (const message of subsequentRequests) {
+              yield await externalizeMessage(message);
+            }
+          } finally {
+            await subsequentRequests.return(undefined);
+          }
+          return undefined;
+        },
+      );
 
     /**
      * @param {string} description

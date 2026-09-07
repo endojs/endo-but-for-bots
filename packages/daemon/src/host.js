@@ -20,6 +20,8 @@ import {
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+
+import { cancelPendingIterator } from './cancelable-iterator.js';
 import {
   assertPetName,
   assertPetNamePath,
@@ -2766,11 +2768,15 @@ export const makeHostMaker = ({
         },
         followMessages: async () => {
           const iterator = host.followMessages();
-          return readerFromIterator(/** @type {any} */ (iterator));
+          return readerFromIterator(/** @type {any} */ (iterator), {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
         followNameChanges: async () => {
           const iterator = host.followNameChanges();
-          return readerFromIterator(iterator);
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
         },
         followPeerChanges: async () => {
           const iterator = await host.followPeerChanges();

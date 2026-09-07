@@ -7833,3 +7833,21 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
 });
+
+test.serial(
+  'idle host follow streams close without publishing another value',
+  async t => {
+    t.timeout(15_000);
+    const { host } = await prepareHost(t);
+    const names = await prepareFollowNameChangesIterator(host);
+    const messages = iterateReader(await E(host).followMessages());
+    const pendingName = names.next();
+    const pendingMessage = messages.next();
+    // Let the stream requests reach their source before closing them.
+    await new Promise(resolve => setImmediate(resolve));
+    t.true((await names.return()).done);
+    t.true((await messages.return()).done);
+    t.true((await pendingName).done);
+    t.true((await pendingMessage).done);
+  },
+);
