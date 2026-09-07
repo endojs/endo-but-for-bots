@@ -235,3 +235,64 @@ must be typed values, not prose replies. Natural-number form fields accept
 decimal strings through `submitForm` and are converted to bigint before the
 daemon checks the field patterns. The Chat form UI likewise supports bounded
 bigint review budgets.
+
+## Machine admin: deploys as operator-approved workflows
+
+The `machine-admin` session preset is `full-control` plus this host's NixOS
+administration, per
+[floot-admin-deploy-workflows](../../designs/floot-admin-deploy-workflows.md).
+Its session holds:
+
+- `nixos` — the raw `NixosAdmin` caplet from `@endo/space-nixos-admin`, for
+  orientation (`getSystemInfo`, `getVitals`, `listFiles`, `readFile`,
+  `getEndoRev`, `status`, `getLog`) and emergencies. Its stage/build/apply
+  verbs are root-equivalent, and the prompt routes ordinary deploys elsewhere.
+- `deploy-endo` and `change-nixos` — proposal-only connections
+  (`deploy-connection.js`) to two deploy-workflow factories over the charts in
+  `deploy-charts.js` (`endo-release`, `nixos-config-change`).
+  `start({ params })` stages and dry-builds the proposal and sends an approval
+  form to the owner's inbox; `status(runId)`, `explain(runId)`, and
+  `journal(runId, { from })` observe it. Through a connection a session cannot
+  approve, cancel, or steer a run, and cannot observe runs of other
+  factories.
+- `forgejo-credential`, reachable through `endo` (the factory host), so the
+  session pushes a revision to the local forge before proposing it.
+
+`floot-factory-setup.js` stores those grants on the factory host
+(`machine-admin-setup.js`) on every start, as locators to the root
+inventory's own bindings, and retracts a grant whose provider has gone. Each
+factory — binding the caplet as `performer` and the root host's `@self`
+handle as `operator` — is minted once and re-minted only when the chart's
+name or version changes or the factory is revoked or no longer known to the
+service; the old factory is never revoked, since that would cancel its live
+runs. The
+connection caplet in front of a factory is re-created on every start, like
+the factory caplet, and a session re-copies it on revival. List the
+providers in `ENDO_EXTRA` ahead of the Floot setup:
+
+```
+@endo/workflow/setup.js                             # pinned workflow-service
+@endo/space-nixos-admin/setup.js                    # controller-for-nixos-admin
+@endo/space-nixos-admin/setup-forgejo-credential.js # forgejo-credential
+@endo/floot/floot-factory-setup.js
+```
+
+Each grant is a quiet no-op where its provider is absent. Without the
+workflow service the session opens without deploy connections, and its prompt
+reports deployment unavailable rather than falling back to the raw caplet;
+without the NixOS controller the preset refuses to open a new session (one
+that already holds a copy keeps it).
+The daemon's Git remotes speak https only, so the forge the credential names
+(`ENDO_FORGEJO_URL`) must be an https origin for the session to clone from
+and push to it; the prompt derives the clone URL from the credential's
+audience rather than naming a host.
+
+One connection serves every session that holds it, so a machine-admin
+session observes the whole deploy history of its host, not only the runs it
+started; a preset that must isolate principals from each other needs a
+connection per principal.
+
+The preset's prompt is versioned (`promptVersion`): a bump migrates the prompt
+of every existing `machine-admin` session exactly once on the factory's next
+registry load, leaving custom and delegated prompts untouched. Ordinary preset
+edits never reach a live session.
