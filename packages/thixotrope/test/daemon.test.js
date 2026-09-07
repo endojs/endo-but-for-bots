@@ -61,13 +61,15 @@ const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
   return daemon;
 };
 
-test('workers create workers; vat GC sweeps the unreachable', async t => {
-  const daemon = await makeDaemon(t);
+test.serial(
+  'workers create workers; vat GC sweeps the unreachable',
+  async t => {
+    const daemon = await makeDaemon(t);
 
-  const parent = await daemon.createWorker({ debugLabel: 'parent' });
-  const controller = daemon.makeResource('worker-controller');
-  const parentRoot = await parent.evaluate(
-    `
+    const parent = await daemon.createWorker({ debugLabel: 'parent' });
+    const controller = daemon.makeResource('worker-controller');
+    const parentRoot = await parent.evaluate(
+      `
     (() => {
       let childRoot;
       return Far('Parent', {
@@ -82,47 +84,48 @@ test('workers create workers; vat GC sweeps the unreachable', async t => {
       });
     })()
     `,
-    { controller },
-  );
-  const childCounter = await E(parentRoot).setup();
-  t.is(await E(parentRoot).pull(), 1, 'the parent drives its child');
-  t.is(await E(childCounter).incr(), 2, 'the child capability relayed out');
+      { controller },
+    );
+    const childCounter = await E(parentRoot).setup();
+    t.is(await E(parentRoot).pull(), 1, 'the parent drives its child');
+    t.is(await E(childCounter).incr(), 2, 'the child capability relayed out');
 
-  const childId = daemon
-    .listWorkerIds()
-    .find(workerId => workerId !== parent.workerId);
-  t.truthy(childId, 'the controller created a second worker');
+    const childId = daemon
+      .listWorkerIds()
+      .find(workerId => workerId !== parent.workerId);
+    t.truthy(childId, 'the controller created a second worker');
 
-  // Publish only the child's counter, then sleep everyone: the parent
-  // becomes unreachable garbage; the child is rooted by the
-  // publication.
-  daemon.publish(childCounter, 'child-cap');
-  for (const workerId of daemon.listWorkerIds()) {
-    // eslint-disable-next-line no-await-in-loop
-    await daemon.getWorker(workerId).sleep();
-  }
-  t.deepEqual(await daemon.collectVats(), [parent.workerId]);
-  t.deepEqual(daemon.listWorkerIds(), [childId]);
+    // Publish only the child's counter, then sleep everyone: the parent
+    // becomes unreachable garbage; the child is rooted by the
+    // publication.
+    daemon.publish(childCounter, 'child-cap');
+    for (const workerId of daemon.listWorkerIds()) {
+      // eslint-disable-next-line no-await-in-loop
+      await daemon.getWorker(workerId).sleep();
+    }
+    t.deepEqual(await daemon.collectVats(), [parent.workerId]);
+    t.deepEqual(daemon.listWorkerIds(), [childId]);
 
-  t.is(
-    await E(await daemon.lookup('child-cap')).incr(),
-    3,
-    'the surviving vat still serves its publication',
-  );
+    t.is(
+      await E(await daemon.lookup('child-cap')).incr(),
+      3,
+      'the surviving vat still serves its publication',
+    );
 
-  // Retirement is a capability-shaped end: the worker, its state, and
-  // its publications go together.
-  await daemon.getWorker(/** @type {string} */ (childId)).retire();
-  t.deepEqual(daemon.listWorkerIds(), []);
-  await t.throwsAsync(() => daemon.lookup('child-cap'), {
-    message: /not found/,
-  });
-  await t.throwsAsync(() => E(childCounter).incr(), {
-    message: /retired/,
-  });
-});
+    // Retirement is a capability-shaped end: the worker, its state, and
+    // its publications go together.
+    await daemon.getWorker(/** @type {string} */ (childId)).retire();
+    t.deepEqual(daemon.listWorkerIds(), []);
+    await t.throwsAsync(() => daemon.lookup('child-cap'), {
+      message: /not found/,
+    });
+    await t.throwsAsync(() => E(childCounter).incr(), {
+      message: /retired/,
+    });
+  },
+);
 
-test('daemon.eval implies a worker', async t => {
+test.serial('daemon.eval implies a worker', async t => {
   const daemon = await makeDaemon(t);
   const before = daemon.listWorkerIds().length;
 
@@ -142,7 +145,7 @@ test('daemon.eval implies a worker', async t => {
   t.is(daemon.listWorkerIds().length, before + 2, 'two workers came to be');
 });
 
-test('a host resource reaches a guest as an endowment', async t => {
+test.serial('a host resource reaches a guest as an endowment', async t => {
   const daemon = await makeDaemon(t);
   const worker = await daemon.createWorker({ debugLabel: 'clock' });
   const timer = daemon.makeResource('timer');
@@ -159,38 +162,41 @@ test('a host resource reaches a guest as an endowment', async t => {
   t.true(worker.isAwake());
 });
 
-test('an idle worker parks itself and wakes on the next call', async t => {
-  t.timeout(10_000);
-  const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
-  t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const daemon = await makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
-    codec: syrupCodec,
-    idleSleepMs: 100,
-    makeNetlayer: ({ handlers, logger }) =>
-      makeTcpNetLayer({ handlers, logger }),
-  });
-  t.teardown(() => daemon.shutdown());
+test.serial(
+  'an idle worker parks itself and wakes on the next call',
+  async t => {
+    t.timeout(10_000);
+    const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const daemon = await makeThixotropeDaemon({
+      store: makeFsStore(statePath),
+      engine: makePeerJournalReplayEngine(),
+      codec: syrupCodec,
+      idleSleepMs: 100,
+      makeNetlayer: ({ handlers, logger }) =>
+        makeTcpNetLayer({ handlers, logger }),
+    });
+    t.teardown(() => daemon.shutdown());
 
-  const worker = await daemon.createWorker({ debugLabel: 'napper' });
-  const counter = await worker.evaluate(COUNTER_SOURCE);
-  t.is(await E(counter).incr(), 1);
-  t.true(worker.isAwake());
+    const worker = await daemon.createWorker({ debugLabel: 'napper' });
+    const counter = await worker.evaluate(COUNTER_SOURCE);
+    t.is(await E(counter).incr(), 1);
+    t.true(worker.isAwake());
 
-  // Workers run to quiescence after every delivery and have no timer
-  // queue, so "no inbound frames for a while" is exact dormancy: the
-  // idle policy parks the worker without being asked.
-  const deadline = Date.now() + 5000;
-  while (worker.isAwake() && Date.now() < deadline) {
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  t.false(worker.isAwake(), 'the worker parked itself');
-  t.is(await E(counter).incr(), 2, 'the next delivery wakes it');
-});
+    // Workers run to quiescence after every delivery and have no timer
+    // queue, so "no inbound frames for a while" is exact dormancy: the
+    // idle policy parks the worker without being asked.
+    const deadline = Date.now() + 5000;
+    while (worker.isAwake() && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    t.false(worker.isAwake(), 'the worker parked itself');
+    t.is(await E(counter).incr(), 2, 'the next delivery wakes it');
+  },
+);
 
-test('a third-party gift routes through the hub bootstrap', async t => {
+test.serial('a third-party gift routes through the hub bootstrap', async t => {
   t.timeout(15_000);
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-gift-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
@@ -266,78 +272,86 @@ test('a third-party gift routes through the hub bootstrap', async t => {
   t.is(await E(counterAtGifter).incr(), 3, 'same counter, same state');
 });
 
-test('the hub redeems an inbound gift on behalf of a worker', async t => {
-  t.timeout(15_000);
-  const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-redeem-'));
-  t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const daemon = await makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
-    codec: syrupCodec,
-    makeNetlayer: ({ handlers, logger }) =>
-      makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'daemon' }),
-  });
-  t.teardown(() => daemon.shutdown());
-  const worker = await daemon.createWorker({ debugLabel: 'holder' });
-  const holder = await worker.evaluate(
-    `Far('Holder', { hold: gadget => E(gadget).poke() })`,
-  );
-  const secret = daemon.publish(holder);
+test.serial(
+  'the hub redeems an inbound gift on behalf of a worker',
+  async t => {
+    t.timeout(15_000);
+    const statePath = await mkdtemp(
+      join(tmpdir(), 'thixotrope-daemon-redeem-'),
+    );
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const daemon = await makeThixotropeDaemon({
+      store: makeFsStore(statePath),
+      engine: makePeerJournalReplayEngine(),
+      codec: syrupCodec,
+      makeNetlayer: ({ handlers, logger }) =>
+        makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'daemon' }),
+    });
+    t.teardown(() => daemon.shutdown());
+    const worker = await daemon.createWorker({ debugLabel: 'holder' });
+    const holder = await worker.evaluate(
+      `Far('Holder', { hold: gadget => E(gadget).poke() })`,
+    );
+    const secret = daemon.publish(holder);
 
-  // The exporter: a third node holding the gadget.
-  /** @type {Map<string, any>} */
-  const exporterLocator = new Map();
-  /** @type {any} */
-  let exporterNetlayer;
-  const exporter = await makeTestOcapn({
-    codec: syrupCodec,
-    debugLabel: 'exporter',
-    locator: exporterLocator,
-    network: async (/** @type {any} */ handlers, /** @type {any} */ logger) => {
-      exporterNetlayer = await makeTcpNetLayer({
-        handlers,
-        logger,
-        specifiedDesignator: 'exporter',
-      });
-      return exporterNetlayer;
-    },
-  });
-  t.teardown(() => exporter.shutdown());
-  exporterLocator.set(
-    'gadget',
-    Far('Gadget', {
-      poke: () => 'poked',
-    }),
-  );
+    // The exporter: a third node holding the gadget.
+    /** @type {Map<string, any>} */
+    const exporterLocator = new Map();
+    /** @type {any} */
+    let exporterNetlayer;
+    const exporter = await makeTestOcapn({
+      codec: syrupCodec,
+      debugLabel: 'exporter',
+      locator: exporterLocator,
+      network: async (
+        /** @type {any} */ handlers,
+        /** @type {any} */ logger,
+      ) => {
+        exporterNetlayer = await makeTcpNetLayer({
+          handlers,
+          logger,
+          specifiedDesignator: 'exporter',
+        });
+        return exporterNetlayer;
+      },
+    });
+    t.teardown(() => exporter.shutdown());
+    exporterLocator.set(
+      'gadget',
+      Far('Gadget', {
+        poke: () => 'poked',
+      }),
+    );
 
-  // The gifter: a peer with sessions to both the exporter and the
-  // daemon. Passing the exporter's gadget into the worker's holder is
-  // a third-party handoff with the DAEMON as receiver: the hub cannot
-  // hand the give to the worker (workers cannot dial), so it redeems
-  // the gift itself — dialing the exporter, withdrawing, and giving
-  // the worker an ordinary promise for the gadget.
-  const gifter = await makeTestOcapn({
-    codec: syrupCodec,
-    debugLabel: 'redeeming-gifter',
-    network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
-      makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'gifter2' }),
-  });
-  t.teardown(() => gifter.shutdown());
+    // The gifter: a peer with sessions to both the exporter and the
+    // daemon. Passing the exporter's gadget into the worker's holder is
+    // a third-party handoff with the DAEMON as receiver: the hub cannot
+    // hand the give to the worker (workers cannot dial), so it redeems
+    // the gift itself — dialing the exporter, withdrawing, and giving
+    // the worker an ordinary promise for the gadget.
+    const gifter = await makeTestOcapn({
+      codec: syrupCodec,
+      debugLabel: 'redeeming-gifter',
+      network: (/** @type {any} */ handlers, /** @type {any} */ logger) =>
+        makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'gifter2' }),
+    });
+    t.teardown(() => gifter.shutdown());
 
-  const gadgetAtGifter = await gifter.enlivenSturdyRef(
-    gifter.makeSturdyRef(exporterNetlayer.location, 'gadget'),
-  );
-  t.is(await E(gadgetAtGifter).poke(), 'poked');
+    const gadgetAtGifter = await gifter.enlivenSturdyRef(
+      gifter.makeSturdyRef(exporterNetlayer.location, 'gadget'),
+    );
+    t.is(await E(gadgetAtGifter).poke(), 'poked');
 
-  const holderAtGifter = await gifter.enlivenSturdyRef(
-    gifter.makeSturdyRef(daemon.location, secret),
-  );
-  t.is(
-    await E(holderAtGifter).hold(gadgetAtGifter),
-    'poked',
-    'the worker called through the hub-redeemed gift',
-  );
-});
+    const holderAtGifter = await gifter.enlivenSturdyRef(
+      gifter.makeSturdyRef(daemon.location, secret),
+    );
+    t.is(
+      await E(holderAtGifter).hold(gadgetAtGifter),
+      'poked',
+      'the worker called through the hub-redeemed gift',
+    );
+  },
+);
 
 test.serial(
   'collection rechecks roots acquired while retiring an earlier candidate',

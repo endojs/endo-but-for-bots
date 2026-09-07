@@ -65,11 +65,12 @@ const makeDurableClient = label =>
       }),
   });
 
-test('live remote references survive a daemon restart', async t => {
+test.serial('live remote references survive a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-sess-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
   const daemon1 = await makeDaemon(statePath, 0);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'counter' });
   const counter = await worker.evaluate(COUNTER_SOURCE);
@@ -99,11 +100,12 @@ test('live remote references survive a daemon restart', async t => {
   t.is(await E(remoteCounter).getCount(), 3, 'no call was lost or doubled');
 });
 
-test('a resumed session continues without a handshake', async t => {
+test.serial('a resumed session continues without a handshake', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-keys-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
   const daemon1 = await makeDaemon(statePath, 0);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'counter' });
   const counter = await worker.evaluate(COUNTER_SOURCE);
@@ -139,7 +141,7 @@ test('a resumed session continues without a handshake', async t => {
   );
 });
 
-test('a promise resolution crosses a daemon restart', async t => {
+test.serial('a promise resolution crosses a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-prom-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
@@ -160,6 +162,7 @@ test('a promise resolution crosses a daemon restart', async t => {
   `;
 
   const daemon1 = await makeDaemon(statePath, 0);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'gifter' });
   const gifter = await worker.evaluate(GIFT_SOURCE);
@@ -201,7 +204,7 @@ test('a promise resolution crosses a daemon restart', async t => {
   );
 });
 
-test('an answer a resource owes rejects after a restart', async t => {
+test.serial('an answer a resource owes rejects after a restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-ans-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
@@ -218,6 +221,7 @@ test('an answer a resource owes rejects after a restart', async t => {
   };
 
   const daemon1 = await makeDaemon(statePath, 0, resources);
+  t.teardown(() => daemon1.shutdown());
   const port = Number(daemon1.location.hints.port);
   const worker = await daemon1.createWorker({ debugLabel: 'waiter' });
   const gate = daemon1.makeResource('gate');
@@ -268,41 +272,50 @@ test('an answer a resource owes rejects after a restart', async t => {
   );
 });
 
-test('a call issued while the daemon is down completes after restart', async t => {
-  const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-sess2-'));
-  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+test.serial(
+  'a call issued while the daemon is down completes after restart',
+  async t => {
+    const statePath = await mkdtemp(
+      join(tmpdir(), 'thixotrope-durable-sess2-'),
+    );
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
-  const daemon1 = await makeDaemon(statePath, 0);
-  const port = Number(daemon1.location.hints.port);
-  const worker = await daemon1.createWorker({ debugLabel: 'counter' });
-  const counter = await worker.evaluate(COUNTER_SOURCE);
-  const secret = daemon1.publish(counter);
+    const daemon1 = await makeDaemon(statePath, 0);
+    t.teardown(() => daemon1.shutdown());
+    const port = Number(daemon1.location.hints.port);
+    const worker = await daemon1.createWorker({ debugLabel: 'counter' });
+    const counter = await worker.evaluate(COUNTER_SOURCE);
+    const secret = daemon1.publish(counter);
 
-  const client = await makeDurableClient('gap-client');
-  t.teardown(() => client.shutdown());
+    const client = await makeDurableClient('gap-client');
+    t.teardown(() => client.shutdown());
 
-  const remoteCounter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon1.location, secret),
-  );
-  t.is(await E(remoteCounter).incr(), 1);
+    const remoteCounter = await client.enlivenSturdyRef(
+      client.makeSturdyRef(daemon1.location, secret),
+    );
+    t.is(await E(remoteCounter).incr(), 1);
 
-  await daemon1.shutdown();
+    await daemon1.shutdown();
 
-  // The daemon is down: the call buffers in the client's netlayer,
-  // which keeps trying to reconnect.
-  const stalled = E(remoteCounter).incr();
+    // The daemon is down: the call buffers in the client's netlayer,
+    // which keeps trying to reconnect.
+    const stalled = E(remoteCounter).incr();
 
-  const daemon2 = await makeDaemon(statePath, port);
-  t.teardown(() => daemon2.shutdown());
+    const daemon2 = await makeDaemon(statePath, port);
+    t.teardown(() => daemon2.shutdown());
 
-  t.is(await stalled, 2, 'the buffered call was delivered to the successor');
-});
+    t.is(await stalled, 2, 'the buffered call was delivered to the successor');
+  },
+);
 
-test('sessions survive repeated daemon restarts', async t => {
+test.serial('sessions survive repeated daemon restarts', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-sess3-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
   let daemon = await makeDaemon(statePath, 0);
+  // The previous instance closes before replacement; always close the current one
+  // if an assertion or restart fails. shutdown also reuses an earlier crash.
+  t.teardown(() => daemon.shutdown());
   const port = Number(daemon.location.hints.port);
   const worker = await daemon.createWorker({ debugLabel: 'counter' });
   const counter = await worker.evaluate(COUNTER_SOURCE);
