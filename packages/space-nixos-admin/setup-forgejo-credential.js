@@ -6,6 +6,9 @@
 // with, and files it in the host's inventory as `forgejo-credential`. Intended
 // to be listed in the daemon's ENDO_EXTRA so it re-provisions on every start
 // for installations that use Forgejo as their local configuration forge.
+// @endo/floot's factory setup, listed after this one, grants the result to
+// its factory host under the same name, as a locator, so a machine-admin
+// session pushes with the credential this script keeps alive.
 //
 // This is what closes the self-update loop: a revision the agent authors exists
 // only on the forge, and `services.endo.mirrorUrl` fetches it from there, so the
@@ -86,6 +89,15 @@ export const main = async agent => {
   // matching the Git remote audience comparison without logging credentials.
   const { origin: audience } = forgejoUrl;
   const username = env.ENDO_FORGEJO_USER || 'floot';
+  if (forgejoUrl.protocol !== 'https:') {
+    // The daemon's Git remotes speak https only, and a credential is accepted
+    // only on an https remote, so an http audience is a credential nothing
+    // can use. Provision it anyway — the host may be mid-migration — but say
+    // so where the operator reads boot diagnostics.
+    console.error(
+      `Forgejo credential audience ${audience} is not https; Git remotes here require https, so no remote can use this credential until ENDO_FORGEJO_URL names an https origin.`,
+    );
+  }
 
   const controller = await existingCredentialController(agent, audience);
   if (controller !== undefined) {

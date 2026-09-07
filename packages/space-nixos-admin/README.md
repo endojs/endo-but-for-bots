@@ -43,6 +43,18 @@ Mutating methods fail until both required directories are configured.
 
 `setup-forgejo-credential.js` is an optional hosted-development integration.
 It is not required to inspect or administer a NixOS machine.
+It reads `ENDO_FORGEJO_FLOOT_PW`, `ENDO_FORGEJO_USER` (default `floot`), and
+`ENDO_FORGEJO_URL` (default `http://127.0.0.1:3000`), and the credential's
+audience is that URL's origin.
+The daemon's Git remotes accept a credential only over https, so a
+deployment that wants to push through this credential must set
+`ENDO_FORGEJO_URL` to an https origin; the setup warns when it is not.
+
+`@endo/floot`'s factory setup grants the controller and the credential to its
+factory host for the `machine-admin` session preset, and binds the controller
+as the `performer` of that package's deploy-workflow factories; list both
+setups in `ENDO_EXTRA` ahead of it.
+See that package's README.
 
 ## Administration flow
 
