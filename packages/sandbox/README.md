@@ -539,10 +539,13 @@ Every later operation is created from that same frozen prefix — and
 then inspected, before it starts, so its *resolved* configuration must
 fingerprint identically to the anchor's.
 Argv identity alone would be exactly the inference this module refuses;
-comparing what the runtime resolved catches a host whose cgroup
-delegation was revoked, or an engine upgrade that resolves a flag
-differently, between the slice being proved and the operation being
-admitted.
+comparing what the runtime resolved catches an engine upgrade that
+resolves a flag differently between the slice being proved and the
+operation being admitted.
+Cgroup delegation is asked again separately, because a runtime echoes
+every ceiling back whether or not a controller is delegated to apply
+it: a `Delegate=` narrowed after the slice was attested leaves an
+identical fingerprint and no memory cgroup.
 What an operation does not get is its own kernel-state read: that was
 proved of the anchor and carries across on the runtime applying the
 same resolved configuration on the same host — a smaller step than
@@ -555,8 +558,9 @@ trusting argv, and not the same as proving it again.
   so an operator's `make()` must place no credential or proxy setting
   there.
 - **Kernel state per operation.** See above: an operation's resolved
-  configuration is compared to the anchor's, not re-read from the
-  kernel.
+  configuration is compared to the anchor's, and cgroup delegation is
+  re-checked, but the kernel-side reads — namespaces, identity,
+  capability masks, seccomp mode — are not repeated per operation.
 - **Namespace privacy beyond this driver.** `procfs` answers "not the
   observer's"; the driver additionally refuses a namespace another of
   its live slices holds. Two slices under *different* daemons sharing

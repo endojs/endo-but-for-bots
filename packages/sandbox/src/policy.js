@@ -610,11 +610,24 @@ const effectiveMountOptions = options => {
  */
 const tmpfsTable = inspect => {
   const table = observed(inspect, 'HostConfig.Tmpfs');
-  if (typeof table !== 'object' || table === null) return harden({});
+  // Absent is empty; anything else unrecognized is unproved. Dropping
+  // an entry we could not read would let an undeclared writable path
+  // pass the exactness check below by being invisible to it — the
+  // asymmetry the `Mounts` branch already avoids.
+  if (table === undefined || table === null) return harden({});
+  if (typeof table !== 'object' || Array.isArray(table)) {
+    return unproved('mount table', table);
+  }
   /** @type {Record<string, string>} */
   const entries = {};
   for (const [destination, options] of Object.entries(table)) {
-    if (typeof options === 'string') entries[destination] = options;
+    if (typeof options !== 'string') {
+      return unproved(
+        'mount table',
+        `unreadable tmpfs entry at ${destination}`,
+      );
+    }
+    entries[destination] = options;
   }
   return harden(entries);
 };
@@ -936,8 +949,9 @@ export const attestSlicePolicy = (policy, state) => {
   if (shmSize === null || shmSize !== policy.resources.shmBytes) {
     return unproved(`shared-memory ceiling at ${SHM_DESTINATION}`, shmSize);
   }
-  if (observed(inspect, 'HostConfig.PidsLimit') !== policy.resources.pids) {
-    return unproved('pid ceiling', observed(inspect, 'HostConfig.PidsLimit'));
+  const pidsLimit = observed(inspect, 'HostConfig.PidsLimit');
+  if (pidsLimit !== policy.resources.pids) {
+    return unproved('pid ceiling', pidsLimit);
   }
   const quota = observed(inspect, 'HostConfig.CpuQuota');
   const period = observed(inspect, 'HostConfig.CpuPeriod');
@@ -1057,6 +1071,13 @@ export const sliceConfigFingerprint = inspect => {
     'HostConfig.ReadonlyRootfs',
     'HostConfig.SecurityOpt',
     'HostConfig.Devices',
+    // Capabilities are the one attested category with no other
+    // per-operation coverage: the kernel-side masks are read of the
+    // anchor only, so a `default_capabilities` change or an engine that
+    // stopped honouring `--cap-drop ALL` would otherwise reach an
+    // operation with an identical fingerprint.
+    'HostConfig.CapDrop',
+    'HostConfig.CapAdd',
     'HostConfig.Memory',
     'HostConfig.MemorySwap',
     'HostConfig.ShmSize',

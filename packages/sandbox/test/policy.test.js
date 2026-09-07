@@ -875,3 +875,47 @@ test('the fingerprint ignores key order but not configuration', t => {
   });
   t.not(sliceConfigFingerprint(one), sliceConfigFingerprint(weaker));
 });
+
+test('the fingerprint covers the capability configuration', t => {
+  const one = makeInspect(record => {
+    record.HostConfig.CapDrop = ['ALL'];
+  });
+  const other = makeInspect(record => {
+    record.HostConfig.CapDrop = [];
+    record.HostConfig.CapAdd = ['CAP_SYS_ADMIN'];
+  });
+  // Capabilities are proved from the kernel for the anchor only, so an
+  // operation whose capability configuration differs must not be able
+  // to fingerprint identically to it.
+  t.not(sliceConfigFingerprint(one), sliceConfigFingerprint(other));
+});
+
+test('a tmpfs table it cannot read is unproved, not empty', t => {
+  const policy = assertSlicePolicyRequest(makeRequest());
+  // Dropping an unreadable entry would let an undeclared writable path
+  // pass the exactness check by being invisible to it.
+  t.throws(
+    () =>
+      attestSlicePolicy(
+        policy,
+        makeState({
+          inspect: makeInspect(record => {
+            record.HostConfig.Tmpfs['/host-data'] = null;
+          }),
+        }),
+      ),
+    { message: /unreadable tmpfs entry at \/host-data/ },
+  );
+  t.throws(
+    () =>
+      attestSlicePolicy(
+        policy,
+        makeState({
+          inspect: makeInspect(record => {
+            record.HostConfig.Tmpfs = 'rw,nosuid,nodev';
+          }),
+        }),
+      ),
+    { message: /mount table/ },
+  );
+});

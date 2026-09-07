@@ -347,7 +347,12 @@ harden(probeRootlessNetBackend);
  *                                     or `null` when no profile was
  *                                     materialised.  Unlinked at
  *                                     teardown.
- * @property {{ request: SlicePolicyRequest, argv: readonly string[], anchorName: string, fingerprint: string, attestation: SlicePolicyAttestation } | null} policy
+ * @property {Set<string>} reserved   Operation names admitted but not
+ *                                     yet live. Admission counts these
+ *                                     with `live`, so a concurrency
+ *                                     ceiling is not a check the next
+ *                                     tick invalidates.
+ * @property {{ request: SlicePolicyRequest, argv: readonly string[], anchorName: string, fingerprint: string, cgroupControllers: readonly string[], attestation: SlicePolicyAttestation } | null} policy
  *                                     Attested policy for the slice, or
  *                                     `null` when the caller did not ask
  *                                     for one.  `argv` is the frozen
@@ -1198,11 +1203,15 @@ export const makePodmanDriver = ({
    * Record the anchor's namespaces as this slice's, refusing any a live
    * slice already holds.
    *
+   * The network namespace is deliberately *not* claimed: it is the
+   * broker's, one sidecar per session is the operator's arrangement to
+   * make, and a slice replacing another for the same session rejoins
+   * the same namespace on purpose.
+   *
    * @param {string} anchorName
    * @param {Record<string, { id: string | null }>} namespaces
-   * @param {string} networkNamespaceId
    */
-  const claimNamespaces = (anchorName, namespaces, networkNamespaceId) => {
+  const claimNamespaces = (anchorName, namespaces) => {
     const claims = Object.entries(namespaces)
       .map(([kind, namespace]) => /** @type {const} */ ([kind, namespace.id]))
       .filter(([, id]) => id !== null);
@@ -1214,11 +1223,6 @@ export const makePodmanDriver = ({
         );
       }
     }
-    // The network namespace is deliberately the broker's and is *not*
-    // claimed: one sidecar per session is the operator's arrangement to
-    // make, and a slice replacing another for the same session rejoins
-    // the same namespace on purpose.
-    void networkNamespaceId;
     for (const [, id] of claims) {
       claimedNamespaces.set(/** @type {string} */ (id), anchorName);
     }
@@ -1398,31 +1402,25 @@ export const makePodmanDriver = ({
     await null;
     try {
       // Inside the try, unlike before: a create that trips the control
-      // deadline can have registered the name already, and the throw
-      // would otherwise carry straight past the removal and leave the
-      // container for a future daemon's orphan sweep.
-      let created;
-      try {
-        created = await spawnAndCollect(
-          cp,
-          'podman',
-          podmanArgs(runtime, [
-            ...assembleCreateArgv(spec, anchorName, null, {
-              seccompProfilePath: null,
-              pathInjection,
-              ownerId,
-              operationId: anchorName,
-              policyArgv,
-            }),
-            ref,
-            ...request.attestationArgv,
-          ]),
-          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-        );
-      } catch (e) {
-        await removeAnchor();
-        throw e;
-      }
+      // deadline can have registered the name already, and the outer
+      // catch removing it is what keeps the container from outliving
+      // the attempt.
+      const created = await spawnAndCollect(
+        cp,
+        'podman',
+        podmanArgs(runtime, [
+          ...assembleCreateArgv(spec, anchorName, null, {
+            seccompProfilePath: null,
+            pathInjection,
+            ownerId,
+            operationId: anchorName,
+            policyArgv,
+          }),
+          ref,
+          ...request.attestationArgv,
+        ]),
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      );
       if (created.code !== 0) {
         throw makeError(
           X`podman policy anchor create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
@@ -1502,7 +1500,7 @@ export const makePodmanDriver = ({
         // owning daemon died first.
         descendantReaping: namespaces.pid.unshared && reconciled,
       });
-      claimNamespaces(anchorName, namespaces, anchorNetwork.namespaceId);
+      claimNamespaces(anchorName, namespaces);
       return harden({
         anchorName,
         fingerprint: sliceConfigFingerprint(inspect),
@@ -1683,6 +1681,7 @@ export const makePodmanDriver = ({
         argv: policyArgv,
         anchorName: attested.anchorName,
         fingerprint: attested.fingerprint,
+        cgroupControllers: harden([...cgroup2.controllers]),
         attestation: attested.attestation,
       });
     }
@@ -1694,6 +1693,7 @@ export const makePodmanDriver = ({
       netBackend,
       runtime,
       live: new Map(),
+      reserved: new Set(),
       seccompTempPath,
       policy,
       runtimeDetails,
@@ -1737,6 +1737,9 @@ export const makePodmanDriver = ({
     if (ownerId === undefined) {
       throw makeError(X`podman driver ownerId is not configured`);
     }
+    // Bound here rather than read inside `admitOperation`, whose
+    // hoisted declaration is outside this narrowing.
+    const owner = ownerId;
     const admissionCancelled = controls?.cancelled;
     const isAdmissionCancelled = controls?.isCancelled;
 
@@ -1744,209 +1747,255 @@ export const makePodmanDriver = ({
     // Names include pid, time, and a counter, so the operation label remains
     // unique even when multiple handles share one formula owner.
     const operationId = containerName;
-    const operationSpec = harden({
-      ...slice.spec,
-      env: harden({ ...slice.spec.env, ...(opts.env ?? {}) }),
-      cwd: opts.cwd ?? slice.spec.cwd,
-    });
-    const slicePath = resolveSlicePath(
-      operationSpec,
-      slice.runtimeDetails.path.value,
-    );
-    const pathInjection = slicePath.source === 'env' ? null : slicePath.value;
-    const createArgv = podmanArgs(slice.runtime, [
-      ...assembleCreateArgv(operationSpec, containerName, slice.netBackend, {
-        seccompProfilePath: slice.seccompTempPath,
-        pathInjection,
-        ownerId,
-        operationId,
-        // The same frozen array the anchor was attested under, so this
-        // operation cannot run at a weaker configuration than the one
-        // `policy()` proved.
-        ...(slice.policy !== null ? { policyArgv: slice.policy.argv } : {}),
-      }),
-      slice.ref,
-      ...argv,
-    ]);
-    // Bounded removal of the exact named operation this spawn minted.
-    // Used on every abandonment path so an aborted or failed admission
-    // cannot leak the container.
-    const removeOperation = () =>
-      removeContainer(cp, slice.runtime, containerName).catch(() => undefined);
 
-    let created;
-    try {
-      created = await spawnAndCollect(cp, 'podman', createArgv, {
-        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
-        cancelled: admissionCancelled,
-        isCancelled: isAdmissionCancelled,
-      });
-    } catch (e) {
-      // The stalled or aborted create may have registered the name
-      // before dying; remove it so nothing outlives the admission.
-      await removeOperation();
-      throw e;
-    }
-    if (created.code !== 0) {
-      throw makeError(
-        X`podman operation create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
-      );
-    }
-    if (isAdmissionCancelled?.()) {
-      await removeOperation();
-      throw makeError(X`podman operation admission aborted`);
-    }
-
+    // Reserved here, synchronously, before the first await. Counting
+    // `live` alone would be a check the next tick invalidates: two
+    // concurrent spawns both read zero, both pass, and the slice runs
+    // one more container than every per-container ceiling — and than
+    // the aggregate the attestation states — was computed for.
     if (slice.policy !== null) {
-      // Every ceiling the policy names is applied per container, so the
-      // slice-wide aggregate it attests is only true while the number
-      // of live containers is the number it was computed for.
       const { maxConcurrentOperations } = slice.policy.request.resources;
-      if (slice.live.size >= maxConcurrentOperations) {
-        await removeOperation();
+      const admitted = slice.live.size + slice.reserved.size;
+      if (admitted >= maxConcurrentOperations) {
         throw makeError(
-          X`slice policy admits ${q(maxConcurrentOperations)} concurrent operations; ${q(slice.live.size)} are already live`,
+          X`slice policy admits ${q(maxConcurrentOperations)} concurrent operations; ${q(admitted)} are already admitted`,
         );
       }
-      // The operation shares the anchor's frozen policy argv, but "the
-      // same flags" is the inference this whole module refuses to make.
-      // Asking the runtime what those flags resolved to *this time* is
-      // what catches a host whose cgroup delegation was revoked, or an
-      // engine upgrade that resolves a flag differently, between the
-      // slice being proved and this operation being admitted.
-      //
-      // Read before start, so it holds for a command that exits at
-      // once. What it does not re-read is the kernel state: that was
-      // proved of the anchor, and carries here on the runtime applying
-      // the same resolved configuration on the same host — a smaller
-      // step than trusting argv, and not the same as proving it again.
-      let operationConfig;
-      try {
-        operationConfig = sliceConfigFingerprint(
-          await inspectContainer(cp, slice.runtime, containerName),
+      slice.reserved.add(containerName);
+    }
+    const releaseReservation = () => slice.reserved.delete(containerName);
+    try {
+      return await admitOperation();
+    } catch (e) {
+      releaseReservation();
+      throw e;
+    }
+
+    /**
+     * The rest of the admission, wrapped so that the reservation above
+     * is released on every path out that is not a live operation —
+     * a create that failed, an aborted admission, a refused
+     * configuration, an attach that never happened.
+     *
+     * @returns {Promise<DriverProcess>}
+     */
+    async function admitOperation() {
+      await null;
+      const operationSpec = harden({
+        ...slice.spec,
+        env: harden({ ...slice.spec.env, ...(opts.env ?? {}) }),
+        cwd: opts.cwd ?? slice.spec.cwd,
+      });
+      const slicePath = resolveSlicePath(
+        operationSpec,
+        slice.runtimeDetails.path.value,
+      );
+      const pathInjection = slicePath.source === 'env' ? null : slicePath.value;
+      const createArgv = podmanArgs(slice.runtime, [
+        ...assembleCreateArgv(operationSpec, containerName, slice.netBackend, {
+          seccompProfilePath: slice.seccompTempPath,
+          pathInjection,
+          ownerId: owner,
+          operationId,
+          // The same frozen array the anchor was attested under, so this
+          // operation cannot run at a weaker configuration than the one
+          // `policy()` proved.
+          ...(slice.policy !== null ? { policyArgv: slice.policy.argv } : {}),
+        }),
+        slice.ref,
+        ...argv,
+      ]);
+      // Bounded removal of the exact named operation this spawn minted.
+      // Used on every abandonment path so an aborted or failed admission
+      // cannot leak the container.
+      const removeOperation = () =>
+        removeContainer(cp, slice.runtime, containerName).catch(
+          () => undefined,
         );
+
+      let created;
+      try {
+        created = await spawnAndCollect(cp, 'podman', createArgv, {
+          timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+          cancelled: admissionCancelled,
+          isCancelled: isAdmissionCancelled,
+        });
       } catch (e) {
+        // The stalled or aborted create may have registered the name
+        // before dying; remove it so nothing outlives the admission.
         await removeOperation();
         throw e;
       }
-      if (operationConfig !== slice.policy.fingerprint) {
+      if (created.code !== 0) {
+        throw makeError(
+          X`podman operation create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
+        );
+      }
+      if (isAdmissionCancelled?.()) {
         await removeOperation();
-        throw makeError(
-          X`podman resolved this operation's configuration differently from the attested slice: ${q(operationConfig)} is not ${q(slice.policy.fingerprint)}`,
-        );
+        throw makeError(X`podman operation admission aborted`);
       }
-    }
 
-    const startArgv = podmanArgs(slice.runtime, [
-      'start',
-      '--attach',
-      '--interactive',
-      containerName,
-    ]);
-
-    /** @type {import('child_process').ChildProcess} */
-    let child;
-    try {
-      child = cp.spawn('podman', startArgv, {
-        stdio: [
-          'pipe',
-          opts.captureStdout === false ? 'ignore' : 'pipe',
-          opts.captureStderr === false ? 'ignore' : 'pipe',
-        ],
-        env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
-      });
-    } catch (e) {
-      await removeOperation();
-      throw makeError(
-        X`failed to attach podman operation: ${q(/** @type {Error} */ (e).message)}`,
-      );
-    }
-
-    const {
-      promise: proxyExited,
-      resolve: resolveProxy,
-      reject: rejectProxy,
-    } = /** @type {import('@endo/promise-kit').PromiseKit<{ code: number | null, signal: string | null }>} */ (
-      makePromiseKit()
-    );
-    child.once('error', rejectProxy);
-    child.once('exit', (code, signal) => resolveProxy({ code, signal }));
-    proxyExited.catch(() => undefined);
-
-    const exited = (async () => {
-      await null;
-      let status;
-      let proxyFailure;
-      try {
-        status = await proxyExited;
-      } catch (e) {
-        proxyFailure = e;
-      }
-      const removed = await removeContainer(cp, slice.runtime, containerName);
-      slice.live.delete(containerName);
-      if (removed.code !== 0 && !reportsContainerGone(removed)) {
-        throw makeError(
-          X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
-        );
-      }
-      if (proxyFailure !== undefined) throw proxyFailure;
-      return /** @type {{ code: number | null, signal: string | null }} */ (
-        status
-      );
-    })();
-    exited.catch(() => undefined);
-    // Not hardened: the entry holds a Node ChildProcess, whose internal
-    // stream state cannot survive a deep freeze.
-    slice.live.set(containerName, { child, wait: exited });
-
-    const stdinStream = child.stdin;
-    /** @type {DriverProcess & { writeStdin(chunk: Uint8Array): Promise<void>, closeStdin(): Promise<void> }} */
-    const driverProcExtended = harden({
-      pid: child.pid ?? -1,
-      stdin: null,
-      stdout: readableToAsyncIterable(child.stdout),
-      stderr: readableToAsyncIterable(child.stderr),
-      wait: () => exited,
-      kill: async signal => {
-        // The operation itself is container PID 1. Signalling the exact
-        // container therefore covers every descendant, unlike signalling a
-        // host-side `podman exec` proxy.
-        const result = await spawnAndCollect(
-          cp,
-          'podman',
-          podmanArgs(slice.runtime, [
-            'kill',
-            '--signal',
-            String(signal ?? 'SIGTERM'),
-            containerName,
-          ]),
-          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-        );
-        if (
-          result.code !== 0 &&
-          !reportsContainerGone(result) &&
-          !reportsContainerNotRunning(result)
-        ) {
+      if (slice.policy !== null) {
+        // The operation shares the anchor's frozen policy argv, but "the
+        // same flags" is the inference this whole module refuses to make.
+        // Asking the runtime what those flags resolved to *this time*
+        // catches an engine upgrade that resolves one differently between
+        // the slice being proved and this operation being admitted.
+        //
+        // Read before start, so it holds for a command that exits at
+        // once. What it does not re-read is the kernel state: that was
+        // proved of the anchor, and carries here on the runtime applying
+        // the same resolved configuration on the same host — a smaller
+        // step than trusting argv, and not the same as proving it again.
+        let operationConfig;
+        try {
+          operationConfig = sliceConfigFingerprint(
+            await inspectContainer(cp, slice.runtime, containerName),
+          );
+        } catch (e) {
+          await removeOperation();
+          throw e;
+        }
+        if (operationConfig !== slice.policy.fingerprint) {
+          await removeOperation();
           throw makeError(
-            X`podman operation signal failed: ${q(result.stderr.trim() || result.stdout.trim())}`,
+            X`podman resolved this operation's configuration differently from the attested slice: ${q(operationConfig)} is not ${q(slice.policy.fingerprint)}`,
           );
         }
-      },
-      /** @param {Uint8Array} chunk */
-      writeStdin: async chunk => {
-        if (stdinStream === null || stdinStream === undefined) return;
-        await new Promise((resolve, reject) => {
-          stdinStream.write(chunk, err =>
-            err ? reject(err) : resolve(undefined),
+        // The ceilings are the runtime's echo of what it was asked for
+        // whether or not a controller is delegated to apply them, so
+        // delegation is its own question and has to be asked again: a
+        // `Delegate=` narrowed after the slice was attested leaves an
+        // identical fingerprint and no memory cgroup.
+        const delegation = await cgroup2Probe.probe();
+        const lost = slice.policy.cgroupControllers.filter(
+          controller => !delegation.controllers.includes(controller),
+        );
+        if (lost.length > 0) {
+          await removeOperation();
+          throw makeError(
+            X`the host no longer delegates the cgroup controllers this slice was attested under: ${q(lost.join(','))}`,
           );
+        }
+      }
+
+      const startArgv = podmanArgs(slice.runtime, [
+        'start',
+        '--attach',
+        '--interactive',
+        containerName,
+      ]);
+
+      /** @type {import('child_process').ChildProcess} */
+      let child;
+      try {
+        child = cp.spawn('podman', startArgv, {
+          stdio: [
+            'pipe',
+            opts.captureStdout === false ? 'ignore' : 'pipe',
+            opts.captureStderr === false ? 'ignore' : 'pipe',
+          ],
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
         });
-      },
-      closeStdin: async () => {
-        if (stdinStream === null || stdinStream === undefined) return;
-        await new Promise(resolve => stdinStream.end(() => resolve(undefined)));
-      },
-    });
-    return /** @type {DriverProcess} */ (driverProcExtended);
+      } catch (e) {
+        await removeOperation();
+        throw makeError(
+          X`failed to attach podman operation: ${q(/** @type {Error} */ (e).message)}`,
+        );
+      }
+
+      const {
+        promise: proxyExited,
+        resolve: resolveProxy,
+        reject: rejectProxy,
+      } = /** @type {import('@endo/promise-kit').PromiseKit<{ code: number | null, signal: string | null }>} */ (
+        makePromiseKit()
+      );
+      child.once('error', rejectProxy);
+      child.once('exit', (code, signal) => resolveProxy({ code, signal }));
+      proxyExited.catch(() => undefined);
+
+      const exited = (async () => {
+        await null;
+        let status;
+        let proxyFailure;
+        try {
+          status = await proxyExited;
+        } catch (e) {
+          proxyFailure = e;
+        }
+        const removed = await removeContainer(cp, slice.runtime, containerName);
+        slice.live.delete(containerName);
+        if (removed.code !== 0 && !reportsContainerGone(removed)) {
+          throw makeError(
+            X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+          );
+        }
+        if (proxyFailure !== undefined) throw proxyFailure;
+        return /** @type {{ code: number | null, signal: string | null }} */ (
+          status
+        );
+      })();
+      exited.catch(() => undefined);
+      // Not hardened: the entry holds a Node ChildProcess, whose internal
+      // stream state cannot survive a deep freeze.
+      // Hands the reservation over: admission counts both, so leaving it
+      // in `reserved` as well would count this operation twice.
+      slice.live.set(containerName, { child, wait: exited });
+      releaseReservation();
+
+      const stdinStream = child.stdin;
+      /** @type {DriverProcess & { writeStdin(chunk: Uint8Array): Promise<void>, closeStdin(): Promise<void> }} */
+      const driverProcExtended = harden({
+        pid: child.pid ?? -1,
+        stdin: null,
+        stdout: readableToAsyncIterable(child.stdout),
+        stderr: readableToAsyncIterable(child.stderr),
+        wait: () => exited,
+        kill: async signal => {
+          // The operation itself is container PID 1. Signalling the exact
+          // container therefore covers every descendant, unlike signalling a
+          // host-side `podman exec` proxy.
+          const result = await spawnAndCollect(
+            cp,
+            'podman',
+            podmanArgs(slice.runtime, [
+              'kill',
+              '--signal',
+              String(signal ?? 'SIGTERM'),
+              containerName,
+            ]),
+            { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+          );
+          if (
+            result.code !== 0 &&
+            !reportsContainerGone(result) &&
+            !reportsContainerNotRunning(result)
+          ) {
+            throw makeError(
+              X`podman operation signal failed: ${q(result.stderr.trim() || result.stdout.trim())}`,
+            );
+          }
+        },
+        /** @param {Uint8Array} chunk */
+        writeStdin: async chunk => {
+          if (stdinStream === null || stdinStream === undefined) return;
+          await new Promise((resolve, reject) => {
+            stdinStream.write(chunk, err =>
+              err ? reject(err) : resolve(undefined),
+            );
+          });
+        },
+        closeStdin: async () => {
+          if (stdinStream === null || stdinStream === undefined) return;
+          await new Promise(resolve =>
+            stdinStream.end(() => resolve(undefined)),
+          );
+        },
+      });
+      return /** @type {DriverProcess} */ (driverProcExtended);
+    }
   };
 
   /**
@@ -1976,10 +2025,19 @@ export const makePodmanDriver = ({
     // on the same pass as the operations rather than left to the next
     // incarnation's orphan sweep.
     if (slice.policy !== null) {
-      await removeContainer(cp, slice.runtime, slice.policy.anchorName).catch(
-        () => undefined,
-      );
-      releaseNamespaces(slice.policy.anchorName);
+      const anchorName = slice.policy.anchorName;
+      // Checked, not swallowed. The anchor joins the broker's network
+      // namespace, so a removal that failed and went unreported would
+      // let `dispose()` resolve as a clean teardown over a container
+      // still in it — and release the namespace claim that would have
+      // stopped a later slice from attesting the same one.
+      const removed = await removeContainer(cp, slice.runtime, anchorName);
+      if (removed.code !== 0 && !reportsContainerGone(removed)) {
+        throw makeError(
+          X`podman policy anchor removal failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+        );
+      }
+      releaseNamespaces(anchorName);
     }
 
     // Unlink any seccomp profile we materialised for `--security-opt
