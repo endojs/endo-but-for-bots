@@ -1972,18 +1972,24 @@ struct ArrayIteratorProxyGetContext {
     meter_terminal_wrapper: bool,
 }
 
-/// The key a Proxy `[[Get]]` trap was handed, as its post-trap
-/// invariant check needs to name it back to the target.
+/// A property key for an operation that only READS the property world —
+/// `[[Get]]`, `[[HasProperty]]`, `[[GetOwnProperty]]`, `[[Delete]]`.
 ///
-/// An index key whose canonical name the key table has never held has no id
-/// yet — the trap is handed a freshly built string, exactly as XS's `fxKeyAt`
-/// builds one from `value.at.index` when `value.at.id` is `XS_NO_ID`. Naming
-/// it back to the target is deferred to [`Interp::proxy_get_trapped`], which
-/// skips it entirely for an ordinary target (no ordinary own property can
-/// exist under a name that was never interned) and so mints nothing for the
-/// common `new Proxy({}, { get() {} })[i]`.
+/// An array index arrives without a name (XS's `value.at.id == XS_NO_ID` plus
+/// `value.at.index`), and none of these operations creates anything, so an
+/// index whose canonical name the key table has never held stays an `Index`
+/// rather than minting an `Id`: interning per novel index would burn the `u16`
+/// id space that [`Interp::next_symbol_key_id`] shares with symbol keys, and
+/// that exhaustion poisons the machine rather than throwing. XS mints nothing
+/// on these paths either — `fxAt` takes its index branch, and `fxKeyAt` spells
+/// a Proxy trap's key from `value.at.index` without touching the key table.
+///
+/// The name is materialized in exactly two places: a Proxy trap, which is
+/// handed the key as a string ([`Interp::read_key_slot`]), and a post-trap
+/// invariant check that must name the key back to the target
+/// ([`Interp::target_own_key_id`], which skips an ordinary target entirely).
 #[derive(Copy, Clone, Debug)]
-enum TrapKeyId {
+enum ReadKey {
     Id(u16),
     Index(u32),
 }
@@ -16058,10 +16064,15 @@ impl Interp {
                             self.ta_numeric_index_at(id, index)
                                 .map(|n| self.ta_valid_index(ta, n).is_none())
                         });
+                    // A delete creates nothing either, so an index the key
+                    // table has never held is never minted: `None` here means
+                    // no ordinary own slot can exist under it, which makes the
+                    // delete a vacuous `true` (XS passes `(id, index)` to
+                    // `mxBehaviorDeleteProperty` and mints no key).
                     let id = if id == crate::value::XS_NO_ID {
-                        self.intern_key(&index.to_string())
+                        self.index_read_key_id(index)
                     } else {
-                        id
+                        Some(id)
                     };
                     let deleted = match obj.value {
                         Payload::Reference(_) if ta_delete.is_some() => {
@@ -16072,7 +16083,11 @@ impl Interp {
                             self.meter.tick_builtin();
                             if self.proxies.contains_key(&inst) {
                                 dispatch_result!(
-                                    self.proxy_delete(code, inst, id),
+                                    match id {
+                                        Some(id) => self.proxy_delete(code, inst, id),
+                                        None => self
+                                            .uninterned_index_proxy_delete(code, inst, index),
+                                    },
                                     pc,
                                     self,
                                     return_depth
@@ -16091,15 +16106,16 @@ impl Interp {
                                         true
                                     }
                                 } else {
-                                    self.delete_own_property(inst, id)
+                                    id.is_none_or(|id| self.delete_own_property(inst, id))
                                 }
-                            } else if self.arrays.contains_key(&inst)
-                                && !self.arguments_objects.contains(&inst)
-                                && self.string_key_name(id).as_deref() == Some("length")
-                            {
+                            } else if id.is_some_and(|id| {
+                                self.arrays.contains_key(&inst)
+                                    && !self.arguments_objects.contains(&inst)
+                                    && self.string_key_name(id).as_deref() == Some("length")
+                            }) {
                                 false
                             } else {
-                                self.delete_own_property(inst, id)
+                                id.is_none_or(|id| self.delete_own_property(inst, id))
                             }
                         }
                         _ if obj.kind == Kind::Null || obj.kind == Kind::Undefined => dispatch_halt!(
@@ -17509,11 +17525,16 @@ impl Interp {
                         }
                         _ => return Halt::EngineInvariant("get_super_at:reference"),
                     };
-                    let id = match key.value {
+                    // A read mints nothing: an index the key table has never
+                    // held stays an index (`ReadKey`).
+                    let read_key = match key.value {
                         Payload::At(id, index) if id == crate::value::XS_NO_ID => {
-                            self.intern_key(&index.to_string())
+                            match self.index_read_key_id(index) {
+                                Some(id) => ReadKey::Id(id),
+                                None => ReadKey::Index(index),
+                            }
                         }
-                        Payload::At(id, _) => id,
+                        Payload::At(id, _) => ReadKey::Id(id),
                         _ => return Halt::EngineInvariant("get_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
@@ -17524,7 +17545,12 @@ impl Interp {
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let value = dispatch_result!(
-                        self.ordinary_get(code, super_ref.next, id, receiver),
+                        match read_key {
+                            ReadKey::Id(id) =>
+                                self.ordinary_get(code, super_ref.next, id, receiver),
+                            ReadKey::Index(index) =>
+                                self.uninterned_index_get(code, super_ref.next, index, receiver),
+                        },
                         pc,
                         self,
                         return_depth
@@ -17881,12 +17907,28 @@ impl Interp {
                     // `k in p`: the proxy `has` trap (ECMA-262 10.5.7). No index /
                     // boot-default gate applies — a proxy honors any string key.
                     if self.proxies.contains_key(&objref) {
-                        let id = match self.property_key_id(key, false) {
-                            Some(id) => id,
-                            None => return Halt::EngineInvariant("in:proxy-key"),
+                        // An uninterned canonical index reaches the trap with a
+                        // key spelled from the index, minting nothing.
+                        let index = match (key.kind, key.value) {
+                            (Kind::String, Payload::String(off)) => {
+                                let name = self.str_text(off);
+                                string_to_index(&name)
+                                    .filter(|_| !self.symbol_ids.contains_key(&name))
+                            }
+                            _ => None,
                         };
-                        let present =
-                            dispatch_result!(self.proxy_has(code, objref, id), pc, self, return_depth);
+                        let present = dispatch_result!(
+                            match index {
+                                Some(index) => self.uninterned_index_proxy_has(code, objref, index),
+                                None => match self.property_key_id(key, false) {
+                                    Some(id) => self.proxy_has(code, objref, id),
+                                    None => return Halt::EngineInvariant("in:proxy-key"),
+                                },
+                            },
+                            pc,
+                            self,
+                            return_depth
+                        );
                         self.meter.tick_raw(IN_METERING);
                         self.push(Slot::boolean(present));
                         pc += size as usize;
@@ -17915,9 +17957,27 @@ impl Interp {
                             return Halt::Unsupported("in:unlinked-default-key");
                         }
                     }
-                    let id = match self.property_key_id(key, false) {
-                        Some(id) => id,
-                        None => return Halt::EngineInvariant("in:key"),
+                    // A canonical index string is what XS's `fxAt` turns into
+                    // `(XS_NO_ID, index)`; uninterned, it stays an index here
+                    // and mints nothing, so `for (i…) i in o` cannot walk the
+                    // id space into its saturation guard.
+                    let read_key = if let (Kind::String, Payload::String(off)) =
+                        (key.kind, key.value)
+                    {
+                        let name = self.str_text(off);
+                        match string_to_index(&name).filter(|_| !self.symbol_ids.contains_key(&name))
+                        {
+                            Some(index) => ReadKey::Index(index),
+                            None => match self.property_key_id(key, false) {
+                                Some(id) => ReadKey::Id(id),
+                                None => return Halt::EngineInvariant("in:key"),
+                            },
+                        }
+                    } else {
+                        match self.property_key_id(key, false) {
+                            Some(id) => ReadKey::Id(id),
+                            None => return Halt::EngineInvariant("in:key"),
+                        }
                     };
                     // Answer with the metered chain walk: `fxRunIn` calls
                     // `fxHasAt` once and does not re-enter per level, so the
@@ -17930,7 +17990,7 @@ impl Interp {
                     // nothing caught either. `IN_METERING` is unchanged: it was
                     // fixed by the own-hit case, which runs no frame.
                     let (present, frames) = dispatch_result!(
-                        self.mop_has_with_recursions(code, objref, id),
+                        self.mop_has_read_with_recursions(code, objref, read_key),
                         pc,
                         self,
                         return_depth
@@ -32846,8 +32906,8 @@ impl Interp {
                         }
                     }
                 } else if self.arrays.contains_key(&inst) {
-                    let id = self.to_property_id(code, arg1)?;
-                    match self.mop_get_own_property(code, inst, id)? {
+                    let key = self.to_read_key(code, arg1)?;
+                    match self.mop_get_own_property_read(code, inst, key)? {
                         Some(descriptor) => {
                             self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
                             self.descriptor_object(descriptor)
@@ -32862,8 +32922,8 @@ impl Interp {
                     || self.array_buffers.contains_key(&inst)
                     || self.data_views.contains_key(&inst)
                 {
-                    let id = self.to_property_id(code, arg1)?;
-                    match self.mop_get_own_property(code, inst, id)? {
+                    let key = self.to_read_key(code, arg1)?;
+                    match self.mop_get_own_property_read(code, inst, key)? {
                         Some(descriptor) => {
                             self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
                             self.descriptor_object(descriptor)
@@ -32874,12 +32934,19 @@ impl Interp {
                         }
                     }
                 } else {
-                // A symbol key resolves to its interned key id; a string key
-                // interns as a name (an index-valued string is the exotic-index
-                // corner — honest skip). Own-only, so no boot-default gate: an
-                // own miss is soundly `undefined`.
-                let id = self.to_property_id(code, arg1)?;
-                match self.find_property(inst, id) {
+                // A symbol key resolves to its interned key id; a non-index
+                // string interns as a name. Own-only, so no boot-default gate:
+                // an own miss is soundly `undefined`. A canonical index the key
+                // table never held mints nothing — every own property of an
+                // ordinary object lives in the slot chain under an interned
+                // name, so such a key is an own miss by construction, and
+                // `function_meta_own_descriptor` names only `length`/`name`.
+                match self.to_read_key(code, arg1)? {
+                    ReadKey::Index(_) => {
+                        self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                        Slot::undefined()
+                    }
+                    ReadKey::Id(id) => match self.find_property(inst, id) {
                     Some(p) => {
                         let prop = self.slots.get(p);
                         // An accessor own property needs the accessor-descriptor
@@ -32936,6 +33003,7 @@ impl Interp {
                             Slot::undefined()
                         }
                     }
+                    },
                 }
                 }
             }
@@ -35966,8 +36034,8 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(self.catchable_type_error()),
                 };
-                let id = self.to_property_id(code, arg1)?;
-                match self.mop_get_own_property(code, inst, id)? {
+                let key = self.to_read_key(code, arg1)?;
+                match self.mop_get_own_property_read(code, inst, key)? {
                     Some(descriptor) => {
                         self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
                         Ok(self.descriptor_object(descriptor))
@@ -36021,9 +36089,11 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(self.catchable_type_error()),
                 };
-                let id = self.to_property_id(code, arg1)?;
+                let key = self.to_read_key(code, arg1)?;
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(Slot::boolean(self.mop_has(code, inst, id)?))
+                Ok(Slot::boolean(
+                    self.mop_has_read_with_recursions(code, inst, key)?.0,
+                ))
             }
             // `Reflect.get(target, key[, receiver])`: dispatch the target's
             // full `[[Get]]`, including exotic objects and accessors that use
@@ -36033,10 +36103,10 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(self.catchable_type_error()),
                 };
-                let id = self.to_property_id(code, arg1)?;
+                let key = self.to_read_key(code, arg1)?;
                 let receiver = if argc >= 3 { arg2 } else { arg0 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.mop_get(code, inst, id, receiver)
+                self.mop_get_read(code, inst, key, receiver)
             }
             // `Reflect.set(target, key, value[, receiver])`: the target's
             // complete `[[Set]]`, returning whether it was accepted.
@@ -36059,9 +36129,9 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(self.catchable_type_error()),
                 };
-                let id = self.to_property_id(code, arg1)?;
+                let key = self.to_read_key(code, arg1)?;
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(Slot::boolean(self.mop_delete(code, inst, id)?))
+                Ok(Slot::boolean(self.mop_delete_read(code, inst, key)?))
             }
             // `Reflect.apply` / `Reflect.construct`: re-entrant (spread argument
             // list into the interpreter frame machinery); an honest named skip
@@ -47029,7 +47099,11 @@ impl Interp {
             let id = if id == crate::value::XS_NO_ID {
                 match self.index_read_key_id(index) {
                     Some(id) => id,
-                    None => return Ok(Slot::undefined()),
+                    // Not simply `undefined`: the wrapper prototype's own chain
+                    // can still answer an index WITHOUT a name — after
+                    // `Object.setPrototypeOf(Number.prototype, [1, 2, 3])`,
+                    // `(5)[0]` is `1`. Same walk as every other index read.
+                    None => return self.uninterned_index_get(code, boxed_proto, index, obj),
                 }
             } else {
                 id
@@ -47147,6 +47221,83 @@ impl Interp {
         self.symbol_ids.get(&index.to_string()).copied()
     }
 
+    /// Resolve a key slot for a READ-side operation, minting nothing for an
+    /// index the key table has never held ([`ReadKey`]).
+    ///
+    /// This is [`Self::to_property_id`] with the index case split out. Every
+    /// other case is byte-for-byte that path: a symbol keeps its descriptor
+    /// identity, and a non-index string interns as a name (XS interns those
+    /// too — `fxAt` only takes its index branch for a canonical index — so
+    /// `o["k" + i]` exhausting the id space stays the engine's documented
+    /// limit rather than something this split pretends to fix).
+    fn to_read_key(&mut self, code: &[u8], key: Slot) -> Result<ReadKey, Halt> {
+        if let Payload::At(id, index) = key.value {
+            if id != crate::value::XS_NO_ID {
+                return Ok(ReadKey::Id(id));
+            }
+            return Ok(match self.index_read_key_id(index) {
+                Some(id) => ReadKey::Id(id),
+                None => ReadKey::Index(index),
+            });
+        }
+        let property_key = self.to_property_key(code, key)?;
+        if property_key.kind == Kind::Symbol {
+            return match property_key.value {
+                Payload::Reference(descriptor) => Ok(ReadKey::Id(self.intern_symbol_key(descriptor))),
+                _ => Err(Halt::EngineInvariant("to_read_key:symbol-without-descriptor")),
+            };
+        }
+        let name = match property_key.value {
+            Payload::String(offset) => self.str_text(offset),
+            _ => return Err(Halt::EngineInvariant("to_read_key:non-string-key")),
+        };
+        // A canonical array-index string is what XS's `fxAt` turns into
+        // `(XS_NO_ID, index)`; uninterned, it stays an index here too.
+        if let Some(index) = string_to_index(&name) {
+            if let Some(id) = self.index_read_key_id(index) {
+                return Ok(ReadKey::Id(id));
+            }
+            return Ok(ReadKey::Index(index));
+        }
+        let id = self.intern_key(&name);
+        self.install_pending_intrinsics();
+        Ok(ReadKey::Id(id))
+    }
+
+    /// The key as the string/symbol slot a Proxy trap is handed. An `Index`
+    /// spells its own canonical numeric string, exactly as XS's `fxKeyAt`
+    /// does for `XS_NO_ID`, without interning it.
+    fn read_key_slot(&mut self, key: ReadKey) -> Result<Slot, Halt> {
+        match key {
+            ReadKey::Id(id) => self.property_key_slot(id),
+            ReadKey::Index(index) => {
+                let offset = self.alloc_str_text(index.to_string().as_bytes());
+                Ok(Slot::of(Kind::String, Payload::String(offset)))
+            }
+        }
+    }
+
+    /// The id a Proxy trap's post-trap invariant check needs to name the key
+    /// back to `target`, or `None` when the target provably has no own
+    /// property under it.
+    ///
+    /// An ORDINARY target cannot carry an own property under a name the table
+    /// never held, so the check is vacuous there and the key is never minted —
+    /// which is what keeps `new Proxy({}, { get() {} })[i]` over novel indices
+    /// inside the id space. Only a target whose own index properties live in a
+    /// side table, or another proxy, has to be asked, and only there is the
+    /// key minted (unmetered: XS reaches the same property without one).
+    fn target_own_key_id(&mut self, key: ReadKey, target: crate::value::SlotIndex) -> Option<u16> {
+        match key {
+            ReadKey::Id(id) => Some(id),
+            ReadKey::Index(index) => match self.index_read_key_id(index) {
+                Some(id) => Some(id),
+                None if self.is_ordinary_object(target) => None,
+                None => Some(self.intern_key_unmetered(&index.to_string())),
+            },
+        }
+    }
+
     /// `[[Get]]` of an index key whose canonical name the key table has never
     /// held, with `receiver` as the `[[Get]]` receiver.
     ///
@@ -47224,12 +47375,294 @@ impl Interp {
             target,
             handler,
             trap,
-            TrapKeyId::Index(index),
+            ReadKey::Index(index),
             receiver,
             0,
             false,
             false,
         )
+    }
+
+    /// Whether `o` has an OWN property at `index` whose name the table has
+    /// never held — [`Self::object_own_property_present`] with the index known
+    /// directly instead of derived from the key's name. Every arm that reaches
+    /// for `find_property` there is `false` here: an ordinary own slot only
+    /// exists under a name that was interned to define it.
+    fn uninterned_index_own_present(
+        &mut self,
+        code: &[u8],
+        o: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<bool, Halt> {
+        if self.proxies.contains_key(&o) {
+            return Ok(self
+                .uninterned_index_own_descriptor(code, o, index)?
+                .is_some());
+        }
+        if let Some(&ta) = self.typed_arrays.get(&o) {
+            return Ok(self.ta_valid_index(ta, f64::from(index)).is_some());
+        }
+        if let Some(a) = self.arrays.get(&o) {
+            return Ok(a.items().contains_key(&index));
+        }
+        if let Some(Slot {
+            kind: Kind::String,
+            value: Payload::String(off),
+            ..
+        }) = self.wrapper_data.get(&o).copied()
+        {
+            return Ok(self.string_exotic_has_own(self.str_len(off), None, Some(index)));
+        }
+        // ArrayBuffer, DataView, Function and every ordinary object reach an
+        // index only through the slot chain, which an uninterned name misses.
+        Ok(false)
+    }
+
+    /// `[[HasProperty]]` of an index key the name table has no id for, plus
+    /// the `fxOrdinaryHasProperty` frame count its callers meter — the same
+    /// loop and the same counting rule as
+    /// [`Self::mop_has_with_recursions_inner`].
+    fn uninterned_index_has(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<(bool, u64), Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            let mut current = inst;
+            let mut frames = 0u64;
+            loop {
+                if vm.proxies.contains_key(&current) {
+                    return Ok((vm.uninterned_index_proxy_has(code, current, index)?, frames));
+                }
+                if vm.uninterned_index_own_present(code, current, index)? {
+                    return Ok((true, frames));
+                }
+                frames += 1;
+                let prototype = vm.instance_prototype(current);
+                if prototype.is_null() {
+                    return Ok((false, frames));
+                }
+                current = prototype;
+            }
+        })
+    }
+
+    /// `[[GetOwnProperty]]` of an index key the name table has no id for —
+    /// [`Self::mop_get_own_property`] with the index known directly.
+    fn uninterned_index_own_descriptor(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+        if self.proxies.contains_key(&inst) {
+            return self.uninterned_index_proxy_own_descriptor(code, inst, index);
+        }
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            return Ok(self.ta_index_own_descriptor(ta, f64::from(index)));
+        }
+        if let Some(item) = self
+            .arrays
+            .get(&inst)
+            .and_then(|a| a.items().get(&index).copied())
+        {
+            let value = self.array_item_value(inst, item);
+            return Ok(Some(OrdinaryDescriptor {
+                value: Some(value),
+                writable: Some(item.flag & XS_DONT_SET_FLAG == 0),
+                enumerable: Some(item.flag & XS_DONT_ENUM_FLAG == 0),
+                configurable: Some(item.flag & XS_DONT_DELETE_FLAG == 0),
+                ..OrdinaryDescriptor::default()
+            }));
+        }
+        if let Some(Slot {
+            kind: Kind::String,
+            value: Payload::String(off),
+            ..
+        }) = self.wrapper_data.get(&inst).copied()
+        {
+            let value = self.string_index_get(off, index);
+            if value.kind != Kind::Undefined {
+                return Ok(Some(OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(false),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `[[Delete]]` of an index key the name table has no id for —
+    /// [`Self::mop_delete_inner`] with the index known directly. A delete
+    /// creates nothing either, and an absent property is a vacuous `true`.
+    fn uninterned_index_delete(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<bool, Halt> {
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            if vm.proxies.contains_key(&inst) {
+                return vm.uninterned_index_proxy_delete(code, inst, index);
+            }
+            if let Some(&ta) = vm.typed_arrays.get(&inst) {
+                // The integer-indexed exotic `[[Delete]]` (10.4.5.7): a valid
+                // index cannot be deleted; an invalid one is vacuously `true`.
+                return Ok(vm.ta_valid_index(ta, f64::from(index)).is_none());
+            }
+            if vm.arrays.contains_key(&inst) {
+                if let Some(item) = vm.arrays[&inst].items().get(&index).copied() {
+                    if item.flag & XS_DONT_DELETE_FLAG != 0 {
+                        return Ok(false);
+                    }
+                    vm.arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .remove_item(&index, &mut vm.side_refs);
+                    return Ok(true);
+                }
+                return Ok(true);
+            }
+            if let Some(Slot {
+                kind: Kind::String,
+                value: Payload::String(off),
+                ..
+            }) = vm.wrapper_data.get(&inst).copied()
+            {
+                // String-exotic index units are non-configurable.
+                if (index as usize) < vm.str_len(off) {
+                    return Ok(false);
+                }
+            }
+            // Nothing else can hold the property, so there is nothing to
+            // delete and no own slot to drop.
+            Ok(true)
+        })
+    }
+
+    /// The Proxy arm of [`Self::uninterned_index_has`]: `[[HasProperty]]`
+    /// (ECMA-262 10.5.7) for an index key with no id. The trap is handed the
+    /// key as a string; an untrapped proxy forwards with the key unbuilt.
+    fn uninterned_index_proxy_has(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "has")? {
+            Some(trap) => trap,
+            None => return Ok(self.uninterned_index_has(code, target, index)?.0),
+        };
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let key = self.read_key_slot(ReadKey::Index(index))?;
+        let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
+        let boolean = self.truthy(&result);
+        if !boolean {
+            if let Some(id) = self.target_own_key_id(ReadKey::Index(index), target) {
+                if let Some(d) = self.mop_get_own_property(code, target, id)? {
+                    if d.configurable == Some(false) {
+                        return Err(self.catchable_type_error());
+                    }
+                    if !self.mop_is_extensible(code, target)? {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+            }
+        }
+        Ok(boolean)
+    }
+
+    /// The Proxy arm of [`Self::uninterned_index_own_descriptor`].
+    fn uninterned_index_proxy_own_descriptor(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+        let (_, handler) = self.proxy_target_handler(proxy)?;
+        if self.proxy_trap(code, handler, "getOwnPropertyDescriptor")?.is_none() {
+            let (target, _) = self.proxy_target_handler(proxy)?;
+            return self.uninterned_index_own_descriptor(code, target, index);
+        }
+        // A trap exists and will be handed the key, so the key must be named;
+        // delegate to the id-keyed path, which re-looks the trap up exactly
+        // once from here.
+        let id = self.intern_key_unmetered(&index.to_string());
+        self.proxy_get_own_property(code, proxy, id)
+    }
+
+    /// The Proxy arm of [`Self::uninterned_index_delete`].
+    fn uninterned_index_proxy_delete(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<bool, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        if self.proxy_trap(code, handler, "deleteProperty")?.is_none() {
+            return self.uninterned_index_delete(code, target, index);
+        }
+        let id = self.intern_key_unmetered(&index.to_string());
+        self.proxy_delete(code, proxy, id)
+    }
+
+    /// `[[Get]]` dispatched on a [`ReadKey`].
+    fn mop_get_read(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        key: ReadKey,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        match key {
+            ReadKey::Id(id) => self.mop_get(code, inst, id, receiver),
+            ReadKey::Index(index) => self.uninterned_index_get(code, inst, index, receiver),
+        }
+    }
+
+    /// `[[HasProperty]]` dispatched on a [`ReadKey`], with the frame count.
+    fn mop_has_read_with_recursions(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        key: ReadKey,
+    ) -> Result<(bool, u64), Halt> {
+        match key {
+            ReadKey::Id(id) => self.mop_has_with_recursions(code, inst, id),
+            ReadKey::Index(index) => self.uninterned_index_has(code, inst, index),
+        }
+    }
+
+    /// `[[GetOwnProperty]]` dispatched on a [`ReadKey`].
+    fn mop_get_own_property_read(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        key: ReadKey,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+        match key {
+            ReadKey::Id(id) => self.mop_get_own_property(code, inst, id),
+            ReadKey::Index(index) => self.uninterned_index_own_descriptor(code, inst, index),
+        }
+    }
+
+    /// `[[Delete]]` dispatched on a [`ReadKey`].
+    fn mop_delete_read(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        key: ReadKey,
+    ) -> Result<bool, Halt> {
+        match key {
+            ReadKey::Id(id) => self.mop_delete(code, inst, id),
+            ReadKey::Index(index) => self.uninterned_index_delete(code, inst, index),
+        }
     }
 
     /// Write a computed (`AT`-key) property. `define` distinguishes
@@ -49620,26 +50053,34 @@ impl Interp {
             return Err(self.catchable_type_error());
         }
         // `? ToPropertyKey(V)` (XS's `fxAt`): a symbol resolves to its stable
-        // key id; a string interns as a name; any other primitive coerces
-        // through ToPrimitive → ToString first (a number key renders and meters
-        // its result chunk). An index-valued string interns as a name too — the
-        // exotic index own-check re-derives the index from the id.
-        let id = self.to_property_id(code, arg0)?;
+        // key id; a non-index string interns as a name; any other primitive
+        // coerces through ToPrimitive → ToString first (a number key renders
+        // and meters its result chunk). A canonical index stays an index and
+        // mints nothing — an own-property PROBE creates no property.
+        let key = self.to_read_key(code, arg0)?;
         // The `mxBehaviorGetOwnProperty` probe native-body residual, metered
         // once per call exactly as the pre-existing string-key path did.
         self.meter.tick_raw(METHOD_HAS_OWN_PROPERTY_METERING);
         let present = match this.value {
-            Payload::Reference(o) if this.kind == Kind::Reference => {
-                self.object_own_property_present(code, o, id)?
-            }
+            Payload::Reference(o) if this.kind == Kind::Reference => match key {
+                ReadKey::Id(id) => self.object_own_property_present(code, o, id)?,
+                ReadKey::Index(index) => self.uninterned_index_own_present(code, o, index)?,
+            },
             // A String primitive's boxed wrapper exposes its canonical integer
             // indices `[0, length)` and `length` as own properties (the
             // String-exotic `[[GetOwnProperty]]`, ECMA-262 10.4.3.5).
             Payload::String(off) if this.kind == Kind::String => {
                 let len = self.str_len(off);
-                let name = self.string_key_name(id);
-                let index = name.as_deref().and_then(string_to_index);
-                self.string_exotic_has_own(len, name.as_deref(), index)
+                match key {
+                    ReadKey::Id(id) => {
+                        let name = self.string_key_name(id);
+                        let index = name.as_deref().and_then(string_to_index);
+                        self.string_exotic_has_own(len, name.as_deref(), index)
+                    }
+                    ReadKey::Index(index) => {
+                        self.string_exotic_has_own(len, None, Some(index))
+                    }
+                }
             }
             // Every other primitive (Number/Boolean/Symbol/BigInt) boxes to a
             // fresh wrapper with no own properties of its own.
@@ -50760,7 +51201,7 @@ impl Interp {
             target,
             handler,
             trap,
-            TrapKeyId::Id(id),
+            ReadKey::Id(id),
             receiver,
             proxy_trap_metering,
             meter_forwarded_target,
@@ -50778,7 +51219,7 @@ impl Interp {
         target: crate::value::SlotIndex,
         handler: crate::value::SlotIndex,
         trap: Slot,
-        key_id: TrapKeyId,
+        key_id: ReadKey,
         receiver: Slot,
         proxy_trap_metering: u64,
         meter_forwarded_target: bool,
@@ -50799,15 +51240,9 @@ impl Interp {
         // Built here, after the trap's metering, so the id-keyed read keeps
         // the order it had before this arm was shared. An index with no id
         // spells its own key, exactly as XS's `fxKeyAt` does for `XS_NO_ID`.
-        let key = match key_id {
-            TrapKeyId::Id(id) => self.property_key_slot(id)?,
-            TrapKeyId::Index(index) => {
-                let offset = self.alloc_str_text(index.to_string().as_bytes());
-                Slot::of(Kind::String, Payload::String(offset))
-            }
-        };
+        let key = self.read_key_slot(key_id)?;
         let saved_context = self.array_iterator_proxy_get_context;
-        if let TrapKeyId::Id(id) = key_id {
+        if let ReadKey::Id(id) = key_id {
             // The Array Iterator metering context is installed only by the
             // id-keyed read; the uninterned-index arm always meters zero.
             if proxy_trap_metering != 0 && self.proxies.contains_key(&target) {
@@ -50822,20 +51257,11 @@ impl Interp {
         let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver]);
         self.array_iterator_proxy_get_context = saved_context;
         let trap_result = trap_result?;
-        let id = match key_id {
-            TrapKeyId::Id(id) => id,
-            // Naming the key back to the target, deferred past the trap (which
-            // may itself have interned it). An ORDINARY target cannot carry an
-            // own property under a name the table never held, so the check is
-            // vacuous there and the key is never minted; only a target whose
-            // own index properties live in a side table — or another proxy —
-            // has to be asked, and only there is the key built, unmetered
-            // (XS reaches the same property without minting one).
-            TrapKeyId::Index(index) => match self.index_read_key_id(index) {
-                Some(id) => id,
-                None if self.is_ordinary_object(target) => return Ok(trap_result),
-                None => self.intern_key_unmetered(&index.to_string()),
-            },
+        // Naming the key back to the target, deferred past the trap (which may
+        // itself have interned it); `None` means the target provably has no
+        // own property under it, so the invariant check is vacuous.
+        let Some(id) = self.target_own_key_id(key_id, target) else {
+            return Ok(trap_result);
         };
         if let Some(d) = self.mop_get_own_property(code, target, id)? {
             if d.configurable == Some(false) {
