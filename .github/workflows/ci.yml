@@ -871,6 +871,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ironhorse-oracle-
 
+      - name: Install pinned lint toolchain
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        run: rustup toolchain install 1.88.0 --profile minimal --component clippy
+
+      - name: Check engine build warnings
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        working-directory: rust/engine
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo +1.88.0 build --locked --workspace
+
+      - name: Check engine Clippy warnings
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        working-directory: rust/engine
+        run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
+
       - name: Test oracle-linked engine crates (rust/engine workspace)
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine

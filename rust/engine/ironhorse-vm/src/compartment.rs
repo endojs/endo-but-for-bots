@@ -18,8 +18,8 @@
 //! therefore share **no primordial object**: `Object.prototype` in one
 //! run is a different heap object from `Object.prototype` in the next.
 //! [`Intrinsics`] is a per-machine *marker* that compartments hold by
-//! `Rc`; it carries no intrinsic graph and nothing writes its
-//! `locked_down` flag. The identity the tests certify with `Rc::ptr_eq`
+//! `Rc`; it carries no intrinsic graph or lockdown state.
+//! The identity the tests certify with `Rc::ptr_eq`
 //! is the marker's, not a shared frozen primordial graph's.
 //!
 //! What this buys, and what it does not:
@@ -104,17 +104,10 @@ use crate::value::{Kind, Payload, Slot};
 /// does not hold one yet. Every evaluation builds its own `Interp` and
 /// therefore its own intrinsic objects (see the module documentation's
 /// realm decision), so two compartments that `Rc::ptr_eq` on this struct
-/// share a marker, not an `Object.prototype`. Nothing in the workspace
-/// writes `locked_down`; it records the shape a real `lockdown` will
-/// fill in once the realm split lands.
+/// share a marker, not an `Object.prototype`. Lockdown state belongs
+/// with the shared graph once the realm split lands.
 #[derive(Default)]
-pub struct Intrinsics {
-    /// Whether `lockdown` has frozen the shared intrinsics. Has no writer
-    /// today (there is no shared graph to freeze); once the realm split
-    /// lands, per-compartment evaluators become the only mutable
-    /// evaluator seam when this is true.
-    pub locked_down: bool,
-}
+pub struct Intrinsics {}
 
 impl Intrinsics {
     pub fn new() -> Rc<Intrinsics> {
@@ -653,10 +646,6 @@ mod tests {
         // see the module documentation's realm decision.
         assert!(Rc::ptr_eq(a.intrinsics(), b.intrinsics()));
         assert!(Rc::ptr_eq(a.intrinsics(), m.intrinsics()));
-        assert!(
-            !m.intrinsics().locked_down,
-            "nothing writes `locked_down` yet"
-        );
     }
 
     #[test]
