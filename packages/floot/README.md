@@ -17,10 +17,11 @@ that make it a hands-free voice assistant.
   Mail remains serialized through the session's execution queue.
   Turns survive browser disconnects, but daemon restarts recover committed history
   rather than live turn handles.
-- **Voice caplets** (`voice/`) — two independent, swappable daemon objects:
-  - `floot-stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
+- **Voice caplets** (`voice/`) — two independent, swappable daemon objects,
+  provisioned under the `floot/` inventory directory (`FLOOT_DIR`):
+  - `floot/stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
     (`voice/audio-server-caplet.js`): `transcribe(audioReader) -> textReader`.
-  - `floot-tts` — text-to-speech via [piper](https://github.com/rhasspy/piper)
+  - `floot/tts` — text-to-speech via [piper](https://github.com/rhasspy/piper)
     (`voice/tts-server-caplet.js`): `synthesize(textReader) -> audioReader`.
 
 The browser UI lives in [`@endo/chat`](../chat); a Chat Space looks these three
@@ -44,9 +45,9 @@ caplets are unconfined and spawn these as subprocesses).
 | --- | --- | --- |
 | Endo daemon + `endo` CLI | everything | Built from this monorepo (`yarn build`); start with `endo start`. |
 | `ANTHROPIC_API_KEY` | factory | Anthropic API key for the LLM. Passed via a capability handle, never stored in caplet env. |
-| [`uv`](https://docs.astral.sh/uv/) | `floot-stt` | Runs `voice/moonshine_daemon.py`, which is PEP-723 self-contained — `uv` installs `moonshine-voice` and downloads the model on first run. No project Python env needed. |
-| [`piper`](https://github.com/rhasspy/piper) binary | `floot-tts` | Standalone TTS engine. Point `FLOOT_TTS_BINARY` at it (default `piper` on PATH). |
-| A piper voice model | `floot-tts` | A `<voice>.onnx` plus its companion `<voice>.onnx.json` (the `.json` supplies `audio.sample_rate`). `FLOOT_TTS_MODEL` is the absolute path to the `.onnx`. |
+| [`uv`](https://docs.astral.sh/uv/) | `floot/stt` | Runs `voice/moonshine_daemon.py`, which is PEP-723 self-contained — `uv` installs `moonshine-voice` and downloads the model on first run. No project Python env needed. Optional: `FLOOT_STT_ENABLE=0` skips STT. |
+| [`piper`](https://github.com/rhasspy/piper) binary | `floot/tts` | Standalone TTS engine. Point `FLOOT_TTS_BINARY` at it (default `piper` on PATH). |
+| A piper voice model | `floot/tts` | A `<voice>.onnx` plus its companion `<voice>.onnx.json` (the `.json` supplies `audio.sample_rate`). `FLOOT_TTS_MODEL` is the absolute path to the `.onnx`. |
 
 ### Getting a piper voice
 
@@ -93,21 +94,27 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
    ```
 
    Or with an `.env` that sets `FLOOT_TTS_MODEL` (plus optional
-   `FLOOT_TTS_BINARY`, `FLOOT_TTS_SPEED`, `FLOOT_STT_LANG`):
+   `FLOOT_TTS_BINARY`, `FLOOT_TTS_SPEED`, `FLOOT_STT_LANG`, `FLOOT_STT_UV`,
+   `FLOOT_STT_ENABLE`, `FLOOT_DIR`):
 
    ```sh
    ./setup-voice.sh
    ```
 
-   Stands up `floot-stt` (warms up Moonshine) and `floot-tts`.
+   Stands up `floot/tts` first, then `floot/stt` (warms up Moonshine).
+   The two halves are independent: STT is best-effort, so a missing `uv` or a
+   failed Moonshine warmup only skips STT, and `FLOOT_STT_ENABLE=0` leaves it
+   out of a TTS-only deployment.
+   Like the factory setup, every knob is also read as `ENDO_FLOOT_*`, so a
+   daemon can run `voice-setup.js` from `ENDO_EXTRA`.
 
 4. **Open the UI.** In [`@endo/chat`](../chat): `yarn dev`.
    Create a Chat Space and set its object paths to `floot-factory`, STT path
-   `floot-stt`, TTS path `floot-tts`.
+   `floot/stt`, TTS path `floot/tts`.
 
 ## Swapping an implementation
 
-`floot-stt` and `floot-tts` are separate daemon formulas, each behind its own
+`floot/stt` and `floot/tts` are separate daemon formulas, each behind its own
 pet-name. To use a different engine, provision a replacement object exposing the
 same interface (`transcribe` / `synthesize`) under the same pet-name — no change
 to the factory or UI is required.
