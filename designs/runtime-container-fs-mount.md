@@ -105,6 +105,35 @@ Deviations from the sketch:
   sessions the same `clientKey`. The machinery is the forward-looking
   safety story for when sharing is wired, not a behavior reachable today.
 
+### Known gaps
+
+Found by adversarial review and deliberately left standing; each is a
+consequence of the design as written, not an oversight in the code.
+
+- **One registrar lock spans every session.** Attach, detach, `releaseSession`
+  and the arm-time replay serialize on a single chain, and inside it a push
+  awaits `setExtraMounts` — a full container recreate. A session whose
+  recreate stalls therefore delays every other session's first turn, and a
+  `setExtraMounts` that never settles (a CapTP promise to a lost worker) wedges
+  the registrar for the rest of the boot. The lock is what stops a sibling
+  attach from slipping a conflicting record into the window between validating
+  against the record set and appending to it, so narrowing it means splitting
+  the record mutation from the slow push rather than simply scoping the lock
+  per client. The bridge provider, which has no shared record set, already
+  locks per key.
+- **`releaseSession` assumes its caller has already removed the client.** For
+  a deleted session's own client it drops the records and releases the bridges
+  without pushing a shrunken bind set, because the client is being torn down
+  anyway; `detach` does the opposite (push first, release second). If a future
+  caller releases a session whose client stays alive, the container keeps the
+  bind until its slice is next disposed. The wiring sketch above puts
+  `releaseSession` after the client removal for exactly this reason.
+- **The overlap check sees only other attaches.** `/mnt/` is assumed disjoint
+  from the slice's own binds, which holds while `WORKSPACE_PATH` is
+  `/workspace`. A deployment that set it under `/mnt/` could let a guest attach
+  over the workspace; the registrar has no way to ask the client what it
+  already binds.
+
 ## Summary
 
 A `ClaudeClient` runs Claude Code inside an `@endo/sandbox` slice, and a Floot

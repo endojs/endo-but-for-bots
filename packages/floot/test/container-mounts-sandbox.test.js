@@ -1,4 +1,4 @@
-// @ts-nocheck
+// @ts-check
 /* eslint-disable no-empty-function */
 
 // End-to-end contract for designs/runtime-container-fs-mount.md across the
@@ -101,6 +101,9 @@ const makeWorld = () => {
   /** @type {Map<string, unknown>} */
   const factoryNames = new Map();
   const factoryPowers = harden({
+    async list() {
+      return harden([...factoryNames.keys()]);
+    },
     async has(name) {
       return factoryNames.has(name);
     },
@@ -120,7 +123,7 @@ const makeWorld = () => {
   // One incarnation of the sandbox slice + its ClaudeClient. A "daemon
   // restart" builds a second one over the same petstore, exactly as the
   // client formula reincarnates.
-  const makeIncarnation = () => {
+  const makeIncarnation = (/** @type {any} */ t) => {
     /** @type {any[][]} */
     const sliceMounts = [];
     let disposals = 0;
@@ -166,9 +169,14 @@ const makeWorld = () => {
       },
       async removeMount() {},
     });
-    const client = makeClaudeClientCaplet(sessionPowers, undefined, {
-      env: CLIENT_ENV,
-    });
+    const client = makeClaudeClientCaplet(
+      /** @type {any} */ (sessionPowers),
+      undefined,
+      { env: CLIENT_ENV },
+    );
+    // A ClaudeClient owns a slice and its 9P mounts; release them with the
+    // test that minted it, whether or not the test terminates it itself.
+    t.teardown(() => client.terminate());
     return {
       client,
       sliceMounts,
@@ -208,6 +216,16 @@ const makeWorld = () => {
     nineP,
     unmounted,
     factoryNames,
+    /** The records in the newest attach-journal snapshot, or undefined. */
+    storedRecords: () => {
+      const journal = [...factoryNames.keys()]
+        .filter(name => name.startsWith('floot-container-mounts-v1-'))
+        .sort();
+      if (journal.length === 0) return undefined;
+      return /** @type {any} */ (
+        factoryNames.get(/** @type {string} */ (journal.at(-1)))
+      ).records;
+    },
     makeIncarnation,
     makeRegistrar,
     makeGuest,
@@ -254,7 +272,7 @@ test('a held capability becomes a /mnt/ bind in the slice, and survives a restar
   world.capsById.set('cap-project', mountShapedCap());
 
   const registrar = world.makeRegistrar();
-  const first = world.makeIncarnation();
+  const first = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
     sessionGuest: world.makeGuest([['project', 'cap-project']]),
@@ -306,7 +324,7 @@ test('a held capability becomes a /mnt/ bind in the slice, and survives a restar
   // deterministic host mountpoint, and the bind lands before any turn runs.
   world.restartHostServices();
   const restarted = world.makeRegistrar();
-  const second = world.makeIncarnation();
+  const second = world.makeIncarnation(t);
   const kitAfter = restarted.makeSessionKit({
     sessionId: 'sess-mnt',
     sessionGuest: world.makeGuest([['project', 'cap-project']]),
@@ -333,7 +351,7 @@ test('a read-only capability is bound read-only at every layer', async t => {
   const world = makeWorld();
   world.capsById.set('cap-src', mountShapedCap());
   const registrar = world.makeRegistrar();
-  const incarnation = world.makeIncarnation();
+  const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
     sessionGuest: world.makeGuest([['endo-src', 'cap-src']]),
@@ -347,7 +365,10 @@ test('a read-only capability is bound read-only at every layer', async t => {
   });
   // Kernel mount, daemon Mount cap, and slice bind all say read-only.
   t.true(world.attachMounts()[0].opts.readOnly);
-  t.true(world.hostNames.get(world.attachMountNames()[0]).readOnly);
+  t.true(
+    /** @type {any} */ (world.hostNames.get(world.attachMountNames()[0]))
+      .readOnly,
+  );
   await runTurn(incarnation.client, 'look');
   t.deepEqual(incarnation.lastBinds(), {
     '/workspace': 'rw',
@@ -359,7 +380,7 @@ test('the last detach recreates without the bind, then releases the 9P mount', a
   const world = makeWorld();
   world.capsById.set('cap-work', mountShapedCap());
   const registrar = world.makeRegistrar();
-  const incarnation = world.makeIncarnation();
+  const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
     sessionGuest: world.makeGuest([['work', 'cap-work']]),
@@ -381,7 +402,7 @@ test('the last detach recreates without the bind, then releases the 9P mount', a
   t.deepEqual(incarnation.lastBinds(), { '/workspace': 'rw' });
   t.deepEqual(world.attachUnmounts(), [world.attachMounts()[0].mountPoint]);
   t.deepEqual(world.attachMountNames(), []);
-  t.deepEqual([...world.factoryNames.get('floot-container-mounts')], []);
+  t.deepEqual([...world.storedRecords()], []);
 });
 
 test('terminate releases every runtime bridge the client was handed', async t => {
@@ -389,7 +410,7 @@ test('terminate releases every runtime bridge the client was handed', async t =>
   world.capsById.set('cap-a', mountShapedCap());
   world.capsById.set('cap-b', mountShapedCap());
   const registrar = world.makeRegistrar();
-  const incarnation = world.makeIncarnation();
+  const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
     sessionGuest: world.makeGuest([
@@ -428,7 +449,7 @@ test('an attach the bridge refuses leaves no record and no bind', async t => {
     harden({ __getMethodNames__: () => ['help'] }),
   );
   const registrar = world.makeRegistrar();
-  const incarnation = world.makeIncarnation();
+  const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
     sessionGuest: world.makeGuest([['opaque', 'cap-opaque']]),
@@ -442,7 +463,7 @@ test('an attach the bridge refuses leaves no record and no bind', async t => {
   );
   // No phantom record to poison every later replay, and the live slice was
   // never recreated.
-  t.false(world.factoryNames.has('floot-container-mounts'));
+  t.is(world.storedRecords(), undefined);
   t.is(incarnation.sliceMounts.length, 1);
   t.deepEqual(incarnation.lastBinds(), { '/workspace': 'rw' });
 });
