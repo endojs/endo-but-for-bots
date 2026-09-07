@@ -70,17 +70,18 @@ pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 ///
 /// [`NATIVE_DEPTH_LIMIT`] is a deterministic *counter*; how many bytes of
 /// host stack the frames it admits occupy is a property of the build, not of
-/// the guest. Measured on the budget's worst corner (`HEAVY_FRAME_COST`-class
-/// activations nested to the ceiling, `join` re-entering `toString` over a
-/// self-containing array): under 2 MiB with optimizations, but close to
-/// 13 MiB in an unoptimized build, where the two monolithic dispatch
-/// functions keep every match arm's temporaries live at once. This constant
-/// therefore states
-/// the requirement per profile — the 32 MiB the `rust/endo` worker threads and
-/// the test262 harness already allocate for debug, and the 8 MiB of a
-/// libFuzzer/OS main thread for release — with headroom above the measurement.
-/// Run the engine on a thread of at least this size; the recursion-budget
-/// tests spawn exactly this size and must never abort.
+/// the guest. Measured on the budget's two corners — `HEAVY_FRAME_COST`-class
+/// activations nested to the ceiling (`join` re-entering `toString` over a
+/// self-containing array: 1.2 MiB with optimizations, close to 13 MiB in an
+/// unoptimized build, where the two monolithic dispatch functions keep every
+/// match arm's temporaries live at once) and `LIGHT_FRAME_COST`-class levels
+/// nested to it (`JSON.stringify` over 2,000 nested arrays: 2.5 MiB and
+/// 11 MiB). This constant therefore states the requirement per profile — the
+/// 32 MiB the `rust/endo` worker threads and the test262 harness already
+/// allocate for debug, and the 8 MiB of a libFuzzer/OS main thread for
+/// release — with headroom above the measurement. Run the engine on a thread
+/// of at least this size; the recursion-budget tests spawn exactly this size
+/// and must never abort.
 pub const NATIVE_STACK_BYTES: usize = if cfg!(debug_assertions) {
     32 * 1024 * 1024
 } else {

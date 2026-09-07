@@ -196,41 +196,56 @@ pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 /// async body (`START_ASYNC`), a generator or async-generator resume, a native
 /// built-in invoking another native (`join` → `toString` → `join` over a
 /// self-containing array), a Proxy forwarding an internal method to a Proxy
-/// target (or to a Proxy in an ordinary object's prototype chain), an exotic
-/// prototype chain walked through the MOP, `JSON.parse` / `JSON.stringify`
-/// over nested data, `Array.prototype.flat`, and the host-boundary renderer
-/// over a nested (or cyclic) completion value.
+/// target (or to a Proxy in an object's prototype chain), `JSON.parse` /
+/// `JSON.stringify` over nested data (and the reviver's walk over what it
+/// installs), `Array.prototype.flat`, and the host-boundary renderer over a
+/// nested (or cyclic) completion value. Prototype chains through ordinary
+/// and exotic objects are walked in place (XS's `fxGetProperty` loop); only
+/// a Proxy in the chain forwards, and only that forwarding is a frame.
 ///
 /// One counter, [`Interp::native_depth`], is charged by every one of those
 /// re-entry points and checked against this ceiling; past it the engine halts
-/// with [`Halt::StackOverflow`] — the same abort-to-host XS raises from
+/// with [`Halt::StackOverflow`] — the abort-to-host XS raises from
 /// `fxCheckCStack`, deterministic across hosts because it is a counter rather
-/// than a stack-address margin. A frame is charged by size class rather than
-/// by count, so the budget bounds the *stack bytes* a guest can consume
-/// regardless of which families it mixes: the worst case is the heavier corner,
+/// than a stack-address margin. The *depth* at which it fires is this
+/// engine's, sized to its own frames, not XS's: the oracle's C stack admits
+/// far deeper nests (thousands of `JSON.parse` levels, a hundred-odd nested
+/// `join`s), so the differential harness classifies this halt against an
+/// oracle completion as the non-gating `ironhorse-aborted-limit` skip rather
+/// than a divergence. A frame is charged by size class rather than by count,
+/// so the budget bounds the *stack bytes* a guest can consume regardless of
+/// which families it mixes: the worst case is the heavier corner,
 /// [`NATIVE_DEPTH_LIMIT`] / [`HEAVY_FRAME_COST`] nested `dispatch_at` or
 /// built-in activations (128 frames; a `forEach` nest costs two per level, so
 /// 63 nested callbacks beneath the top-level program's own dispatch — the
 /// allowance the 64-deep re-entry ceiling of endojs/endo-but-for-bots#1046
-/// gave the nested-`START_ASYNC` fuzz trophy `[193, 193, 37, 253, 45, 93]`),
-/// or [`NATIVE_DEPTH_LIMIT`] light frames (512 nested proxies / JSON levels).
+/// gave the nested-`START_ASYNC` fuzz trophy `[193, 193, 37, 253, 45, 93]`;
+/// a nested `join` costs the same two), or [`NATIVE_DEPTH_LIMIT`] light
+/// frames (about 2,000 nested proxies or JSON levels beneath that dispatch).
+/// The two corners cost about the same host stack — 13 MiB and 11 MiB
+/// unoptimized, 1.2 MiB and 2.5 MiB optimized — which is what the weights are
+/// chosen to make true.
 ///
 /// The bound is only a bound relative to a thread stack that can hold the
 /// budget: [`crate::NATIVE_STACK_BYTES`] states the size the engine requires,
 /// per build profile, and `tests/native_recursion_budget.rs` pins each family
 /// at the ceiling on a thread of exactly that size.
-pub const NATIVE_DEPTH_LIMIT: usize = 512;
+pub const NATIVE_DEPTH_LIMIT: usize = 2048;
 
 /// Budget units charged by a **heavy** native frame: a `dispatch_at`
 /// re-entry, or a `call_native` / `call_native_method` activation. Both are
 /// the monolithic match-dispatch functions of this crate, whose activations
-/// measure in the tens to hundreds of KiB (debug) — an order of magnitude
-/// above any other frame the engine recurses through.
-pub const HEAVY_FRAME_COST: usize = 4;
+/// measure about 100 KiB unoptimized (a nested `join` level, two of them plus
+/// the built-ins between, is 200 KiB; a nested `forEach` level 150 KiB) and
+/// about 10 KiB optimized — more than an order of magnitude above any other
+/// frame the engine recurses through.
+pub const HEAVY_FRAME_COST: usize = 16;
 
 /// Budget units charged by a **light** native frame: a MOP internal method
-/// forwarding through a Proxy or an exotic prototype, a JSON walker level, a
-/// `flat` level, or a renderer level (at most a few KiB each).
+/// (which forwards once per Proxy layer), a JSON walker level, a `flat`
+/// level, a Proxy step of an iterative prototype walk, or a renderer level —
+/// 2.5 to 5.5 KiB per level unoptimized (a `JSON.stringify` level is the
+/// heaviest), 0.5 to 1.2 KiB optimized.
 pub const LIGHT_FRAME_COST: usize = 1;
 
 /// The fixed cost, in computrons, of the top-level program invocation
@@ -4047,10 +4062,12 @@ pub enum Halt {
     Throw { value: Slot, rendered: String },
     /// The value stack was exhausted (XS's `fxOverflow` →
     /// `fxAbort(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)`): a fixed-geometry
-    /// stack overflow. Like XS's, this is an **abort to the host**, not a
-    /// catchable `RangeError` — a deterministic, consensus-relevant limit
-    /// in the xsnap lineage. Carries the slot count over the limit for
-    /// diagnostics.
+    /// stack overflow — or the native-recursion budget was exhausted
+    /// ([`NATIVE_DEPTH_LIMIT`], XS's `fxCheckCStack`). Like XS's, this is an
+    /// **abort to the host**, not a catchable `RangeError` — a deterministic,
+    /// consensus-relevant limit in the xsnap lineage. Carries the value-stack
+    /// slot count in use at the halt for diagnostics (over the limit in the
+    /// first case; incidental in the second).
     StackOverflow(usize),
     /// A generator body reached `XS_CODE_YIELD` and suspended its
     /// activation into the `generators` side table (design § generators).
@@ -4374,10 +4391,15 @@ pub struct Interp {
     boot_slot_count: u32,
     /// Native-recursion budget consumed so far, in the units of
     /// [`NATIVE_DEPTH_LIMIT`]: every engine function that re-enters guest code
-    /// or recurses over guest-controlled structure on the host stack charges
-    /// its frame class here ([`Self::enter_native_frame`]) and releases it on
-    /// return, so a degenerate nest halts with [`Halt::StackOverflow`] instead
-    /// of overflowing the real thread stack. Always `0` at a crank boundary.
+    /// or recurses without a bound of its own over guest-controlled structure
+    /// on the host stack charges its frame class here
+    /// ([`Self::enter_native_frame`]) and releases it on return, so a
+    /// degenerate nest halts with [`Halt::StackOverflow`] instead of
+    /// overflowing the real thread stack. (A recursion with its own small node
+    /// budget — the compact `flat` path's 1,024-node pre-check — and a
+    /// redispatch that loops instead, such as the bound-function fold and the
+    /// `call`/`apply` trampolines in [`Self::invoke_value`], need no charge.)
+    /// Always `0` at a crank boundary.
     native_depth: usize,
     /// The host-installed source compiler ([`SourceCompiler`]) the runtime
     /// source-execution bridge (`eval` of a string, the `Function`
@@ -6106,7 +6128,9 @@ impl Interp {
     /// [`Self::run`], when the top-level frame's scope is restored. Returns
     /// `None` when the program never assigned that name (its slot is absent or
     /// still the hoisted `undefined`): the did-not-run latch — `$DONE`/`print`
-    /// was never called.
+    /// was never called — and when the renderer refuses the value (a
+    /// self-containing array past the native-recursion budget), which no
+    /// harness sentinel is.
     pub fn global_string(&self, name: &str) -> Option<String> {
         let id = *self.symbol_ids.get(name)?;
         let slot = self.resolve_get(id)?;
@@ -8414,7 +8438,9 @@ impl Interp {
             Payload::Reference(target) if prototype.kind == Kind::Reference => target,
             _ => return Err(self.catchable_type_error()),
         };
+        let mut proxy_steps = 0;
         loop {
+            self.charge_proxy_chain_step(object, &mut proxy_steps)?;
             let parent = self.mop_get_prototype(code, object)?;
             match (parent.kind, parent.value) {
                 (Kind::Reference, Payload::Reference(parent)) => {
@@ -12909,6 +12935,11 @@ impl Interp {
             && self.array_iterator_proxy_get_context.is_none()
             && self.exception.kind == Kind::Undefined
             && !self.id_space_exhausted
+            // The native-recursion budget is released by every guarded entry
+            // on return; a machine holding a charge at a boundary was unwound
+            // by a panic, and a resumed twin (which starts at zero) would
+            // halt at a different depth than it does.
+            && self.native_depth == 0
     }
 
     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
@@ -13212,11 +13243,18 @@ impl Interp {
         self.render_at(s, self.native_depth)
     }
 
-    fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Halt> {
+    /// The renderer's budget for one more level of element recursion, or the
+    /// refusal. Charged only where the renderer actually descends, so a
+    /// scalar or an error object renders at any depth — including a
+    /// diagnostic render at the very ceiling — and only nesting is refused.
+    fn render_descend(&self, depth: usize) -> Result<usize, Halt> {
         if depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT {
             return Err(Halt::StackOverflow(self.stack_slots_in_use()));
         }
-        let depth = depth + LIGHT_FRAME_COST;
+        Ok(depth + LIGHT_FRAME_COST)
+    }
+
+    fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Halt> {
         Ok(match s.value {
             Payload::String(off) => self.str_text(off),
             // A BigInt completion renders as its decimal magnitude (XS's
@@ -13244,6 +13282,7 @@ impl Interp {
                     // `join(",")`: each index in `[0, length)` rendered, holes
                     // and `undefined`/`null` rendered as the empty string,
                     // joined with commas.
+                    let depth = self.render_descend(depth)?;
                     let mut out = String::new();
                     for i in 0..a.length {
                         if i > 0 {
@@ -13344,7 +13383,7 @@ impl Interp {
                 } else if let Some(prim) = self.wrapper_data.get(&r).copied() {
                     // A primitive wrapper (`new Boolean`/`Number`/`String`)
                     // stringifies as its wrapped primitive value.
-                    self.render_at(&prim, depth)?
+                    self.render_at(&prim, self.render_descend(depth)?)?
                 } else if let Some(n) = self.native_of(r) {
                     // A native (intrinsic) function stringifies through
                     // `Function.prototype.toString` as a host function
@@ -13747,6 +13786,30 @@ impl Interp {
         let result = f(self);
         self.leave_native_frame(cost);
         result
+    }
+
+    /// One step of an iterative prototype-chain walk that may pass through a
+    /// Proxy (`OrdinaryHasInstance`, `Object.prototype.isPrototypeOf`). A
+    /// Proxy forwards `[[GetPrototypeOf]]` to its target, and a spec-legal
+    /// cycle through one (`OrdinarySetPrototypeOf`'s cycle check stops at a
+    /// Proxy) makes such a walk infinite — a stuck worker rather than a
+    /// crashed one. Count the walk's Proxy steps in `proxy_steps` against the
+    /// native-recursion budget, exactly what the recursive shape of the same
+    /// walk would have consumed, so the cycle halts with
+    /// [`Halt::StackOverflow`] after at most the budget's worth of forwarding.
+    /// Ordinary steps are free: an ordinary chain is acyclic by construction.
+    fn charge_proxy_chain_step(
+        &self,
+        object: crate::value::SlotIndex,
+        proxy_steps: &mut usize,
+    ) -> Result<(), Halt> {
+        if self.proxies.contains_key(&object) {
+            *proxy_steps += LIGHT_FRAME_COST;
+            if self.native_depth + *proxy_steps > NATIVE_DEPTH_LIMIT {
+                return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+            }
+        }
+        Ok(())
     }
 
     fn dispatch_at_inner(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Halt {
@@ -20622,8 +20685,9 @@ impl Interp {
         // monolithic activations of this crate (with `call_native_method`):
         // charge the native-recursion budget's heavy class for it, so a
         // built-in that re-enters another built-in or guest code (through
-        // `invoke_value`/`construct_value`, never through `dispatch_at`) is
-        // bounded by [`NATIVE_DEPTH_LIMIT`] rather than by the host stack.
+        // `invoke_value`/`construct_value`; a guest callback's own
+        // `dispatch_at` beneath it charges itself) is bounded by
+        // [`NATIVE_DEPTH_LIMIT`] rather than by the host stack.
         self.with_native_frame(HEAVY_FRAME_COST, |vm| {
             vm.call_native_inner(native, base, argc, has_target, code)
         })
@@ -26427,11 +26491,23 @@ impl Interp {
     }
 
     fn slot_is_constructor(&self, r: crate::value::SlotIndex) -> bool {
-        if let Some(data) = self.proxies.get(&r) {
-            return !data.revoked && self.slot_is_constructor(data.target);
-        }
-        if let Some(data) = self.bound_functions.get(&r) {
-            return self.slot_is_constructor(data.target);
+        // Follow proxy and bound-function targets in a loop: both chains are
+        // acyclic (each wrapper's target already exists when the wrapper is
+        // minted) but a guest can make them a million links long.
+        let mut r = r;
+        loop {
+            if let Some(data) = self.proxies.get(&r) {
+                if data.revoked {
+                    return false;
+                }
+                r = data.target;
+                continue;
+            }
+            if let Some(data) = self.bound_functions.get(&r) {
+                r = data.target;
+                continue;
+            }
+            break;
         }
         match self.functions.get(&r) {
             Some(fi) if fi.method.is_some() => false,
@@ -26447,12 +26523,16 @@ impl Interp {
     /// proxy whose target is (recursively) callable (ECMA-262 10.5.12 gates
     /// `[[Call]]` on the target being callable).
     fn slot_is_callable(&self, r: crate::value::SlotIndex) -> bool {
-        if self.functions.contains_key(&r) {
-            return true;
-        }
-        match self.proxies.get(&r) {
-            Some(data) if !data.revoked => self.slot_is_callable(data.target),
-            _ => false,
+        // Follow proxy targets in a loop (see `slot_is_constructor`).
+        let mut r = r;
+        loop {
+            if self.functions.contains_key(&r) {
+                return true;
+            }
+            match self.proxies.get(&r) {
+                Some(data) if !data.revoked => r = data.target,
+                _ => return false,
+            }
         }
     }
 
@@ -32512,7 +32592,9 @@ impl Interp {
                 let Payload::Reference(prototype) = prototype.value else {
                     unreachable!("ToObject returns a reference")
                 };
+                let mut proxy_steps = 0;
                 loop {
+                    self.charge_proxy_chain_step(object, &mut proxy_steps)?;
                     let parent = self.mop_get_prototype(code, object)?;
                     match (parent.kind, parent.value) {
                         (Kind::Reference, Payload::Reference(parent)) => {
@@ -37108,15 +37190,7 @@ impl Interp {
                 let holder = self.slots.alloc(Slot::instance(self.object_proto));
                 let root_id = self.intern_key("");
                 self.set_own_unmetered(holder, root_id, value);
-                self.json_internalize_property(
-                    code,
-                    &input,
-                    holder,
-                    root_id,
-                    Some(source),
-                    reviver,
-                    0,
-                )
+                self.json_internalize_property(code, &input, holder, root_id, Some(source), reviver)
             }
             _ => Err(Halt::Unsupported("json:unmodeled")),
         }
@@ -37985,7 +38059,10 @@ impl Interp {
     /// `InternalizeJSONProperty(holder, name, reviver)`, including the pinned
     /// XS implementation of the ES2024 reviver `context.source` extension.
     /// The property value is read at visit time, so an earlier reviver call can
-    /// replace or delete a later sibling exactly as the specification permits.
+    /// replace or delete a later sibling exactly as the specification permits
+    /// — with a structure of any depth, so each level of the walk is one light
+    /// frame of the native-recursion budget (XS's `mxCheckCStack` boundary,
+    /// as a counter).
     fn json_internalize_property(
         &mut self,
         code: &[u8],
@@ -37994,14 +38071,21 @@ impl Interp {
         name: u16,
         source: Option<JsonSource>,
         reviver: Slot,
-        depth: usize,
     ) -> Result<Slot, Halt> {
-        // Mirror XS's `mxCheckCStack` fail-closed boundary without risking the
-        // Rust host stack on a callback-mutated cyclic/deep replacement graph.
-        const JSON_REVIVER_RECURSION_CAP: usize = 1024;
-        if depth >= JSON_REVIVER_RECURSION_CAP {
-            return Err(Halt::StackOverflow(depth));
-        }
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.json_internalize_property_inner(code, input, holder, name, source, reviver)
+        })
+    }
+
+    fn json_internalize_property_inner(
+        &mut self,
+        code: &[u8],
+        input: &[u8],
+        holder: crate::value::SlotIndex,
+        name: u16,
+        source: Option<JsonSource>,
+        reviver: Slot,
+    ) -> Result<Slot, Halt> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
         let value = self.mop_get(code, holder, name, holder_slot)?;
         if let Payload::Reference(object) = value.value {
@@ -38023,7 +38107,6 @@ impl Interp {
                             id,
                             child_source,
                             reviver,
-                            depth + 1,
                         )?;
                         if revived.kind == Kind::Undefined {
                             let _ = self.mop_delete(code, object, id)?;
@@ -38047,7 +38130,6 @@ impl Interp {
                             id,
                             child_source,
                             reviver,
-                            depth + 1,
                         )?;
                         if revived.kind == Kind::Undefined {
                             let _ = self.mop_delete(code, object, id)?;
@@ -45955,7 +46037,9 @@ impl Interp {
             None => {
                 // Uncaught: the host-escape leaves the machine
                 // post-throw ([`Self::unwind_to_jump`] disarmed the
-                // pending new-target for every escape path, W6-15).
+                // pending new-target for every escape path, W6-15). The
+                // text is a diagnostic (see [`Self::render_uncaught`]): a
+                // value the renderer refuses gets the stub, never a halt.
                 self.meter_host_escape();
                 Halt::Throw {
                     value,
@@ -48230,33 +48314,36 @@ impl Interp {
             if parent.is_null() {
                 return Ok(Slot::undefined());
             }
-            if self.mop_get_is_ordinary(parent) {
-                // A plain parent's `[[Get]]` is this very algorithm, so
-                // continue the walk in place, as XS's `fxGetProperty` loop
-                // does, rather than nesting one native frame per prototype
-                // level: a `for` loop of `Object.create` builds a chain deep
-                // enough to overflow the host stack that way.
-                current = parent;
-                continue;
-            }
-            return self.mop_get(code, parent, id, receiver);
-        }
-    }
-
-    /// Whether `O.[[Get]]` on `inst` is exactly [`Self::ordinary_get`]: no
-    /// Proxy, no exotic own surface (`exotic_own_descriptor` /
-    /// TypedArray index), and no Array-Iterator Proxy-Get metering context
-    /// aimed at it — so a prototype walk may step onto it in place.
-    fn mop_get_is_ordinary(&self, inst: crate::value::SlotIndex) -> bool {
-        !self.proxies.contains_key(&inst)
-            && !self.typed_arrays.contains_key(&inst)
-            && !self.arrays.contains_key(&inst)
-            && !self.wrapper_data.contains_key(&inst)
-            && !self.functions.contains_key(&inst)
-            && !self.ctor_prototype.contains_key(&inst)
-            && self
+            let iterator_context_aimed_at_parent = self
                 .array_iterator_proxy_get_context
-                .is_none_or(|context| context.target != inst)
+                .is_some_and(|context| context.target == parent && context.id == id);
+            if self.proxies.contains_key(&parent) || iterator_context_aimed_at_parent {
+                return self.mop_get(code, parent, id, receiver);
+            }
+            // Every other parent's `[[Get]]` is `mop_get`'s non-Proxy path —
+            // its exotic own surface, then this very algorithm — so perform
+            // it in place, as XS's `fxGetProperty` loop does, rather than
+            // nesting one native frame per prototype level (a `for` loop of
+            // `Object.create`, or of `class extends`, builds a chain deep
+            // enough to overflow the host stack that way). The exotic surface
+            // is the one `mop_get_with_proxy_metering_inner` consults: a
+            // TypedArray's integer index, then the side-table own data of an
+            // array, function or String wrapper when no ordinary own slot
+            // shadows it.
+            if self.find_property(parent, id).is_none() {
+                if let Some(&typed_array) = self.typed_arrays.get(&parent) {
+                    if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                        return Ok(self.ta_indexed_element_get(typed_array, index));
+                    }
+                }
+                if let Some(d) = self.exotic_own_descriptor(parent, id) {
+                    if d.is_data() {
+                        return Ok(d.value.unwrap_or_else(Slot::undefined));
+                    }
+                }
+            }
+            current = parent;
+        }
     }
 
     fn ordinary_set(
@@ -48298,7 +48385,15 @@ impl Interp {
             if parent.is_null() {
                 break;
             }
-            if self.proxies.contains_key(&parent) || self.typed_arrays.contains_key(&parent) {
+            // `mop_set` differs from this algorithm only for a Proxy and for a
+            // TypedArray's integer-indexed element.
+            let typed_array_element = self.typed_arrays.contains_key(&parent)
+                && !self.is_symbol_key_id(id)
+                && self
+                    .string_key_name(id)
+                    .and_then(|name| canonical_numeric_index_string(&name))
+                    .is_some();
+            if self.proxies.contains_key(&parent) || typed_array_element {
                 return self.mop_set(code, parent, id, value, receiver);
             }
             // Any other parent's `[[Set]]` is this very algorithm (`mop_set`
@@ -48455,125 +48550,151 @@ impl Interp {
         code: &[u8],
         func: Slot,
         this: Slot,
-        args: &[Slot],
+        initial_args: &[Slot],
     ) -> Result<Slot, Halt> {
-        let f = match func.value {
-            Payload::Reference(f) if func.kind == Kind::Reference => f,
-            _ => return Err(self.catchable_type_error()),
-        };
-        if self.proxies.contains_key(&f) {
-            return self.proxy_call(code, f, this, args);
-        }
-        // Promise resolve/reject functions carry a native-method marker for
-        // reflection, but their [[Call]] settles the captured promise.
-        if self.promise_functions.contains_key(&f) {
-            let base = self.stack.len();
-            self.push(this);
-            self.push(func);
-            self.push(Slot::undefined());
-            self.push(Slot::of(Kind::Uninitialized, Payload::None));
-            for a in args {
-                self.push(*a);
+        // The bound-function fold and the `Function.prototype.call`/`apply`
+        // trampolines below each redispatch to another callable. They loop
+        // here rather than recurse: neither enters a charged frame, so a chain
+        // `c = c.call.bind(c)` (bound wrapper → `call` → bound wrapper …) of
+        // 10,000 links overflowed the host stack while the pinned XS completes
+        // it. `owned_args` is the argument list the last step rebuilt; until a
+        // step rebuilds one, `initial_args` serves.
+        let mut func = func;
+        let mut this = this;
+        let mut owned_args: Option<Vec<Slot>> = None;
+        loop {
+            let args: &[Slot] = owned_args.as_deref().unwrap_or(initial_args);
+            let f = match func.value {
+                Payload::Reference(f) if func.kind == Kind::Reference => f,
+                _ => return Err(self.catchable_type_error()),
+            };
+            if self.proxies.contains_key(&f) {
+                return self.proxy_call(code, f, this, args);
             }
-            return match self.call_promise_function(code, f, base, args.len()) {
-                Ok(()) => Ok(self.pop()),
-                Err(h) => {
-                    self.stack.truncate(base);
-                    Err(h)
+            // Promise resolve/reject functions carry a native-method marker for
+            // reflection, but their [[Call]] settles the captured promise.
+            if self.promise_functions.contains_key(&f) {
+                let base = self.stack.len();
+                self.push(this);
+                self.push(func);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                for a in args {
+                    self.push(*a);
                 }
-            };
-        }
-        // BoundFunctionExoticObject.[[Call]] prepends this level's arguments,
-        // substitutes its bound this, and redispatches the target. Recursing
-        // naturally supports bound chains and every callable target shape.
-        if self.bound_functions.contains_key(&f) {
-            // Fold the whole chain iteratively rather than recursing once per
-            // wrapper: a 20,000-link chain overflowed the real thread stack and
-            // aborted the host, while the pinned XS completes the same program.
-            // `enter_construct_bound` already folds the construct side this
-            // way. Each level prepends its own bound arguments and replaces the
-            // receiver, and is charged exactly as the recursive form charged
-            // it, so the meter is unchanged. `bind` always allocates a fresh
-            // exotic whose target already exists, so the chain is acyclic and
-            // this terminates.
-            let mut current = f;
-            let mut this_arg = this;
-            let mut combined: Vec<Slot> = args.to_vec();
-            while let Some(data) = self.bound_functions.get(&current).cloned() {
-                let mut next = data.args;
-                next.extend_from_slice(&combined);
-                self.meter
-                    .tick_raw(BIND_CALL_METERING + next.len() as u64 * BIND_CALL_PER_ARG);
-                combined = next;
-                this_arg = data.this_arg;
-                current = data.target;
+                return match self.call_promise_function(code, f, base, args.len()) {
+                    Ok(()) => Ok(self.pop()),
+                    Err(h) => {
+                        self.stack.truncate(base);
+                        Err(h)
+                    }
+                };
             }
-            let target = Slot::of(Kind::Reference, Payload::Reference(current));
-            return self.invoke_value(code, target, this_arg, &combined);
-        }
-        let fi = match self.functions.get(&f) {
-            Some(fi) => fi,
-            None => return Err(self.catchable_type_error()),
-        };
-        let native = fi.native;
-        let method = fi.method;
-        // Function.prototype.call/apply are themselves ordinary callable
-        // built-ins whose receiver is the function to redispatch. The opcode
-        // RUN path has an in-place trampoline for them, but abstract Call
-        // sites arrive here without that opcode context. Handle the same
-        // semantics at the shared dispatcher so a bound call/apply function,
-        // a Proxy trap, or another native algorithm can invoke them too.
-        if method == Some(NativeMethod::FunctionCall) {
-            if !self.is_callable_value(this) {
-                return Err(self.catchable_type_error());
-            }
-            let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
-            let forwarded = args.get(1..).unwrap_or_default();
-            self.meter.tick_raw(
-                CALL_TRAMPOLINE_METERING
-                    + forwarded.len() as u64 * CALL_TRAMPOLINE_PER_ARG,
-            );
-            return self.invoke_value(code, this, this_arg, forwarded);
-        }
-        if method == Some(NativeMethod::FunctionApply) {
-            if !self.is_callable_value(this) {
-                return Err(self.catchable_type_error());
-            }
-            let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
-            let arg_array = args.get(1).copied().unwrap_or_else(Slot::undefined);
-            let forwarded = if arg_array.kind == Kind::Undefined || arg_array.kind == Kind::Null {
-                Vec::new()
-            } else {
-                self.arraylike_to_vec(code, arg_array)?
-            };
-            self.meter.tick_raw(CALL_TRAMPOLINE_METERING);
-            return self.invoke_value(code, this, this_arg, &forwarded);
-        }
-        if native.is_some() || method.is_some() {
-            // Native / native-method: build the [THIS, FUNCTION, RESULT, FRAME]
-            // frame + args, dispatch, and take the pushed result.
-            let base = self.stack.len();
-            self.push(this);
-            self.push(func);
-            self.push(Slot::undefined());
-            self.push(Slot::of(Kind::Uninitialized, Payload::None));
-            for a in args {
-                self.push(*a);
-            }
-            let result = if let Some(n) = native {
-                self.call_native(n, base, args.len(), false, code)
-            } else {
-                self.call_native_method(method.unwrap(), base, args.len(), code)
-            };
-            return match result {
-                Ok(()) => Ok(self.pop()),
-                Err(h) => {
-                    self.stack.truncate(base);
-                    Err(h)
+            // BoundFunctionExoticObject.[[Call]] prepends this level's
+            // arguments, substitutes its bound this, and redispatches the
+            // target.
+            if self.bound_functions.contains_key(&f) {
+                // Fold the whole chain iteratively rather than recursing once
+                // per wrapper: a 20,000-link chain overflowed the real thread
+                // stack and aborted the host, while the pinned XS completes the
+                // same program. `enter_construct_bound` already folds the
+                // construct side this way. Each level prepends its own bound
+                // arguments and replaces the receiver, and is charged exactly
+                // as the recursive form charged it, so the meter is unchanged.
+                // `bind` always allocates a fresh exotic whose target already
+                // exists, so the chain is acyclic and this terminates.
+                let mut current = f;
+                let mut this_arg = this;
+                let mut combined: Vec<Slot> = match owned_args.take() {
+                    Some(rebuilt) => rebuilt,
+                    None => initial_args.to_vec(),
+                };
+                while let Some(data) = self.bound_functions.get(&current).cloned() {
+                    let mut next = data.args;
+                    next.extend_from_slice(&combined);
+                    self.meter
+                        .tick_raw(BIND_CALL_METERING + next.len() as u64 * BIND_CALL_PER_ARG);
+                    combined = next;
+                    this_arg = data.this_arg;
+                    current = data.target;
                 }
+                func = Slot::of(Kind::Reference, Payload::Reference(current));
+                this = this_arg;
+                owned_args = Some(combined);
+                continue;
+            }
+            let fi = match self.functions.get(&f) {
+                Some(fi) => fi,
+                None => return Err(self.catchable_type_error()),
             };
+            let native = fi.native;
+            let method = fi.method;
+            // Function.prototype.call/apply are themselves ordinary callable
+            // built-ins whose receiver is the function to redispatch. The
+            // opcode RUN path has an in-place trampoline for them, but abstract
+            // Call sites arrive here without that opcode context. Handle the
+            // same semantics at the shared dispatcher so a bound call/apply
+            // function, a Proxy trap, or another native algorithm can invoke
+            // them too.
+            if method == Some(NativeMethod::FunctionCall) {
+                if !self.is_callable_value(this) {
+                    return Err(self.catchable_type_error());
+                }
+                let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
+                let forwarded: Vec<Slot> = args.get(1..).unwrap_or_default().to_vec();
+                self.meter.tick_raw(
+                    CALL_TRAMPOLINE_METERING
+                        + forwarded.len() as u64 * CALL_TRAMPOLINE_PER_ARG,
+                );
+                func = this;
+                this = this_arg;
+                owned_args = Some(forwarded);
+                continue;
+            }
+            if method == Some(NativeMethod::FunctionApply) {
+                if !self.is_callable_value(this) {
+                    return Err(self.catchable_type_error());
+                }
+                let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
+                let arg_array = args.get(1).copied().unwrap_or_else(Slot::undefined);
+                let forwarded =
+                    if arg_array.kind == Kind::Undefined || arg_array.kind == Kind::Null {
+                        Vec::new()
+                    } else {
+                        self.arraylike_to_vec(code, arg_array)?
+                    };
+                self.meter.tick_raw(CALL_TRAMPOLINE_METERING);
+                func = this;
+                this = this_arg;
+                owned_args = Some(forwarded);
+                continue;
+            }
+            if native.is_some() || method.is_some() {
+                // Native / native-method: build the [THIS, FUNCTION, RESULT,
+                // FRAME] frame + args, dispatch, and take the pushed result.
+                let base = self.stack.len();
+                self.push(this);
+                self.push(func);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                for a in args {
+                    self.push(*a);
+                }
+                let result = if let Some(n) = native {
+                    self.call_native(n, base, args.len(), false, code)
+                } else {
+                    self.call_native_method(method.unwrap(), base, args.len(), code)
+                };
+                return match result {
+                    Ok(()) => Ok(self.pop()),
+                    Err(h) => {
+                        self.stack.truncate(base);
+                        Err(h)
+                    }
+                };
+            }
+            return self.run_user_callback(code, func, this, args);
         }
-        self.run_user_callback(code, func, this, args)
     }
 
     /// Construct any constructor value with an explicit argument list — the
