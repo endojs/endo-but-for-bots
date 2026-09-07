@@ -20,8 +20,14 @@ fn ironhorse_result(source: &str, expected: &str) {
 #[test]
 fn canonicalization_and_locale_fields_are_oracle_exact() {
     for (source, expected) in [
-        ("Intl.getCanonicalLocales('EN-latn-us-u-kn-true-kf-upper')[0]", "en-Latn-US-u-kf-upper-kn"),
-        ("new Intl.Locale('de-latn-de-u-ca-gregory-kn').toString()", "de-Latn-DE-u-ca-gregory-kn"),
+        (
+            "Intl.getCanonicalLocales('EN-latn-us-u-kn-true-kf-upper')[0]",
+            "en-Latn-US-u-kf-upper-kn",
+        ),
+        (
+            "new Intl.Locale('de-latn-de-u-ca-gregory-kn').toString()",
+            "de-Latn-DE-u-ca-gregory-kn",
+        ),
         ("new Intl.Locale('zh-hans-cn').baseName", "zh-Hans-CN"),
         ("new Intl.Locale('en-u-kn').numeric", "true"),
         ("new Intl.Locale('sr').maximize().toString()", "sr-Cyrl-RS"),
@@ -35,10 +41,19 @@ fn canonicalization_and_locale_fields_are_oracle_exact() {
 fn collator_options_and_compare_are_oracle_exact() {
     for (source, expected) in [
         ("new Intl.Collator('en').compare('a', 'b') < 0", "true"),
-        ("new Intl.Collator('en', {numeric:true}).compare('2', '10') < 0", "true"),
-        ("new Intl.Collator('en', {sensitivity:'base'}).compare('A', 'a')", "0"),
+        (
+            "new Intl.Collator('en', {numeric:true}).compare('2', '10') < 0",
+            "true",
+        ),
+        (
+            "new Intl.Collator('en', {sensitivity:'base'}).compare('A', 'a')",
+            "0",
+        ),
         ("new Intl.Collator('de').resolvedOptions().locale", "de"),
-        ("new Intl.Collator('en', {numeric:true}).resolvedOptions().numeric", "true"),
+        (
+            "new Intl.Collator('en', {numeric:true}).resolvedOptions().numeric",
+            "true",
+        ),
     ] {
         ironhorse_result(source, expected);
     }

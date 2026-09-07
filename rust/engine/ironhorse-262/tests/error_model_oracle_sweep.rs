@@ -263,7 +263,10 @@ fn error_model_agrees_with_the_oracle() {
     ];
     let mut bad = Vec::new();
     let mut stale_allowlist = Vec::new();
-    for src in programs.iter().chain(KNOWN_DIVERGENCES.iter().map(|(p, _)| p)) {
+    for src in programs
+        .iter()
+        .chain(KNOWN_DIVERGENCES.iter().map(|(p, _)| p))
+    {
         let run = dual_run(src).expect("the pinned XS oracle machine must start");
         let same = match run.agreement {
             Agreement::BothComplete => run.result_agrees,

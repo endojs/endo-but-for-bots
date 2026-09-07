@@ -38,15 +38,14 @@ fn run_two_cranks_with_gc(crank1: &str, crank2: &str) -> ironhorse_vm::RunOutcom
     m.run(&b2)
 }
 
-const CHURN: &str = "var zz = 0; for (zz = 0; zz < 64; zz++) { churn[zz % 8] = { a: zz, b: 'x' + zz }; }";
+const CHURN: &str =
+    "var zz = 0; for (zz = 0; zz < 64; zz++) { churn[zz % 8] = { a: zz, b: 'x' + zz }; }";
 
 #[test]
 fn proxy_target_and_handler_survive_a_full_collection() {
     let crank1 = "var p = 0; var churn = 0; churn = []; \
                   p = new Proxy({ v: 41 }, {}); 0;";
-    let crank2 = &format!(
-        "var p; var churn; var t = 0; {CHURN} t = p.v; t"
-    );
+    let crank2 = &format!("var p; var churn; var t = 0; {CHURN} t = p.v; t");
     let out = run_two_cranks_with_gc(crank1, crank2);
     assert!(out.completed, "crank 2: {:?}", out.halt);
     assert_eq!(
@@ -83,9 +82,7 @@ fn disposable_stack_resources_survive_a_full_collection() {
     let crank1 = "var s = 0; var r = 0; var churn = 0; churn = []; \
                   s = new DisposableStack(); r = { open: true }; \
                   s.adopt(r, function () {}); 0;";
-    let crank2 = &format!(
-        "var s; var r; var churn; var t = 0; {CHURN} t = r.open; t"
-    );
+    let crank2 = &format!("var s; var r; var churn; var t = 0; {CHURN} t = r.open; t");
     let out = run_two_cranks_with_gc(crank1, crank2);
     assert!(out.completed, "crank 2: {:?}", out.halt);
     assert_eq!(out.result, "true");
@@ -101,9 +98,7 @@ fn iterator_from_wrapper_keeps_its_iterated_object_and_next_method_alive() {
                   next = function () { return { value: ++this.n }; }; \
                   base.next = next; wrapped = Iterator.from(base); \
                   base = 0; next = 0; 0;";
-    let crank2 = &format!(
-        "var wrapped; var churn; var t = 0; {CHURN} t = wrapped.next().value; t"
-    );
+    let crank2 = &format!("var wrapped; var churn; var t = 0; {CHURN} t = wrapped.next().value; t");
     let out = run_two_cranks_with_gc(crank1, crank2);
     assert!(out.completed, "crank 2: {:?}", out.halt);
     assert_eq!(out.result, "1");
@@ -115,9 +110,7 @@ fn regexp_string_iterator_keeps_its_cloned_matcher_alive() {
     // dropped, the kind-9 iterator row is its only owner across collection.
     let crank1 = "var it = 0; var churn = 0; churn = []; \
                   it = 'a1b22'.matchAll(/(\\d+)/g); it.next(); 0;";
-    let crank2 = &format!(
-        "var it; var churn; var t = 0; {CHURN} t = it.next().value[0]; t"
-    );
+    let crank2 = &format!("var it; var churn; var t = 0; {CHURN} t = it.next().value[0]; t");
     let out = run_two_cranks_with_gc(crank1, crank2);
     assert!(out.completed, "crank 2: {:?}", out.halt);
     assert_eq!(out.result, "22");
@@ -140,7 +133,10 @@ fn a_live_date_record_survives_and_a_dead_ones_is_pruned() {
     );
     let o = run_two_cranks_with_gc(crank1, crank2);
     assert!(o.completed, "crank 2: {:?}", o.halt);
-    assert_eq!(o.result, "86400000", "the live Date's record survives the collection");
+    assert_eq!(
+        o.result, "86400000",
+        "the live Date's record survives the collection"
+    );
 }
 
 #[test]
@@ -168,11 +164,17 @@ fn a_recycled_slot_does_not_inherit_a_dead_dates_brand() {
         let b = m.relink_crank(&b, &n).expect("relink");
         m.run(&b)
     };
-    assert!(crank(&mut m, "var churn; var zz = 0; zz = 1; 0;").completed, "drain crank");
+    assert!(
+        crank(&mut m, "var churn; var zz = 0; zz = 1; 0;").completed,
+        "drain crank"
+    );
     m.collect_garbage();
     assert!(
-        crank(&mut m, "var churn; var zz; for (zz = 0; zz < 64; zz++) { churn[zz] = {}; } 0;")
-            .completed,
+        crank(
+            &mut m,
+            "var churn; var zz; for (zz = 0; zz < 64; zz++) { churn[zz] = {}; } 0;"
+        )
+        .completed,
         "churn crank"
     );
     for i in 0..64 {

@@ -7,7 +7,9 @@
 use ironhorse_snapshot::format::SnapshotError;
 use ironhorse_snapshot::image::{read_machine, write_machine};
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
-use ironhorse_snapshot::store::{image_to_batch, validate_store, HeapStore, MemoryStore, StoreError};
+use ironhorse_snapshot::store::{
+    image_to_batch, validate_store, HeapStore, MemoryStore, StoreError,
+};
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
@@ -39,7 +41,10 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
     let m = quiescent_machine("var re = 0; var t = 0; re = /a(b+)c/g; t = 7; t");
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let mut image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(!image.regexps.is_empty(), "the fixture persisted its regexp row");
+    assert!(
+        !image.regexps.is_empty(),
+        "the fixture persisted its regexp row"
+    );
     image.regexps[0].source = "(".to_string();
     let crafted = write_machine(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
@@ -70,7 +75,10 @@ fn a_populated_stack_atom_is_refused_at_container_read() {
     let m = quiescent_machine("var t = 0; t = 1; t");
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let mut image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(image.stack.is_empty(), "an honest snapshot has an empty stack");
+    assert!(
+        image.stack.is_empty(),
+        "an honest snapshot has an empty stack"
+    );
     image.stack = vec![ironhorse_vm::Slot::undefined()];
     let crafted = write_machine(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
@@ -117,7 +125,10 @@ fn a_crafted_collection_table_geometry_is_refused() {
     );
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(!image.collections.is_empty(), "the fixture persisted its Map row");
+    assert!(
+        !image.collections.is_empty(),
+        "the fixture persisted its Map row"
+    );
     let expect = |crafted: &[u8], want: &'static str| match from_snapshot_bytes(crafted, &sig()) {
         Err(SnapshotError::Corrupt(msg)) if msg == want => {}
         Err(other) => panic!("refused, but not by the geometry gate ({want}): {other:?}"),
@@ -166,9 +177,8 @@ fn an_explicit_full_name_floor_is_refused_as_non_canonical() {
     );
     image.name_floor = Some(image.names.len() as u32);
     match from_snapshot_bytes(&write_machine(&image), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "installed-names floor: non-canonical explicit full floor",
-        )) => {}
+        Err(SnapshotError::Corrupt("installed-names floor: non-canonical explicit full floor")) => {
+        }
         Err(other) => panic!("refused, but not by the canonicality gate: {other:?}"),
         Ok(_) => panic!("a non-canonical explicit floor must not restore"),
     }
@@ -203,7 +213,11 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
     );
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let mut image = read_machine(&bytes, &sig()).expect("reads");
-    assert_eq!(image.generators.len(), 1, "the fixture persisted its generator");
+    assert_eq!(
+        image.generators.len(),
+        1,
+        "the fixture persisted its generator"
+    );
 
     let owner = image.generators[0].frame.as_ref().unwrap().cur_func;
     let segment = image
@@ -248,7 +262,9 @@ fn a_container_from_a_foreign_boot_layout_is_refused() {
     // A different engine build: same wire schema, different boot layout,
     // therefore a different signature.
     let other_build = Signature::new("ironhorse-worker-v1-boot2");
-    let bytes = m.write_snapshot(&other_build).expect("the other build writes");
+    let bytes = m
+        .write_snapshot(&other_build)
+        .expect("the other build writes");
 
     // Sanity: the bytes are honest under their OWN signature, so the
     // refusal below is about the signature and nothing else.
@@ -338,8 +354,7 @@ fn non_canonical_container_encodings_are_refused() {
     }
     let mut empty = plain_bytes.clone();
     empty.splice(at..at, atom.iter().copied());
-    let grown =
-        (u32::from_be_bytes([empty[0], empty[1], empty[2], empty[3]]) + 12).to_be_bytes();
+    let grown = (u32::from_be_bytes([empty[0], empty[1], empty[2], empty[3]]) + 12).to_be_bytes();
     empty[0..4].copy_from_slice(&grown);
     match read_machine(&empty, &sig()) {
         Err(SnapshotError::Corrupt(msg)) if msg.contains("present but empty") => {}
@@ -366,12 +381,8 @@ fn non_canonical_container_encodings_are_refused() {
     // BEFORE the fixed atoms instead of after them.
     let mut misordered = plain_bytes.clone();
     misordered.splice(8..8, atom.iter().copied());
-    let grown = (u32::from_be_bytes([
-        misordered[0],
-        misordered[1],
-        misordered[2],
-        misordered[3],
-    ]) + 12)
+    let grown = (u32::from_be_bytes([misordered[0], misordered[1], misordered[2], misordered[3]])
+        + 12)
         .to_be_bytes();
     misordered[0..4].copy_from_slice(&grown);
     match read_machine(&misordered, &sig()) {
@@ -529,13 +540,10 @@ fn a_finally_reaction_requires_a_constructor_after_restore() {
         .find(|r| r.kind == 1)
         .expect("the fixture holds a pending FinallyReturn reaction")
         .on_rejected = ironhorse_vm::Slot::of(
-            ironhorse_vm::Kind::Reference,
-            ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(array)),
-        );
-    expect_container_refusal(
-        &image,
-        "side-table restore: malformed promise capability",
+        ironhorse_vm::Kind::Reference,
+        ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(array)),
     );
+    expect_container_refusal(&image, "side-table restore: malformed promise capability");
 }
 
 #[test]
@@ -558,7 +566,10 @@ fn a_resolving_function_with_a_crafted_guard_or_promise_is_refused() {
     let m = promise_fixture();
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let image = read_machine(&bytes, &sig()).expect("reads");
-    assert!(!image.promise_cluster.functions.is_empty(), "resolvers persisted");
+    assert!(
+        !image.promise_cluster.functions.is_empty(),
+        "resolvers persisted"
+    );
 
     let mut oor = image.clone();
     oor.promise_cluster.functions[0].guard = oor.promise_cluster.guards.len() as u32;
@@ -574,7 +585,10 @@ fn a_resolving_function_with_a_crafted_guard_or_promise_is_refused() {
         .unwrap()
         + 1;
     orphan.promise_cluster.functions[0].promise = absent;
-    expect_container_refusal(&orphan, "promise cluster: resolving function names no promise row");
+    expect_container_refusal(
+        &orphan,
+        "promise cluster: resolving function names no promise row",
+    );
 
     // An unreferenced guard cannot come from the compacting writer.
     let mut sparse = image.clone();
@@ -635,8 +649,7 @@ fn a_crafted_capability_executor_home_is_refused() {
     // verify both hidden capture fields rather than resurrecting a callable
     // executor that reads unrelated heap state.
     let mut missing_fields = image;
-    missing_fields.promise_cluster.functions[executor].promise =
-        missing_fields.arrays[0].owner;
+    missing_fields.promise_cluster.functions[executor].promise = missing_fields.arrays[0].owner;
     expect_container_refusal(
         &missing_fields,
         "side-table restore: malformed promise cluster",
@@ -676,8 +689,7 @@ fn a_crafted_finally_wrapper_home_is_refused() {
     // A structurally in-bounds object is not a valid capture home. The image
     // decoder establishes shape; adoption verifies the required hidden fields.
     let mut missing_fields = image.clone();
-    missing_fields.promise_cluster.functions[wrappers[0]].promise =
-        missing_fields.arrays[0].owner;
+    missing_fields.promise_cluster.functions[wrappers[0]].promise = missing_fields.arrays[0].owner;
     expect_container_refusal(
         &missing_fields,
         "side-table restore: malformed promise cluster",
@@ -687,10 +699,7 @@ fn a_crafted_finally_wrapper_home_is_refused() {
     // that reads a missing `[[PromiseFinallyValue]]` capture.
     let mut wrong_kind = image;
     wrong_kind.promise_cluster.functions[wrappers[0]].guard = u32::MAX - 2;
-    expect_container_refusal(
-        &wrong_kind,
-        "side-table restore: malformed promise cluster",
-    );
+    expect_container_refusal(&wrong_kind, "side-table restore: malformed promise cluster");
 }
 
 #[test]
@@ -698,7 +707,11 @@ fn a_crafted_combinator_row_is_refused() {
     let m = combinator_fixture();
     let bytes = m.write_snapshot(&sig()).expect("writes");
     let image = read_machine(&bytes, &sig()).expect("reads");
-    assert_eq!(image.promise_cluster.combinators.len(), 1, "one live combinator");
+    assert_eq!(
+        image.promise_cluster.combinators.len(),
+        1,
+        "one live combinator"
+    );
 
     let mut kind = image.clone();
     kind.promise_cluster.combinators[0].kind = 4;
@@ -708,13 +721,19 @@ fn a_crafted_combinator_row_is_refused() {
     let mut sparse = image.clone();
     let extra = sparse.promise_cluster.combinators[0];
     sparse.promise_cluster.combinators.push(extra);
-    expect_container_refusal(&sparse, "promise cluster: combinators not densely referenced");
+    expect_container_refusal(
+        &sparse,
+        "promise cluster: combinators not densely referenced",
+    );
 
     // `remaining` below the pending element reactions would underflow
     // at the drain (each settling element decrements it once).
     let mut low = image.clone();
     low.promise_cluster.combinators[0].remaining = 0;
-    expect_container_refusal(&low, "promise cluster: remaining below its pending reactions");
+    expect_container_refusal(
+        &low,
+        "promise cluster: remaining below its pending reactions",
+    );
 
     // The results accumulator must name an `ARRY` row — the element
     // drain writes through the dense store (the view-names-a-buffer-row
@@ -722,7 +741,10 @@ fn a_crafted_combinator_row_is_refused() {
     // not an Array.
     let mut results = image;
     results.promise_cluster.combinators[0].results = results.promise_cluster.promises[0].owner;
-    expect_container_refusal(&results, "promise cluster: combinator's results Array has no row");
+    expect_container_refusal(
+        &results,
+        "promise cluster: combinator's results Array has no row",
+    );
 }
 
 /// The two-sided collision property: `PRMS` restores its resolving
@@ -746,7 +768,10 @@ fn a_resolver_crafted_onto_a_guest_function_slot_is_refused() {
         .promise_cluster
         .functions
         .sort_unstable_by_key(|row| row.function);
-    image.promise_cluster.functions.dedup_by_key(|row| row.function);
+    image
+        .promise_cluster
+        .functions
+        .dedup_by_key(|row| row.function);
     let crafted = write_machine(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("side-table restore: malformed retained function state")) => {}
@@ -776,7 +801,10 @@ fn a_crafted_combine_element_shape_is_refused() {
         .find(|r| r.kind == 2)
         .expect("a pending element reaction");
     r.b = u32::MAX;
-    expect_container_refusal(&oor, "promise cluster: element index outside the results Array");
+    expect_container_refusal(
+        &oor,
+        "promise cluster: element index outside the results Array",
+    );
 
     // A kind-byte mutation cannot turn an ordinary queued reaction into a
     // synchronous callback. A direct callback must carry the private bridge's
@@ -948,7 +976,10 @@ fn a_combinator_remaining_outside_its_element_count_is_refused() {
     // combinator stays pending forever.
     let mut inflated = image.clone();
     inflated.promise_cluster.combinators[0].remaining = u32::MAX;
-    expect_container_refusal(&inflated, "promise cluster: remaining outside its element count");
+    expect_container_refusal(
+        &inflated,
+        "promise cluster: remaining outside its element count",
+    );
 
     // A race never decrements, so its remaining must EQUAL the count.
     let mr = quiescent_machine(
@@ -961,7 +992,10 @@ fn a_combinator_remaining_outside_its_element_count_is_refused() {
     let mut race = read_machine(&bytes, &sig()).expect("reads");
     assert_eq!(race.promise_cluster.combinators[0].kind, 2, "a race row");
     race.promise_cluster.combinators[0].remaining -= 1;
-    expect_container_refusal(&race, "promise cluster: remaining outside its element count");
+    expect_container_refusal(
+        &race,
+        "promise cluster: remaining outside its element count",
+    );
 }
 
 #[test]

@@ -26,15 +26,15 @@ fn sig() -> Signature {
 }
 
 const PROG_A: [u8; 44] = [
-    0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x13, 0x0b, 0x01, 0x9e, 0x01, 0x86, 0x01,
-    0x00, 0x02, 0x00, 0xe6, 0x01, 0x92, 0x5c, 0x01, 0x72, 0x01, 0x01, 0xbb, 0x44, 0x58, 0x92,
-    0x42, 0xe0, 0x89, 0x02, 0x00, 0x72, 0x04, 0x28, 0x72, 0x05, 0xab, 0x01, 0xbb, 0xa9,
+    0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x13, 0x0b, 0x01, 0x9e, 0x01, 0x86, 0x01, 0x00,
+    0x02, 0x00, 0xe6, 0x01, 0x92, 0x5c, 0x01, 0x72, 0x01, 0x01, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0,
+    0x89, 0x02, 0x00, 0x72, 0x04, 0x28, 0x72, 0x05, 0xab, 0x01, 0xbb, 0xa9,
 ];
 const PROG_B: [u8; 51] = [
-    0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x1c, 0x0b, 0x00, 0xe0, 0x38, 0x00, 0x00,
-    0x2e, 0x06, 0x0b, 0x00, 0x72, 0x01, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x01, 0x00,
-    0x72, 0x04, 0x28, 0xab, 0x00, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x01, 0x00, 0x72,
-    0x04, 0x28, 0xab, 0x00, 0xbb, 0xa9,
+    0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x1c, 0x0b, 0x00, 0xe0, 0x38, 0x00, 0x00, 0x2e,
+    0x06, 0x0b, 0x00, 0x72, 0x01, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x01, 0x00, 0x72, 0x04,
+    0x28, 0xab, 0x00, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x01, 0x00, 0x72, 0x04, 0x28, 0xab,
+    0x00, 0xbb, 0xa9,
 ];
 
 fn file_store(name: &str) -> (FileStore, common::TempDir) {
@@ -43,7 +43,9 @@ fn file_store(name: &str) -> (FileStore, common::TempDir) {
 }
 
 fn begin(m: Interp, store: &mut dyn HeapStore) -> StoreSession {
-    begin_store_session(m, &sig(), store).map_err(|(_, e)| panic!("begin: {e:?}")).unwrap()
+    begin_store_session(m, &sig(), store)
+        .map_err(|(_, e)| panic!("begin: {e:?}"))
+        .unwrap()
 }
 
 /// The central invariant and the row-6 bar now live in the shared
@@ -86,7 +88,10 @@ fn incremental_checkpoint_writes_only_dirty_rows() {
     );
     assert_eq!(
         store_to_image(&store).unwrap(),
-        session.machine().snapshot_image(&sig()).expect("gated image")
+        session
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image")
     );
 
     checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
@@ -123,7 +128,10 @@ fn resumed_session_checkpoints_incrementally_across_reopen() {
     assert!(session.machine_mut().run(&PROG_B).completed);
     let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     assert_eq!(epoch, 2);
-    let expected = session.machine().snapshot_image(&sig()).expect("gated image");
+    let expected = session
+        .machine()
+        .snapshot_image(&sig())
+        .expect("gated image");
     assert_eq!(store_to_image(&store).unwrap(), expected);
 
     drop(store);
@@ -286,8 +294,13 @@ fn resume_after_incremental_checkpoint_reads_merged_state() {
     let s2 = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(s2.machine().meter_state(), session.machine().meter_state());
     assert_eq!(
-        s2.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots")
+        s2.machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots")
     );
 }
 
@@ -381,7 +394,14 @@ fn interleaving_store(fire_on: Interleave) -> InterleavingStore {
     assert!(m.run(&PROG_A).completed);
     let session = begin(m, &mut inner);
     let seal1 = inner.manifest().unwrap().seal;
-    let batch2 = image_to_batch(&session.machine().snapshot_image(&sig()).expect("gated image"), 2, &seal1);
+    let batch2 = image_to_batch(
+        &session
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image"),
+        2,
+        &seal1,
+    );
     drop(session);
     let armed = fire_on == Interleave::Validation;
     InterleavingStore {
@@ -439,7 +459,6 @@ fn lazy_fault_refuses_row_read_across_a_foreign_commit() {
         "expected the named torn-read panic, got: {msg}"
     );
 }
-
 
 /// The two seal findings from the third review pass, locked: a seal
 /// binds the COMPLETE manifest identity (same rows under a different
@@ -521,7 +540,10 @@ fn length_preserving_flip_at_rest_fails_closed() {
     }));
     match outcome {
         Err(payload) => {
-            let msg = payload.downcast_ref::<String>().map(String::as_str).unwrap_or("");
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .unwrap_or("");
             assert!(
                 msg.contains("fails its leaf hash"),
                 "expected the named leaf-hash panic, got: {msg}"
@@ -548,7 +570,6 @@ fn length_preserving_flip_at_rest_fails_closed() {
         Err(_) => {}
         Ok(_) => panic!("a flipped leaf hash must fail closed at open"),
     }
-
 }
 
 /// Phase 6: reachability over the persisted summaries is answered
@@ -648,7 +669,10 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
 
     // Reference bytes, faulting everything in (all rows resident).
-    let expect = session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots");
+    let expect = session
+        .machine()
+        .write_snapshot(&sig())
+        .expect("quiescent machine snapshots");
 
     // Evict every clean row — including the rows the checkpoint just
     // rewrote and the pages appended past the attach range.
@@ -660,12 +684,18 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     for ext in 0..chunk_extent_count(manifest.chunk_len) {
         evictions += session.machine().chunks.evict_extent(ext) as u32;
     }
-    assert!(evictions > 0, "nothing was evicted — the regression is untested");
+    assert!(
+        evictions > 0,
+        "nothing was evicted — the regression is untested"
+    );
 
     // Every re-fault must verify against the REFRESHED leaves at the
     // COMMITTED geometry and reinstall identical content.
     assert_eq!(
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         expect,
         "post-commit eviction re-faults reinstall the committed bytes"
     );
@@ -724,7 +754,10 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
     checkpoint_to_store(&mut session, &sig(), &mut twin).expect("twin checkpoint");
 
     // Reference bytes with everything resident.
-    let expect = session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots");
+    let expect = session
+        .machine()
+        .write_snapshot(&sig())
+        .expect("quiescent machine snapshots");
 
     let manifest = store.borrow().manifest().unwrap();
     let mut evictions = 0u32;
@@ -739,7 +772,10 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
     let _ = evictions;
 
     assert_eq!(
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         expect,
         "an evict sweep after a twin-store checkpoint must not revert the body"
     );
@@ -823,7 +859,10 @@ fn checkpoint_recovers_through_a_failed_commit() {
     assert_eq!(epoch, 2);
     assert_eq!(
         store_to_image(&store).unwrap(),
-        session.machine().snapshot_image(&sig()).expect("gated image"),
+        session
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image"),
         "retried checkpoint equals the live machine"
     );
 
@@ -835,8 +874,14 @@ fn checkpoint_recovers_through_a_failed_commit() {
     ironhorse_snapshot::store::validate_store(&store, &sig()).unwrap();
     let resumed = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(
-        resumed.machine().snapshot_image(&sig()).expect("gated image"),
-        session.machine().snapshot_image(&sig()).expect("gated image"),
+        resumed
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image"),
+        session
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image"),
         "a resume sees exactly the recovered history"
     );
 }

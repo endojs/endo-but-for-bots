@@ -45,16 +45,17 @@ pub use interp::{
     BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, CompiledSource,
     DateTimeFormatData, DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot,
     GeneratorRow, Halt, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow, ListFormatData,
-    LocaleData, Native, NumberFormatData, PluralRulesData, PrivateAccessorRow,
+    LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData, PrivateAccessorRow,
     PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow,
-    PromiseReactionRow, PromiseRow, PanicKind, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError,
+    PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError,
     RunOutcome, SavedFrameRow, SavedJumpRow, SegmentIteratorData, SegmenterData, SegmentsData,
     SourceCompileError, SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
+pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{
-    BodyOp, ExportEntry, ImportEntry, ImportName, ModuleError, ModuleGraph, ModuleId,
-    ModuleRecord, ModuleSource, ModuleValue, Namespace,
+    BodyOp, ExportEntry, ImportEntry, ImportName, ModuleError, ModuleGraph, ModuleId, ModuleRecord,
+    ModuleSource, ModuleValue, Namespace,
 };
 pub use opcode::{instruction_len, Opcode};
 pub use symbols::parse_symbols;
@@ -62,7 +63,6 @@ pub use value::{
     ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot, SlotArena, SlotIndex,
     CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
 };
-pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 
 /// The native (thread) stack, in bytes, the engine requires for its
 /// native-recursion budget to be a bound rather than a hope.
@@ -108,7 +108,9 @@ pub fn run_program(bytecode: &[u8]) -> RunOutcome {
 /// becomes a bounded [`Halt::StepLimit`] in milliseconds instead of wedging
 /// the whole test binary.
 pub fn run_program_bounded(bytecode: &[u8], step_limit: u64) -> RunOutcome {
-    Interp::new().run_bounded(bytecode, step_limit).host_coerced()
+    Interp::new()
+        .run_bounded(bytecode, step_limit)
+        .host_coerced()
 }
 
 /// Run a program bytecode buffer with its XS `symbols` atom, so the
@@ -264,5 +266,3 @@ mod tests {
         assert!(!Halt::Return.is_panic());
     }
 }
-
-

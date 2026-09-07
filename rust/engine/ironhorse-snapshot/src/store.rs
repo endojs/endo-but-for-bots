@@ -349,8 +349,7 @@ impl StoreManifest {
                 "store manifest signature truncated",
             )));
         }
-        let signature =
-            Signature::decode(&p[i..i + sig_len]).map_err(SnapshotError::Signature)?;
+        let signature = Signature::decode(&p[i..i + sig_len]).map_err(SnapshotError::Signature)?;
         i += sig_len;
         let crea_hi = take4(&mut i)?;
         let crea_lo = take4(&mut i)?;
@@ -750,7 +749,11 @@ pub fn compute_root(
     let pr = class_tree_root(TREE_PAGES, pages, &build_class_tree(TREE_PAGES, pages));
     let xr = class_tree_root(TREE_EXTS, exts, &build_class_tree(TREE_EXTS, exts));
     let fr = class_tree_root(TREE_FREES, frees, &build_class_tree(TREE_FREES, frees));
-    let sr = class_tree_root(TREE_EDGES, &edge_leaves, &build_class_tree(TREE_EDGES, &edge_leaves));
+    let sr = class_tree_root(
+        TREE_EDGES,
+        &edge_leaves,
+        &build_class_tree(TREE_EDGES, &edge_leaves),
+    );
     combine_class_roots(
         small_leaf,
         [pages.len() as u32, exts.len() as u32, frees.len() as u32],
@@ -1901,11 +1904,7 @@ pub trait HeapStore {
         let wset: std::collections::BTreeSet<u32> = within.iter().copied().collect();
         let edges = self.page_edges()?;
         let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        let mut frontier: Vec<u32> = roots
-            .iter()
-            .copied()
-            .filter(|r| wset.contains(r))
-            .collect();
+        let mut frontier: Vec<u32> = roots.iter().copied().filter(|r| wset.contains(r)).collect();
         for &r in &frontier {
             seen.insert(r);
         }
@@ -2117,7 +2116,13 @@ fn migrate_v6_to_v7(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         // `expected` = recomputed root, `found` = manifest's claim
         // (review wave 4, F4).
@@ -2156,7 +2161,13 @@ fn migrate_v7_to_v8(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         // `expected` = recomputed root, `found` = manifest's claim.
         return Err(StoreError::BaselineMismatch {
@@ -2186,7 +2197,13 @@ fn migrate_v8_to_v9(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         // `expected` = recomputed root, `found` = manifest's claim.
         return Err(StoreError::BaselineMismatch {
@@ -2219,7 +2236,13 @@ fn migrate_v9_to_v10(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         // `expected` = recomputed root, `found` = manifest's claim.
         return Err(StoreError::BaselineMismatch {
@@ -2253,7 +2276,13 @@ fn migrate_v10_to_v11(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         // `expected` = recomputed root, `found` = manifest's claim.
         return Err(StoreError::BaselineMismatch {
@@ -2290,7 +2319,13 @@ fn migrate_v11_to_v12(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         // `expected` = recomputed root, `found` = manifest's claim.
         return Err(StoreError::BaselineMismatch {
@@ -2324,7 +2359,13 @@ fn migrate_v12_to_v13(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         // `expected` = recomputed root, `found` = manifest's claim.
         return Err(StoreError::BaselineMismatch {
@@ -2354,7 +2395,13 @@ fn migrate_v13_to_v14(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2383,7 +2430,13 @@ fn migrate_v14_to_v15(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2412,7 +2465,13 @@ fn migrate_v15_to_v16(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2441,7 +2500,13 @@ fn migrate_v16_to_v17(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2470,7 +2535,13 @@ fn migrate_v17_to_v18(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2498,7 +2569,13 @@ fn migrate_v18_to_v19(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2525,7 +2602,13 @@ fn migrate_v19_to_v20(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2555,7 +2638,13 @@ fn migrate_v21_to_v22(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2581,7 +2670,13 @@ fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2611,7 +2706,13 @@ fn migrate_v22_to_v23(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let (pages, exts) = store.leaf_hashes()?;
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
-    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
     if old != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: old,
@@ -2706,12 +2807,13 @@ pub fn check_succession(
 pub fn check_epoch(stored: Option<u64>, batch_epoch: u64) -> Result<(), StoreError> {
     // A decoded manifest may legally carry u64::MAX; an exhausted
     // epoch is corrupt input, not a wrap to epoch 0.
-    let expected = match stored {
-        None => 1,
-        Some(e) => e.checked_add(1).ok_or(StoreError::Snapshot(
-            crate::format::SnapshotError::Corrupt("store epoch exhausted"),
-        ))?,
-    };
+    let expected =
+        match stored {
+            None => 1,
+            Some(e) => e.checked_add(1).ok_or(StoreError::Snapshot(
+                crate::format::SnapshotError::Corrupt("store epoch exhausted"),
+            ))?,
+        };
     if batch_epoch != expected {
         return Err(StoreError::EpochMismatch {
             expected,
@@ -2931,7 +3033,13 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         });
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
-    let root = compute_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees_all, &edges);
+    let root = compute_root(
+        &small_leaf,
+        &leaf_pages,
+        &leaf_exts,
+        &leaf_frees_all,
+        &edges,
+    );
     if root != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -2961,8 +3069,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             )));
         }
         slots.extend(
-            decode_slots(&bytes)
-                .map_err(|_| SnapshotError::Corrupt("store slot page record"))?,
+            decode_slots(&bytes).map_err(|_| SnapshotError::Corrupt("store slot page record"))?,
         );
     }
 
@@ -3242,7 +3349,10 @@ pub fn validate_store(
     }
     let n_exts = chunk_extent_count(manifest.chunk_len);
     if ext_lens.len() != n_exts as usize {
-        return Err(StoreError::MissingRow("chunk extent", ext_lens.len() as u32));
+        return Err(StoreError::MissingRow(
+            "chunk extent",
+            ext_lens.len() as u32,
+        ));
     }
     for (ext, found) in ext_lens.iter().enumerate() {
         let expected = chunk_extent_len(manifest.chunk_len, ext as u32);
@@ -3608,7 +3718,14 @@ impl HeapStore for MemoryStore {
         let mut leaf_exts = self.leaf_exts.clone();
         let mut leaf_frees = self.leaf_frees.clone();
         let mut edges = self.edges.clone();
-        apply_batch(&mut leaf_pages, &mut leaf_exts, &mut leaf_frees, &mut edges, self.manifest.as_ref(), batch)?;
+        apply_batch(
+            &mut leaf_pages,
+            &mut leaf_exts,
+            &mut leaf_frees,
+            &mut edges,
+            self.manifest.as_ref(),
+            batch,
+        )?;
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }
@@ -3671,7 +3788,10 @@ mod tests {
         assert_eq!(slot_page_count(1), 1);
         assert_eq!(slot_page_count(SLOTS_PER_PAGE), 1);
         assert_eq!(slot_page_count(SLOTS_PER_PAGE + 1), 2);
-        assert_eq!(slot_page_len(SLOTS_PER_PAGE + 1, 0), SLOTS_PER_PAGE as usize);
+        assert_eq!(
+            slot_page_len(SLOTS_PER_PAGE + 1, 0),
+            SLOTS_PER_PAGE as usize
+        );
         assert_eq!(slot_page_len(SLOTS_PER_PAGE + 1, 1), 1);
         assert_eq!(slot_page_len(SLOTS_PER_PAGE + 1, 2), 0);
         let e = CHUNK_EXTENT_BYTES as u64;
@@ -3730,9 +3850,7 @@ mod tests {
         let mut trailing = bytes.clone();
         trailing.push(0);
         match StoreManifest::decode(&trailing) {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest trailing bytes",
-            ))) => {}
+            Err(StoreError::Snapshot(SnapshotError::Corrupt("store manifest trailing bytes"))) => {}
             other => panic!("expected trailing-byte refusal, got {other:?}"),
         }
     }
@@ -3873,7 +3991,9 @@ mod tests {
     fn image_batch_store_image_round_trips() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).expect("commits");
+        store
+            .commit(&image_to_batch(&image, 1, ""))
+            .expect("commits");
         let back = store_to_image(&store).expect("reads back");
         assert_eq!(back, image);
     }
@@ -4120,7 +4240,11 @@ mod tests {
             // edges, then a single middle index.
             for dirt in [
                 (0..width).step_by(3).collect::<Vec<u32>>(),
-                if width > 0 { vec![0, width - 1] } else { vec![] },
+                if width > 0 {
+                    vec![0, width - 1]
+                } else {
+                    vec![]
+                },
                 if width > 2 { vec![width / 2] } else { vec![] },
             ] {
                 if dirt.is_empty() {
@@ -4172,13 +4296,8 @@ mod tests {
         let mut exts: Vec<[u8; 32]> = Vec::new();
         let mut frees: Vec<[u8; 32]> = Vec::new();
         let mut edges: Vec<Vec<u32>> = Vec::new();
-        let mut ledger = RootLedger::build(
-            &small,
-            pages.clone(),
-            exts.clone(),
-            frees.clone(),
-            &edges,
-        );
+        let mut ledger =
+            RootLedger::build(&small, pages.clone(), exts.clone(), frees.clone(), &edges);
 
         // (n_pages, n_exts, n_frees, salt): grow from empty, grow
         // more, stable-width dirt, shrink, mixed.
@@ -4207,18 +4326,20 @@ mod tests {
                 }
                 v
             };
-            let slot_rows: Vec<(u32, Vec<u8>)> = dirty_rows(pages.len().min(n_pages as usize), n_pages)
-                .into_iter()
-                .map(|i| (i, leaf_bytes(i, salt)))
-                .collect();
+            let slot_rows: Vec<(u32, Vec<u8>)> =
+                dirty_rows(pages.len().min(n_pages as usize), n_pages)
+                    .into_iter()
+                    .map(|i| (i, leaf_bytes(i, salt)))
+                    .collect();
             let ext_rows: Vec<(u32, Vec<u8>)> = dirty_rows(exts.len().min(n_exts as usize), n_exts)
                 .into_iter()
                 .map(|i| (i, leaf_bytes(i, salt ^ 1)))
                 .collect();
-            let free_rows: Vec<(u32, Vec<u8>)> = dirty_rows(frees.len().min(n_frees as usize), n_frees)
-                .into_iter()
-                .map(|i| (i, leaf_bytes(i, salt ^ 2)))
-                .collect();
+            let free_rows: Vec<(u32, Vec<u8>)> =
+                dirty_rows(frees.len().min(n_frees as usize), n_frees)
+                    .into_iter()
+                    .map(|i| (i, leaf_bytes(i, salt ^ 2)))
+                    .collect();
             let edge_rows: Vec<(u32, Vec<u32>)> = slot_rows
                 .iter()
                 .map(|(i, _)| (*i, vec![*i, i + salt as u32]))
@@ -4249,15 +4370,16 @@ mod tests {
                 &edges,
             );
             let incremental = ledger
-                .apply(&manifest, &small, &slot_rows, &ext_rows, &free_rows, &edge_rows)
+                .apply(
+                    &manifest, &small, &slot_rows, &ext_rows, &free_rows, &edge_rows,
+                )
                 .unwrap();
             assert_eq!(incremental, scratch, "step {step}");
             assert_eq!(ledger.root(), scratch, "step {step} re-read");
-            assert_eq!(ledger.widths(), [
-                n_pages as usize,
-                n_exts as usize,
-                n_frees as usize
-            ]);
+            assert_eq!(
+                ledger.widths(),
+                [n_pages as usize, n_exts as usize, n_frees as usize]
+            );
         }
 
         // An out-of-range row fails closed instead of panicking.
@@ -4353,5 +4475,4 @@ mod tests {
             ))),
         );
     }
-
 }

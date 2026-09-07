@@ -53,9 +53,7 @@ fn distinct_symbols_are_distinct_keys() {
         "var a = Symbol(); var b = Symbol(); var o = {}; o[a] = 1; o[b] = 2; o[b]",
     );
     // A well-known symbol is a distinct key from a fresh user symbol.
-    assert_result_agrees(
-        "var s = Symbol(); var o = {}; o[s] = 1; o[Symbol.iterator] = 2; o[s]",
-    );
+    assert_result_agrees("var s = Symbol(); var o = {}; o[s] = 1; o[Symbol.iterator] = 2; o[s]");
 }
 
 // -------------------------------------------------------------------------
@@ -123,7 +121,9 @@ fn symbol_in_and_delete() {
 fn object_keys_excludes_symbol_keys() {
     // A symbol key does not appear in `Object.keys` (string-key enumeration),
     // so a string-keyed object with an extra symbol key keeps its string count.
-    assert_result_agrees("var s = Symbol(); var o = { a: 1, b: 2 }; o[s] = 3; Object.keys(o).length");
+    assert_result_agrees(
+        "var s = Symbol(); var o = { a: 1, b: 2 }; o[s] = 3; Object.keys(o).length",
+    );
     assert_result_agrees("var s = Symbol(); var o = {}; o[s] = 3; Object.keys(o).length");
     assert_result_agrees("var s = Symbol(); var o = { a: 1 }; o[s] = 3; Object.keys(o)[0]");
 }

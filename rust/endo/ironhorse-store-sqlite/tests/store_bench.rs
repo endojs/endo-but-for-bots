@@ -126,7 +126,11 @@ fn store_query_cost_across_heap_sizes() {
         let mut session = resume_from_store_lazy(store.clone(), &sig()).unwrap();
         for k in 0..5 {
             let o = session.machine_mut().run(&b2);
-            assert_eq!(o.result, (8 + k).to_string(), "touch crank result (symbol alignment)");
+            assert_eq!(
+                o.result,
+                (8 + k).to_string(),
+                "touch crank result (symbol alignment)"
+            );
             let t0 = Instant::now();
             checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).unwrap();
             commit_ms.push(t0.elapsed().as_secs_f64() * 1e3);
@@ -138,7 +142,10 @@ fn store_query_cost_across_heap_sizes() {
         // the heap and dense/CTE do comparable work (and must AGREE).
         let full_answer = reachable_pages(&*store.borrow(), [0u32]).unwrap().len();
         let cte_full_answer = store.borrow().reachable_pages_sql(&[0]).unwrap().len();
-        assert_eq!(full_answer, cte_full_answer, "dense and CTE agree on the full answer");
+        assert_eq!(
+            full_answer, cte_full_answer,
+            "dense and CTE agree on the full answer"
+        );
         let dense_full_ms: Vec<f64> = (0..5)
             .map(|_| {
                 let t0 = Instant::now();
@@ -162,7 +169,11 @@ fn store_query_cost_across_heap_sizes() {
         // the transfer-∝-answer contrast — the CTE tracks the answer, the
         // dense path tracks the heap.
         let small_root = [pages + 7];
-        let small_answer = store.borrow().reachable_pages_sql(&small_root).unwrap().len();
+        let small_answer = store
+            .borrow()
+            .reachable_pages_sql(&small_root)
+            .unwrap()
+            .len();
         let dense_small_ms: Vec<f64> = (0..5)
             .map(|_| {
                 let t0 = Instant::now();

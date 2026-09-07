@@ -30,9 +30,9 @@ use crate::meter::ParseMeter;
 use crate::token::Token;
 use crate::token_flags::has_flag;
 use crate::token_flags::{
-    ASSIGN_EXPRESSION, BEGIN_EXPRESSION, CALL_EXPRESSION, EQUAL_EXPRESSION, EXPONENTIATION_EXPRESSION,
-    IDENTIFIER_NAME, POSTFIX_EXPRESSION, PREFIX_EXPRESSION, RELATIONAL_EXPRESSION, SHIFT_EXPRESSION,
-    UNARY_EXPRESSION,
+    ASSIGN_EXPRESSION, BEGIN_EXPRESSION, CALL_EXPRESSION, EQUAL_EXPRESSION,
+    EXPONENTIATION_EXPRESSION, IDENTIFIER_NAME, POSTFIX_EXPRESSION, PREFIX_EXPRESSION,
+    RELATIONAL_EXPRESSION, SHIFT_EXPRESSION, UNARY_EXPRESSION,
 };
 
 /// A parser error, classified and located as XS's `fxReportParserError`
@@ -73,7 +73,11 @@ impl std::error::Error for ParseError {}
 
 impl From<LexError> for ParseError {
     fn from(e: LexError) -> ParseError {
-        ParseError { line: e.line, kind: ParseErrorKind::Lex(e.clone()), message: e.to_string() }
+        ParseError {
+            line: e.line,
+            kind: ParseErrorKind::Lex(e.clone()),
+            message: e.to_string(),
+        }
     }
 }
 
@@ -247,7 +251,11 @@ impl Parser {
     // --- errors ---
 
     fn error(&self, message: &str) -> ParseError {
-        ParseError { line: self.cur.line, kind: ParseErrorKind::Syntax, message: message.to_string() }
+        ParseError {
+            line: self.cur.line,
+            kind: ParseErrorKind::Syntax,
+            message: message.to_string(),
+        }
     }
 
     fn unsupported_error(&self, message: &str) -> ParseError {
@@ -358,11 +366,23 @@ impl Parser {
     }
 
     fn push_integer(&mut self, value: i32, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(Token::Integer, line, 0, Vec::new(), Value::Integer(value)))));
+        self.push(Item::Node(Box::new(Node::new(
+            Token::Integer,
+            line,
+            0,
+            Vec::new(),
+            Value::Integer(value),
+        ))));
     }
 
     fn push_number(&mut self, value: f64, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(Token::Number, line, 0, Vec::new(), Value::Number(value)))));
+        self.push(Item::Node(Box::new(Node::new(
+            Token::Number,
+            line,
+            0,
+            Vec::new(),
+            Value::Number(value),
+        ))));
     }
 
     fn push_string(&mut self, value: Vec<u16>, line: u32, escaped: bool) {
@@ -378,7 +398,13 @@ impl Parser {
         if legacy {
             flags |= flags::STRING_LEGACY;
         }
-        self.push(Item::Node(Box::new(Node::new(Token::String, line, flags, Vec::new(), Value::Str(value)))));
+        self.push(Item::Node(Box::new(Node::new(
+            Token::String,
+            line,
+            flags,
+            Vec::new(),
+            Value::Str(value),
+        ))));
     }
 
     /// `fxPushStringNode` sets `flags = states[0].escaped`
@@ -391,7 +417,13 @@ impl Parser {
         if error {
             flags |= flags::STRING_ERROR;
         }
-        self.push(Item::Node(Box::new(Node::new(Token::String, line, flags, Vec::new(), Value::Str(value)))));
+        self.push(Item::Node(Box::new(Node::new(
+            Token::String,
+            line,
+            flags,
+            Vec::new(),
+            Value::Str(value),
+        ))));
     }
 
     /// An untagged template's cooked value is coded through `fxStringNodeCode`,
@@ -401,8 +433,12 @@ impl Parser {
     /// slot (it emits `undefined` instead), so this fires only for the untagged
     /// primary-position template just built on the stack top.
     fn reject_untagged_template_cooked_error(&self) -> PResult<()> {
-        let Some(Item::Node(node)) = self.stack.last() else { return Ok(()) };
-        let Some(Item::List(items)) = node.children.get(1) else { return Ok(()) };
+        let Some(Item::Node(node)) = self.stack.last() else {
+            return Ok(());
+        };
+        let Some(Item::List(items)) = node.children.get(1) else {
+            return Ok(());
+        };
         for item in items {
             if let Item::Node(mid) = item {
                 if mid.token == Token::TemplateMiddle {
@@ -418,11 +454,23 @@ impl Parser {
     }
 
     fn push_raw(&mut self, value: Vec<u16>, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(Token::String, line, 0, Vec::new(), Value::Str(value)))));
+        self.push(Item::Node(Box::new(Node::new(
+            Token::String,
+            line,
+            0,
+            Vec::new(),
+            Value::Str(value),
+        ))));
     }
 
     fn push_bigint(&mut self, value: crate::lexer::BigIntLiteral, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(Token::Bigint, line, 0, Vec::new(), Value::BigInt(value)))));
+        self.push(Item::Node(Box::new(Node::new(
+            Token::Bigint,
+            line,
+            0,
+            Vec::new(),
+            Value::BigInt(value),
+        ))));
     }
 
     /// `fxPushNodeStruct` — pop `count` stack items and build a node of
@@ -435,7 +483,13 @@ impl Parser {
         }
         let start = self.stack.len() - count;
         let children: Vec<Item> = self.stack.split_off(start);
-        let node = Node::new(token, line, self.flags & flags::INHERITED, children, Value::None);
+        let node = Node::new(
+            token,
+            line,
+            self.flags & flags::INHERITED,
+            children,
+            Value::None,
+        );
         // The tree-depth invariant: no node deeper than
         // [`crate::ast::TREE_DEPTH_LIMIT`] is ever built, so no later pass —
         // nor the tree's own drop glue — recurses past it. This is where a
@@ -486,7 +540,13 @@ impl Parser {
     /// exactly as `fxPushNodeStruct` would (used by the off-stack
     /// cover-grammar binding conversions).
     fn new_inherited_node(&self, token: Token, line: u32, children: Vec<Item>) -> Item {
-        Item::Node(Box::new(Node::new(token, line, self.flags & flags::INHERITED, children, Value::None)))
+        Item::Node(Box::new(Node::new(
+            token,
+            line,
+            self.flags & flags::INHERITED,
+            children,
+            Value::None,
+        )))
     }
 
     /// `fxDefineNodeNew(DEFINE, symbol)` + `node->initializer = pop`: pop
@@ -494,7 +554,13 @@ impl Parser {
     /// `symbol`.
     fn push_define(&mut self, symbol: String, line: u32) {
         let init = self.pop();
-        self.push(Item::Node(Box::new(Node::new(Token::Define, line, 0, vec![Item::Symbol(symbol), init], Value::None))));
+        self.push(Item::Node(Box::new(Node::new(
+            Token::Define,
+            line,
+            0,
+            vec![Item::Symbol(symbol), init],
+            Value::None,
+        ))));
     }
 
     /// Push an already-collected list of items as a `List` slot (the
@@ -507,7 +573,10 @@ impl Parser {
     /// `parser->states[1].token` — the one-token lookahead's kind, or
     /// [`Token::NoToken`] if no lookahead is buffered.
     fn ahead_token(&self) -> Token {
-        self.ahead.as_ref().map(|s| s.token).unwrap_or(Token::NoToken)
+        self.ahead
+            .as_ref()
+            .map(|s| s.token)
+            .unwrap_or(Token::NoToken)
     }
 
     /// `parser->states[1].crlf` — whether a line terminator precedes the
@@ -517,7 +586,10 @@ impl Parser {
     }
 
     fn ahead2_token(&self) -> Token {
-        self.ahead2.as_ref().map(|s| s.token).unwrap_or(Token::NoToken)
+        self.ahead2
+            .as_ref()
+            .map(|s| s.token)
+            .unwrap_or(Token::NoToken)
     }
 
     /// The symbol of the top-of-stack `Access` node (its `child[0]`), if
@@ -568,7 +640,10 @@ impl Parser {
                 }
                 Ok(true)
             }
-            Some(Token::Member) | Some(Token::MemberAt) | Some(Token::PrivateMember) | Some(Token::Undefined) => Ok(true),
+            Some(Token::Member)
+            | Some(Token::MemberAt)
+            | Some(Token::PrivateMember)
+            | Some(Token::Undefined) => Ok(true),
             _ => {
                 if token == Token::Assign {
                     if t == Some(Token::Array) {
@@ -595,10 +670,12 @@ impl Parser {
     fn unwrap_reference_cover(&mut self) {
         loop {
             let single = match self.stack.last() {
-                Some(Item::Node(node)) if node.token == Token::Expressions => match node.children.first() {
-                    Some(Item::List(items)) if items.len() == 1 => Some(items[0].clone()),
-                    _ => None,
-                },
+                Some(Item::Node(node)) if node.token == Token::Expressions => {
+                    match node.children.first() {
+                        Some(Item::List(items)) if items.len() == 1 => Some(items[0].clone()),
+                        _ => None,
+                    }
+                }
                 _ => None,
             };
             let Some(item) = single else { return };
@@ -607,7 +684,10 @@ impl Parser {
                 _ => None,
             };
             match inner_token {
-                Some(Token::Access) | Some(Token::Member) | Some(Token::MemberAt) | Some(Token::PrivateMember)
+                Some(Token::Access)
+                | Some(Token::Member)
+                | Some(Token::MemberAt)
+                | Some(Token::PrivateMember)
                 | Some(Token::Undefined) => {
                     self.pop();
                     self.push(item);
@@ -1135,7 +1215,11 @@ impl Parser {
                 self.get_next_token()?;
             }
             Token::Bigint => {
-                let b = self.cur.bigint.clone().expect("bigint lexeme carries a literal");
+                let b = self
+                    .cur
+                    .bigint
+                    .clone()
+                    .expect("bigint lexeme carries a literal");
                 self.push_bigint(b, line);
                 self.get_next_token()?;
             }
@@ -1228,7 +1312,10 @@ impl Parser {
     /// The cooked / raw strings of the current `Template`/`TemplateHead`
     /// lexeme.
     fn cur_template_strings(&self) -> (Vec<u16>, Vec<u16>) {
-        (self.cur.string.clone().unwrap_or_default(), self.cur.raw.clone().unwrap_or_default())
+        (
+            self.cur.string.clone().unwrap_or_default(),
+            self.cur.raw.clone().unwrap_or_default(),
+        )
     }
 
     /// `import` in expression position: dynamic `import(...)` or
@@ -1526,7 +1613,11 @@ impl Parser {
         let token0 = self.cur.token;
         if has_flag(token0, IDENTIFIER_NAME) {
             symbol = self.cur.symbol.clone();
-            let ahead_token = self.ahead.as_ref().map(|s| s.token).unwrap_or(Token::NoToken);
+            let ahead_token = self
+                .ahead
+                .as_ref()
+                .map(|s| s.token)
+                .unwrap_or(Token::NoToken);
             let ahead_crlf = self.ahead.as_ref().map(|s| s.crlf).unwrap_or(false);
             if ahead_token == Token::Colon {
                 self.push_symbol(symbol.clone().unwrap_or_default());
@@ -1560,12 +1651,18 @@ impl Parser {
         } else if self.cur.token == Token::Integer {
             match self.push_property_index_integer(self.cur.integer, line) {
                 None => token1 = Token::PropertyAt,
-                Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                Some(s) => {
+                    symbol = Some(s);
+                    token1 = Token::Property;
+                }
             }
         } else if self.cur.token == Token::Number {
             match self.push_property_index_number(self.cur.number, line) {
                 None => token1 = Token::PropertyAt,
-                Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                Some(s) => {
+                    symbol = Some(s);
+                    token1 = Token::Property;
+                }
             }
         } else if self.cur.token == Token::String {
             let s = crate::ast::units_to_string(&self.cur.string.clone().unwrap_or_default());
@@ -1609,13 +1706,19 @@ impl Parser {
             } else if self.cur.token == Token::Integer {
                 match self.push_property_index_integer(self.cur.integer, line) {
                     None => token1 = Token::PropertyAt,
-                    Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                    Some(s) => {
+                        symbol = Some(s);
+                        token1 = Token::Property;
+                    }
                 }
                 self.get_next_token()?;
             } else if self.cur.token == Token::Number {
                 match self.push_property_index_number(self.cur.number, line) {
                     None => token1 = Token::PropertyAt,
-                    Some(s) => { symbol = Some(s); token1 = Token::Property; }
+                    Some(s) => {
+                        symbol = Some(s);
+                        token1 = Token::Property;
+                    }
                 }
                 self.get_next_token()?;
             } else if self.cur.token == Token::String {

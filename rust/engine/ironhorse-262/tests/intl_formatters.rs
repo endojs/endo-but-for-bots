@@ -152,13 +152,34 @@ fn plural_rules_select_english_cardinal_and_ordinal_are_exact() {
         ("new Intl.PluralRules('en').select(0)", "other"),
         ("new Intl.PluralRules('en').select(1.5)", "other"),
         ("new Intl.PluralRules('en').select(-1)", "one"),
-        ("new Intl.PluralRules('en',{type:'ordinal'}).select(1)", "one"),
-        ("new Intl.PluralRules('en',{type:'ordinal'}).select(2)", "two"),
-        ("new Intl.PluralRules('en',{type:'ordinal'}).select(3)", "few"),
-        ("new Intl.PluralRules('en',{type:'ordinal'}).select(4)", "other"),
-        ("new Intl.PluralRules('en',{type:'ordinal'}).select(11)", "other"),
-        ("new Intl.PluralRules('en',{type:'ordinal'}).select(21)", "one"),
-        ("new Intl.PluralRules('en',{type:'ordinal'}).select(22)", "two"),
+        (
+            "new Intl.PluralRules('en',{type:'ordinal'}).select(1)",
+            "one",
+        ),
+        (
+            "new Intl.PluralRules('en',{type:'ordinal'}).select(2)",
+            "two",
+        ),
+        (
+            "new Intl.PluralRules('en',{type:'ordinal'}).select(3)",
+            "few",
+        ),
+        (
+            "new Intl.PluralRules('en',{type:'ordinal'}).select(4)",
+            "other",
+        ),
+        (
+            "new Intl.PluralRules('en',{type:'ordinal'}).select(11)",
+            "other",
+        ),
+        (
+            "new Intl.PluralRules('en',{type:'ordinal'}).select(21)",
+            "one",
+        ),
+        (
+            "new Intl.PluralRules('en',{type:'ordinal'}).select(22)",
+            "two",
+        ),
     ] {
         intl_result(source, expected);
     }
@@ -208,7 +229,10 @@ fn arguments_length_counts_all_passed_arguments() {
         ("(function(a,b,c){return arguments.length})(1,2,3,4)", "4"),
         ("(function(a,b){return arguments.length})(1)", "1"),
         ("(function(){return arguments.length})(9,9)", "2"),
-        ("'use strict';(function(a,b){return arguments.length})(7,8,9)", "3"),
+        (
+            "'use strict';(function(a,b){return arguments.length})(7,8,9)",
+            "3",
+        ),
         ("(function(a,b,c){return arguments[3]})(1,2,3,4)", "4"),
     ] {
         let run = dual_run(source).expect("the XS oracle machine must start");

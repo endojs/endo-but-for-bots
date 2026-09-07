@@ -269,8 +269,7 @@ impl Decimal {
                 None => Decimal::zero(),
                 Some(k) => {
                     let exponent = -(k as i32) - 1;
-                    let mut digits: Vec<u8> =
-                        frac_str[k..].bytes().map(|b| b - b'0').collect();
+                    let mut digits: Vec<u8> = frac_str[k..].bytes().map(|b| b - b'0').collect();
                     trim_trailing_zeros(&mut digits);
                     Decimal { digits, exponent }
                 }
@@ -310,12 +309,7 @@ fn trim_trailing_zeros(digits: &mut Vec<u8>) {
 /// **fixed-width** digit vector (length == `keep`, may include trailing zeros)
 /// paired with the exponent of its leading digit. `keep == 0` rounds to either
 /// zero or one (a leading 1 from carrying).
-fn round_to_significant(
-    dec: &Decimal,
-    keep: usize,
-    mode: RoundingMode,
-    negative: bool,
-) -> Decimal {
+fn round_to_significant(dec: &Decimal, keep: usize, mode: RoundingMode, negative: bool) -> Decimal {
     if dec.is_zero() {
         return Decimal {
             digits: vec![0; keep],
@@ -461,7 +455,12 @@ fn to_raw_fixed(
         r = apply_rounding_increment(dec, min_frac, max_frac, mode, negative, rounding_increment);
     }
     // Trim to at least min_frac, honoring stripIfInteger.
-    trim_fraction(&mut r.frac_digits, min_frac as usize, trailing_zero, &r.int_digits);
+    trim_fraction(
+        &mut r.frac_digits,
+        min_frac as usize,
+        trailing_zero,
+        &r.int_digits,
+    );
     r
 }
 
@@ -561,9 +560,7 @@ fn apply_rounding_increment(
             RoundingMode::HalfFloor => matches!(ord, Greater) || (ord == Equal && negative),
             RoundingMode::HalfExpand => matches!(ord, Greater | Equal),
             RoundingMode::HalfTrunc => matches!(ord, Greater),
-            RoundingMode::HalfEven => {
-                matches!(ord, Greater) || (ord == Equal && (q % 2 == 1))
-            }
+            RoundingMode::HalfEven => matches!(ord, Greater) || (ord == Equal && (q % 2 == 1)),
         }
     };
     let result = (q + if up { 1 } else { 0 }) * inc;
@@ -756,7 +753,13 @@ fn grouping_sizes(locale: &str) -> (usize, usize) {
 /// interleaved as `Part`s of type `integer`/`group`. The `sep` is the raw
 /// separator string (already numbering-mapped is not needed — separators are
 /// literal).
-fn group_integer(int_digits: &str, primary: usize, secondary: usize, sep: &str, nu: &str) -> Vec<Part> {
+fn group_integer(
+    int_digits: &str,
+    primary: usize,
+    secondary: usize,
+    sep: &str,
+    nu: &str,
+) -> Vec<Part> {
     let bytes: Vec<u8> = int_digits.bytes().collect();
     let n = bytes.len();
     // Compute the byte positions (from the right) at which a group boundary
@@ -789,7 +792,9 @@ fn should_group(grouping: Grouping, int_digit_count: usize, notation: Notation) 
         Grouping::Never => false,
         // Notation `compact`/`scientific`/`engineering` never group unless
         // explicitly `always` — the mantissa is below the group threshold.
-        Grouping::Always => int_digit_count > 3 || notation == Notation::Standard && int_digit_count > 3,
+        Grouping::Always => {
+            int_digit_count > 3 || notation == Notation::Standard && int_digit_count > 3
+        }
         Grouping::Auto => notation == Notation::Standard && int_digit_count > 3,
         Grouping::Min2 => notation == Notation::Standard && int_digit_count > 4,
     }
@@ -952,11 +957,7 @@ fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, b
 
 /// Build the body for an exact finite decimal magnitude. Keeping this path
 /// independent of `f64` lets BigInt locale formatting preserve every digit.
-fn finite_body_parts(
-    opts: &NfResolved,
-    mut dec: Decimal,
-    negative: bool,
-) -> (Vec<Part>, bool) {
+fn finite_body_parts(opts: &NfResolved, mut dec: Decimal, negative: bool) -> (Vec<Part>, bool) {
     let mut parts = Vec::new();
     if opts.style == Style::Percent {
         dec.scale_pow10(2);
@@ -1010,7 +1011,10 @@ fn finite_body_parts(
     }
 
     if !rendered.frac_digits.is_empty() {
-        parts.push(Part::new(PartType::Decimal, decimal_separator(&opts.locale)));
+        parts.push(Part::new(
+            PartType::Decimal,
+            decimal_separator(&opts.locale),
+        ));
         parts.push(Part::new(
             PartType::Fraction,
             map_digits(&rendered.frac_digits, nu),
@@ -1078,13 +1082,12 @@ fn apply_style_pattern(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
                     "de" | "es" | "fr" | "it" | "nl" | "pt" | "ru" | "tr"
                 );
             if suffix {
-                let separator = if opts.currency_display == CurrencyDisplay::Name
-                    && language == "en"
-                {
-                    " "
-                } else {
-                    "\u{00a0}"
-                };
+                let separator =
+                    if opts.currency_display == CurrencyDisplay::Name && language == "en" {
+                        " "
+                    } else {
+                        "\u{00a0}"
+                    };
                 parts.push(Part::new(PartType::Literal, separator));
                 parts.push(Part::new(PartType::Currency, label));
                 return parts;
@@ -1104,7 +1107,10 @@ fn apply_style_pattern(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
             // minus sign with parentheses for prefix currency patterns.
             if opts.currency_sign == CurrencySign::Accounting
                 && language == "en"
-                && matches!(parts.first().map(|part| part.kind), Some(PartType::MinusSign))
+                && matches!(
+                    parts.first().map(|part| part.kind),
+                    Some(PartType::MinusSign)
+                )
             {
                 parts[0] = Part::new(PartType::Literal, "(");
                 parts.push(Part::new(PartType::Literal, ")"));
@@ -1179,8 +1185,7 @@ fn rendered_value_is_one(opts: &NfResolved, parts: &[Part]) -> bool {
 /// Convert digits from a supported numbering system back to ASCII for the
 /// small amount of exact-value reasoning required by plural selection.
 fn unmap_digits(value: &str, nu: &str) -> Option<String> {
-    let map = numbering_digits(nu)
-        .unwrap_or(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+    let map = numbering_digits(nu).unwrap_or(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
     let mut ascii = String::with_capacity(value.len());
     for ch in value.chars() {
         let digit = map

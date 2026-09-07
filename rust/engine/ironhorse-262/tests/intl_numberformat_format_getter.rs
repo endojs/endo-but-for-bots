@@ -43,7 +43,10 @@ fn both_exact(source: &str, expected: &str) {
         "both engines must complete `{source}` (ih halt: {:?})",
         run.ironhorse_halt,
     );
-    assert_eq!(run.ironhorse_result, expected, "ironhorse value for `{source}`");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse value for `{source}`"
+    );
     assert_eq!(run.oracle_result, expected, "oracle value for `{source}`");
     assert!(
         run.is_bit_exact(),
@@ -65,7 +68,10 @@ fn both_value(source: &str, expected: &str) {
         "both engines must complete `{source}` (ih halt: {:?})",
         run.ironhorse_halt,
     );
-    assert_eq!(run.ironhorse_result, expected, "ironhorse value for `{source}`");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse value for `{source}`"
+    );
     assert_eq!(run.oracle_result, expected, "oracle value for `{source}`");
 }
 
@@ -79,7 +85,10 @@ fn format_is_an_accessor_property_on_the_prototype() {
         "function,true,false,true",
     );
     // It is a real own property of the prototype, reachable by the string key.
-    intl_result("Intl.NumberFormat.prototype.hasOwnProperty('format')", "true");
+    intl_result(
+        "Intl.NumberFormat.prototype.hasOwnProperty('format')",
+        "true",
+    );
     // The accessor is configurable: it can be deleted and redefined.
     intl_result(
         "delete Intl.NumberFormat.prototype.format;\
@@ -117,7 +126,10 @@ fn format_getter_is_a_builtin_function() {
 fn format_getter_returns_a_cached_bound_function() {
     // The same bound function is returned on every read (the [[BoundFormat]]
     // cache) — bound-to-numberformat-instance.js relies on this identity.
-    intl_result("var nf=new Intl.NumberFormat('en-US'); nf.format===nf.format", "true");
+    intl_result(
+        "var nf=new Intl.NumberFormat('en-US'); nf.format===nf.format",
+        "true",
+    );
     // The bound function is an anonymous, length-1, non-constructor builtin
     // with no own `prototype` (format-function-{name,length,builtin}.js).
     intl_result(
@@ -199,7 +211,10 @@ fn object_to_string_tags_callables_as_function() {
         "Object.prototype.toString.call(function(){})",
         "[object Function]",
     );
-    both_exact("Object.prototype.toString.call(Object)", "[object Function]");
+    both_exact(
+        "Object.prototype.toString.call(Object)",
+        "[object Function]",
+    );
     both_exact(
         "Object.prototype.toString.call(Array.prototype.map)",
         "[object Function]",
@@ -224,10 +239,7 @@ fn reflect_construct_requires_a_constructor() {
     );
     // A genuine constructor still works (value-level; Reflect.construct's exact
     // computron count is not calibrated against XS here).
-    both_value(
-        "Reflect.construct(function(a){this.a=a;}, [7]).a",
-        "7",
-    );
+    both_value("Reflect.construct(function(a){this.a=a;}, [7]).a", "7");
 }
 
 #[test]

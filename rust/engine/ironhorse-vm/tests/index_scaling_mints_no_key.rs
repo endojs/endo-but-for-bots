@@ -145,12 +145,18 @@ fn array_from_over_a_large_array_like_mints_no_key() {
 
 #[test]
 fn array_from_over_a_large_sparse_array_mints_no_key() {
-    assert_result(&format!("var a = []; a.length = {N}; Array.from(a).length"), "70000");
+    assert_result(
+        &format!("var a = []; a.length = {N}; Array.from(a).length"),
+        "70000",
+    );
 }
 
 #[test]
 fn spreading_a_large_sparse_array_mints_no_key() {
-    assert_result(&format!("var a = []; a.length = {N}; [...a].length"), "70000");
+    assert_result(
+        &format!("var a = []; a.length = {N}; [...a].length"),
+        "70000",
+    );
 }
 
 /// A Proxy anywhere on the chain makes EVERY index answerable, so the probe
@@ -193,9 +199,18 @@ fn array_from_async_over_a_large_array_like_mints_no_key() {
 
 #[test]
 fn array_from_over_a_proxy_still_answers_the_same() {
-    assert_result("Array.from(new Proxy({length: 3, 1: 'x'}, {})).join('|')", "|x|");
-    assert_result("var b = [1, 2, 3]; Array.from(new Proxy(b, {})).join('|')", "1|2|3");
-    assert_result("var b = [1, , 3]; Array.from(new Proxy(b, {})).join('|')", "1||3");
+    assert_result(
+        "Array.from(new Proxy({length: 3, 1: 'x'}, {})).join('|')",
+        "|x|",
+    );
+    assert_result(
+        "var b = [1, 2, 3]; Array.from(new Proxy(b, {})).join('|')",
+        "1|2|3",
+    );
+    assert_result(
+        "var b = [1, , 3]; Array.from(new Proxy(b, {})).join('|')",
+        "1||3",
+    );
     assert_result(
         "var b = [1, 2]; Object.setPrototypeOf(b, {1: 'inh'});          Array.from(new Proxy(b, {})).join('|')",
         "1|2",
@@ -279,7 +294,10 @@ fn a_generic_array_read_over_a_large_sparse_array_mints_no_key() {
         &format!("{setup} String(a.includes(7)) + '|' + String(a.indexOf(7))"),
         "false|-1",
     );
-    assert_result(&format!("{setup} String(a.every(function () {{ return false; }}))"), "true");
+    assert_result(
+        &format!("{setup} String(a.every(function () {{ return false; }}))"),
+        "true",
+    );
 }
 
 #[test]
@@ -475,7 +493,10 @@ fn assigning_from_a_large_array_whose_keys_are_all_skipped_mints_no_key() {
 
 #[test]
 fn object_assign_still_copies_only_enumerable_own_keys() {
-    assert_result("JSON.stringify(Object.assign({}, [1, 2, 3]))", "{\"0\":1,\"1\":2,\"2\":3}");
+    assert_result(
+        "JSON.stringify(Object.assign({}, [1, 2, 3]))",
+        "{\"0\":1,\"1\":2,\"2\":3}",
+    );
     assert_result(
         "var a = [1, 2]; a.x = 5; JSON.stringify(Object.assign({}, a))",
         "{\"0\":1,\"1\":2,\"x\":5}",
@@ -485,7 +506,10 @@ fn object_assign_still_copies_only_enumerable_own_keys() {
          JSON.stringify(Object.assign({}, t))",
         "{}",
     );
-    assert_result("JSON.stringify(Object.assign({}, 'ab'))", "{\"0\":\"a\",\"1\":\"b\"}");
+    assert_result(
+        "JSON.stringify(Object.assign({}, 'ab'))",
+        "{\"0\":\"a\",\"1\":\"b\"}",
+    );
     // The source's traps are still all called, in order.
     assert_result(
         "var seen = []; \

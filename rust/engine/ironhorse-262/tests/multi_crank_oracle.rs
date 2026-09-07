@@ -18,11 +18,7 @@ fn agrees(cranks: &[&str]) {
     let runs = dual_run_cranks(cranks).expect("the XS oracle machine must start");
     assert_eq!(runs.len(), cranks.len(), "every crank ran");
     for (i, run) in runs.iter().enumerate() {
-        assert_eq!(
-            run.agreement,
-            Agreement::BothComplete,
-            "crank {i}: {run:?}"
-        );
+        assert_eq!(run.agreement, Agreement::BothComplete, "crank {i}: {run:?}");
         assert!(run.is_bit_exact(), "crank {i}: {run:?}");
     }
 }

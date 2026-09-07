@@ -56,7 +56,11 @@ fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
 /// Run crank 1 and the observation cranks uninterrupted, and the same
 /// cranks across a checkpoint/resume split on `store`; assert the
 /// observations agree pairwise and return the continuous ones.
-fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
+fn twin(
+    crank1: &str,
+    observations: &[&str],
+    store: &mut dyn HeapStore,
+) -> Vec<(bool, String, String, u64)> {
     let (b1, n1) = compile(crank1);
 
     let mut cont = Interp::new();
@@ -76,7 +80,10 @@ fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(
         .iter()
         .map(|s| crank(session.machine_mut(), s))
         .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
+    assert_eq!(
+        continuous, resumed,
+        "resumed observes exactly as uninterrupted"
+    );
     checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
     validate_store(store, &sig()).expect("post-crank store validates");
     continuous
@@ -89,7 +96,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     let got: Vec<&str> = seen.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -235,19 +245,16 @@ fn resumed_set_entries_iterator_answers_like_uninterrupted() {
         "ih-iter-twin-set",
         "var s = 0; var si2 = 0; var t = 0; \
          s = new Set(); s.add(5); s.add(6); si2 = s.entries(); si2.next(); t = 7; t",
-        &[
-            "var si2; var t; var r = 0; r = si2.next(); \
-             t = r.value[0] + ':' + r.value[1] + ':' + r.done; t",
-        ],
+        &["var si2; var t; var r = 0; r = si2.next(); \
+             t = r.value[0] + ':' + r.value[1] + ':' + r.done; t"],
         &["6:6:false"],
     );
 }
 
 #[test]
 fn blob_snapshot_carries_the_iterator_rows_too() {
-    let (b1, n1) = compile(
-        "var it = 0; var t = 0; it = [4, 5, 6].values(); t = it.next().value; t",
-    );
+    let (b1, n1) =
+        compile("var it = 0; var t = 0; it = [4, 5, 6].values(); t = it.next().value; t");
     let obs = "var it; var t; t = it.next().value; t";
 
     let mut cont = Interp::new();

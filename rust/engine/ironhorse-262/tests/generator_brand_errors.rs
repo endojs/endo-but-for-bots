@@ -28,8 +28,7 @@ fn reentrant_generator_resume_throws_a_catchable_type_error() {
 
 #[test]
 fn async_generator_methods_reject_for_incompatible_receivers() {
-    let source =
-        "var g='';var p=Object.getPrototypeOf(async function*(){}());\
+    let source = "var g='';var p=Object.getPrototypeOf(async function*(){}());\
          p.next.call({}).then(undefined,function(e){g+='n'+(e instanceof TypeError)});\
          p.return.call({}).then(undefined,function(e){g+='r'+(e instanceof TypeError)});\
          p.throw.call({}).then(undefined,function(e){g+='t'+(e instanceof TypeError)});undefined";
@@ -47,7 +46,11 @@ fn async_generator_brand_rejections_include_the_reject_call_metering() {
              .then(undefined,function(e){{g=e instanceof TypeError}})"
         );
         let run = dual_run_async(&source, "g").expect("the XS oracle machine must start");
-        assert_eq!(run.run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+        assert_eq!(
+            run.run.agreement,
+            Agreement::BothComplete,
+            "{source}: {run:?}"
+        );
         assert_eq!(run.ironhorse_signal.as_deref(), Some("true"), "{source}");
         assert!(
             run.run.computrons_agree,

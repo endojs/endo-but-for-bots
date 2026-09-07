@@ -46,10 +46,7 @@ fn shared_array_buffer_completion_tag() {
 
 #[test]
 fn data_view_completion_tag() {
-    assert_agree(
-        "new DataView(new ArrayBuffer(8))",
-        "[object DataView]",
-    );
+    assert_agree("new DataView(new ArrayBuffer(8))", "[object DataView]");
 }
 
 #[test]
@@ -58,7 +55,10 @@ fn typed_array_completion_joins_elements() {
     // NOT its `[object …]` tag.
     assert_agree("new Int8Array(3)", "0,0,0");
     assert_agree("new Uint8Array(0)", "");
-    assert_agree("var a = new Int16Array(3); a[0] = 7; a[2] = -9; a", "7,0,-9");
+    assert_agree(
+        "var a = new Int16Array(3); a[0] = 7; a[2] = -9; a",
+        "7,0,-9",
+    );
 }
 
 #[test]
@@ -72,8 +72,14 @@ fn bigint_typed_array_completion_joins_decimals() {
 fn arguments_completion_tag() {
     // The `arguments` exotic's `Object.prototype.toString` builtinTag is
     // `Arguments`; it does NOT join its indexed elements.
-    assert_agree("(function(){ return arguments; })(1, 2)", "[object Arguments]");
-    assert_agree("(function(){ 'use strict'; return arguments; })(1, 2)", "[object Arguments]");
+    assert_agree(
+        "(function(){ return arguments; })(1, 2)",
+        "[object Arguments]",
+    );
+    assert_agree(
+        "(function(){ 'use strict'; return arguments; })(1, 2)",
+        "[object Arguments]",
+    );
     assert_agree("(function(){ return arguments; })()", "[object Arguments]");
 }
 
@@ -81,10 +87,7 @@ fn arguments_completion_tag() {
 fn symbol_to_string_tag_completion() {
     // A guest object carrying a string `Symbol.toStringTag` (own or inherited)
     // renders `[object <Tag>]` through `Object.prototype.toString`.
-    assert_agree(
-        "({ [Symbol.toStringTag]: 'Widget' })",
-        "[object Widget]",
-    );
+    assert_agree("({ [Symbol.toStringTag]: 'Widget' })", "[object Widget]");
     assert_agree(
         "var p = { [Symbol.toStringTag]: 'Base' }; Object.create(p)",
         "[object Base]",

@@ -46,7 +46,10 @@ fn phased(src: &str, phases: usize, gc: bool) -> (String, u64) {
 fn assert_gc_invariant(src: &str, phases: usize, expect: &str) {
     let plain = phased(src, phases, false);
     let with_gc = phased(src, phases, true);
-    assert_eq!(plain.0, expect, "the uncollected run answers the real value");
+    assert_eq!(
+        plain.0, expect,
+        "the uncollected run answers the real value"
+    );
     assert_eq!(
         plain, with_gc,
         "a boundary collection changed an observation (a mis-repointed arena index?)"

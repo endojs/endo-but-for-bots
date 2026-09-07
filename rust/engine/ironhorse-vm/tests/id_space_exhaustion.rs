@@ -63,7 +63,9 @@ fn id_space_exhaustion_halts_by_name_instead_of_aliasing() {
     // the run loop halts on the latch before the first instruction, and
     // the quiescence gate reports the machine unpersistable.
     let (b2, n2) = compile("j = 1; j");
-    let b2 = m.relink_crank(&b2, &n2).expect("relink of already-interned names");
+    let b2 = m
+        .relink_crank(&b2, &n2)
+        .expect("relink of already-interned names");
     let o2 = m.run(&b2);
     assert_eq!(
         o2.halt,

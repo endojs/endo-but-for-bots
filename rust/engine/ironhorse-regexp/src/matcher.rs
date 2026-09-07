@@ -16,10 +16,27 @@ use crate::flags::*;
 use crate::opcode::*;
 
 /// `gxLineCharacters` (xsre.c): the line terminators, as charset ranges.
-const LINE_CHARACTERS: [i32; 7] = [6, 0x000A, 0x000A + 1, 0x000D, 0x000D + 1, 0x2028, 0x2029 + 1];
+const LINE_CHARACTERS: [i32; 7] = [
+    6,
+    0x000A,
+    0x000A + 1,
+    0x000D,
+    0x000D + 1,
+    0x2028,
+    0x2029 + 1,
+];
 /// `gxWordCharacters` (xsre.c): the `\w` set, as charset ranges.
-const WORD_CHARACTERS: [i32; 9] =
-    [8, b'0' as i32, b'9' as i32 + 1, b'A' as i32, b'Z' as i32 + 1, b'_' as i32, b'_' as i32 + 1, b'a' as i32, b'z' as i32 + 1];
+const WORD_CHARACTERS: [i32; 9] = [
+    8,
+    b'0' as i32,
+    b'9' as i32 + 1,
+    b'A' as i32,
+    b'Z' as i32 + 1,
+    b'_' as i32,
+    b'_' as i32 + 1,
+    b'a' as i32,
+    b'z' as i32 + 1,
+];
 
 /// The outcome of running a compiled pattern over a subject.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,10 +149,21 @@ pub fn match_regexp_checked(
 
     let mut captures: Vec<(i32, i32)> = vec![(-1, -1); capture_count];
     let mut names: Vec<i32> = vec![-1; name_count];
-    let mut assertions: Vec<AssertionData> =
-        vec![AssertionData { offset: 0, first_state: 0 }; program.assertion_count];
-    let mut quantifiers: Vec<QuantifierData> =
-        vec![QuantifierData { min: 0, max: 0, offset: 0 }; program.quantifier_count];
+    let mut assertions: Vec<AssertionData> = vec![
+        AssertionData {
+            offset: 0,
+            first_state: 0
+        };
+        program.assertion_count
+    ];
+    let mut quantifiers: Vec<QuantifierData> = vec![
+        QuantifierData {
+            min: 0,
+            max: 0,
+            offset: 0
+        };
+        program.quantifier_count
+    ];
     let mut states: Vec<State> = Vec::new();
 
     let mut meter: u64 = 0;
@@ -206,7 +234,12 @@ pub fn match_regexp_checked(
                         assertions[ai].offset = offset;
                         assertions[ai].first_state = states.len();
                         let sequel = code[p];
-                        states.push(State { step: sequel, offset, flags, captures: captures.clone() });
+                        states.push(State {
+                            step: sequel,
+                            offset,
+                            flags,
+                            captures: captures.clone(),
+                        });
                     }
                     CX_ASSERTION_NOT_COMPLETION => {
                         let ai = code[p] as usize;
@@ -287,7 +320,9 @@ pub fn match_regexp_checked(
                                 let mut g = target;
                                 let mut ok = true;
                                 while from < to {
-                                    if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
+                                    if get_character(subject, g as usize, flags as u32)
+                                        != get_character(subject, from as usize, flags as u32)
+                                    {
                                         ok = false;
                                         break;
                                     }
@@ -335,13 +370,15 @@ pub fn match_regexp_checked(
                                     ok = false;
                                     break;
                                 }
-                                if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
+                                if get_character(subject, g as usize, flags as u32)
+                                    != get_character(subject, from as usize, flags as u32)
+                                {
                                     ok = false;
                                     break;
                                 }
                                 g = find_character(subject, g as usize, 1, flags as u32) as i32;
-                                from = find_character(subject, from as usize, 1, flags as u32)
-                                    as i32;
+                                from =
+                                    find_character(subject, from as usize, 1, flags as u32) as i32;
                             }
                             if ok {
                                 offset = g;
@@ -356,10 +393,15 @@ pub fn match_regexp_checked(
                         if offset == 0 {
                             pop = true;
                         } else {
-                            let e = find_character(subject, offset as usize, -1, flags as u32)
-                                as i32;
+                            let e =
+                                find_character(subject, offset as usize, -1, flags as u32) as i32;
                             let count = code[p];
-                            if !match_character(code, p + 1, count, get_character(subject, e as usize, flags as u32)) {
+                            if !match_character(
+                                code,
+                                p + 1,
+                                count,
+                                get_character(subject, e as usize, flags as u32),
+                            ) {
                                 pop = true;
                             } else {
                                 offset = e;
@@ -373,7 +415,12 @@ pub fn match_regexp_checked(
                             pop = true;
                         } else {
                             let count = code[p];
-                            if !match_character(code, p + 1, count, get_character(subject, offset as usize, flags as u32)) {
+                            if !match_character(
+                                code,
+                                p + 1,
+                                count,
+                                get_character(subject, offset as usize, flags as u32),
+                            ) {
                                 pop = true;
                             } else {
                                 offset = find_character(subject, offset as usize, 1, flags as u32)
@@ -385,7 +432,12 @@ pub fn match_regexp_checked(
                         step = code[p];
                         p += 1;
                         let sequel = code[p];
-                        states.push(State { step: sequel, offset, flags, captures: captures.clone() });
+                        states.push(State {
+                            step: sequel,
+                            offset,
+                            flags,
+                            captures: captures.clone(),
+                        });
                     }
                     CX_EMPTY_STEP => {
                         step = code[p];
@@ -452,7 +504,12 @@ pub fn match_regexp_checked(
                             step = sequel;
                         } else {
                             if quantifiers[qi].min == 0 {
-                                states.push(State { step: sequel, offset, flags, captures: captures.clone() });
+                                states.push(State {
+                                    step: sequel,
+                                    offset,
+                                    flags,
+                                    captures: captures.clone(),
+                                });
                             }
                             if from <= to {
                                 for i in from..=to {
@@ -474,7 +531,12 @@ pub fn match_regexp_checked(
                         if quantifiers[qi].max == 0 {
                             step = sequel;
                         } else if quantifiers[qi].min == 0 {
-                            states.push(State { step, offset, flags, captures: captures.clone() });
+                            states.push(State {
+                                step,
+                                offset,
+                                flags,
+                                captures: captures.clone(),
+                            });
                             step = sequel;
                         } else if from <= to {
                             for i in from..=to {
@@ -500,7 +562,11 @@ pub fn match_regexp_checked(
                             }
                             step = sequel;
                         } else {
-                            quantifiers[qi].min = if quantifiers[qi].min == 0 { 0 } else { quantifiers[qi].min - 1 };
+                            quantifiers[qi].min = if quantifiers[qi].min == 0 {
+                                0
+                            } else {
+                                quantifiers[qi].min - 1
+                            };
                             quantifiers[qi].max = if quantifiers[qi].max == 0x7FFF_FFFF {
                                 0x7FFF_FFFF
                             } else if quantifiers[qi].max == 0 {
@@ -592,5 +658,10 @@ fn word_at(subject: &[u8], offset: i32, boundary: i32, flags: i32) -> bool {
     } else {
         offset as usize
     };
-    match_character(&WORD_CHARACTERS, 1, WORD_CHARACTERS[0], get_character(subject, at, flags as u32))
+    match_character(
+        &WORD_CHARACTERS,
+        1,
+        WORD_CHARACTERS[0],
+        get_character(subject, at, flags as u32),
+    )
 }

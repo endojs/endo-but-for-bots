@@ -14,9 +14,16 @@ use ironhorse_262::{dual_run, Agreement};
 /// `expected` (rendered).
 fn assert_oracle_result(source: &str, expected: &str) {
     let run = dual_run(source).expect("pinned XS oracle is available");
-    assert_eq!(run.agreement, Agreement::BothComplete, "agreement for {source}");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothComplete,
+        "agreement for {source}"
+    );
     assert_eq!(run.oracle_result, expected, "oracle result for {source}");
-    assert_eq!(run.ironhorse_result, expected, "ironhorse result for {source}");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse result for {source}"
+    );
 }
 
 /// Assert both engines abort on `source` (e.g. an uncaught throw) and, when
@@ -24,7 +31,11 @@ fn assert_oracle_result(source: &str, expected: &str) {
 /// oracle's.
 fn assert_shared_abort(source: &str) {
     let run = dual_run(source).expect("pinned XS oracle is available");
-    assert_eq!(run.agreement, Agreement::BothAbort, "agreement for {source}");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothAbort,
+        "agreement for {source}"
+    );
 }
 
 // ---- `typeof` of an unresolvable reference is "undefined", never a throw ----
@@ -37,7 +48,10 @@ fn typeof_unresolvable_name_is_undefined() {
     assert_oracle_result("typeof someUnresolvableNameXYZ", "undefined");
     assert_oracle_result("typeof someUnresolvableNameXYZ === 'undefined'", "true");
     // Inside a function frame and inside an eval unit alike.
-    assert_oracle_result("function f(){ return typeof someUnresolvableNameXYZ } f()", "undefined");
+    assert_oracle_result(
+        "function f(){ return typeof someUnresolvableNameXYZ } f()",
+        "undefined",
+    );
     assert_oracle_result("(0, eval)('typeof someUnresolvableNameXYZ')", "undefined");
     assert_oracle_result("eval('typeof someUnresolvableNameXYZ')", "undefined");
     // A resolvable binding still reports its real type through the same path.
@@ -96,7 +110,10 @@ fn eval_lexical_declarations_are_eval_scoped() {
     // A `let`/`const`/`class` declared inside an eval lives in the eval's own
     // (discarded) declarative environment, so after the eval returns the name is
     // unresolvable — `typeof` of it is "undefined", not the eval-time value.
-    assert_oracle_result("(0, eval)('let onlyInside = 3;'); typeof onlyInside", "undefined");
+    assert_oracle_result(
+        "(0, eval)('let onlyInside = 3;'); typeof onlyInside",
+        "undefined",
+    );
     assert_oracle_result("(0, eval)('const k = 9;'); typeof k", "undefined");
     // The binding is fully usable *within* the eval.
     assert_oracle_result("(0, eval)('let z = 5; z')", "5");

@@ -58,9 +58,7 @@ fn a_non_string_argument_is_coerced_before_it_is_stored() {
     assert_result_agrees("'' + Symbol(1).toString()");
     assert_result_agrees("'' + Symbol(null).description");
     assert_result_agrees("'' + Symbol(true).description");
-    assert_result_agrees(
-        "'' + Symbol({ toString: function () { return 'x' } }).description",
-    );
+    assert_result_agrees("'' + Symbol({ toString: function () { return 'x' } }).description");
     assert_result_agrees(
         "var c = ''; try { Symbol(Symbol()) } catch (e) { c = e.constructor.name } '' + c",
     );
@@ -73,9 +71,7 @@ fn accessor_descriptor_shape_matches_xs() {
          '' + [typeof d, typeof d.get, typeof d.set, d.enumerable, d.configurable].join(',')",
     );
     assert_result_agrees("'' + Symbol.prototype.hasOwnProperty('description')");
-    assert_result_agrees(
-        "'' + Object.getOwnPropertyDescriptor(Symbol('t'), 'description')",
-    );
+    assert_result_agrees("'' + Object.getOwnPropertyDescriptor(Symbol('t'), 'description')");
     assert_result_agrees(
         "var d = Object.getOwnPropertyDescriptor(Symbol.prototype, 'description'); \
          '' + [d.get.name, d.get.length].join(',')",
@@ -133,7 +129,10 @@ fn the_own_key_order_diverges_while_the_key_set_agrees() {
         .expect("the XS oracle machine must start");
     assert_eq!(dr.agreement, Agreement::BothComplete);
     assert_eq!(dr.oracle_result, "description,toString,valueOf,constructor");
-    assert_eq!(dr.ironhorse_result, "toString,valueOf,description,constructor");
+    assert_eq!(
+        dr.ironhorse_result,
+        "toString,valueOf,description,constructor"
+    );
     // The KEY SET agrees even though the order does not — before the
     // accessor, `description` was missing from ironhorse's list entirely,
     // so this half of the match is what the change buys.

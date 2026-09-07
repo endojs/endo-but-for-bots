@@ -73,7 +73,10 @@ fn collected_machine_keeps_executing_and_agrees() {
     // the crank's own garbage — nothing live is lost either way.
     let live_before = m.collect_garbage().slots_live;
     let again = m.collect_garbage();
-    assert_eq!(again.slots_live, live_before, "collect is idempotent on live set");
+    assert_eq!(
+        again.slots_live, live_before,
+        "collect is idempotent on live set"
+    );
 }
 
 #[test]
@@ -100,8 +103,13 @@ fn collected_machine_checkpoints_and_resumes_exactly() {
     assert_eq!(got.result, expected.result);
     assert_eq!(got.computrons, expected.computrons);
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        oracle.write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        oracle
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "post-GC store round-trip is byte-exact"
     );
 }
@@ -139,7 +147,10 @@ fn partial_collect_is_conservative_and_exact() {
     // growth may shift the chain across page boundaries and expose some whole
     // pages with no such link; reclaiming those is safe and intentionally not
     // locked to a boot-allocation-sensitive exact count.
-    assert!(freed <= live_before, "partial collection cannot free more than the arena holds");
+    assert!(
+        freed <= live_before,
+        "partial collection cannot free more than the arena holds"
+    );
     assert_eq!(
         session.machine().slots.live_count(),
         live_before - freed,
@@ -155,8 +166,14 @@ fn partial_collect_is_conservative_and_exact() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "post-partial-collect store round-trip is byte-exact"
     );
 }
@@ -236,8 +253,14 @@ fn partial_collect_keeps_side_table_only_referenced_objects() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "store round-trip stays byte-exact"
     );
 }
@@ -303,8 +326,14 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "post-reclaim store round-trip is byte-exact"
     );
     session.machine_mut().collect_garbage();
@@ -317,11 +346,9 @@ fn partial_collect_reclaims_page_isolated_garbage() {
 fn small_state_stays_small_with_a_large_free_list() {
     use ironhorse_snapshot::store::{free_seg_count, HeapStore};
 
-    let cranks = [
-        "var last = { v: 0 }; var t = 0; var i = 0; \
+    let cranks = ["var last = { v: 0 }; var t = 0; var i = 0; \
          for (i = 0; i < 3000; i = i + 1) { last = { v: i }; } \
-         last = 0; t = 7;",
-    ];
+         last = 0; t = 7;"];
     let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
@@ -351,7 +378,10 @@ fn small_state_stays_small_with_a_large_free_list() {
     // and it genuinely spans MULTIPLE segments, so the split and the
     // reassembly are exercised, not just the single-segment case.
     let segs = free_seg_count(manifest.free_len);
-    assert!(segs >= 2, "multi-segment split exercised, got {segs} segment(s)");
+    assert!(
+        segs >= 2,
+        "multi-segment split exercised, got {segs} segment(s)"
+    );
     let total: usize = (0..segs)
         .map(|s| store.read_free_seg(s).unwrap().len())
         .sum();
@@ -365,10 +395,6 @@ fn small_state_stays_small_with_a_large_free_list() {
         manifest.free_len
     );
 }
-
-
-
-
 
 /// Phase 9 proportionality lock (review follow-up): LIFO free-list
 /// churn rewrites ONLY the tail segment. Allocation pops from the
@@ -411,7 +437,10 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
 
     let segs_after = free_seg_count(store.manifest().unwrap().free_len);
-    assert_eq!(segs_before, segs_after, "fixture premise: no boundary crossing");
+    assert_eq!(
+        segs_before, segs_after,
+        "fixture premise: no boundary crossing"
+    );
     assert_eq!(
         store.last_commit_stats().free_segs_written,
         1,
@@ -499,7 +528,10 @@ fn ephemeron_marking_reclaims_dead_keyed_weak_entries() {
     // The live-keyed chain survives: keep -> {k:2} -> {v:3}.
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
-    assert_eq!(o2.result, "5", "get() answers through the ephemeron chain after GC");
+    assert_eq!(
+        o2.result, "5",
+        "get() answers through the ephemeron chain after GC"
+    );
 }
 
 #[test]
@@ -528,7 +560,10 @@ fn weak_set_membership_keeps_nothing_alive() {
     );
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
-    assert_eq!(o2.result, "1", "the externally-held member is still a member");
+    assert_eq!(
+        o2.result, "1",
+        "the externally-held member is still a member"
+    );
 }
 
 #[test]
@@ -564,9 +599,15 @@ fn symbol_key_descriptor_survives_collection() {
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed, "crank 1 halted: {:?}", o1.halt);
-    assert_eq!(o1.result, "1", "the symbol key is partitioned out before GC");
+    assert_eq!(
+        o1.result, "1",
+        "the symbol key is partitioned out before GC"
+    );
     let stats = m.collect_garbage();
-    assert!(stats.slots_reclaimed > 0, "the plain garbage was real: {stats:?}");
+    assert!(
+        stats.slots_reclaimed > 0,
+        "the plain garbage was real: {stats:?}"
+    );
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "crank 2 halted: {:?}", o2.halt);
     assert_eq!(
@@ -639,7 +680,10 @@ fn partial_collect_under_bulk_table_churn_stays_parity_clean() {
 
     let o3 = session.machine_mut().run(&compiled[2].0);
     assert!(o3.completed, "halt: {:?}", o3.halt);
-    assert_eq!(o3.result, "1006", "the churned state survives the collections");
+    assert_eq!(
+        o3.result, "1006",
+        "the churned state survives the collections"
+    );
 }
 
 #[test]
@@ -681,14 +725,15 @@ fn dead_keyed_symbol_interns_are_reclaimed_precisely() {
     // Symbols still intern and read back after the precise sweep.
     let o2 = m.run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
-    assert_eq!(o2.result, "16", "a fresh symbol key works after the reclamation");
+    assert_eq!(
+        o2.result, "16",
+        "a fresh symbol key works after the reclamation"
+    );
 }
 
 #[test]
 fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
-    use ironhorse_snapshot::machine::{
-        checkpoint_to_store, generational_collect, partial_collect,
-    };
+    use ironhorse_snapshot::machine::{checkpoint_to_store, generational_collect, partial_collect};
     // Phase 11's semantic lock, run as TWINS from identical state:
     // the generational pass (candidates = pages dirtied since the
     // last collect) frees new page-isolated garbage, never frees a
@@ -770,5 +815,8 @@ fn generational_collect_is_a_noop_with_no_new_dirt() {
     let freed = partial_collect(&mut session, &store).expect("partial");
     assert!(freed > 0);
     let again = generational_collect(&mut session, &store).expect("generational");
-    assert_eq!(again, 0, "no dirt since the last collect, nothing to examine");
+    assert_eq!(
+        again, 0,
+        "no dirt since the last collect, nothing to examine"
+    );
 }

@@ -304,7 +304,9 @@ mod tests {
         // root -> a (via next) -> b (via Reference payload)
         let mut h = Heap::new();
         let b = h.slots.alloc(Slot::integer(99));
-        let a = h.slots.alloc(Slot::of(Kind::Reference, Payload::Reference(b)));
+        let a = h
+            .slots
+            .alloc(Slot::of(Kind::Reference, Payload::Reference(b)));
         let mut root_slot = Slot::integer(0);
         root_slot.next = a;
         let root = h.slots.alloc(root_slot);
@@ -321,8 +323,13 @@ mod tests {
         // a <-> b cycle, both reachable from root; the mark bit must
         // stop the trace from looping.
         let mut h = Heap::new();
-        let a = h.slots.alloc(Slot::of(Kind::Reference, Payload::Reference(SlotIndex::NULL)));
-        let b = h.slots.alloc(Slot::of(Kind::Reference, Payload::Reference(a)));
+        let a = h.slots.alloc(Slot::of(
+            Kind::Reference,
+            Payload::Reference(SlotIndex::NULL),
+        ));
+        let b = h
+            .slots
+            .alloc(Slot::of(Kind::Reference, Payload::Reference(a)));
         h.slots.get_mut(a).value = Payload::Reference(b);
         let stats = h.collect(&[a]);
         assert_eq!(stats.slots_reclaimed, 0, "the whole cycle is live");
@@ -374,11 +381,13 @@ mod tests {
         // same sign+magnitude bytes.
         let mut h = Heap::new();
         let _dead = h.chunks.alloc(&[0u8, 7, 0, 0, 0]); // dead `7n`
-        // keep `-4294967297n` = 0x1_0000_0001, two limbs, negative.
+                                                        // keep `-4294967297n` = 0x1_0000_0001, two limbs, negative.
         let keep_bytes = [1u8, 0x01, 0, 0, 0, 0x01, 0, 0, 0];
         let keep_off = h.chunks.alloc(&keep_bytes);
         let _dead2 = h.chunks.alloc(&[0u8, 9, 0, 0, 0]); // dead `9n`
-        let keep = h.slots.alloc(Slot::of(Kind::BigInt, Payload::BigInt(keep_off)));
+        let keep = h
+            .slots
+            .alloc(Slot::of(Kind::BigInt, Payload::BigInt(keep_off)));
 
         let before = h.chunks.byte_size();
         let stats = h.collect(&[keep]);
@@ -389,7 +398,11 @@ mod tests {
             stats.chunk_bytes_after
         );
         let new_off = h.slots.get(keep).chunk_ref().unwrap();
-        assert_eq!(&*h.chunks.payload(new_off), &keep_bytes, "BigInt digits survive relocation");
+        assert_eq!(
+            &*h.chunks.payload(new_off),
+            &keep_bytes,
+            "BigInt digits survive relocation"
+        );
     }
 
     #[test]
@@ -415,9 +428,15 @@ mod tests {
         h.slots.get_mut(dead_inst).next = dead_prop;
 
         let stats = h.collect(&[root]);
-        assert_eq!(stats.slots_reclaimed, 2, "the detached instance + its property are swept");
+        assert_eq!(
+            stats.slots_reclaimed, 2,
+            "the detached instance + its property are swept"
+        );
         assert!(h.slots.is_marked(inner), "Reference-held instance kept");
-        assert!(h.slots.is_marked(pa) && h.slots.is_marked(pb), "the property chain is kept");
+        assert!(
+            h.slots.is_marked(pa) && h.slots.is_marked(pb),
+            "the property chain is kept"
+        );
         assert!(!h.slots.is_marked(dead_inst) && !h.slots.is_marked(dead_prop));
         // The chain is intact after the collection.
         assert_eq!(h.slots.get(root).next, pa);
@@ -433,8 +452,14 @@ mod tests {
         let obj = h.slots.alloc(Slot::instance(proto));
         let _garbage = h.slots.alloc(Slot::instance(SlotIndex::NULL));
         let stats = h.collect(&[obj]);
-        assert_eq!(stats.slots_reclaimed, 1, "only the unrelated instance is swept");
-        assert!(h.slots.is_marked(proto), "the prototype is kept through the instance edge");
+        assert_eq!(
+            stats.slots_reclaimed, 1,
+            "only the unrelated instance is swept"
+        );
+        assert!(
+            h.slots.is_marked(proto),
+            "the prototype is kept through the instance edge"
+        );
     }
 
     #[test]

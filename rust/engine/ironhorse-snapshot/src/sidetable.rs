@@ -488,9 +488,10 @@ impl SideTable {
             // runtime-interned string key IS a `symbol_names` append, the
             // same restore covers it. Regression: `restore_side_tables.rs`
             // (`symbol_tables_rebuilt_at_restore`).
-            SideTable::SymbolTables => {
-                ("symbol_names(NAME-serialized)+symbol_ids(derived)", RebuiltAtRestore)
-            }
+            SideTable::SymbolTables => (
+                "symbol_names(NAME-serialized)+symbol_ids(derived)",
+                RebuiltAtRestore,
+            ),
             // Ledger G1 (2026-08-24): the `Symbol.for` registry travels in
             // the `REGY` atom / small-state registry section (key bytes →
             // descriptor slot, key-ascending), and restore repopulates the
@@ -595,9 +596,10 @@ impl SideTable {
             SideTable::IntlRecords => ("locales/collators/…/date_time_formats", Serialized),
             // Runtime compare/format functions and their owner links
             // travel in `IBFN`; restore rebuilds their native FuncInfo.
-            SideTable::IntlBoundFunctions => {
-                ("collator_compare_functions/number_format_bound_functions", Serialized)
-            }
+            SideTable::IntlBoundFunctions => (
+                "collator_compare_functions/number_format_bound_functions",
+                Serialized,
+            ),
             // Defining-crank and eval segments travel in the same atomic
             // cluster as their function metadata.
             SideTable::Segments => ("code_segments/func_segments", Serialized),
@@ -662,7 +664,10 @@ mod tests {
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.
-        let mut fields: Vec<&str> = SideTable::ALL.iter().map(|t| t.descriptor().field).collect();
+        let mut fields: Vec<&str> = SideTable::ALL
+            .iter()
+            .map(|t| t.descriptor().field)
+            .collect();
         fields.sort_unstable();
         let before = fields.len();
         fields.dedup();
@@ -711,36 +716,99 @@ mod tests {
         // the mechanism named for its group; moving a field between
         // groups is a deliberate edit here, never drift.
         const LEDGER_ROWS: &[&str] = &[
-            "functions", "bound_functions", "proxies", "proxy_revokers", "call_stack",
-            "jumps", "global_props", "error_data", "accessors", "wrapper_data", "arrays",
-            "collections", "array_buffers", "typed_arrays", "data_views", "iterators",
-            "promises", "promise_functions", "promise_guards", "promise_jobs",
-            "combinators", "generators", "gen_run_stack", "async_instances",
-            "async_run_stack", "async_generators", "async_gen_run_stack",
-            "private_values", "private_accessors", "disposable_stacks", "regexps",
-            "temporal_instants", "temporal_durations", "temporal_plains",
-            "temporal_zoneds", "dates", "locales", "collators", "list_formats", "plural_rules",
-            "number_formats", "segmenters", "segments", "segment_iterators",
-            "date_time_formats", "collator_compare_functions",
-            "number_format_bound_functions", "code_segments", "func_segments",
-            "ctor_prototype", "symbol_registry", "symbol_registry_keys",
-            "symbol_names", "symbol_ids", "symbol_key_ids", "next_symbol_key_id",
-            "installed_names_len", "meter",
+            "functions",
+            "bound_functions",
+            "proxies",
+            "proxy_revokers",
+            "call_stack",
+            "jumps",
+            "global_props",
+            "error_data",
+            "accessors",
+            "wrapper_data",
+            "arrays",
+            "collections",
+            "array_buffers",
+            "typed_arrays",
+            "data_views",
+            "iterators",
+            "promises",
+            "promise_functions",
+            "promise_guards",
+            "promise_jobs",
+            "combinators",
+            "generators",
+            "gen_run_stack",
+            "async_instances",
+            "async_run_stack",
+            "async_generators",
+            "async_gen_run_stack",
+            "private_values",
+            "private_accessors",
+            "disposable_stacks",
+            "regexps",
+            "temporal_instants",
+            "temporal_durations",
+            "temporal_plains",
+            "temporal_zoneds",
+            "dates",
+            "locales",
+            "collators",
+            "list_formats",
+            "plural_rules",
+            "number_formats",
+            "segmenters",
+            "segments",
+            "segment_iterators",
+            "date_time_formats",
+            "collator_compare_functions",
+            "number_format_bound_functions",
+            "code_segments",
+            "func_segments",
+            "ctor_prototype",
+            "symbol_registry",
+            "symbol_registry_keys",
+            "symbol_names",
+            "symbol_ids",
+            "symbol_key_ids",
+            "next_symbol_key_id",
+            "installed_names_len",
+            "meter",
         ];
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
-            "detached_buffers", "shared_buffers", "deleted_fn_meta", "from_async",
-            "arguments_objects", "side_refs",
+            "detached_buffers",
+            "shared_buffers",
+            "deleted_fn_meta",
+            "from_async",
+            "arguments_objects",
+            "side_refs",
         ];
         const TRANSIENTS: &[&str] = &[
             // Intrinsic linking is synchronous and restores this guard before
             // control can reach a persistence boundary.
             "installing_intrinsics",
-            "args", "this_val", "this_captures", "cur_func", "cur_target", "target_func",
-            "pending_new_target", "exception", "frame_slots", "locals", "id_map",
-            "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
+            "args",
+            "this_val",
+            "this_captures",
+            "cur_func",
+            "cur_target",
+            "target_func",
+            "pending_new_target",
+            "exception",
+            "frame_slots",
+            "locals",
+            "id_map",
+            "resume_status",
+            "callback_return_depth",
+            "env",
+            "direct_eval_hoist",
             "eval_program_hoist",
-            "eval_direct", "active_segment", "top_level_code", "result", "strict",
+            "eval_direct",
+            "active_segment",
+            "top_level_code",
+            "result",
+            "strict",
             // The native-recursion budget consumed by the activations in
             // flight; every guarded entry releases its charge on return,
             // so it is `0` before control can reach a persistence boundary.
@@ -763,18 +831,34 @@ mod tests {
             "last_crank_completed",
         ];
         const HOST_WIRING: &[&str] = &[
-            "meter_host", "source_compiler", "cost", "step_limit", "n_dispatched",
+            "meter_host",
+            "source_compiler",
+            "cost",
+            "step_limit",
+            "n_dispatched",
         ];
         const BOOT_DERIVED: &[&str] = &[
-            "intrinsics", "global_obj", "intl_object", "temporal_object",
-            "temporal_now_object", "math_object", "static_str", "default_keys",
+            "intrinsics",
+            "global_obj",
+            "intl_object",
+            "temporal_object",
+            "temporal_now_object",
+            "math_object",
+            "static_str",
+            "default_keys",
             "boot_slot_count",
-            "well_known_symbols", "proto_methods", "proto_data", "proto_accessors",
-            "proto_value_data", "string_iterator_method", "async_iterator_identity",
+            "well_known_symbols",
+            "proto_methods",
+            "proto_data",
+            "proto_accessors",
+            "proto_value_data",
+            "string_iterator_method",
+            "async_iterator_identity",
             // Boot-minted identities for well-known-symbol properties whose
             // property ids remain lazy. They are explicit roots until first
             // materialization and are re-derived at identical slots on resume.
-            "function_has_instance_method", "symbol_to_primitive_method",
+            "function_has_instance_method",
+            "symbol_to_primitive_method",
             "date_to_primitive_method",
             // The three `@@iterator` natives that used to be minted
             // during `link_intrinsics` (above `boot_slot_count`, so
@@ -783,7 +867,8 @@ mod tests {
             // plain object). Minting them at boot beside the two
             // siblings above is what makes them boot-derived, and a
             // fresh boot reproduces them at identical indices.
-            "iterator_identity", "segments_iterator_method",
+            "iterator_identity",
+            "segments_iterator_method",
             "segment_iterator_identity",
             // `%Error.prototype%`'s `stack` host accessor pair. Both
             // function slots are minted in `create_intrinsics`, so a
@@ -795,34 +880,80 @@ mod tests {
             // generated-site properties and template-array references travel
             // in the ordinary slot arena rooted through that head.
             "template_cache",
-            "object_proto", "function_proto", "array_proto",
-            "map_proto", "set_proto", "weakmap_proto", "weakset_proto",
-            "arraybuffer_proto", "dataview_proto", "array_iterator_proto",
-            "string_proto", "number_proto", "boolean_proto", "symbol_proto",
+            "object_proto",
+            "function_proto",
+            "array_proto",
+            "map_proto",
+            "set_proto",
+            "weakmap_proto",
+            "weakset_proto",
+            "arraybuffer_proto",
+            "dataview_proto",
+            "array_iterator_proto",
+            "string_proto",
+            "number_proto",
+            "boolean_proto",
+            "symbol_proto",
             "bigint_proto",
             "promise_proto",
-            "generator_proto", "generator_function_proto", "async_function_proto",
-            "async_generator_proto", "async_generator_function_proto", "regexp_proto",
-            "regexp_replace_method", "regexp_match_method", "regexp_match_all_method",
-            "regexp_search_method", "regexp_split_method",
-            "iterator_proto", "iterator_wrapper_proto", "map_iterator_proto",
-            "set_iterator_proto", "regexp_string_iterator_proto", "date_proto",
-            "locale_proto", "collator_proto", "list_format_proto",
-            "plural_rules_proto", "segmenter_proto", "segments_proto",
-            "segment_iterator_proto", "date_time_format_proto", "number_format_proto",
-            "temporal_instant_proto", "temporal_duration_proto",
-            "temporal_plain_protos", "temporal_zoned_proto", "byte_length_id",
-            "byte_offset_id", "buffer_id", "size_id", "length_id", "name_id",
-            "value_id", "done_id", "then_id", "constructor_id", "last_index_id",
+            "generator_proto",
+            "generator_function_proto",
+            "async_function_proto",
+            "async_generator_proto",
+            "async_generator_function_proto",
+            "regexp_proto",
+            "regexp_replace_method",
+            "regexp_match_method",
+            "regexp_match_all_method",
+            "regexp_search_method",
+            "regexp_split_method",
+            "iterator_proto",
+            "iterator_wrapper_proto",
+            "map_iterator_proto",
+            "set_iterator_proto",
+            "regexp_string_iterator_proto",
+            "date_proto",
+            "locale_proto",
+            "collator_proto",
+            "list_format_proto",
+            "plural_rules_proto",
+            "segmenter_proto",
+            "segments_proto",
+            "segment_iterator_proto",
+            "date_time_format_proto",
+            "number_format_proto",
+            "temporal_instant_proto",
+            "temporal_duration_proto",
+            "temporal_plain_protos",
+            "temporal_zoned_proto",
+            "byte_length_id",
+            "byte_offset_id",
+            "buffer_id",
+            "size_id",
+            "length_id",
+            "name_id",
+            "value_id",
+            "done_id",
+            "then_id",
+            "constructor_id",
+            "last_index_id",
             // The same cached-key-id class as its neighbours above:
             // derived from the symbol table at link and re-derived by
             // `bind_program_symbols` on restore.
             "prototype_key_id",
-            "regexp_getter_ids", "regexp_result_ids",
+            "regexp_getter_ids",
+            "regexp_result_ids",
         ];
 
         let mut accounted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        for group in [LEDGER_ROWS, ARENAS, SATELLITES, TRANSIENTS, HOST_WIRING, BOOT_DERIVED] {
+        for group in [
+            LEDGER_ROWS,
+            ARENAS,
+            SATELLITES,
+            TRANSIENTS,
+            HOST_WIRING,
+            BOOT_DERIVED,
+        ] {
             for f in group {
                 assert!(accounted.insert(f), "{f} classified twice");
             }
@@ -918,7 +1049,10 @@ mod tests {
             SideTable::GenRunStack,
             SideTable::AsyncRunStack,
         ] {
-            assert!(!pending.contains(&t), "{t:?} is quiescence-gated, not pending");
+            assert!(
+                !pending.contains(&t),
+                "{t:?} is quiescence-gated, not pending"
+            );
             assert_eq!(t.descriptor().coverage, Coverage::EmptyAtBoundary);
         }
     }
@@ -963,7 +1097,9 @@ mod tests {
             "/../ironhorse-vm/src/interp.rs"
         ))
         .expect("read the vm source");
-        let start = src.find("pub fn is_quiescent(&self)").expect("the predicate");
+        let start = src
+            .find("pub fn is_quiescent(&self)")
+            .expect("the predicate");
         let open = start + src[start..].find('{').expect("body");
         let mut depth = 0usize;
         let mut end = open;
@@ -1073,7 +1209,13 @@ mod tests {
         }
         // And the overstatement is gone: no row still claims a bare `InArena`
         // for state that a HashMap index (not the arena) actually gates.
-        assert_ne!(SideTable::GlobalProps.descriptor().coverage, Coverage::InArena);
-        assert_ne!(SideTable::CtorPrototype.descriptor().coverage, Coverage::InArena);
+        assert_ne!(
+            SideTable::GlobalProps.descriptor().coverage,
+            Coverage::InArena
+        );
+        assert_ne!(
+            SideTable::CtorPrototype.descriptor().coverage,
+            Coverage::InArena
+        );
     }
 }

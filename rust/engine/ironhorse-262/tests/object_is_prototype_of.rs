@@ -44,7 +44,9 @@ fn non_object_argument_short_circuits_before_to_object() {
 #[test]
 fn object_argument_requires_an_object_receiver() {
     agrees("try{Object.prototype.isPrototypeOf.call(null,{})}catch(e){e instanceof TypeError}");
-    agrees("try{Object.prototype.isPrototypeOf.call(undefined,[])}catch(e){e instanceof TypeError}");
+    agrees(
+        "try{Object.prototype.isPrototypeOf.call(undefined,[])}catch(e){e instanceof TypeError}",
+    );
 }
 
 #[test]

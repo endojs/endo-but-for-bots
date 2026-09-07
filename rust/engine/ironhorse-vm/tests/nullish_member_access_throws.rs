@@ -50,7 +50,10 @@ fn reading_a_named_property_of_null_or_undefined_throws() {
 #[test]
 fn reading_a_computed_property_of_null_or_undefined_throws() {
     assert_throws_type_error("var k='f'; null[k]", "cannot coerce null to object");
-    assert_throws_type_error("var k='f'; undefined[k]", "cannot coerce undefined to object");
+    assert_throws_type_error(
+        "var k='f'; undefined[k]",
+        "cannot coerce undefined to object",
+    );
     assert_throws_type_error("null[0]", "cannot coerce null to object");
 }
 
@@ -59,7 +62,10 @@ fn writing_a_property_of_null_or_undefined_throws() {
     assert_throws_type_error("null.f = 1", "cannot coerce null to object");
     assert_throws_type_error("undefined.f = 1", "cannot coerce undefined to object");
     assert_throws_type_error("var k='f'; null[k] = 1", "cannot coerce null to object");
-    assert_throws_type_error("var k='f'; undefined[k] = 1", "cannot coerce undefined to object");
+    assert_throws_type_error(
+        "var k='f'; undefined[k] = 1",
+        "cannot coerce undefined to object",
+    );
 }
 
 #[test]
@@ -79,7 +85,11 @@ fn a_non_nullish_primitive_base_boxes_to_its_wrapper_prototype() {
         ("(1n).toString()", "1"),
     ] {
         let out = run(source);
-        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert!(
+            out.completed,
+            "`{source}` must complete; halt: {:?}",
+            out.halt
+        );
         assert_eq!(out.result, expected, "{source}");
     }
     // A name absent from `%Boolean.prototype%` is still `undefined`, not a
@@ -109,7 +119,11 @@ fn the_computed_key_path_boxes_a_primitive_base_the_same_way() {
         ("String(true['nosuch'])", "undefined"),
     ] {
         let out = run(source);
-        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert!(
+            out.completed,
+            "`{source}` must complete; halt: {:?}",
+            out.halt
+        );
         assert_eq!(out.result, expected, "{source}");
     }
 }
@@ -132,10 +146,8 @@ fn an_index_read_on_a_boxed_primitive_mints_no_key() {
         assert_eq!(out.result, "ok", "{base}");
     }
     // An index key some assignment already interned still resolves.
-    let out = run(
-        "Number.prototype[0]=7; Boolean.prototype[3]=9; \
-         String((42)[0]) + ',' + String(true[3])",
-    );
+    let out = run("Number.prototype[0]=7; Boolean.prototype[3]=9; \
+         String((42)[0]) + ',' + String(true[3])");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "7,9");
 }
@@ -158,7 +170,11 @@ fn a_computed_read_on_a_symbol_does_not_reach_its_description_slot() {
         ("var s=Symbol('x'); s.toString()", "Symbol(x)"),
     ] {
         let out = run(source);
-        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert!(
+            out.completed,
+            "`{source}` must complete; halt: {:?}",
+            out.halt
+        );
         assert_eq!(out.result, expected, "{source}");
     }
 }
@@ -172,7 +188,11 @@ fn a_sloppy_write_through_a_non_nullish_primitive_base_stays_silent() {
         let out = run(&format!(
             "var r='unset'; try {{ {source}; r='silent' }} catch(e){{ r='threw' }} r"
         ));
-        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert!(
+            out.completed,
+            "`{source}` must complete; halt: {:?}",
+            out.halt
+        );
         assert_eq!(out.result, "silent", "{source}");
     }
 }
@@ -184,7 +204,10 @@ fn the_other_nullish_coercions_carry_the_same_message() {
     assert_throws_type_error("var {a} = null", "cannot coerce null to object");
     assert_throws_type_error("var {a} = undefined", "cannot coerce undefined to object");
     assert_throws_type_error("delete null.x", "cannot coerce null to object");
-    assert_throws_type_error("var k='x'; delete undefined[k]", "cannot coerce undefined to object");
+    assert_throws_type_error(
+        "var k='x'; delete undefined[k]",
+        "cannot coerce undefined to object",
+    );
     assert_throws_type_error("'x' in null", "in: not an object");
     assert_throws_type_error("'x' in 5", "in: not an object");
 }
@@ -195,10 +218,8 @@ fn a_nullish_base_throws_before_the_computed_key_is_coerced() {
     // key: `k.toString` never runs for `null[k]`. For `null[k] = rhs` the
     // compiler's `at_2` follows the RHS, so the RHS runs, then the base
     // throws, and the key is still never coerced (oracle: `rhs,threw`).
-    let out = run(
-        "var s=[]; var k={toString(){s.push('key');return 'x'}}; \
-         try{ null[k] }catch(e){ s.push(e.name+': '+e.message) } s.join('|')",
-    );
+    let out = run("var s=[]; var k={toString(){s.push('key');return 'x'}}; \
+         try{ null[k] }catch(e){ s.push(e.name+': '+e.message) } s.join('|')");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "TypeError: cannot coerce null to object");
     let out = run(
@@ -234,10 +255,8 @@ fn iterating_a_nullish_value_carries_the_coercion_message() {
 fn a_nullish_guard_takes_the_throwing_path_not_the_wrong_branch() {
     // The silent form: before the fix `x.y` was `undefined` and the guard
     // fell through to "no".
-    let out = run(
-        "var x = null; var r = 'unset'; \
-         try { if (x.y) { r = 'yes' } else { r = 'no' } } catch (e) { r = 'threw' } r",
-    );
+    let out = run("var x = null; var r = 'unset'; \
+         try { if (x.y) { r = 'yes' } else { r = 'no' } } catch (e) { r = 'threw' } r");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "threw");
 }
@@ -299,17 +318,14 @@ fn a_symbols_description_is_coerced_at_construction() {
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "Symbol(5):Symbol(null):Symbol()");
     // It runs guest code exactly once, in string-hint order, at construction.
-    let out = run(
-        "var log=[]; var o={valueOf(){log.push('vo');return 'V'},\
+    let out = run("var log=[]; var o={valueOf(){log.push('vo');return 'V'},\
                             toString(){log.push('ts');return 'T'}}; \
-         var s=Symbol(o); log.join()+':'+s.toString()",
-    );
+         var s=Symbol(o); log.join()+':'+s.toString()");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "ts:Symbol(T)");
     // …and its abrupt completion propagates, before any symbol exists.
-    let out = run(
-        "var m={}; var r=0; try { Symbol({toString(){throw m}}) } catch(e){ r=(e===m) } r",
-    );
+    let out =
+        run("var m={}; var r=0; try { Symbol({toString(){throw m}}) } catch(e){ r=(e===m) } r");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "true");
     // A `undefined` description stays `undefined` (step 2), not "undefined".
@@ -339,7 +355,8 @@ fn symbol_prototype_description_is_a_real_accessor() {
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "get description:0:undefined:false:true");
     // Brand-checked like its `toString`/`valueOf` siblings.
-    let out = run("var r=0; try{ Symbol.prototype.description }catch(e){ r=e instanceof TypeError } r");
+    let out =
+        run("var r=0; try{ Symbol.prototype.description }catch(e){ r=e instanceof TypeError } r");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "true");
 }

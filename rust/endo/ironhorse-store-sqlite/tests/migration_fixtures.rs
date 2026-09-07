@@ -33,8 +33,7 @@ const FIXTURE_RESULTS: [&str; 2] = ["7", "3"];
 #[test]
 #[ignore]
 fn regenerate_sqlite_store_fixture() {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> =
-        FIXTURE_CRANKS.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = FIXTURE_CRANKS.iter().map(|s| compile(s)).collect();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("store-v5.sqlite");

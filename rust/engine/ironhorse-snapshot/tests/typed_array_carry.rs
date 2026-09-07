@@ -49,7 +49,11 @@ fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
 /// Run crank 1 and then the observation cranks uninterrupted, and the
 /// same cranks across a checkpoint/resume split on `store`; assert the
 /// observations agree pairwise and return the continuous ones.
-fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
+fn twin(
+    crank1: &str,
+    observations: &[&str],
+    store: &mut dyn HeapStore,
+) -> Vec<(bool, String, String, u64)> {
     let (b1, n1) = compile(crank1);
 
     let mut cont = Interp::new();
@@ -69,7 +73,10 @@ fn twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(
         .iter()
         .map(|s| crank(session.machine_mut(), s))
         .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
+    assert_eq!(
+        continuous, resumed,
+        "resumed observes exactly as uninterrupted"
+    );
     // The resumed machine must also checkpoint cleanly — its restored
     // rows re-serialize into the next commit.
     checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
@@ -84,7 +91,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
         assert!(got.0, "observation completes: {:?}", got.1);
     }
     let got: Vec<&str> = seen.iter().map(|(_, _, r, _)| r.as_str()).collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -158,7 +168,8 @@ fn resumed_detached_buffer_stays_detached() {
     let crank1 = "var ta = 0; var t = 0; \
          ta = new Uint8Array(4); ta[0] = 9; \
          ta.buffer.transfer(); t = 7; t";
-    let obs = "var ta; var t; try { t = ta.subarray(0); t = 'no-throw'; } catch (e) { t = 'threw'; } t";
+    let obs =
+        "var ta; var t; try { t = ta.subarray(0); t = 'no-throw'; } catch (e) { t = 'threw'; } t";
     assert_twin("ih-tarr-twin-detached", crank1, &[obs], &["threw"]);
 }
 
@@ -180,9 +191,7 @@ fn resumed_shared_buffer_keeps_its_brand() {
 
 #[test]
 fn blob_snapshot_carries_the_family_too() {
-    let (b1, n1) = compile(
-        "var ta = 0; var t = 0; ta = new Int16Array(4); ta[2] = -300; t = 7; t",
-    );
+    let (b1, n1) = compile("var ta = 0; var t = 0; ta = new Int16Array(4); ta[2] = -300; t = 7; t");
     let obs = "var ta; var t; t = ta[2] + ':' + ta.length; t";
 
     let mut cont = Interp::new();
@@ -194,7 +203,9 @@ fn blob_snapshot_carries_the_family_too() {
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
     assert!(m.run(&b1).completed, "crank 1 (blob)");
-    let bytes = m.write_snapshot(&sig()).expect("suspend with a live typed array");
+    let bytes = m
+        .write_snapshot(&sig())
+        .expect("suspend with a live typed array");
     let mut r = from_snapshot_bytes(&bytes, &sig()).expect("rebuild");
     let resumed = crank(&mut r, obs);
     assert_eq!(resumed, continuous, "blob twin agrees");

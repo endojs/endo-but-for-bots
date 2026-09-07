@@ -56,7 +56,8 @@ fn without_a_compiler_eval_halts_before_any_segment_exists() {
 /// A live eval-defined function begins, resumes, and remains callable.
 #[test]
 fn live_eval_function_persists_from_begin() {
-    let (b, n) = compile("var f = 0; f = eval('(function (x) { return x * 2; })'); var t = 0; t = f(4); t");
+    let (b, n) =
+        compile("var f = 0; f = eval('(function (x) { return x * 2; })'); var t = 0; t = f(4); t");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     m.set_source_compiler(std::rc::Rc::new(TestCompiler));
@@ -75,7 +76,10 @@ fn live_eval_function_persists_from_begin() {
     );
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
     let (b2, n2) = compile("var f; var t; t = f(5); t");
-    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2 = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     let out = resumed.machine_mut().run(&b2);
     assert!(out.completed, "resumed eval function: {:?}", out.halt);
     assert_eq!(out.result, "10");
@@ -94,15 +98,24 @@ fn eval_crank_checkpoints_its_retained_function() {
         .map_err(|(_, e)| e)
         .expect("a compiler alone is not a segment: clean begin");
     let (b1, n1) = compile("var f; var t; f = eval('(function () { return 7; })'); t = f(); t");
-    let b1 = session.machine_mut().relink_crank(&b1, &n1).expect("relinks");
+    let b1 = session
+        .machine_mut()
+        .relink_crank(&b1, &n1)
+        .expect("relinks");
     let o = session.machine_mut().run(&b1);
     assert!(o.completed, "eval crank: {:?}", o.halt);
     assert_eq!(o.result, "7");
-    assert_eq!(checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(), 2);
+    assert_eq!(
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(),
+        2
+    );
     drop(session);
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
     let (b2, n2) = compile("var f; var t; t = f(); t");
-    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2 = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     let out = resumed.machine_mut().run(&b2);
     assert!(out.completed, "resumed eval function: {:?}", out.halt);
     assert_eq!(out.result, "7");
@@ -113,9 +126,7 @@ fn eval_crank_checkpoints_its_retained_function() {
 /// persists again.
 #[test]
 fn collected_eval_function_persists_again() {
-    let (b, n) = compile(
-        "var t = 0; t = (eval('(function (x) { return x + 1; })'))(1); t",
-    );
+    let (b, n) = compile("var t = 0; t = (eval('(function (x) { return x + 1; })'))(1); t");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     m.set_source_compiler(std::rc::Rc::new(TestCompiler));
@@ -162,7 +173,10 @@ fn cross_crank_function_reference_works_live_and_resumed() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
     drop(session);
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
-    let b2r = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2r = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     let r = resumed.machine_mut().run(&b2r);
     assert!(r.completed, "resumed cross-crank call: {:?}", r.halt);
     assert_eq!(r.result, "42");

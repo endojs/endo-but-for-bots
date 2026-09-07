@@ -33,7 +33,12 @@ fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
     let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
+    (
+        outcome.completed,
+        format!("{:?}", outcome.halt),
+        outcome.result,
+        outcome.computrons,
+    )
 }
 
 fn twin(
@@ -80,7 +85,10 @@ fn guest_getters_and_setters_survive_memory_and_file_resume() {
     ];
     let mut memory = MemoryStore::new();
     let seen = twin(FIRST, &observations, &mut memory);
-    assert_eq!(seen.iter().map(|row| row.2.as_str()).collect::<Vec<_>>(), ["42", "11"]);
+    assert_eq!(
+        seen.iter().map(|row| row.2.as_str()).collect::<Vec<_>>(),
+        ["42", "11"]
+    );
 
     let dir = TempDir::new("ih-accessor-carry");
     let mut file = FileStore::open(dir.join("heap.ihstore")).expect("open");
@@ -235,9 +243,7 @@ fn malformed_accessor_rows_are_refused() {
     let mut bad_id = image;
     bad_id.accessors[0].id = 0;
     match from_snapshot_bytes(&write_machine(&bad_id), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "accessor state: id outside the property-key tables",
-        )) => {}
+        Err(SnapshotError::Corrupt("accessor state: id outside the property-key tables")) => {}
         Err(other) => panic!("wrong accessor-id refusal: {other:?}"),
         Ok(_) => panic!("an unregistered accessor id must not restore"),
     }

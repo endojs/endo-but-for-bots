@@ -52,7 +52,8 @@ fn assert_gc_invariant(crank1: &str, crank2: &str) {
 /// Allocation churn: every fixture's crank 2 starts by cycling enough
 /// objects that a wrongly-freed anchor slot is REUSED, turning a
 /// dangling cache into a visible divergence rather than a lucky hit.
-const CHURN: &str = "var zz = 0; for (zz = 0; zz < 200; zz++) { churn[zz % 8] = { a: zz, b: 'x' + zz }; }";
+const CHURN: &str =
+    "var zz = 0; for (zz = 0; zz < 200; zz++) { churn[zz % 8] = { a: zz, b: 'x' + zz }; }";
 
 #[test]
 fn intl_proto_caches_survive_construction_after_a_collection() {

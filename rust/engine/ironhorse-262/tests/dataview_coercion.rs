@@ -29,9 +29,7 @@ fn constructor_to_index_and_view_bounds() {
     assert_result_agrees(
         "try { new DataView(new ArrayBuffer(8), -1); false } catch (e) { e instanceof RangeError }",
     );
-    assert_result_agrees(
-        "try { new DataView({}, 0); false } catch (e) { e instanceof TypeError }",
-    );
+    assert_result_agrees("try { new DataView({}, 0); false } catch (e) { e instanceof TypeError }");
     assert_result_agrees(
         "try { DataView(new ArrayBuffer(1)); false } catch (e) { e instanceof TypeError }",
     );

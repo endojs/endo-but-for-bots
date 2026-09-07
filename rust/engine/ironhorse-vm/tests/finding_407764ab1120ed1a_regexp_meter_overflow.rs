@@ -54,7 +54,10 @@ fn regexp_match_meter_does_not_overflow_u32() {
     // No panic on this pathological, backreference-heavy pattern.
     let outcome = ironhorse_regexp::match_regexp(&program, SUBJECT.as_bytes(), START);
 
-    assert!(outcome.matched, "the pattern matches (empty) at offset {START}");
+    assert!(
+        outcome.matched,
+        "the pattern matches (empty) at offset {START}"
+    );
     assert_eq!(
         outcome.match_meter_raw, EXPECTED_MATCH_METER_RAW,
         "full-width match meter must be pinned bit-exact (no 32-bit wrap)"

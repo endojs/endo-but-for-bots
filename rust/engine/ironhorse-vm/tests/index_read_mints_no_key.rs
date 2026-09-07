@@ -139,7 +139,10 @@ fn a_get_trap_cannot_contradict_a_non_configurable_index_it_was_never_named_for(
         "5",
     );
     // A frozen array behind an untrapped proxy still forwards to the item.
-    assert_result("var a = [7]; Object.freeze(a); var p = new Proxy(a, {}); p[0]", "7");
+    assert_result(
+        "var a = [7]; Object.freeze(a); var p = new Proxy(a, {}); p[0]",
+        "7",
+    );
 }
 
 /// A trapping proxy still answers with the trap's value, and the trap still
@@ -209,13 +212,19 @@ fn the_other_index_keyed_operations_still_answer_correctly() {
     );
     // `hasOwnProperty` — own index, inherited index (false), string units.
     assert_result("var a = [1, 2]; a.hasOwnProperty(1)", "true");
-    assert_result("var o = Object.create([1, 2]); o.hasOwnProperty(1)", "false");
+    assert_result(
+        "var o = Object.create([1, 2]); o.hasOwnProperty(1)",
+        "false",
+    );
     assert_result("'abc'.hasOwnProperty(2)", "true");
     assert_result("'abc'.hasOwnProperty(3)", "false");
     // `Reflect.*` on an index.
     assert_result("Reflect.get([4, 5], 1)", "5");
     assert_result("Reflect.has([4, 5], 1)", "true");
-    assert_result("var a = [4, 5]; Reflect.deleteProperty(a, 0); a[0] === undefined", "true");
+    assert_result(
+        "var a = [4, 5]; Reflect.deleteProperty(a, 0); a[0] === undefined",
+        "true",
+    );
     assert_result(
         "var d = Reflect.getOwnPropertyDescriptor([4], 0); d.value + ',' + d.enumerable",
         "4,true",
@@ -268,9 +277,18 @@ fn a_proxy_trap_is_looked_up_once_per_operation_for_either_key_spelling() {
         var handler = new Proxy(real, { get: function (t, k) { looks.push(k); return t[k]; } }); \
         var p = new Proxy({}, handler); ";
     for (expr, trap) in [
-        ("Object.getOwnPropertyDescriptor(p, 'x')", "getOwnPropertyDescriptor"),
-        ("Object.getOwnPropertyDescriptor(p, 0)", "getOwnPropertyDescriptor"),
-        ("Reflect.getOwnPropertyDescriptor(p, 0)", "getOwnPropertyDescriptor"),
+        (
+            "Object.getOwnPropertyDescriptor(p, 'x')",
+            "getOwnPropertyDescriptor",
+        ),
+        (
+            "Object.getOwnPropertyDescriptor(p, 0)",
+            "getOwnPropertyDescriptor",
+        ),
+        (
+            "Reflect.getOwnPropertyDescriptor(p, 0)",
+            "getOwnPropertyDescriptor",
+        ),
         ("delete p.x", "deleteProperty"),
         ("delete p[0]", "deleteProperty"),
         ("Reflect.deleteProperty(p, 0)", "deleteProperty"),
@@ -301,8 +319,14 @@ fn the_index_walk_and_the_id_path_agree_on_every_receiver_shape() {
     // same source runs down the id path in the second machine.
     for prelude in ["", "var z = {}; z[0] = 1;"] {
         let at = |body: &str| format!("{prelude} {body}");
-        assert_result(&at("var o = Object.create(Object.create({})); String(o[0])"), "undefined");
-        assert_result(&at("var o = Object.create(Object.create({})); String(0 in o)"), "false");
+        assert_result(
+            &at("var o = Object.create(Object.create({})); String(o[0])"),
+            "undefined",
+        );
+        assert_result(
+            &at("var o = Object.create(Object.create({})); String(0 in o)"),
+            "false",
+        );
         assert_result(&at("var o = Object.create(null); String(0 in o)"), "false");
         assert_result(&at("var o = {}; String(delete o[0])"), "true");
         assert_result(&at("var o = {}; String(o.hasOwnProperty(0))"), "false");
@@ -322,10 +346,16 @@ fn the_index_walk_and_the_id_path_agree_on_every_receiver_shape() {
         assert_result(&at("var t = new Uint8Array(2); String(0 in t)"), "true");
         assert_result(&at("var t = new Uint8Array(2); String(9 in t)"), "false");
         assert_result(&at("var s = new String('hi'); String(s[0])"), "h");
-        assert_result(&at("var s = new String('hi'); String(delete s[0])"), "false");
+        assert_result(
+            &at("var s = new String('hi'); String(delete s[0])"),
+            "false",
+        );
         assert_result(&at("var o = Object.create([1, 2, 3]); String(o[2])"), "3");
         // The write path and the read path agree about what an index names.
-        assert_result(&at("var o = {}; o[4] = 'v'; String(o[4]) + o.hasOwnProperty(4) + (4 in o)"), "vtruetrue");
+        assert_result(
+            &at("var o = {}; o[4] = 'v'; String(o[4]) + o.hasOwnProperty(4) + (4 in o)"),
+            "vtruetrue",
+        );
     }
 }
 
@@ -384,7 +414,10 @@ fn a_lying_trap_over_an_exotic_target_is_still_rejected() {
     }
     // An honest trap, and a configurable item, still answer normally.
     assert_result("String(new Proxy([7], {})[0])", "7");
-    assert_result("String(new Proxy([7], { get: function () { return 5; } })[0])", "5");
+    assert_result(
+        "String(new Proxy([7], { get: function () { return 5; } })[0])",
+        "5",
+    );
 }
 
 /// `Object.prototype.propertyIsEnumerable` is a pure own-property PROBE.
@@ -403,7 +436,10 @@ fn a_property_is_enumerable_probe_mints_no_key() {
         ("String('ab'.propertyIsEnumerable(1))", "true"),
         ("String([1].propertyIsEnumerable('length'))", "false"),
         ("String(new Uint8Array(2).propertyIsEnumerable(1))", "true"),
-        ("var o = {}; o[3] = 1; String(o.propertyIsEnumerable(3))", "true"),
+        (
+            "var o = {}; o[3] = 1; String(o.propertyIsEnumerable(3))",
+            "true",
+        ),
     ] {
         assert_result(source, want);
     }
@@ -489,5 +525,8 @@ fn a_trap_that_names_the_index_mid_flight_is_still_held_to_the_invariant() {
 
     // Honest traps are unaffected.
     assert_result("String(new Proxy([7], {})[0])", "7");
-    assert_result("String(new Proxy({}, { get: function () { return 5; } })[0])", "5");
+    assert_result(
+        "String(new Proxy({}, { get: function () { return 5; } })[0])",
+        "5",
+    );
 }

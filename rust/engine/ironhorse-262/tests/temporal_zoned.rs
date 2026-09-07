@@ -26,22 +26,49 @@ fn temporal_result(source: &str, expected: &str) {
 #[test]
 fn zoned_construction_getters_and_offsets() {
     for (source, expected) in [
-        ("new Temporal.ZonedDateTime(0n, 'UTC').toString()", "1970-01-01T00:00:00+00:00[UTC]"),
+        (
+            "new Temporal.ZonedDateTime(0n, 'UTC').toString()",
+            "1970-01-01T00:00:00+00:00[UTC]",
+        ),
         ("new Temporal.ZonedDateTime(0n, 'UTC').offset", "+00:00"),
-        ("new Temporal.ZonedDateTime(0n, '+05:30').toString()", "1970-01-01T05:30:00+05:30[+05:30]"),
+        (
+            "new Temporal.ZonedDateTime(0n, '+05:30').toString()",
+            "1970-01-01T05:30:00+05:30[+05:30]",
+        ),
         ("new Temporal.ZonedDateTime(0n, '+05:30').offset", "+05:30"),
-        ("new Temporal.ZonedDateTime(0n, '+05:30').timeZoneId", "+05:30"),
-        ("new Temporal.ZonedDateTime(0n, '+05:30').offsetNanoseconds", "19800000000000"),
-        ("new Temporal.ZonedDateTime(0n, '-05:00').toString()", "1969-12-31T19:00:00-05:00[-05:00]"),
-        ("new Temporal.ZonedDateTime(0n, 'UTC').epochNanoseconds === 0n", "true"),
-        ("new Temporal.ZonedDateTime(1000000n, 'UTC').epochMilliseconds", "1"),
-        ("new Temporal.ZonedDateTime(0n, 'UTC').calendarId", "iso8601"),
+        (
+            "new Temporal.ZonedDateTime(0n, '+05:30').timeZoneId",
+            "+05:30",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n, '+05:30').offsetNanoseconds",
+            "19800000000000",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n, '-05:00').toString()",
+            "1969-12-31T19:00:00-05:00[-05:00]",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n, 'UTC').epochNanoseconds === 0n",
+            "true",
+        ),
+        (
+            "new Temporal.ZonedDateTime(1000000n, 'UTC').epochMilliseconds",
+            "1",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n, 'UTC').calendarId",
+            "iso8601",
+        ),
         ("new Temporal.ZonedDateTime(0n, 'UTC').hoursInDay", "24"),
         ("new Temporal.ZonedDateTime(0n, 'UTC').year", "1970"),
         ("new Temporal.ZonedDateTime(0n, 'UTC').dayOfWeek", "4"),
         ("new Temporal.ZonedDateTime(0n, 'UTC').daysInWeek", "7"),
         ("new Temporal.ZonedDateTime(0n, 'UTC').inLeapYear", "false"),
-        ("typeof new Temporal.ZonedDateTime(0n, 'UTC').era", "undefined"),
+        (
+            "typeof new Temporal.ZonedDateTime(0n, 'UTC').era",
+            "undefined",
+        ),
     ] {
         temporal_result(source, expected);
     }
@@ -84,18 +111,54 @@ fn zoned_arithmetic_difference_and_rounding() {
 #[test]
 fn zoned_conversions_with_and_transition() {
     for (source, expected) in [
-        ("new Temporal.ZonedDateTime(0n,'+05:30').toInstant().toString()", "1970-01-01T00:00:00Z"),
-        ("new Temporal.ZonedDateTime(0n,'+05:30').toPlainDate().toString()", "1970-01-01"),
-        ("new Temporal.ZonedDateTime(0n,'+05:30').toPlainTime().toString()", "05:30:00"),
-        ("new Temporal.ZonedDateTime(0n,'+05:30').toPlainDateTime().toString()", "1970-01-01T05:30:00"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').with({hour:12}).toString()", "1970-01-01T12:00:00+00:00[UTC]"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').withPlainTime('06:00').toString()", "1970-01-01T06:00:00+00:00[UTC]"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').withTimeZone('+01:00').toString()", "1970-01-01T01:00:00+01:00[+01:00]"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').withCalendar('iso8601').calendarId", "iso8601"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').getTimeZoneTransition('next') === null", "true"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').toJSON()", "1970-01-01T00:00:00+00:00[UTC]"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').toString({calendarName:'always'})", "1970-01-01T00:00:00+00:00[UTC][u-ca=iso8601]"),
-        ("new Temporal.ZonedDateTime(0n,'UTC').toString({offset:'never',timeZoneName:'never'})", "1970-01-01T00:00:00"),
+        (
+            "new Temporal.ZonedDateTime(0n,'+05:30').toInstant().toString()",
+            "1970-01-01T00:00:00Z",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'+05:30').toPlainDate().toString()",
+            "1970-01-01",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'+05:30').toPlainTime().toString()",
+            "05:30:00",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'+05:30').toPlainDateTime().toString()",
+            "1970-01-01T05:30:00",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').with({hour:12}).toString()",
+            "1970-01-01T12:00:00+00:00[UTC]",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').withPlainTime('06:00').toString()",
+            "1970-01-01T06:00:00+00:00[UTC]",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').withTimeZone('+01:00').toString()",
+            "1970-01-01T01:00:00+01:00[+01:00]",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').withCalendar('iso8601').calendarId",
+            "iso8601",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').getTimeZoneTransition('next') === null",
+            "true",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').toJSON()",
+            "1970-01-01T00:00:00+00:00[UTC]",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').toString({calendarName:'always'})",
+            "1970-01-01T00:00:00+00:00[UTC][u-ca=iso8601]",
+        ),
+        (
+            "new Temporal.ZonedDateTime(0n,'UTC').toString({offset:'never',timeZoneName:'never'})",
+            "1970-01-01T00:00:00",
+        ),
     ] {
         temporal_result(source, expected);
     }
@@ -125,15 +188,33 @@ fn now_deterministic_hooks() {
     for (source, expected) in [
         ("Temporal.Now.instant().epochNanoseconds === 0n", "true"),
         ("Temporal.Now.timeZoneId()", "UTC"),
-        ("Temporal.Now.zonedDateTimeISO().toString()", "1970-01-01T00:00:00+00:00[UTC]"),
-        ("Temporal.Now.zonedDateTimeISO().timeZoneId === Temporal.Now.timeZoneId()", "true"),
-        ("Temporal.Now.zonedDateTimeISO('+05:30').toString()", "1970-01-01T05:30:00+05:30[+05:30]"),
+        (
+            "Temporal.Now.zonedDateTimeISO().toString()",
+            "1970-01-01T00:00:00+00:00[UTC]",
+        ),
+        (
+            "Temporal.Now.zonedDateTimeISO().timeZoneId === Temporal.Now.timeZoneId()",
+            "true",
+        ),
+        (
+            "Temporal.Now.zonedDateTimeISO('+05:30').toString()",
+            "1970-01-01T05:30:00+05:30[+05:30]",
+        ),
         ("Temporal.Now.zonedDateTimeISO().calendarId", "iso8601"),
         ("Temporal.Now.plainDateISO().toString()", "1970-01-01"),
-        ("Temporal.Now.plainDateTimeISO().toString()", "1970-01-01T00:00:00"),
+        (
+            "Temporal.Now.plainDateTimeISO().toString()",
+            "1970-01-01T00:00:00",
+        ),
         ("Temporal.Now.plainTimeISO().toString()", "00:00:00"),
-        ("Temporal.Now.plainDateTimeISO('+05:30').toString()", "1970-01-01T05:30:00"),
-        ("Temporal.Now.zonedDateTimeISO() instanceof Temporal.ZonedDateTime", "true"),
+        (
+            "Temporal.Now.plainDateTimeISO('+05:30').toString()",
+            "1970-01-01T05:30:00",
+        ),
+        (
+            "Temporal.Now.zonedDateTimeISO() instanceof Temporal.ZonedDateTime",
+            "true",
+        ),
     ] {
         temporal_result(source, expected);
     }

@@ -271,7 +271,10 @@ fn segmenter_resolved_options_are_exact() {
         intl_result(source, expected);
     }
     // An invalid granularity is a RangeError.
-    intl_throws("new Intl.Segmenter('en',{granularity:'bogus'})", "RangeError");
+    intl_throws(
+        "new Intl.Segmenter('en',{granularity:'bogus'})",
+        "RangeError",
+    );
 }
 
 #[test]

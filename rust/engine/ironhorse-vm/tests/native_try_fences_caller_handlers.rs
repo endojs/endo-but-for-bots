@@ -60,9 +60,8 @@ fn an_executor_throw_rejects_the_promise_with_the_thrown_value() {
 
 #[test]
 fn a_handler_inside_the_executor_still_catches() {
-    let out = run(
-        "var r=0; new Promise(function(){ try { throw 1; } catch(e) { r='inner:'+e; } }); r",
-    );
+    let out =
+        run("var r=0; new Promise(function(){ try { throw 1; } catch(e) { r='inner:'+e; } }); r");
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "inner:1");
 }
@@ -128,7 +127,11 @@ fn a_natively_caught_throw_never_runs_the_thrown_objects_tostring() {
     ] {
         let out = run(source);
         assert!(out.completed, "halt: {:?}\n  {source}", out.halt);
-        let expected = if source.contains("Array.from") { "100" } else { "0" };
+        let expected = if source.contains("Array.from") {
+            "100"
+        } else {
+            "0"
+        };
         assert_eq!(out.result, expected, "{source}");
     }
 }

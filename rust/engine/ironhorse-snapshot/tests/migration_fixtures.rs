@@ -64,8 +64,5 @@ fn regenerate_file_store_fixture() {
         export_to_container(&store).unwrap(),
     )
     .unwrap();
-    println!(
-        "fixtures written under {} — commit them",
-        dir.display()
-    );
+    println!("fixtures written under {} — commit them", dir.display());
 }

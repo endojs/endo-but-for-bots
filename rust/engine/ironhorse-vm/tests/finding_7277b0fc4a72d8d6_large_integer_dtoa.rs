@@ -72,11 +72,18 @@ fn large_integer_result_renders_shortest_round_tripping_decimal() {
     assert_eq!(not_a, -2071986177, "~2071986176 is -2071986177");
     // The inner product, rounded to a double, then `~ToInt32(..)`.
     let inner = f64::from(not_a) * f64::from(not_a);
-    assert_eq!(inner, 4293126717679075328.0, "(-2071986177)^2 rounds to this double");
+    assert_eq!(
+        inner, 4293126717679075328.0,
+        "(-2071986177)^2 rounds to this double"
+    );
     let x = !to_int32(inner); // ~ToInt32(inner) = 150994943
     assert_eq!(x, 150994943, "~ToInt32(inner) is 150994943");
     let value = f64::from(x) * f64::from(x);
-    assert_eq!(value.to_bits(), FINDING_VALUE.to_bits(), "program value is 150994943^2");
+    assert_eq!(
+        value.to_bits(),
+        FINDING_VALUE.to_bits(),
+        "program value is 150994943^2"
+    );
 
     // The port renders the ECMA-262 shortest decimal, exactly as V8/Node does.
     assert_eq!(

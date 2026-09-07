@@ -520,7 +520,9 @@ impl MachineImage {
         first_stored_unregistered_id(live.chain(self.stack.iter()), self.names.len(), &registered)
             .or_else(|| {
                 first_stored_unregistered_id(
-                    self.arrays.iter().flat_map(|a| a.items.iter().map(|(_, s)| s)),
+                    self.arrays
+                        .iter()
+                        .flat_map(|a| a.items.iter().map(|(_, s)| s)),
                     self.names.len(),
                     &registered,
                 )
@@ -676,7 +678,8 @@ impl MachineImage {
     /// Rebuild the slot and chunk arenas from this image. Round-trips the
     /// index arenas exactly (indices preserved, free list preserved).
     pub fn to_arenas(&self) -> (SlotArena, ChunkArena) {
-        let slots = SlotArena::from_image(self.slots.clone(), self.slot_free.clone(), self.slot_live);
+        let slots =
+            SlotArena::from_image(self.slots.clone(), self.slot_free.clone(), self.slot_live);
         let chunks = ChunkArena::from_image(self.chunks.clone());
         (slots, chunks)
     }
@@ -827,7 +830,8 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     if free.len() as u64 + live as u64 != slot_count as u64 {
         return Err(SnapshotError::Corrupt("HEAP live/free accounting"));
     }
-    let slots = decode_slots(&p[i..i + want]).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
+    let slots =
+        decode_slots(&p[i..i + want]).map_err(|_| SnapshotError::Corrupt("HEAP slot record"))?;
     Ok((slots, free, live))
 }
 
@@ -988,8 +992,13 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
         // side-ref counts (a parity-net panic / release over-pin) — and
         // makes `import ∘ export` idempotent (the dedup-and-re-sort a
         // crafted unordered image would otherwise survive).
-        if out.last().is_some_and(|prev: &ArrayImage| owner <= prev.owner) {
-            return Err(SnapshotError::Corrupt("arrays side table: owners not strictly ascending"));
+        if out
+            .last()
+            .is_some_and(|prev: &ArrayImage| owner <= prev.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "arrays side table: owners not strictly ascending",
+            ));
         }
         out.push(ArrayImage {
             owner,
@@ -1038,7 +1047,10 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
             entries.push((key, value));
         }
         // Strictly-ascending owners — same rationale as `decode_arrays`.
-        if out.last().is_some_and(|prev: &CollectionImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &CollectionImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "collections side table: owners not strictly ascending",
             ));
@@ -1181,7 +1193,10 @@ pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotEr
         // bytes): a crafted duplicate/unordered registry would
         // otherwise not round-trip byte-identically and could displace
         // a forward/reverse map entry at restore.
-        if out.last().is_some_and(|prev: &RegistryImage| key <= prev.key) {
+        if out
+            .last()
+            .is_some_and(|prev: &RegistryImage| key <= prev.key)
+        {
             return Err(SnapshotError::Corrupt(
                 "symbol registry: keys not strictly ascending",
             ));
@@ -1275,7 +1290,10 @@ pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> 
         // crafted duplicate would displace a row at restore while an
         // unordered image would re-sort — either breaks the
         // import∘export identity the CAS key rests on.
-        if out.last().is_some_and(|prev: &ErrorImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &ErrorImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "error-data side table: owners not strictly ascending",
             ));
@@ -1387,7 +1405,10 @@ pub(crate) fn decode_buffers(p: &[u8]) -> Result<Vec<BufferImage>, SnapshotError
             ));
         }
         // Strictly-ascending owners, for the sibling decoders' reason.
-        if out.last().is_some_and(|prev: &BufferImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &BufferImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "array-buffers side table: owners not strictly ascending",
             ));
@@ -1436,7 +1457,10 @@ pub(crate) fn decode_typed_arrays(p: &[u8]) -> Result<Vec<TypedArrayImage>, Snap
                 "typed-arrays side table: unknown element kind",
             ));
         }
-        if out.last().is_some_and(|prev: &TypedArrayImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &TypedArrayImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "typed-arrays side table: owners not strictly ascending",
             ));
@@ -1477,7 +1501,10 @@ pub(crate) fn decode_data_views(p: &[u8]) -> Result<Vec<DataViewImage>, Snapshot
         let buffer = c.u32()?;
         let offset = c.u32()?;
         let size = c.u32()?;
-        if out.last().is_some_and(|prev: &DataViewImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &DataViewImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "data-views side table: owners not strictly ascending",
             ));
@@ -1513,7 +1540,10 @@ pub(crate) fn decode_wrappers(p: &[u8]) -> Result<Vec<WrapperImage>, SnapshotErr
     for _ in 0..count {
         let owner = c.u32()?;
         let value = c.slot()?;
-        if out.last().is_some_and(|prev: &WrapperImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &WrapperImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "wrapper side table: owners not strictly ascending",
             ));
@@ -1556,7 +1586,10 @@ pub(crate) fn decode_regexps(p: &[u8]) -> Result<Vec<RegExpImage>, SnapshotError
         let flags = String::from_utf8(c.bytes(flags_len)?.to_vec())
             .map_err(|_| SnapshotError::Corrupt("regexp side table: flags not UTF-8"))?;
         let last_index_bits = ((c.u32()? as u64) << 32) | c.u32()? as u64;
-        if out.last().is_some_and(|prev: &RegExpImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &RegExpImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "regexp side table: owners not strictly ascending",
             ));
@@ -1590,7 +1623,10 @@ pub(crate) fn decode_dates(p: &[u8]) -> Result<Vec<DateImage>, SnapshotError> {
     for _ in 0..count {
         let owner = c.u32()?;
         let value_bits = ((c.u32()? as u64) << 32) | c.u32()? as u64;
-        if out.last().is_some_and(|prev: &DateImage| owner <= prev.owner) {
+        if out
+            .last()
+            .is_some_and(|prev: &DateImage| owner <= prev.owner)
+        {
             return Err(SnapshotError::Corrupt(
                 "date side table: owners not strictly ascending",
             ));
@@ -1881,9 +1917,7 @@ pub(crate) fn encode_accessors(rows: &[ironhorse_vm::AccessorRow]) -> Vec<u8> {
     v
 }
 
-pub(crate) fn decode_accessors(
-    p: &[u8],
-) -> Result<Vec<ironhorse_vm::AccessorRow>, SnapshotError> {
+pub(crate) fn decode_accessors(p: &[u8]) -> Result<Vec<ironhorse_vm::AccessorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "accessor state");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 8));
@@ -1957,9 +1991,8 @@ pub(crate) fn decode_intl_bound_functions(
         }
         let owner = c.u32()?;
         let name_len = c.u32()? as usize;
-        let name = String::from_utf8(c.bytes(name_len)?.to_vec()).map_err(|_| {
-            SnapshotError::Corrupt("Intl bound-function state: name not UTF-8")
-        })?;
+        let name = String::from_utf8(c.bytes(name_len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("Intl bound-function state: name not UTF-8"))?;
         rows.push(ironhorse_vm::IntlBoundFunctionRow {
             kind,
             function,
@@ -2042,9 +2075,7 @@ pub(crate) fn decode_private_elements(
             match c.u8()? {
                 0 => Ok(None),
                 1 => Ok(Some(c.slot()?)),
-                _ => Err(SnapshotError::Corrupt(
-                    "private accessors: bad option tag",
-                )),
+                _ => Err(SnapshotError::Corrupt("private accessors: bad option tag")),
             }
         };
         accessors.push(ironhorse_vm::PrivateAccessorRow {
@@ -2525,8 +2556,7 @@ pub(crate) fn decode_promise_cluster(
     c.done()?;
 
     // The cross-references, all four tables now in hand.
-    let owners: std::collections::BTreeSet<u32> =
-        promises.iter().map(|row| row.owner).collect();
+    let owners: std::collections::BTreeSet<u32> = promises.iter().map(|row| row.owner).collect();
     // A guard is the `[[AlreadyResolved]]` boolean of exactly ONE
     // resolving pair (`fxPushPromiseFunctions` mints two rows per
     // guard: opposite polarity, one promise). The collector may sweep
@@ -2781,7 +2811,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal instants: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal instants: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let mut b = [0u8; 16];
         b.copy_from_slice(c.bytes(16)?);
@@ -2791,7 +2825,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal durations: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal durations: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let mut f = [0i64; 10];
         for x in &mut f {
@@ -2805,7 +2843,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal plains: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal plains: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let kind = c.u8()?;
         // The engine's plain-record discriminants are 0..=4; anything
@@ -2826,7 +2868,11 @@ pub(crate) fn decode_temporal(p: &[u8]) -> Result<TemporalImage, SnapshotError> 
     let mut prev = None;
     for _ in 0..n {
         let owner = c.u32()?;
-        ascending(prev, owner, "temporal zoneds: owners not strictly ascending")?;
+        ascending(
+            prev,
+            owner,
+            "temporal zoneds: owners not strictly ascending",
+        )?;
         prev = Some(owner);
         let mut b = [0u8; 16];
         b.copy_from_slice(c.bytes(16)?);
@@ -3029,10 +3075,7 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
             _ => Err(SnapshotError::Corrupt("intl side table: bad boolean byte")),
         }
     }
-    fn owner_of(
-        c: &mut Cursor<'_>,
-        prev: &mut Option<u32>,
-    ) -> Result<u32, SnapshotError> {
+    fn owner_of(c: &mut Cursor<'_>, prev: &mut Option<u32>) -> Result<u32, SnapshotError> {
         let owner = c.u32()?;
         if prev.is_some_and(|p| owner <= p) {
             return Err(SnapshotError::Corrupt(
@@ -3240,10 +3283,8 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
         let owner = owner_of(&mut c, &mut prev)?;
         let segments_inst = ironhorse_vm::value::SlotIndex(c.u32()?);
         let pos = c.u32()? as usize;
-        t.segment_iterators.push((
-            owner,
-            SegmentIteratorData { segments_inst, pos },
-        ));
+        t.segment_iterators
+            .push((owner, SegmentIteratorData { segments_inst, pos }));
     }
     let n = c.u32()? as usize;
     let mut prev = None;
@@ -3601,9 +3642,10 @@ where
     I: IntoIterator<Item = &'a Slot>,
 {
     let floor = runtime_intern_floor(program_names)?;
-    slots
-        .into_iter()
-        .find_map(|s| s.stored_key_id().filter(|&id| id >= floor && !registered.contains(&id)))
+    slots.into_iter().find_map(|s| {
+        s.stored_key_id()
+            .filter(|&id| id >= floor && !registered.contains(&id))
+    })
 }
 
 /// `SYMB` joined this walk when the symbol-key table became live
@@ -3909,9 +3951,7 @@ pub(crate) fn check_image_slot_bounds(
     for row in &lang.proxy_state.revokers {
         owned(row.owner)?;
         if !proxy_owners.contains(&row.proxy) {
-            return Err(SnapshotError::Corrupt(
-                "proxy revoker names no proxy row",
-            ));
+            return Err(SnapshotError::Corrupt("proxy revoker names no proxy row"));
         }
         if row.name_chunk != u32::MAX {
             let offset = row.name_chunk as usize;
@@ -3923,9 +3963,7 @@ pub(crate) fn check_image_slot_bounds(
     let symbol_ids = symbols.id_set();
     for row in lang.accessors {
         owned(row.owner)?;
-        if row.id == 0
-            || (row.id as usize > names_len && !symbol_ids.contains(&row.id))
-        {
+        if row.id == 0 || (row.id as usize > names_len && !symbol_ids.contains(&row.id)) {
             return Err(SnapshotError::Corrupt(
                 "accessor state: id outside the property-key tables",
             ));
@@ -4103,9 +4141,7 @@ pub(crate) fn check_image_slot_bounds(
                     }
                     let (Some(start), Some(end)) = (
                         other.body_start,
-                        other
-                            .body_start
-                            .and_then(|s| s.checked_add(other.body_len)),
+                        other.body_start.and_then(|s| s.checked_add(other.body_len)),
                     ) else {
                         continue;
                     };
@@ -4123,12 +4159,9 @@ pub(crate) fn check_image_slot_bounds(
             }
         };
         if !starts.contains(&frame.resume_pc)
-            || frame
-                .id_map
-                .iter()
-                .any(|&(id, index)| {
-                    id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
-                })
+            || frame.id_map.iter().any(|&(id, index)| {
+                id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
+            })
         {
             return Err(SnapshotError::Corrupt(
                 "generator frame: invalid resume cursor or scope map",
@@ -4487,7 +4520,10 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
         w.atom(crate::format::ABUF, &encode_buffers(&image.buffers));
     }
     if !image.typed_arrays.is_empty() {
-        w.atom(crate::format::TARR, &encode_typed_arrays(&image.typed_arrays));
+        w.atom(
+            crate::format::TARR,
+            &encode_typed_arrays(&image.typed_arrays),
+        );
     }
     if !image.data_views.is_empty() {
         w.atom(crate::format::DVIW, &encode_data_views(&image.data_views));
@@ -4523,10 +4559,7 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
         );
     }
     if !image.proxy_state.is_empty() {
-        w.atom(
-            crate::format::PROX,
-            &encode_proxy_state(&image.proxy_state),
-        );
+        w.atom(crate::format::PROX, &encode_proxy_state(&image.proxy_state));
     }
     if !image.accessors.is_empty() {
         w.atom(crate::format::ACCS, &encode_accessors(&image.accessors));
@@ -4698,19 +4731,31 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     // side-table-free container), exactly mirroring the writer's
     // emit-only-when-non-empty rule.
     let arrays = match r.find(crate::format::ARRY) {
-        Some(a) => present_and_non_empty(decode_arrays(a.payload)?, "ARRY atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_arrays(a.payload)?,
+            "ARRY atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let collections = match r.find(crate::format::COLL) {
-        Some(a) => present_and_non_empty(decode_collections(a.payload)?, "COLL atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_collections(a.payload)?,
+            "COLL atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let registry = match r.find(crate::format::REGY) {
-        Some(a) => present_and_non_empty(decode_registry(a.payload)?, "REGY atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_registry(a.payload)?,
+            "REGY atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let mut errors = match r.find(crate::format::ERRD) {
-        Some(a) => present_and_non_empty(decode_errors(a.payload)?, "ERRD atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_errors(a.payload)?,
+            "ERRD atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     // Join the frames back onto their rows. An owner naming no `ERRD`
@@ -4736,27 +4781,45 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         }
     }
     let buffers = match r.find(crate::format::ABUF) {
-        Some(a) => present_and_non_empty(decode_buffers(a.payload)?, "ABUF atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_buffers(a.payload)?,
+            "ABUF atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let typed_arrays = match r.find(crate::format::TARR) {
-        Some(a) => present_and_non_empty(decode_typed_arrays(a.payload)?, "TARR atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_typed_arrays(a.payload)?,
+            "TARR atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let data_views = match r.find(crate::format::DVIW) {
-        Some(a) => present_and_non_empty(decode_data_views(a.payload)?, "DVIW atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_data_views(a.payload)?,
+            "DVIW atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let wrappers = match r.find(crate::format::WRAP) {
-        Some(a) => present_and_non_empty(decode_wrappers(a.payload)?, "WRAP atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_wrappers(a.payload)?,
+            "WRAP atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let regexps = match r.find(crate::format::REGX) {
-        Some(a) => present_and_non_empty(decode_regexps(a.payload)?, "REGX atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_regexps(a.payload)?,
+            "REGX atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let arguments_brands = match r.find(crate::format::ARGB) {
-        Some(a) => present_and_non_empty(decode_arguments_brands(a.payload)?, "ARGB atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_arguments_brands(a.payload)?,
+            "ARGB atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let temporal = match r.find(crate::format::TMPR) {
@@ -4784,11 +4847,17 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => IntlTables::default(),
     };
     let iterators = match r.find(crate::format::ITER) {
-        Some(a) => present_and_non_empty(decode_iterators(a.payload)?, "ITER atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_iterators(a.payload)?,
+            "ITER atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let dates = match r.find(crate::format::DATE) {
-        Some(a) => present_and_non_empty(decode_dates(a.payload)?, "DATE atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_dates(a.payload)?,
+            "DATE atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let function_state = match r.find(crate::format::FUNC) {
@@ -4816,11 +4885,17 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => ironhorse_vm::ProxyStateSnapshot::default(),
     };
     let accessors = match r.find(crate::format::ACCS) {
-        Some(a) => present_and_non_empty(decode_accessors(a.payload)?, "ACCS atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_accessors(a.payload)?,
+            "ACCS atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let intl_bound_functions = match r.find(crate::format::IBFN) {
-        Some(a) => present_and_non_empty(decode_intl_bound_functions(a.payload)?, "IBFN atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_intl_bound_functions(a.payload)?,
+            "IBFN atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let private_elements = match r.find(crate::format::PRIV) {
@@ -4836,7 +4911,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => ironhorse_vm::PrivateElementSnapshot::default(),
     };
     let disposable_stacks = match r.find(crate::format::DISP) {
-        Some(a) => present_and_non_empty(decode_disposable_stacks(a.payload)?, "DISP atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_disposable_stacks(a.payload)?,
+            "DISP atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
     let generators = match r.find(crate::format::GENR) {
@@ -4870,7 +4948,8 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             if a.payload.len() != 4 {
                 return Err(SnapshotError::Corrupt("installed-names floor size"));
             }
-            let floor = u32::from_be_bytes([a.payload[0], a.payload[1], a.payload[2], a.payload[3]]);
+            let floor =
+                u32::from_be_bytes([a.payload[0], a.payload[1], a.payload[2], a.payload[3]]);
             // A floor past the name table cannot come from an honest
             // suspension — installs only ever floor at a table length
             // the machine actually had.
@@ -5024,8 +5103,16 @@ mod tests {
         // would displace the first `ArrayData` without decrementing its
         // side-ref counts (wave-4 P2). Decode must reject it.
         let dup = vec![
-            ArrayImage { owner: 3, length: 0, items: vec![] },
-            ArrayImage { owner: 3, length: 0, items: vec![] },
+            ArrayImage {
+                owner: 3,
+                length: 0,
+                items: vec![],
+            },
+            ArrayImage {
+                owner: 3,
+                length: 0,
+                items: vec![],
+            },
         ];
         assert!(matches!(
             decode_arrays(&encode_arrays(&dup)),
@@ -5033,16 +5120,32 @@ mod tests {
         ));
         // Unordered (would break import∘export idempotency / CAS).
         let unordered = vec![
-            CollectionImage { owner: 5, kind: 0, table_length: 0, entries: vec![] },
-            CollectionImage { owner: 2, kind: 0, table_length: 0, entries: vec![] },
+            CollectionImage {
+                owner: 5,
+                kind: 0,
+                table_length: 0,
+                entries: vec![],
+            },
+            CollectionImage {
+                owner: 2,
+                kind: 0,
+                table_length: 0,
+                entries: vec![],
+            },
         ];
         assert!(matches!(
             decode_collections(&encode_collections(&unordered)),
             Err(SnapshotError::Corrupt(_))
         ));
         let dup_key = vec![
-            RegistryImage { key: b"k".to_vec(), descriptor: 1 },
-            RegistryImage { key: b"k".to_vec(), descriptor: 2 },
+            RegistryImage {
+                key: b"k".to_vec(),
+                descriptor: 1,
+            },
+            RegistryImage {
+                key: b"k".to_vec(),
+                descriptor: 2,
+            },
         ];
         assert!(matches!(
             decode_registry(&encode_registry(&dup_key)),
@@ -5050,8 +5153,16 @@ mod tests {
         ));
         // The ascending forms decode fine.
         let ok = vec![
-            ArrayImage { owner: 2, length: 0, items: vec![] },
-            ArrayImage { owner: 5, length: 0, items: vec![] },
+            ArrayImage {
+                owner: 2,
+                length: 0,
+                items: vec![],
+            },
+            ArrayImage {
+                owner: 5,
+                length: 0,
+                items: vec![],
+            },
         ];
         assert_eq!(decode_arrays(&encode_arrays(&ok)).unwrap(), ok);
     }
@@ -5060,8 +5171,18 @@ mod tests {
     fn error_data_decode_refuses_crafted_rows() {
         // Duplicate owner: restore would displace the first row.
         let dup = vec![
-            ErrorImage { owner: 3, name: "Error".to_string(), message: None , frames: Vec::new() },
-            ErrorImage { owner: 3, name: "TypeError".to_string(), message: None , frames: Vec::new() },
+            ErrorImage {
+                owner: 3,
+                name: "Error".to_string(),
+                message: None,
+                frames: Vec::new(),
+            },
+            ErrorImage {
+                owner: 3,
+                name: "TypeError".to_string(),
+                message: None,
+                frames: Vec::new(),
+            },
         ];
         assert!(matches!(
             decode_errors(&encode_errors(&dup)),
@@ -5073,7 +5194,7 @@ mod tests {
             owner: 1,
             name: "NotAnError".to_string(),
             message: None,
-                frames: Vec::new(),
+            frames: Vec::new(),
         }];
         assert!(matches!(
             decode_errors(&encode_errors(&unknown)),
@@ -5084,7 +5205,7 @@ mod tests {
             owner: 1,
             name: "Error".to_string(),
             message: None,
-                frames: Vec::new(),
+            frames: Vec::new(),
         }]);
         *bytes.last_mut().unwrap() = 2;
         assert!(matches!(
@@ -5093,12 +5214,27 @@ mod tests {
         ));
         // The well-formed rows round-trip, message halves preserved.
         let ok = vec![
-            ErrorImage { owner: 2, name: "RangeError".to_string(), message: Some("r".to_string()) , frames: Vec::new() },
-            ErrorImage { owner: 7, name: "SuppressedError".to_string(), message: None , frames: Vec::new() },
+            ErrorImage {
+                owner: 2,
+                name: "RangeError".to_string(),
+                message: Some("r".to_string()),
+                frames: Vec::new(),
+            },
+            ErrorImage {
+                owner: 7,
+                name: "SuppressedError".to_string(),
+                message: None,
+                frames: Vec::new(),
+            },
         ];
         assert_eq!(decode_errors(&encode_errors(&ok)).unwrap(), ok);
         // And an out-of-arena owner is refused by the bounds gate.
-        let oob = vec![ErrorImage { owner: 9, name: "Error".to_string(), message: None, frames: Vec::new() }];
+        let oob = vec![ErrorImage {
+            owner: 9,
+            name: "Error".to_string(),
+            message: None,
+            frames: Vec::new(),
+        }];
         assert!(check_image_slot_bounds(
             &[],
             &[],
@@ -5114,22 +5250,35 @@ mod tests {
             0,
             &SymbolKeyImage::default(),
             4,
-            64
-        , &[])
+            64,
+            &[]
+        )
         .is_err());
     }
 
     #[test]
     fn date_decode_preserves_raw_bits_and_refuses_duplicate_owners() {
         let rows = vec![
-            DateImage { owner: 2, value_bits: (-0.0f64).to_bits() },
-            DateImage { owner: 7, value_bits: 0x7ff8_0000_0000_0042 },
+            DateImage {
+                owner: 2,
+                value_bits: (-0.0f64).to_bits(),
+            },
+            DateImage {
+                owner: 7,
+                value_bits: 0x7ff8_0000_0000_0042,
+            },
         ];
         assert_eq!(decode_dates(&encode_dates(&rows)).unwrap(), rows);
 
         let duplicate = vec![
-            DateImage { owner: 3, value_bits: 1.0f64.to_bits() },
-            DateImage { owner: 3, value_bits: 2.0f64.to_bits() },
+            DateImage {
+                owner: 3,
+                value_bits: 1.0f64.to_bits(),
+            },
+            DateImage {
+                owner: 3,
+                value_bits: 2.0f64.to_bits(),
+            },
         ];
         assert!(matches!(
             decode_dates(&encode_dates(&duplicate)),
@@ -5140,30 +5289,61 @@ mod tests {
     #[test]
     fn typed_array_family_decode_refuses_crafted_rows() {
         // Unknown flag bits on a buffer row.
-        let bad_flags = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 4 }];
+        let bad_flags = vec![BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: 4,
+        }];
         assert!(matches!(
             decode_buffers(&encode_buffers(&bad_flags)),
             Err(SnapshotError::Corrupt(_))
         ));
         // Duplicate owners in each table.
         let dup_buf = vec![
-            BufferImage { owner: 2, data: 4, length: 8, flags: 0 },
-            BufferImage { owner: 2, data: 16, length: 8, flags: 0 },
+            BufferImage {
+                owner: 2,
+                data: 4,
+                length: 8,
+                flags: 0,
+            },
+            BufferImage {
+                owner: 2,
+                data: 16,
+                length: 8,
+                flags: 0,
+            },
         ];
         assert!(matches!(
             decode_buffers(&encode_buffers(&dup_buf)),
             Err(SnapshotError::Corrupt(_))
         ));
         // Unknown element kind on a view row.
-        let bad_kind = vec![TypedArrayImage { owner: 1, kind: 200, buffer: 2, offset: 0, length: 1 }];
+        let bad_kind = vec![TypedArrayImage {
+            owner: 1,
+            kind: 200,
+            buffer: 2,
+            offset: 0,
+            length: 1,
+        }];
         assert!(matches!(
             decode_typed_arrays(&encode_typed_arrays(&bad_kind)),
             Err(SnapshotError::Corrupt(_))
         ));
         // Unordered data-view owners.
         let unordered = vec![
-            DataViewImage { owner: 5, buffer: 1, offset: 0, size: 1 },
-            DataViewImage { owner: 3, buffer: 1, offset: 0, size: 1 },
+            DataViewImage {
+                owner: 5,
+                buffer: 1,
+                offset: 0,
+                size: 1,
+            },
+            DataViewImage {
+                owner: 3,
+                buffer: 1,
+                offset: 0,
+                size: 1,
+            },
         ];
         assert!(matches!(
             decode_data_views(&encode_data_views(&unordered)),
@@ -5171,13 +5351,37 @@ mod tests {
         ));
         // The well-formed rows round-trip.
         let ok_b = vec![
-            BufferImage { owner: 1, data: 4, length: 8, flags: 0b10 },
-            BufferImage { owner: 3, data: 16, length: 0, flags: 0b01 },
+            BufferImage {
+                owner: 1,
+                data: 4,
+                length: 8,
+                flags: 0b10,
+            },
+            BufferImage {
+                owner: 3,
+                data: 16,
+                length: 0,
+                flags: 0b01,
+            },
         ];
         assert_eq!(decode_buffers(&encode_buffers(&ok_b)).unwrap(), ok_b);
-        let ok_t = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 1, offset: 0, length: 8 }];
-        assert_eq!(decode_typed_arrays(&encode_typed_arrays(&ok_t)).unwrap(), ok_t);
-        let ok_d = vec![DataViewImage { owner: 2, buffer: 1, offset: 4, size: 4 }];
+        let ok_t = vec![TypedArrayImage {
+            owner: 2,
+            kind: 0,
+            buffer: 1,
+            offset: 0,
+            length: 8,
+        }];
+        assert_eq!(
+            decode_typed_arrays(&encode_typed_arrays(&ok_t)).unwrap(),
+            ok_t
+        );
+        let ok_d = vec![DataViewImage {
+            owner: 2,
+            buffer: 1,
+            offset: 4,
+            size: 4,
+        }];
         assert_eq!(decode_data_views(&encode_data_views(&ok_d)).unwrap(), ok_d);
     }
 
@@ -5185,38 +5389,207 @@ mod tests {
     fn typed_array_family_bounds_refuse_crafted_geometry() {
         let sym = SymbolKeyImage::default();
         // A buffer whose backing extent runs past the chunk arena.
-        let past = vec![BufferImage { owner: 1, data: 60, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &past, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
+        let past = vec![BufferImage {
+            owner: 1,
+            data: 60,
+            length: 8,
+            flags: 0,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &past,
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &sym,
+            4,
+            64,
+            &[]
+        )
+        .is_err());
         // A buffer whose offset sits inside the chunk header.
-        let low = vec![BufferImage { owner: 1, data: 2, length: 8, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &low, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
+        let low = vec![BufferImage {
+            owner: 1,
+            data: 2,
+            length: 8,
+            flags: 0,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &low,
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &sym,
+            4,
+            64,
+            &[]
+        )
+        .is_err());
         // The NULL chunk sentinel is never valid backing, even when a
         // store advertises a chunk domain large enough to cover u32::MAX.
-        let null = vec![BufferImage { owner: 1, data: u32::MAX, length: 0, flags: 0 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &null, &[], &[], &LangRows::EMPTY, &[], 0, &sym, 4, usize::MAX, &[]).is_err());
+        let null = vec![BufferImage {
+            owner: 1,
+            data: u32::MAX,
+            length: 0,
+            flags: 0,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &null,
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &sym,
+            4,
+            usize::MAX,
+            &[]
+        )
+        .is_err());
         // A view naming a buffer with NO row (an in-bounds slot is not
         // enough — restoring it would read through unbacked geometry).
-        let orphan = vec![TypedArrayImage { owner: 2, kind: 0, buffer: 3, offset: 0, length: 1 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &orphan, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
+        let orphan = vec![TypedArrayImage {
+            owner: 2,
+            kind: 0,
+            buffer: 3,
+            offset: 0,
+            length: 1,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &orphan,
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &sym,
+            4,
+            64,
+            &[]
+        )
+        .is_err());
         // View geometry past its buffer's length (Uint32Array: shift 2).
-        let buf = vec![BufferImage { owner: 1, data: 4, length: 8, flags: 0 }];
+        let buf = vec![BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: 0,
+        }];
         let kind_u32 = ironhorse_vm::TYPED_ARRAY_TYPES
             .iter()
             .position(|t| t.shift == 2)
             .unwrap() as u8;
-        let wide = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 4, length: 2 }];
-        assert!(
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &wide, &[], &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err()
-        );
-        // A data view past its buffer.
-        let dv = vec![DataViewImage { owner: 2, buffer: 1, offset: 6, size: 4 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &buf, &[], &dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64, &[]).is_err());
-        // The covered forms pass.
-        let fit_view = vec![TypedArrayImage { owner: 2, kind: kind_u32, buffer: 1, offset: 0, length: 2 }];
-        let fit_dv = vec![DataViewImage { owner: 3, buffer: 1, offset: 4, size: 4 }];
+        let wide = vec![TypedArrayImage {
+            owner: 2,
+            kind: kind_u32,
+            buffer: 1,
+            offset: 4,
+            length: 2,
+        }];
         assert!(check_image_slot_bounds(
-            &[], &[], &[], &[], &[], &[], &buf, &fit_view, &fit_dv, &LangRows::EMPTY, &[], 0, &sym, 4, 64
-        , &[])
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &buf,
+            &wide,
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &sym,
+            4,
+            64,
+            &[]
+        )
+        .is_err());
+        // A data view past its buffer.
+        let dv = vec![DataViewImage {
+            owner: 2,
+            buffer: 1,
+            offset: 6,
+            size: 4,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &buf,
+            &[],
+            &dv,
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &sym,
+            4,
+            64,
+            &[]
+        )
+        .is_err());
+        // The covered forms pass.
+        let fit_view = vec![TypedArrayImage {
+            owner: 2,
+            kind: kind_u32,
+            buffer: 1,
+            offset: 0,
+            length: 2,
+        }];
+        let fit_dv = vec![DataViewImage {
+            owner: 3,
+            buffer: 1,
+            offset: 4,
+            size: 4,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &buf,
+            &fit_view,
+            &fit_dv,
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &sym,
+            4,
+            64,
+            &[]
+        )
         .is_ok());
     }
 
@@ -5240,7 +5613,10 @@ mod tests {
         // Owners not strictly ascending.
         let mut t = IntlTables::default();
         t.collators = vec![collator(5), collator(3)];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "non-ascending owners");
+        assert!(
+            decode_intl(&encode_intl(&t)).is_err(),
+            "non-ascending owners"
+        );
         // Segment boundaries outside their input.
         let mut t = IntlTables::default();
         t.segments = vec![(
@@ -5251,7 +5627,10 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "segment end past units");
+        assert!(
+            decode_intl(&encode_intl(&t)).is_err(),
+            "segment end past units"
+        );
         // Overlapping ranges (review): a start must equal the previous
         // END — the pre-review check compared previous STARTS, so
         // (0,2),(1,3) decoded silently.
@@ -5264,7 +5643,10 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "overlapping segments");
+        assert!(
+            decode_intl(&encode_intl(&t)).is_err(),
+            "overlapping segments"
+        );
         // Boundaries that do not COVER the input (ICU always emits the
         // final boundary at the unit count).
         let mut t = IntlTables::default();
@@ -5276,7 +5658,10 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(decode_intl(&encode_intl(&t)).is_err(), "non-covering segments");
+        assert!(
+            decode_intl(&encode_intl(&t)).is_err(),
+            "non-covering segments"
+        );
         // Unicode-extension keys: the writer emits BTreeMap order, so
         // unordered or duplicated keys are non-canonical crafted bytes
         // (review: silently re-canonicalizing broke byte identity).
@@ -5305,7 +5690,11 @@ mod tests {
         let mut duped = canonical.clone();
         duped[nu..nu + 2].copy_from_slice(b"ca");
         assert!(decode_intl(&duped).is_err(), "duplicate unicode keys");
-        assert_eq!(decode_intl(&canonical).unwrap(), t, "canonical order round-trips");
+        assert_eq!(
+            decode_intl(&canonical).unwrap(),
+            t,
+            "canonical order round-trips"
+        );
         // An unknown date-time component key is crafted bytes: the keys
         // are a closed engine set carried as statics.
         let mut t = IntlTables::default();
@@ -5372,7 +5761,24 @@ mod tests {
                 temporal: &EMPTY_TEMPORAL,
                 intl,
             };
-            check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &lang, &[], 0, &sym, 4, 64, &[])
+            check_image_slot_bounds(
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &lang,
+                &[],
+                0,
+                &sym,
+                4,
+                64,
+                &[],
+            )
         };
         let segs = |owner: u32| {
             (
@@ -5393,15 +5799,24 @@ mod tests {
         t.segments = vec![segs(1)];
         t.segment_iterators = vec![(
             2,
-            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(3), pos: 0 },
+            SegmentIteratorData {
+                segments_inst: ironhorse_vm::value::SlotIndex(3),
+                pos: 0,
+            },
         )];
-        assert!(check(&t).is_err(), "iterator names no covering segments row");
+        assert!(
+            check(&t).is_err(),
+            "iterator names no covering segments row"
+        );
         // A cursor past the precomputed list.
         let mut t = IntlTables::default();
         t.segments = vec![segs(1)];
         t.segment_iterators = vec![(
             2,
-            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(1), pos: 5 },
+            SegmentIteratorData {
+                segments_inst: ironhorse_vm::value::SlotIndex(1),
+                pos: 5,
+            },
         )];
         assert!(check(&t).is_err(), "cursor past the list");
         // The covered form passes (pos == len is the exhausted cursor).
@@ -5409,9 +5824,15 @@ mod tests {
         t.segments = vec![segs(1)];
         t.segment_iterators = vec![(
             2,
-            SegmentIteratorData { segments_inst: ironhorse_vm::value::SlotIndex(1), pos: 1 },
+            SegmentIteratorData {
+                segments_inst: ironhorse_vm::value::SlotIndex(1),
+                pos: 1,
+            },
         )];
-        assert!(check(&t).is_ok(), "a covering row with an in-range cursor passes");
+        assert!(
+            check(&t).is_ok(),
+            "a covering row with an in-range cursor passes"
+        );
     }
 
     #[test]
@@ -5480,8 +5901,22 @@ mod tests {
         let sym = SymbolKeyImage::default();
         let check = |rows: &[IteratorRow], colls: &[CollectionImage], names_len: usize| {
             check_image_slot_bounds(
-                &[], &[], &[], colls, &[], &[], &[], &[], &[], &LangRows::EMPTY, rows, names_len,
-                &sym, 4, 64, &[],
+                &[],
+                &[],
+                &[],
+                colls,
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &LangRows::EMPTY,
+                rows,
+                names_len,
+                &sym,
+                4,
+                64,
+                &[],
             )
         };
         let coll = CollectionImage {
@@ -5533,34 +5968,146 @@ mod tests {
         // shape a reviewer actually crafted and reached a release panic
         // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
-            check_image_slot_bounds(heap, stack, &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[])
+            check_image_slot_bounds(
+                heap,
+                stack,
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &LangRows::EMPTY,
+                &[],
+                0,
+                &SymbolKeyImage::default(),
+                4,
+                64,
+                &[],
+            )
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
         // --- the wave-5 additions: heap, next, stack, symbols, chunks ---
-        assert!(ok(&[refd(9)], &[]).is_err(), "heap Reference past the arena");
+        assert!(
+            ok(&[refd(9)], &[]).is_err(),
+            "heap Reference past the arena"
+        );
         let mut chained = Slot::undefined();
         chained.next = SlotIndex(9);
         assert!(ok(&[chained], &[]).is_err(), "heap `next` past the arena");
-        assert!(ok(&[], &[refd(9)]).is_err(), "stack Reference past the arena");
+        assert!(
+            ok(&[], &[refd(9)]).is_err(),
+            "stack Reference past the arena"
+        );
         let bad_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(0xFFFF_0000)));
-        assert!(ok(&[bad_chunk], &[]).is_err(), "chunk offset past the arena");
+        assert!(
+            ok(&[bad_chunk], &[]).is_err(),
+            "chunk offset past the arena"
+        );
         let below_header = Slot::of(Kind::String, Payload::String(ChunkOffset(0)));
-        assert!(ok(&[below_header], &[]).is_err(), "chunk offset below the header");
+        assert!(
+            ok(&[below_header], &[]).is_err(),
+            "chunk offset below the header"
+        );
 
         // --- the wave-4 arms, still enforced ---
-        let bad_desc = [RegistryImage { key: b"k".to_vec(), descriptor: 9 }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &bad_desc, &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
+        let bad_desc = [RegistryImage {
+            key: b"k".to_vec(),
+            descriptor: 9,
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &bad_desc,
+            &[],
+            &[],
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[]
+        )
+        .is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
             next_id: u16::MAX - 1,
             pairs: vec![(u16::MAX, 4)],
         };
-        assert!(check_image_slot_bounds(&[], &[], &[], &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &bad_sym, 4, 64, &[]).is_err());
-        let bad_owner = [ArrayImage { owner: 9, length: 0, items: vec![] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_owner, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
-        let bad_ref = [ArrayImage { owner: 1, length: 1, items: vec![(0, refd(9))] }];
-        assert!(check_image_slot_bounds(&[], &[], &bad_ref, &[], &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &bad_sym,
+            4,
+            64,
+            &[]
+        )
+        .is_err());
+        let bad_owner = [ArrayImage {
+            owner: 9,
+            length: 0,
+            items: vec![],
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &bad_owner,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[]
+        )
+        .is_err());
+        let bad_ref = [ArrayImage {
+            owner: 1,
+            length: 1,
+            items: vec![(0, refd(9))],
+        }];
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &bad_ref,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[]
+        )
+        .is_err());
         // Collections were passed `&[]` in every wave-4 case, so that
         // whole branch never executed (wave 5, llvm-cov). Exercise both
         // the key and the value side.
@@ -5570,14 +6117,50 @@ mod tests {
             table_length: 0,
             entries: vec![(refd(9), Slot::undefined())],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_key, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &bad_key,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[]
+        )
+        .is_err());
         let bad_val = [CollectionImage {
             owner: 1,
             kind: 0,
             table_length: 0,
             entries: vec![(Slot::undefined(), refd(9))],
         }];
-        assert!(check_image_slot_bounds(&[], &[], &[], &bad_val, &[], &[], &[], &[], &[], &LangRows::EMPTY, &[], 0, &SymbolKeyImage::default(), 4, 64, &[]).is_err());
+        assert!(check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &bad_val,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            64,
+            &[]
+        )
+        .is_err());
 
         // --- in-bounds and NULL pass ---
         assert!(ok(&[refd(3)], &[refd(0)]).is_ok(), "in-bounds indices pass");
@@ -5586,7 +6169,10 @@ mod tests {
             "a NULL reference is an absence, not an out-of-arena index",
         );
         let good_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(8)));
-        assert!(ok(&[good_chunk], &[]).is_ok(), "an in-range chunk offset passes");
+        assert!(
+            ok(&[good_chunk], &[]).is_ok(),
+            "an in-range chunk offset passes"
+        );
     }
 
     /// Review findings 2+3 (free-record hygiene): a record on the free
@@ -5603,8 +6189,22 @@ mod tests {
         let sym = SymbolKeyImage::default();
         let gate = |heap: &[Slot], errors: &[ErrorImage], free: &[u32]| {
             check_image_slot_bounds(
-                heap, &[], &[], &[], &[], errors, &[], &[], &[], &LangRows::EMPTY, &[], 0, &sym,
-                4, 64, free,
+                heap,
+                &[],
+                &[],
+                &[],
+                &[],
+                errors,
+                &[],
+                &[],
+                &[],
+                &LangRows::EMPTY,
+                &[],
+                0,
+                &sym,
+                4,
+                64,
+                free,
             )
         };
         // A stale chunk offset AND a dangling reference on freed
@@ -5612,16 +6212,31 @@ mod tests {
         let stale_chunk = Slot::of(Kind::String, Payload::String(ChunkOffset(0xFFFF_0000)));
         let stale_ref = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(9)));
         assert!(
-            gate(&[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()], &[], &[1, 2]).is_ok(),
+            gate(
+                &[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()],
+                &[],
+                &[1, 2]
+            )
+            .is_ok(),
             "freed records are opaque: stale bytes must not refuse an honest post-GC image"
         );
         // The SAME records live: refused (the wave-5 rule unchanged).
         assert!(
-            gate(&[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()], &[], &[]).is_err(),
+            gate(
+                &[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()],
+                &[],
+                &[]
+            )
+            .is_err(),
             "live records keep the wave-5 refusals"
         );
         // A side-table row owned by a free slot: refused by name.
-        let row = [ErrorImage { owner: 1, name: "Error".to_string(), message: None, frames: Vec::new() }];
+        let row = [ErrorImage {
+            owner: 1,
+            name: "Error".to_string(),
+            message: None,
+            frames: Vec::new(),
+        }];
         assert!(
             matches!(
                 gate(&[Slot::undefined(); 4], &row, &[1]),
@@ -5648,27 +6263,47 @@ mod tests {
         // More items than the length can hold — caught, like the case
         // below, by bounding the last index: ascending indices under
         // `length` cannot outnumber it.
-        let overfull = vec![ArrayImage { owner: 1, length: 1, items: vec![(0, v(7)), (1, v(8))] }];
+        let overfull = vec![ArrayImage {
+            owner: 1,
+            length: 1,
+            items: vec![(0, v(7)), (1, v(8))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&overfull)),
             Err(SnapshotError::Corrupt(_)),
         ));
         // A single item sitting AT or PAST the declared length.
-        let past = vec![ArrayImage { owner: 1, length: 2, items: vec![(2, v(7))] }];
+        let past = vec![ArrayImage {
+            owner: 1,
+            length: 2,
+            items: vec![(2, v(7))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&past)),
             Err(SnapshotError::Corrupt(_)),
         ));
         // A dense, honest row still decodes.
-        let ok = vec![ArrayImage { owner: 1, length: 2, items: vec![(0, v(7)), (1, v(8))] }];
+        let ok = vec![ArrayImage {
+            owner: 1,
+            length: 2,
+            items: vec![(0, v(7)), (1, v(8))],
+        }];
         assert_eq!(decode_arrays(&encode_arrays(&ok)).unwrap(), ok);
         // And a SPARSE row does too — the guard bounds the items, it does
         // not require density. Including the extreme: this is exactly
         // `a[0] = 7; a.length = 2e8`, and refusing it would refuse a
         // correct snapshot.
-        let sparse = vec![ArrayImage { owner: 1, length: 9, items: vec![(0, v(7)), (8, v(8))] }];
+        let sparse = vec![ArrayImage {
+            owner: 1,
+            length: 9,
+            items: vec![(0, v(7)), (8, v(8))],
+        }];
         assert_eq!(decode_arrays(&encode_arrays(&sparse)).unwrap(), sparse);
-        let huge = vec![ArrayImage { owner: 1, length: 200_000_000, items: vec![(0, v(7))] }];
+        let huge = vec![ArrayImage {
+            owner: 1,
+            length: 200_000_000,
+            items: vec![(0, v(7))],
+        }];
         assert_eq!(decode_arrays(&encode_arrays(&huge)).unwrap(), huge);
     }
 
@@ -5681,12 +6316,20 @@ mod tests {
         // import-export identity the CAS key rests on. Note the plain
         // write(read(b)) round trip IS idempotent for these, which is
         // why only a live-Interp round trip exposes it.
-        let dup = vec![ArrayImage { owner: 1, length: 4, items: vec![(1, v(10)), (1, v(11))] }];
+        let dup = vec![ArrayImage {
+            owner: 1,
+            length: 4,
+            items: vec![(1, v(10)), (1, v(11))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&dup)),
             Err(SnapshotError::Corrupt(_)),
         ));
-        let unordered = vec![ArrayImage { owner: 1, length: 4, items: vec![(3, v(30)), (1, v(10))] }];
+        let unordered = vec![ArrayImage {
+            owner: 1,
+            length: 4,
+            items: vec![(3, v(30)), (1, v(10))],
+        }];
         assert!(matches!(
             decode_arrays(&encode_arrays(&unordered)),
             Err(SnapshotError::Corrupt(_)),
@@ -5701,8 +6344,14 @@ mod tests {
         // indices in bounds, registry rooted, nothing downstream catches
         // it.
         let shared = vec![
-            RegistryImage { key: b"aaa".to_vec(), descriptor: 3 },
-            RegistryImage { key: b"bbb".to_vec(), descriptor: 3 },
+            RegistryImage {
+                key: b"aaa".to_vec(),
+                descriptor: 3,
+            },
+            RegistryImage {
+                key: b"bbb".to_vec(),
+                descriptor: 3,
+            },
         ];
         assert!(matches!(
             decode_registry(&encode_registry(&shared)),
@@ -5710,8 +6359,14 @@ mod tests {
         ));
         // Distinct descriptors decode fine.
         let ok = vec![
-            RegistryImage { key: b"aaa".to_vec(), descriptor: 3 },
-            RegistryImage { key: b"bbb".to_vec(), descriptor: 4 },
+            RegistryImage {
+                key: b"aaa".to_vec(),
+                descriptor: 3,
+            },
+            RegistryImage {
+                key: b"bbb".to_vec(),
+                descriptor: 4,
+            },
         ];
         assert_eq!(decode_registry(&encode_registry(&ok)).unwrap(), ok);
     }

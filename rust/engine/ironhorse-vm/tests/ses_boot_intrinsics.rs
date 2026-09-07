@@ -156,7 +156,9 @@ fn computed_compound_assignment_preserves_reference_and_evaluates_key_once() {
 
 #[test]
 fn intrinsic_reflection_materializes_symbol_keys_before_freeze() {
-    assert_eq!(result(r#"
+    assert_eq!(
+        result(
+            r#"
         const prototype = Array.prototype;
         const keys = Reflect.ownKeys(prototype);
         const symbol = Symbol.unscopables;
@@ -167,24 +169,34 @@ fn intrinsic_reflection_materializes_symbol_keys_before_freeze() {
         eval("Array.prototype[Symbol.unscopables]; Array.prototype['to' + 'Sorted'];");
         [present, Object.isFrozen(prototype), prototype[symbol] === undefined,
          Reflect.ownKeys(prototype).length === before].join(':')
-    "#), "true:true:true:true");
+    "#
+        ),
+        "true:true:true:true"
+    );
 }
 
 #[test]
 fn later_intrinsic_linking_preserves_frozen_descriptors() {
-    assert_eq!(result(r#"
+    assert_eq!(
+        result(
+            r#"
         const protos = [Array.prototype, Error.prototype,
           Object.getPrototypeOf((async function* () {})()).constructor.prototype];
         protos.forEach(Object.freeze);
         const before = protos.map(p => Reflect.ownKeys(p).length);
         eval("new Intl.NumberFormat(); Object.getOwnPropertyDescriptor(Error.prototype, 'stack');");
         protos.map((p, i) => Object.isFrozen(p) && Reflect.ownKeys(p).length === before[i]).join(':')
-    "#), "true:true:true");
+    "#
+        ),
+        "true:true:true"
+    );
 }
 
 #[test]
 fn frozen_global_is_not_extended_by_computed_intrinsic_names() {
-    assert_eq!(result(r#"
+    assert_eq!(
+        result(
+            r#"
         (() => {
             const global = globalThis;
             Object.freeze(global);
@@ -193,12 +205,17 @@ fn frozen_global_is_not_extended_by_computed_intrinsic_names() {
             const constructor = global[name];
             return [typeof constructor, Object.isFrozen(global), Reflect.ownKeys(global).length === count].join(':');
         })()
-    "#), "function:true:true");
+    "#
+        ),
+        "function:true:true"
+    );
 }
 
 #[test]
 fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
-    assert_eq!(result(r#"
+    assert_eq!(
+        result(
+            r#"
         const buffer = new ArrayBuffer(12), view = new DataView(buffer, 3, 5);
         const cases = [[buffer, ArrayBuffer.prototype, 'byteLength'],
             [view, DataView.prototype, 'byteLength'],
@@ -215,5 +232,8 @@ fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
             Object.defineProperty(instance, key, {value: 42});
             return replaced && deleted && read(instance) === 42 && Reflect.get(instance, key) === 42;
         }).join(':')
-    "#), "true:true:true:true");
+    "#
+        ),
+        "true:true:true:true"
+    );
 }

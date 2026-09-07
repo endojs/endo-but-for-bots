@@ -155,9 +155,20 @@ fn global_descriptors_are_live_environment_bindings() {
     let strict = "'use strict';var x=1;Object.defineProperty(globalThis,'x',{writable:false});try{x=2;false}catch(e){e instanceof TypeError&&x===1}";
     assert!(ironhorse_compile::script_goal_deviates(strict));
     let run = dual_run(strict).expect("the XS oracle machine must start");
-    assert_eq!(run.agreement, Agreement::BothComplete, "{:?}", run.ironhorse_halt);
-    assert_eq!(run.ironhorse_result, "true", "the strict Script must throw and keep x");
-    assert_eq!(run.oracle_result, "false", "the eval-framed oracle keeps x local");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothComplete,
+        "{:?}",
+        run.ironhorse_halt
+    );
+    assert_eq!(
+        run.ironhorse_result, "true",
+        "the strict Script must throw and keep x"
+    );
+    assert_eq!(
+        run.oracle_result, "false",
+        "the eval-framed oracle keeps x local"
+    );
 }
 
 #[test]

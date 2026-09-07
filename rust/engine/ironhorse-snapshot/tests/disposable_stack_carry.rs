@@ -33,7 +33,12 @@ fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
     let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
+    (
+        outcome.completed,
+        format!("{:?}", outcome.halt),
+        outcome.result,
+        outcome.computrons,
+    )
 }
 
 const FIRST: &str = "var log = ''; var stack = 0; var t = 0; \
@@ -109,9 +114,7 @@ fn disposed_stack_cannot_retain_records_in_snapshot() {
     let mut image = read_machine(&bytes, &sig()).expect("read DISP");
     image.disposable_stacks[0].disposed = true;
     match from_snapshot_bytes(&write_machine(&image), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "disposable stacks: disposed stack retains records",
-        )) => {}
+        Err(SnapshotError::Corrupt("disposable stacks: disposed stack retains records")) => {}
         Err(other) => panic!("wrong disposed-stack refusal: {other:?}"),
         Ok(_) => panic!("disposed stack with records must not restore"),
     }

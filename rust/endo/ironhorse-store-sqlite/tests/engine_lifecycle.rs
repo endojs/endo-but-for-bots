@@ -94,7 +94,10 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         .expect("begin session");
     assert_eq!(
         store_to_image(&store).unwrap(),
-        session.machine().snapshot_image(&sig()).expect("gated image"),
+        session
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image"),
         "[{name}] store equals live machine after the full write"
     );
 
@@ -134,7 +137,10 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         assert_eq!(epoch as usize, i + 1, "[{name}] one epoch per crank");
         assert_eq!(
             store_to_image(&store).unwrap(),
-            session.machine().snapshot_image(&sig()).expect("gated image"),
+            session
+                .machine()
+                .snapshot_image(&sig())
+                .expect("gated image"),
             "[{name}] store equals live machine after checkpoint {}",
             i + 1
         );
@@ -1186,10 +1192,7 @@ fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
                  (1234n).toLocaleString(); t",
         ],
     );
-    assert_eq!(
-        last,
-        "true:1:true:[object Int8Array]:1,1,3:1,234:1,234"
-    );
+    assert_eq!(last, "true:1:true:[object Int8Array]:1,1,3:1,234:1,234");
 }
 
 #[test]
@@ -1330,7 +1333,11 @@ fn the_promise_cluster_survives_sqlite_sleep_cycles() {
 fn async_activations_survive_sqlite_sleep_cycles() {
     for (name, settlement, expected) in [
         ("async-fulfill", "release(5); 'released'", "21:finally"),
-        ("async-reject", "reject('no'); 'released'", "caught:no:finally"),
+        (
+            "async-reject",
+            "reject('no'); 'released'",
+            "caught:no:finally",
+        ),
     ] {
         let last = run_scenario(
             name,

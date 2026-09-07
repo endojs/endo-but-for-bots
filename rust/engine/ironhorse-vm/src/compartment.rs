@@ -129,7 +129,10 @@ fn is_heap_backed(value: Slot) -> bool {
     matches!(
         value.value,
         Payload::Reference(_) | Payload::String(_) | Payload::BigInt(_) | Payload::At(..)
-    ) || matches!(value.kind, Kind::Reference | Kind::String | Kind::BigInt | Kind::Symbol)
+    ) || matches!(
+        value.kind,
+        Kind::Reference | Kind::String | Kind::BigInt | Kind::Symbol
+    )
 }
 
 /// A compartment's (its `globalThis`'s) identity within a machine.
@@ -361,7 +364,11 @@ impl Compartment {
 
     /// Mint a nested compartment with explicit options.
     pub fn new_compartment_with(&self, options: CompartmentOptions) -> Compartment {
-        Compartment::from_options(Rc::clone(&self.intrinsics), Rc::clone(&self.counter), options)
+        Compartment::from_options(
+            Rc::clone(&self.intrinsics),
+            Rc::clone(&self.counter),
+            options,
+        )
     }
 
     /// This compartment's id-keyed endowments in the order they are
@@ -404,12 +411,8 @@ impl Compartment {
             // label as a literal at its construction site, so a new refusal
             // is a visible edit to that allowlist.
             halt: match skip {
-                CompartmentSkip::DynamicImport => {
-                    Halt::Unsupported("compartment:dynamic-import")
-                }
-                CompartmentSkip::HeapEndowment => {
-                    Halt::Unsupported("compartment:heap-endowment")
-                }
+                CompartmentSkip::DynamicImport => Halt::Unsupported("compartment:dynamic-import"),
+                CompartmentSkip::HeapEndowment => Halt::Unsupported("compartment:heap-endowment"),
             },
         }
     }
@@ -537,7 +540,11 @@ impl Machine {
     /// A fresh compartment with explicit options (endowments, module map,
     /// name, resolve/import hooks) — the `new Compartment({...})` surface.
     pub fn compartment(&self, options: CompartmentOptions) -> Compartment {
-        Compartment::from_options(Rc::clone(&self.intrinsics), Rc::clone(&self.counter), options)
+        Compartment::from_options(
+            Rc::clone(&self.intrinsics),
+            Rc::clone(&self.counter),
+            options,
+        )
     }
 }
 
@@ -553,8 +560,12 @@ mod tests {
     fn read_global_program(id: u16) -> Vec<u8> {
         let [lo, hi] = id.to_le_bytes();
         vec![
-            Opcode::XS_CODE_EVAL_REFERENCE as u8, lo, hi,
-            Opcode::XS_CODE_GET_VARIABLE as u8, lo, hi,
+            Opcode::XS_CODE_EVAL_REFERENCE as u8,
+            lo,
+            hi,
+            Opcode::XS_CODE_GET_VARIABLE as u8,
+            lo,
+            hi,
             Opcode::XS_CODE_SET_RESULT as u8,
             Opcode::XS_CODE_END as u8,
         ]
@@ -642,7 +653,10 @@ mod tests {
         // see the module documentation's realm decision.
         assert!(Rc::ptr_eq(a.intrinsics(), b.intrinsics()));
         assert!(Rc::ptr_eq(a.intrinsics(), m.intrinsics()));
-        assert!(!m.intrinsics().locked_down, "nothing writes `locked_down` yet");
+        assert!(
+            !m.intrinsics().locked_down,
+            "nothing writes `locked_down` yet"
+        );
     }
 
     #[test]
@@ -842,7 +856,8 @@ mod tests {
             modules,
             ..Default::default()
         });
-        c.import_static("main").expect("links and evaluates the graph");
+        c.import_static("main")
+            .expect("links and evaluates the graph");
     }
 
     #[test]

@@ -80,8 +80,7 @@ fn the_fixture_really_is_as_deep_as_it_claims() {
         assert!(
             run.result_agrees,
             "fixture depth diverged: {source}\n  oracle={} ironhorse={}",
-            run.oracle_result,
-            run.ironhorse_result,
+            run.oracle_result, run.ironhorse_result,
         );
     }
 }

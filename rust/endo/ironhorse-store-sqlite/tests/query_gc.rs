@@ -107,10 +107,7 @@ fn assert_parity(store: &SqliteHeapStore) {
 
 #[test]
 fn edge_pairs_agree_with_dense_reachability() {
-    let dir = common::TempDir::new(&format!(
-        "ironhorse-query-gc-parity-{}",
-        std::process::id()
-    ));
+    let dir = common::TempDir::new(&format!("ironhorse-query-gc-parity-{}", std::process::id()));
     let store = Rc::new(RefCell::new(
         SqliteHeapStore::open(dir.join("heap.sqlite")).unwrap(),
     ));
@@ -186,11 +183,9 @@ fn edge_pairs_rebuilt_after_count_preserving_desync() {
     {
         let raw = rusqlite::Connection::open(&path).unwrap();
         let (target, page): (i64, i64) = raw
-            .query_row(
-                "SELECT target, page FROM edge_pairs LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row("SELECT target, page FROM edge_pairs LIMIT 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .expect("fixture has at least one edge pair");
         // Move it to a page value no legitimate pair occupies (pages
         // are < the geometry), so the primary key cannot collide and
@@ -331,7 +326,10 @@ fn generational_collect_equivalent_across_backends() {
     let mut sq = SqliteHeapStore::open(dir.join("heap.sqlite")).unwrap();
     let (freed_sq, fl_sq) = run(&mut sq);
 
-    assert!(freed_mem > 800, "the new dropped chain reclaims: {freed_mem}");
+    assert!(
+        freed_mem > 800,
+        "the new dropped chain reclaims: {freed_mem}"
+    );
     assert_eq!(freed_mem, freed_file, "freed count: memory vs file");
     assert_eq!(freed_mem, freed_sq, "freed count: memory vs sqlite");
     assert_eq!(fl_mem, fl_file, "free list: memory vs file");

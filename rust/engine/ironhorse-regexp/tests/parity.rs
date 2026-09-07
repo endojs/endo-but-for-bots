@@ -480,7 +480,9 @@ fn corpus() -> Vec<Case> {
 
     // Invalid inline modifiers (both must reject): empty add+remove, a repeated
     // flag, a non-modifier flag, and a directly-quantified modifier group.
-    for &p in &["(?-:a)", "(?ii:a)", "(?i-i:a)", "(?g:a)", "(?i:a)+", "(?i:a"] {
+    for &p in &[
+        "(?-:a)", "(?ii:a)", "(?i-i:a)", "(?g:a)", "(?i:a)+", "(?i:a",
+    ] {
         v.push((p, "", "a", 0));
     }
 

@@ -118,10 +118,7 @@ fn every_raise_in_the_dispatch_loop_goes_through_dispatch_halt() {
             seen += 1;
             // The text before the call with whitespace and the receiver
             // removed must be the macro's opening.
-            let before: String = body[..at]
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect();
+            let before: String = body[..at].chars().filter(|c| !c.is_whitespace()).collect();
             let before = before
                 .strip_suffix("self.")
                 .or_else(|| before.strip_suffix("machine."))
@@ -169,7 +166,11 @@ fn no_native_result_is_propagated_out_of_the_loop_by_hand() {
         "Err(Halt::Resume(",
     ] {
         for at in occurrences(&body, needle) {
-            bad.push(format!("  loop line {}: `{}`", line_of(&body, at), needle.trim()));
+            bad.push(format!(
+                "  loop line {}: `{}`",
+                line_of(&body, at),
+                needle.trim()
+            ));
         }
     }
     assert!(

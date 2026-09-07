@@ -397,9 +397,8 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // suffix, and the bounds gate refuses a side table that names one
     // ("side table names a free slot").
     let live_idxs: Vec<SlotIndex> = idxs.iter().copied().filter(|i| i.0 < live_cap).collect();
-    let slot = |c: &mut Cursor| {
-        Slot::of(Kind::Reference, Payload::Reference(pick_ref(c, &live_idxs)))
-    };
+    let slot =
+        |c: &mut Cursor| Slot::of(Kind::Reference, Payload::Reference(pick_ref(c, &live_idxs)));
     let opt_slot = |c: &mut Cursor| (c.byte() % 3 != 0).then(|| slot(c));
 
     let mut next_owner = 0u32;
@@ -416,8 +415,16 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             // A revoked proxy NULLs both edges (`SlotIndex::NULL`, not
             // index 0, which is a live slot): the decoder refuses a
             // revoked row that retains them.
-            target: if revoked { u32::MAX } else { pick_ref(&mut c, &live_idxs).0 },
-            handler: if revoked { u32::MAX } else { pick_ref(&mut c, &live_idxs).0 },
+            target: if revoked {
+                u32::MAX
+            } else {
+                pick_ref(&mut c, &live_idxs).0
+            },
+            handler: if revoked {
+                u32::MAX
+            } else {
+                pick_ref(&mut c, &live_idxs).0
+            },
             revoked,
         });
     }
@@ -578,7 +585,11 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // 0 SuspendedStart / 1 SuspendedYield carry a frame; 2
         // Completed must not -- the decoder checks the agreement. With
         // no function row to name, only Completed rows are legal.
-        let state = if has_function && !names.is_empty() { c.byte() % 3 } else { 2 };
+        let state = if has_function && !names.is_empty() {
+            c.byte() % 3
+        } else {
+            2
+        };
         let frame = (state != 2).then(|| {
             let n_locals = 1 + (c.byte() % 4) as usize;
             ironhorse_vm::SavedFrameRow {
@@ -611,7 +622,11 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 resume_pc: c.u32() as u64 % n_body,
             }
         });
-        generators.push(ironhorse_vm::GeneratorRow { state, owner, frame });
+        generators.push(ironhorse_vm::GeneratorRow {
+            state,
+            owner,
+            frame,
+        });
     }
 
     // The promise cluster (`PRMS`): generated to satisfy the decoder's
@@ -742,21 +757,18 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             for _ in 0..(c.byte() % 3) {
                 let host = pending[(c.byte() as usize) % pending.len()];
                 let (resolve_fn, reject_fn) = pairs[(c.byte() as usize) % pairs.len()];
-                let fn_ref = |f: u32| {
-                    Slot::of(
-                        Kind::Reference,
-                        Payload::Reference(SlotIndex(f)),
-                    )
-                };
-                prms_promises[host].reactions.push(ironhorse_vm::PromiseReactionRow {
-                    on_fulfilled: slot(&mut c),
-                    on_rejected: slot(&mut c),
-                    resolve: fn_ref(resolve_fn),
-                    reject: fn_ref(reject_fn),
-                    kind: c.byte() % 2,
-                    a: 0,
-                    b: 0,
-                });
+                let fn_ref = |f: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(f)));
+                prms_promises[host]
+                    .reactions
+                    .push(ironhorse_vm::PromiseReactionRow {
+                        on_fulfilled: slot(&mut c),
+                        on_rejected: slot(&mut c),
+                        resolve: fn_ref(resolve_fn),
+                        reject: fn_ref(reject_fn),
+                        kind: c.byte() % 2,
+                        a: 0,
+                        b: 0,
+                    });
             }
         }
     }
@@ -768,24 +780,40 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         combinators: prms_combinators,
     };
 
-    MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
-        .with_meter(meter)
-        .with_function_state(function_state)
-        .with_proxy_state(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
-        .with_accessors(accessors)
-        .with_private_elements(ironhorse_vm::PrivateElementSnapshot {
-            values: private_values,
-            accessors: private_accessors,
-        })
-        .with_disposable_stacks(disposable_stacks)
-        .with_generators(generators)
-        .with_promise_cluster(promise_cluster)
-        // The typed-array family is left empty here: honest ABUF rows
-        // need REAL chunk-arena extents, which this builder does not
-        // model. Crafted family bytes are exercised by the byte-level
-        // container decoder target instead.
-        .with_side_tables(arrays, collections, registry, errors, Vec::new(), Vec::new(), Vec::new())
-        .with_dates(dates)
+    MachineImage::from_arenas(
+        fuzz_snapshot_sig(),
+        &slots,
+        &chunks,
+        &stack,
+        names,
+        keys,
+        symbols,
+    )
+    .with_meter(meter)
+    .with_function_state(function_state)
+    .with_proxy_state(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
+    .with_accessors(accessors)
+    .with_private_elements(ironhorse_vm::PrivateElementSnapshot {
+        values: private_values,
+        accessors: private_accessors,
+    })
+    .with_disposable_stacks(disposable_stacks)
+    .with_generators(generators)
+    .with_promise_cluster(promise_cluster)
+    // The typed-array family is left empty here: honest ABUF rows
+    // need REAL chunk-arena extents, which this builder does not
+    // model. Crafted family bytes are exercised by the byte-level
+    // container decoder target instead.
+    .with_side_tables(
+        arrays,
+        collections,
+        registry,
+        errors,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .with_dates(dates)
 }
 
 /// The core round-trip invariant over a built image: a freshly written
@@ -1113,7 +1141,11 @@ mod tests {
                 panic!("arena snapshot round-trip divergence at seed {seed}: {d:?}");
             }
         }
-        assert!(distinct.len() > 500, "arena sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 500,
+            "arena sweep too uniform: {} distinct",
+            distinct.len()
+        );
         assert!(saw_free, "free-list arm never exercised");
         // (No value-stack witness: the reader enforces quiescence, so
         // the generator emits only the empty stack every honest writer
@@ -1134,10 +1166,16 @@ mod tests {
         // The frame is the substantial half of the GENR codec; a
         // generator sweep that only ever emitted Completed rows would
         // leave `SavedFrameRow` unexercised while looking covered.
-        assert!(saw_generator_frames, "GENR suspended-frame arm never exercised");
+        assert!(
+            saw_generator_frames,
+            "GENR suspended-frame arm never exercised"
+        );
         assert!(saw_promises, "side-table PRMS arm never exercised");
         assert!(saw_promise_reactions, "PRMS reaction arm never exercised");
-        assert!(saw_promise_functions, "PRMS resolving-function arm never exercised");
+        assert!(
+            saw_promise_functions,
+            "PRMS resolving-function arm never exercised"
+        );
         assert!(saw_combinators, "PRMS combinator arm never exercised");
         // (`IBFN` and the typed-array family are deliberately not
         // generated -- both are cross-table dependent on state this
@@ -1246,7 +1284,11 @@ mod tests {
         let sig = fuzz_snapshot_sig();
         let bytes = write_machine(&img);
         let back = read_machine(&bytes, &sig).expect("valid snapshot reads back");
-        assert_eq!(write_machine(&back), bytes, "write→read→write byte-identical");
+        assert_eq!(
+            write_machine(&back),
+            bytes,
+            "write→read→write byte-identical"
+        );
     }
 
     #[test]
@@ -1270,8 +1312,14 @@ mod tests {
                 Err(_) => gate_rejected += 1,
             }
         }
-        assert!(restored_ok > 0, "no mutant ever read back (mutation too destructive)");
-        assert!(reached_inner > 0, "no mutant reached the atom-payload decoders");
+        assert!(
+            restored_ok > 0,
+            "no mutant ever read back (mutation too destructive)"
+        );
+        assert!(
+            reached_inner > 0,
+            "no mutant reached the atom-payload decoders"
+        );
         assert!(gate_rejected > 0, "no mutant hit the outer gates");
     }
 }

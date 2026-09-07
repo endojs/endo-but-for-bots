@@ -321,294 +321,294 @@ impl Lexer {
                     self.advance();
                 }
                 c if c <= 0x7F => match c as u8 {
-                b'0' => {
-                    self.scan_zero(&mut st)?;
-                }
-                b'1'..=b'9' => {
-                    self.scan_number_e(&mut st, false)?;
-                }
-                b'.' => {
-                    self.advance();
-                    let c = self.ch;
-                    if c == b'.' as u32 {
+                    b'0' => {
+                        self.scan_zero(&mut st)?;
+                    }
+                    b'1'..=b'9' => {
+                        self.scan_number_e(&mut st, false)?;
+                    }
+                    b'.' => {
+                        self.advance();
+                        let c = self.ch;
+                        if c == b'.' as u32 {
+                            self.advance();
+                            if self.ch == b'.' as u32 {
+                                st.token = Token::Spread;
+                                self.advance();
+                            } else {
+                                return Err(self.err(LexErrorKind::UnexpectedCharacter(self.ch)));
+                            }
+                        } else if (b'0' as u32..=b'9' as u32).contains(&c) {
+                            self.scan_number_e(&mut st, true)?;
+                        } else {
+                            st.token = Token::Dot;
+                        }
+                    }
+                    b',' => {
+                        st.token = Token::Comma;
+                        self.advance();
+                    }
+                    b';' => {
+                        st.token = Token::Semicolon;
+                        self.advance();
+                    }
+                    b':' => {
+                        st.token = Token::Colon;
+                        self.advance();
+                    }
+                    b'?' => {
                         self.advance();
                         if self.ch == b'.' as u32 {
-                            st.token = Token::Spread;
+                            if !(b'0' as u32..=b'9' as u32).contains(&self.la) {
+                                st.token = Token::Chain;
+                                self.advance();
+                            } else {
+                                st.token = Token::QuestionMark;
+                            }
+                        } else if self.ch == b'?' as u32 {
+                            st.token = Token::Coalesce;
                             self.advance();
-                        } else {
-                            return Err(self.err(LexErrorKind::UnexpectedCharacter(self.ch)));
-                        }
-                    } else if (b'0' as u32..=b'9' as u32).contains(&c) {
-                        self.scan_number_e(&mut st, true)?;
-                    } else {
-                        st.token = Token::Dot;
-                    }
-                }
-                b',' => {
-                    st.token = Token::Comma;
-                    self.advance();
-                }
-                b';' => {
-                    st.token = Token::Semicolon;
-                    self.advance();
-                }
-                b':' => {
-                    st.token = Token::Colon;
-                    self.advance();
-                }
-                b'?' => {
-                    self.advance();
-                    if self.ch == b'.' as u32 {
-                        if !(b'0' as u32..=b'9' as u32).contains(&self.la) {
-                            st.token = Token::Chain;
-                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::CoalesceAssign;
+                                self.advance();
+                            }
                         } else {
                             st.token = Token::QuestionMark;
                         }
-                    } else if self.ch == b'?' as u32 {
-                        st.token = Token::Coalesce;
-                        self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::CoalesceAssign;
-                            self.advance();
-                        }
-                    } else {
-                        st.token = Token::QuestionMark;
                     }
-                }
-                b'(' => {
-                    st.token = Token::LeftParenthesis;
-                    self.advance();
-                }
-                b')' => {
-                    st.token = Token::RightParenthesis;
-                    self.advance();
-                }
-                b'[' => {
-                    st.token = Token::LeftBracket;
-                    self.advance();
-                }
-                b']' => {
-                    st.token = Token::RightBracket;
-                    self.advance();
-                }
-                b'{' => {
-                    st.token = Token::LeftBrace;
-                    self.advance();
-                }
-                b'}' => {
-                    st.token = Token::RightBrace;
-                    self.advance();
-                }
-                b'=' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
+                    b'(' => {
+                        st.token = Token::LeftParenthesis;
+                        self.advance();
+                    }
+                    b')' => {
+                        st.token = Token::RightParenthesis;
+                        self.advance();
+                    }
+                    b'[' => {
+                        st.token = Token::LeftBracket;
+                        self.advance();
+                    }
+                    b']' => {
+                        st.token = Token::RightBracket;
+                        self.advance();
+                    }
+                    b'{' => {
+                        st.token = Token::LeftBrace;
+                        self.advance();
+                    }
+                    b'}' => {
+                        st.token = Token::RightBrace;
+                        self.advance();
+                    }
+                    b'=' => {
                         self.advance();
                         if self.ch == b'=' as u32 {
-                            st.token = Token::StrictEqual;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::StrictEqual;
+                                self.advance();
+                            } else {
+                                st.token = Token::Equal;
+                            }
+                        } else if self.ch == b'>' as u32 {
+                            st.token = Token::Arrow;
                             self.advance();
                         } else {
-                            st.token = Token::Equal;
+                            st.token = Token::Assign;
                         }
-                    } else if self.ch == b'>' as u32 {
-                        st.token = Token::Arrow;
-                        self.advance();
-                    } else {
-                        st.token = Token::Assign;
                     }
-                }
-                b'<' => {
-                    self.advance();
-                    if self.ch == b'<' as u32 {
+                    b'<' => {
                         self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::LeftShiftAssign;
+                        if self.ch == b'<' as u32 {
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::LeftShiftAssign;
+                                self.advance();
+                            } else {
+                                st.token = Token::LeftShift;
+                            }
+                        } else if self.ch == b'=' as u32 {
+                            st.token = Token::LessEqual;
                             self.advance();
                         } else {
-                            st.token = Token::LeftShift;
+                            st.token = Token::Less;
                         }
-                    } else if self.ch == b'=' as u32 {
-                        st.token = Token::LessEqual;
-                        self.advance();
-                    } else {
-                        st.token = Token::Less;
                     }
-                }
-                b'>' => {
-                    self.advance();
-                    if self.ch == b'>' as u32 {
+                    b'>' => {
                         self.advance();
                         if self.ch == b'>' as u32 {
                             self.advance();
-                            if self.ch == b'=' as u32 {
-                                st.token = Token::UnsignedRightShiftAssign;
+                            if self.ch == b'>' as u32 {
+                                self.advance();
+                                if self.ch == b'=' as u32 {
+                                    st.token = Token::UnsignedRightShiftAssign;
+                                    self.advance();
+                                } else {
+                                    st.token = Token::UnsignedRightShift;
+                                }
+                            } else if self.ch == b'=' as u32 {
+                                st.token = Token::SignedRightShiftAssign;
                                 self.advance();
                             } else {
-                                st.token = Token::UnsignedRightShift;
+                                st.token = Token::SignedRightShift;
                             }
                         } else if self.ch == b'=' as u32 {
-                            st.token = Token::SignedRightShiftAssign;
+                            st.token = Token::MoreEqual;
                             self.advance();
                         } else {
-                            st.token = Token::SignedRightShift;
+                            st.token = Token::More;
                         }
-                    } else if self.ch == b'=' as u32 {
-                        st.token = Token::MoreEqual;
-                        self.advance();
-                    } else {
-                        st.token = Token::More;
                     }
-                }
-                b'!' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
+                    b'!' => {
                         self.advance();
                         if self.ch == b'=' as u32 {
-                            st.token = Token::StrictNotEqual;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::StrictNotEqual;
+                                self.advance();
+                            } else {
+                                st.token = Token::NotEqual;
+                            }
+                        } else {
+                            st.token = Token::Not;
+                        }
+                    }
+                    b'~' => {
+                        st.token = Token::BitNot;
+                        self.advance();
+                    }
+                    b'&' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::BitAndAssign;
+                            self.advance();
+                        } else if self.ch == b'&' as u32 {
+                            st.token = Token::And;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::AndAssign;
+                                self.advance();
+                            }
+                        } else {
+                            st.token = Token::BitAnd;
+                        }
+                    }
+                    b'|' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::BitOrAssign;
+                            self.advance();
+                        } else if self.ch == b'|' as u32 {
+                            st.token = Token::Or;
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::OrAssign;
+                                self.advance();
+                            }
+                        } else {
+                            st.token = Token::BitOr;
+                        }
+                    }
+                    b'^' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::BitXorAssign;
                             self.advance();
                         } else {
-                            st.token = Token::NotEqual;
+                            st.token = Token::BitXor;
                         }
-                    } else {
-                        st.token = Token::Not;
                     }
-                }
-                b'~' => {
-                    st.token = Token::BitNot;
-                    self.advance();
-                }
-                b'&' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::BitAndAssign;
-                        self.advance();
-                    } else if self.ch == b'&' as u32 {
-                        st.token = Token::And;
+                    b'+' => {
                         self.advance();
                         if self.ch == b'=' as u32 {
-                            st.token = Token::AndAssign;
+                            st.token = Token::AddAssign;
                             self.advance();
-                        }
-                    } else {
-                        st.token = Token::BitAnd;
-                    }
-                }
-                b'|' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::BitOrAssign;
-                        self.advance();
-                    } else if self.ch == b'|' as u32 {
-                        st.token = Token::Or;
-                        self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::OrAssign;
-                            self.advance();
-                        }
-                    } else {
-                        st.token = Token::BitOr;
-                    }
-                }
-                b'^' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::BitXorAssign;
-                        self.advance();
-                    } else {
-                        st.token = Token::BitXor;
-                    }
-                }
-                b'+' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::AddAssign;
-                        self.advance();
-                    } else if self.ch == b'+' as u32 {
-                        st.token = Token::Increment;
-                        self.advance();
-                    } else {
-                        st.token = Token::Add;
-                    }
-                }
-                b'-' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::SubtractAssign;
-                        self.advance();
-                    } else if self.ch == b'-' as u32 {
-                        st.token = Token::Decrement;
-                        self.advance();
-                    } else {
-                        st.token = Token::Subtract;
-                    }
-                }
-                b'*' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::MultiplyAssign;
-                        self.advance();
-                    } else if self.ch == b'*' as u32 {
-                        self.advance();
-                        if self.ch == b'=' as u32 {
-                            st.token = Token::ExponentiationAssign;
+                        } else if self.ch == b'+' as u32 {
+                            st.token = Token::Increment;
                             self.advance();
                         } else {
-                            st.token = Token::Exponentiation;
+                            st.token = Token::Add;
                         }
-                    } else {
-                        st.token = Token::Multiply;
                     }
-                }
-                b'/' => {
-                    self.advance();
-                    if self.ch == b'*' as u32 {
-                        self.scan_block_comment(&mut st)?;
-                    } else if self.ch == b'/' as u32 {
-                        self.scan_line_comment();
-                    } else if self.ch == b'=' as u32 {
-                        st.token = Token::DivideAssign;
+                    b'-' => {
                         self.advance();
-                    } else {
-                        st.token = Token::Divide;
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::SubtractAssign;
+                            self.advance();
+                        } else if self.ch == b'-' as u32 {
+                            st.token = Token::Decrement;
+                            self.advance();
+                        } else {
+                            st.token = Token::Subtract;
+                        }
                     }
-                }
-                b'%' => {
-                    self.advance();
-                    if self.ch == b'=' as u32 {
-                        st.token = Token::ModuloAssign;
+                    b'*' => {
                         self.advance();
-                    } else {
-                        st.token = Token::Modulo;
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::MultiplyAssign;
+                            self.advance();
+                        } else if self.ch == b'*' as u32 {
+                            self.advance();
+                            if self.ch == b'=' as u32 {
+                                st.token = Token::ExponentiationAssign;
+                                self.advance();
+                            } else {
+                                st.token = Token::Exponentiation;
+                            }
+                        } else {
+                            st.token = Token::Multiply;
+                        }
                     }
-                }
-                b'"' | b'\'' => {
-                    let c = self.ch;
-                    self.advance();
-                    self.scan_string(&mut st, c)?;
-                    st.token = Token::String;
-                    self.advance();
-                }
-                b'`' => {
-                    self.advance();
-                    self.scan_string(&mut st, b'`' as u32)?;
-                    if self.ch == b'{' as u32 {
-                        st.token = Token::TemplateHead;
-                    } else {
-                        st.token = Token::Template;
+                    b'/' => {
+                        self.advance();
+                        if self.ch == b'*' as u32 {
+                            self.scan_block_comment(&mut st)?;
+                        } else if self.ch == b'/' as u32 {
+                            self.scan_line_comment();
+                        } else if self.ch == b'=' as u32 {
+                            st.token = Token::DivideAssign;
+                            self.advance();
+                        } else {
+                            st.token = Token::Divide;
+                        }
                     }
-                    self.advance();
-                }
-                b'@' => {
-                    if self.host {
-                        st.token = Token::Host;
-                    } else {
-                        return Err(self.err(LexErrorKind::InvalidAtSign));
+                    b'%' => {
+                        self.advance();
+                        if self.ch == b'=' as u32 {
+                            st.token = Token::ModuloAssign;
+                            self.advance();
+                        } else {
+                            st.token = Token::Modulo;
+                        }
                     }
-                    self.advance();
-                }
-                _ => {
-                    self.scan_identifier(&mut st)?;
-                }
+                    b'"' | b'\'' => {
+                        let c = self.ch;
+                        self.advance();
+                        self.scan_string(&mut st, c)?;
+                        st.token = Token::String;
+                        self.advance();
+                    }
+                    b'`' => {
+                        self.advance();
+                        self.scan_string(&mut st, b'`' as u32)?;
+                        if self.ch == b'{' as u32 {
+                            st.token = Token::TemplateHead;
+                        } else {
+                            st.token = Token::Template;
+                        }
+                        self.advance();
+                    }
+                    b'@' => {
+                        if self.host {
+                            st.token = Token::Host;
+                        } else {
+                            return Err(self.err(LexErrorKind::InvalidAtSign));
+                        }
+                        self.advance();
+                    }
+                    _ => {
+                        self.scan_identifier(&mut st)?;
+                    }
                 },
                 _ => {
                     self.scan_identifier(&mut st)?;
@@ -667,7 +667,9 @@ impl Lexer {
         }
         let bytes = body.as_bytes();
         if bytes.first() == Some(&b'#') || bytes.first() == Some(&b'@') {
-            if let Some(rest) = body.strip_prefix("#line ").or_else(|| body.strip_prefix("@line "))
+            if let Some(rest) = body
+                .strip_prefix("#line ")
+                .or_else(|| body.strip_prefix("@line "))
             {
                 // "@line N" or "@line N \"path\"": reset the line counter.
                 let mut n: u32 = 0;
@@ -727,7 +729,12 @@ impl Lexer {
     /// Port of `fxGetNextDigits`: read a run of digits (via `pred`),
     /// allowing single `_` separators between digit groups but rejecting
     /// leading/trailing/doubled ones and (when `empty`) an empty run.
-    fn scan_digits<F>(&mut self, buf: &mut String, mut pred: F, mut empty: bool) -> Result<(), LexError>
+    fn scan_digits<F>(
+        &mut self,
+        buf: &mut String,
+        mut pred: F,
+        mut empty: bool,
+    ) -> Result<(), LexError>
     where
         F: FnMut(u32) -> bool,
     {
@@ -846,14 +853,22 @@ impl Lexer {
         if dot {
             buf.push('.');
         }
-        self.scan_digits(&mut buf, |c| (b'0' as u32..=b'9' as u32).contains(&c), false)?;
+        self.scan_digits(
+            &mut buf,
+            |c| (b'0' as u32..=b'9' as u32).contains(&c),
+            false,
+        )?;
         let mut had_fraction = dot;
         if !dot && self.ch == b'.' as u32 {
             dot = true;
             had_fraction = true;
             buf.push('.');
             self.advance();
-            self.scan_digits(&mut buf, |c| (b'0' as u32..=b'9' as u32).contains(&c), false)?;
+            self.scan_digits(
+                &mut buf,
+                |c| (b'0' as u32..=b'9' as u32).contains(&c),
+                false,
+            )?;
         }
         let mut c = self.ch;
         if c == b'e' as u32 || c == b'E' as u32 {
@@ -1077,8 +1092,7 @@ impl Lexer {
                     '0'..='7' => {
                         let first = chars[i] as u32 - '0' as u32;
                         i += 1;
-                        let next_is_digit =
-                            i < chars.len() && ('0'..='9').contains(&chars[i]);
+                        let next_is_digit = i < chars.len() && ('0'..='9').contains(&chars[i]);
                         if first == 0 && !next_is_digit {
                             out.push(0);
                         } else {

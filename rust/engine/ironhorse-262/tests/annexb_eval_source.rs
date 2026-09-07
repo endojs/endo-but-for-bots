@@ -28,7 +28,11 @@ use ironhorse_262::{dual_run, Agreement};
 /// caught, not just a constructor match.
 fn assert_shared_throw(source: &str, oracle_error: &str) {
     let run = dual_run(source).expect("pinned XS oracle is available");
-    assert_eq!(run.agreement, Agreement::BothAbort, "both abort for {source:?}");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothAbort,
+        "both abort for {source:?}"
+    );
     assert_eq!(
         run.oracle_error, oracle_error,
         "oracle error text for {source:?}"
@@ -50,7 +54,10 @@ fn assert_shared_result(source: &str, expected: &str) {
         "both complete for {source:?}"
     );
     assert_eq!(run.oracle_result, expected, "oracle result for {source:?}");
-    assert_eq!(run.ironhorse_result, expected, "ironhorse result for {source:?}");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse result for {source:?}"
+    );
 }
 
 // ---- Annex B block-level FunctionDeclaration: XS's `no block` early error ---
@@ -169,5 +176,8 @@ fn eval_and_dynamic_function_positive_controls() {
     assert_shared_result("Function('a','b','return a+b')(2,3)", "5");
     // A valid `if` with a block body — the Annex B extension is unnecessary and
     // no early error fires.
-    assert_shared_result("eval('if (true) { function f(){ return 9 } } typeof f')", "undefined");
+    assert_shared_result(
+        "eval('if (true) { function f(){ return 9 } } typeof f')",
+        "undefined",
+    );
 }

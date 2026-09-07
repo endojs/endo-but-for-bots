@@ -24,11 +24,11 @@
 //!   machine to its image runs the whole persist predicate set, the
 //!   stored-key-id audit included.
 
+use ironhorse_snapshot::machine::MachineSnapshotError;
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
-use ironhorse_snapshot::machine::MachineSnapshotError;
 use ironhorse_snapshot::store::{HeapStore, MemoryStore, StoreError};
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
@@ -76,7 +76,10 @@ fn a_halted_crank_refuses_checkpoint_and_writes_nothing() {
     let epoch_before = store.manifest().unwrap().epoch;
 
     let (b1, n1) = compile("var x; throw 'mid';");
-    let b1 = session.machine_mut().relink_crank(&b1, &n1).expect("relink");
+    let b1 = session
+        .machine_mut()
+        .relink_crank(&b1, &n1)
+        .expect("relink");
     let o = session.machine_mut().run(&b1);
     assert!(!o.completed, "the halting crank must halt");
     assert!(
@@ -137,7 +140,9 @@ fn a_live_eval_function_round_trips_the_blob_verbs() {
         m.live_dynamic_segment_function().is_some(),
         "the escaped function is the live segment witness"
     );
-    let bytes = m.write_snapshot(&sig()).expect("retained function snapshots");
+    let bytes = m
+        .write_snapshot(&sig())
+        .expect("retained function snapshots");
     let mut restored = from_snapshot_bytes(&bytes, &sig()).expect("restore");
     let (b2, n2) = compile("var f; var t; t = f(41); t");
     let b2 = restored.relink_crank(&b2, &n2).expect("relink");
@@ -179,11 +184,12 @@ fn a_resumed_machine_rearms_without_losing_its_meter() {
 
     // And the re-armed machine really is armed: a hostile host verdict
     // aborts the next crank.
-    resumed
-        .machine_mut()
-        .rearm_meter(1, Box::new(|_| false));
+    resumed.machine_mut().rearm_meter(1, Box::new(|_| false));
     let (b2, n2) = compile("var j = 0; for (j = 0; j < 100000; j++) { j = j; } j");
-    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2 = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     let o2 = resumed.machine_mut().run(&b2);
     assert!(
         matches!(o2.halt, ironhorse_vm::Halt::MeterAbort),
@@ -246,10 +252,12 @@ fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
     // `count` to `index + interval`, past everything crank 2 spends.)
     let consulted = Rc::new(Cell::new(0u32));
     let seen = consulted.clone();
-    resumed.machine_mut().reattach_meter_host(Box::new(move |_| {
-        seen.set(seen.get() + 1);
-        true
-    }));
+    resumed
+        .machine_mut()
+        .reattach_meter_host(Box::new(move |_| {
+            seen.set(seen.get() + 1);
+            true
+        }));
     assert_eq!(
         resumed.machine_mut().meter_state(),
         mid_window,
@@ -257,7 +265,10 @@ fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
     );
 
     let (b2, n2) = compile(crank2_src);
-    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let b2 = resumed
+        .machine_mut()
+        .relink_crank(&b2, &n2)
+        .expect("relink");
     assert!(resumed.machine_mut().run(&b2).completed);
     assert!(
         consulted.get() >= 1,
@@ -368,9 +379,8 @@ fn a_pending_await_is_now_carried() {
 
 #[test]
 fn a_live_async_generator_refuses_every_persist_verb() {
-    let (b, n) = compile(
-        "var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t",
-    );
+    let (b, n) =
+        compile("var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     let out = m.run(&b);
@@ -463,7 +473,10 @@ fn a_refault_after_a_growing_checkpoint_verifies_against_the_committed_arena() {
     let attach_len = store.borrow().manifest().expect("manifest").chunk_len;
 
     // The growing crank, then the session's own checkpoint.
-    assert!(session.machine_mut().run(&compiled[1].0).completed, "crank 2");
+    assert!(
+        session.machine_mut().run(&compiled[1].0).completed,
+        "crank 2"
+    );
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
     let grown_len = store.borrow().manifest().expect("manifest").chunk_len;
     assert!(
@@ -481,7 +494,11 @@ fn a_refault_after_a_growing_checkpoint_verifies_against_the_committed_arena() {
     assert!(evicted > 0, "the arm's premise: something was evictable");
 
     let out = session.machine_mut().run(&compiled[2].0);
-    assert!(out.completed, "crank 3 after the evict sweep: {:?}", out.halt);
+    assert!(
+        out.completed,
+        "crank 3 after the evict sweep: {:?}",
+        out.halt
+    );
     assert_eq!(
         out.result, "seed-grown-past-the-attach-time-chunk-arena-length",
         "the re-faulted string is intact"
@@ -508,8 +525,14 @@ fn a_resolver_reached_through_any_stored_reference_persists() {
     for (name, tail) in [
         ("a plain global", "g = g;"),
         ("a plain property", "o = {}; o.x = g;"),
-        ("a bound argument", "b = (function (x) { return typeof x; }).bind(null, g);"),
-        ("a bound this", "b = (function () { return typeof this; }).bind(g);"),
+        (
+            "a bound argument",
+            "b = (function (x) { return typeof x; }).bind(null, g);",
+        ),
+        (
+            "a bound this",
+            "b = (function () { return typeof this; }).bind(g);",
+        ),
         ("an array element", "o = [g];"),
         ("a Map value", "o = new Map(); o.set('k', g);"),
         ("a Set member", "o = new Set(); o.add(g);"),
@@ -548,10 +571,22 @@ fn a_resolver_reached_through_any_stored_reference_persists() {
 #[test]
 fn stored_references_to_persistable_functions_are_not_refused() {
     for (name, src) in [
-        ("a guest function in a global", "var f = 0; f = function () { return 1; }; 7"),
-        ("a guest function in an array", "var o = 0; o = [function () { return 1; }]; 7"),
-        ("a boot native in a property", "var o = 0; o = {}; o.k = Object.keys; 7"),
-        ("a boot native in a Map", "var m = 0; m = new Map(); m.set('k', Math.max); 7"),
+        (
+            "a guest function in a global",
+            "var f = 0; f = function () { return 1; }; 7",
+        ),
+        (
+            "a guest function in an array",
+            "var o = 0; o = [function () { return 1; }]; 7",
+        ),
+        (
+            "a boot native in a property",
+            "var o = 0; o = {}; o.k = Object.keys; 7",
+        ),
+        (
+            "a boot native in a Map",
+            "var m = 0; m = new Map(); m.set('k', Math.max); 7",
+        ),
         (
             "an Intl bound native in a global",
             "var nf = 0; var g = 0; nf = new Intl.NumberFormat('en'); g = nf.format; 7",
@@ -569,7 +604,11 @@ fn stored_references_to_persistable_functions_are_not_refused() {
         let mut m = Interp::new();
         m.link_intrinsics(&names);
         assert!(m.run(&bytes).completed, "fixture: {name}");
-        assert_eq!(m.stored_unpersistable_row(), None, "must stay persistable: {name}");
+        assert_eq!(
+            m.stored_unpersistable_row(),
+            None,
+            "must stay persistable: {name}"
+        );
         assert!(m.write_snapshot(&sig()).is_ok(), "blob verb: {name}");
         let mut store = MemoryStore::new();
         assert!(
@@ -677,8 +716,15 @@ fn every_admitted_fixture_resumes_faithfully() {
         cont.link_intrinsics(&n1);
         assert!(cont.run(&b1).completed, "{name}: setup crank");
         let continuous = cont.run(&b2);
-        assert!(continuous.completed, "{name}: observation halted: {:?}", continuous.halt);
-        assert_eq!(continuous.result, expect, "{name}: the uninterrupted answer");
+        assert!(
+            continuous.completed,
+            "{name}: observation halted: {:?}",
+            continuous.halt
+        );
+        assert_eq!(
+            continuous.result, expect,
+            "{name}: the uninterrupted answer"
+        );
 
         let mut m = Interp::new();
         m.link_intrinsics(&n1);
@@ -694,8 +740,8 @@ fn every_admitted_fixture_resumes_faithfully() {
                 .map_err(|(_, e)| e)
                 .unwrap_or_else(|e| panic!("{name}: begin: {e:?}")),
         );
-        let mut session = resume_from_store(&store, &sig())
-            .unwrap_or_else(|e| panic!("{name}: resume: {e:?}"));
+        let mut session =
+            resume_from_store(&store, &sig()).unwrap_or_else(|e| panic!("{name}: resume: {e:?}"));
         let resumed = session.machine_mut().run(&b2);
         assert_eq!(
             (resumed.completed, resumed.result.as_str()),
@@ -725,7 +771,10 @@ fn every_admitted_fixture_resumes_faithfully() {
 // every-verb lock rather than a latch lock.)
 
 fn assert_every_persist_verb_refuses_non_quiescent(m: Interp, shape: &str) {
-    assert!(!m.is_quiescent(), "{shape}: a halted crank is not a quiescent boundary");
+    assert!(
+        !m.is_quiescent(),
+        "{shape}: a halted crank is not a quiescent boundary"
+    );
     match m.write_snapshot(&sig()) {
         Err(MachineSnapshotError::NotQuiescent) => {}
         other => panic!("{shape}: the blob verb must refuse as NotQuiescent: {other:?}"),
@@ -736,7 +785,10 @@ fn assert_every_persist_verb_refuses_non_quiescent(m: Interp, shape: &str) {
         Err((_, other)) => panic!("{shape}: the store verb refused by the wrong gate: {other:?}"),
         Ok(_) => panic!("{shape}: the store verb must refuse"),
     }
-    assert!(store.manifest().is_err(), "{shape}: a refused begin writes nothing");
+    assert!(
+        store.manifest().is_err(),
+        "{shape}: a refused begin writes nothing"
+    );
 }
 
 /// Architecture review F047: the gate is on the DATA PATH, not on three
@@ -756,9 +808,8 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
         Err(other) => panic!("refused by the wrong gate: {other:?}"),
     }
     // And the pending-row arm refuses the image by name too.
-    let (b, n) = compile(
-        "var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t",
-    );
+    let (b, n) =
+        compile("var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
@@ -799,11 +850,16 @@ fn a_stored_unregistered_key_id_refuses_the_gated_image_and_every_verb() {
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
-    m.snapshot_image(&sig()).expect("the control: the clean machine is admitted");
+    m.snapshot_image(&sig())
+        .expect("the control: the clean machine is admitted");
 
     // The global `x`'s property slot carries `x`'s program id.
     let names = m.program_symbol_names().to_vec();
-    let x_id = names.iter().position(|name| name == "x").expect("x is a program symbol") as u16 + 1;
+    let x_id = names
+        .iter()
+        .position(|name| name == "x")
+        .expect("x is a program symbol") as u16
+        + 1;
     // A LIVE slot: the audit skips free records, so a freed record with
     // a stale `x` id at a lower index would be poisoned harmlessly and
     // misreport the gate as broken.
@@ -849,7 +905,11 @@ fn a_meter_aborted_crank_refuses_every_persist_verb() {
     m.link_intrinsics(&n);
     m.arm_meter(1, Box::new(|_| false));
     let o = m.run(&b);
-    assert!(matches!(o.halt, ironhorse_vm::Halt::MeterAbort), "fixture: {:?}", o.halt);
+    assert!(
+        matches!(o.halt, ironhorse_vm::Halt::MeterAbort),
+        "fixture: {:?}",
+        o.halt
+    );
     assert!(!o.completed);
     assert_every_persist_verb_refuses_non_quiescent(m, "meter abort");
 }
@@ -864,7 +924,11 @@ fn a_step_limited_crank_refuses_every_persist_verb() {
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     let o = m.run_bounded(&b, 50);
-    assert!(matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)), "fixture: {:?}", o.halt);
+    assert!(
+        matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)),
+        "fixture: {:?}",
+        o.halt
+    );
     assert!(!o.completed);
     assert_every_persist_verb_refuses_non_quiescent(m, "step limit");
 }
@@ -879,13 +943,21 @@ fn a_crank_that_halted_before_dispatching_refuses_every_persist_verb() {
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     let o = m.run_bounded(&b, 0);
-    assert!(matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)), "fixture: {:?}", o.halt);
+    assert!(
+        matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)),
+        "fixture: {:?}",
+        o.halt
+    );
     assert_every_persist_verb_refuses_non_quiescent(m, "step limit before dispatch");
 
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     let o = m.run(&[]);
-    assert!(matches!(o.halt, ironhorse_vm::Halt::Decode(_)), "fixture: {:?}", o.halt);
+    assert!(
+        matches!(o.halt, ironhorse_vm::Halt::Decode(_)),
+        "fixture: {:?}",
+        o.halt
+    );
     assert_every_persist_verb_refuses_non_quiescent(m, "decode fault");
 }
 
@@ -905,10 +977,17 @@ fn a_meter_aborted_crank_refuses_checkpoint_and_writes_nothing() {
     let epoch_before = store.manifest().unwrap().epoch;
 
     let (b1, n1) = compile("var x; var i; for (i = 0; i < 100000; i++) { x = x + 1; } x");
-    let b1 = session.machine_mut().relink_crank(&b1, &n1).expect("relink");
+    let b1 = session
+        .machine_mut()
+        .relink_crank(&b1, &n1)
+        .expect("relink");
     session.machine_mut().arm_meter(1, Box::new(|_| false));
     let o = session.machine_mut().run(&b1);
-    assert!(matches!(o.halt, ironhorse_vm::Halt::MeterAbort), "fixture: {:?}", o.halt);
+    assert!(
+        matches!(o.halt, ironhorse_vm::Halt::MeterAbort),
+        "fixture: {:?}",
+        o.halt
+    );
     match checkpoint_to_store(&mut session, &sig(), &mut store) {
         Err(StoreError::MachineNotQuiescent) => {}
         other => panic!("a meter-aborted crank must not checkpoint: {other:?}"),
@@ -928,7 +1007,10 @@ fn a_fresh_and_a_resumed_machine_are_quiescent() {
     let (b, n) = compile("var x = 0; x = 41; x");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
-    assert!(m.is_quiescent(), "a linked machine that never ran is at a boundary");
+    assert!(
+        m.is_quiescent(),
+        "a linked machine that never ran is at a boundary"
+    );
     assert!(m.run(&b).completed);
     let bytes = m.write_snapshot(&sig()).expect("snapshots");
     let resumed = from_snapshot_bytes(&bytes, &sig()).expect("resumes");
@@ -948,14 +1030,19 @@ fn a_completed_crank_after_a_halt_restores_quiescence() {
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     let o = m.run_bounded(&b_halt, 0);
-    assert!(matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)), "fixture: {:?}", o.halt);
+    assert!(
+        matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)),
+        "fixture: {:?}",
+        o.halt
+    );
     assert!(!m.is_quiescent(), "the latch alone refuses");
     let (b_ok, n_ok) = compile("var i; i = 7; i");
     let b_ok = m.relink_crank(&b_ok, &n_ok).expect("relink");
     let o = m.run(&b_ok);
     assert!(o.completed, "{:?}", o.halt);
     assert!(m.is_quiescent(), "a completed crank is a boundary again");
-    m.write_snapshot(&sig()).expect("and the blob verb admits it");
+    m.write_snapshot(&sig())
+        .expect("and the blob verb admits it");
 }
 
 /// The two UNCOERCIBLE completions -- a completion value the oracle
@@ -973,7 +1060,10 @@ fn a_completed_crank_after_a_halt_restores_quiescence() {
 fn an_uncoercible_completion_leaves_a_quiescent_machine_whose_twins_agree() {
     for (name, completion) in [
         ("a Symbol completion", "let s = Symbol('k'); s"),
-        ("a null-prototype completion", "let s = Object.create(null); s"),
+        (
+            "a null-prototype completion",
+            "let s = Object.create(null); s",
+        ),
     ] {
         // Both cranks intern the same program symbols, in order (the
         // dead mention block), so the twins run identical bytecode.
@@ -994,7 +1084,11 @@ fn an_uncoercible_completion_leaves_a_quiescent_machine_whose_twins_agree() {
         let mut cont = Interp::new();
         cont.link_intrinsics(&n1);
         let o = cont.run(&b1);
-        assert!(o.completed, "{name}: the engine's verdict is a completion ({:?})", o.halt);
+        assert!(
+            o.completed,
+            "{name}: the engine's verdict is a completion ({:?})",
+            o.halt
+        );
         assert!(
             o.coercion_error.is_some(),
             "{name}: the harness's post-run coercion travels beside it"
@@ -1016,8 +1110,18 @@ fn an_uncoercible_completion_leaves_a_quiescent_machine_whose_twins_agree() {
         );
         let co = cont.run(&b2);
         let to = twin.run(&b2);
-        assert_eq!((co.completed, co.result.as_str()), (true, "42"), "{name}: {:?}", co.halt);
-        assert_eq!((to.completed, to.result.as_str()), (true, "42"), "{name}: {:?}", to.halt);
+        assert_eq!(
+            (co.completed, co.result.as_str()),
+            (true, "42"),
+            "{name}: {:?}",
+            co.halt
+        );
+        assert_eq!(
+            (to.completed, to.result.as_str()),
+            (true, "42"),
+            "{name}: {:?}",
+            to.halt
+        );
         assert_eq!(co.computrons, to.computrons, "{name}: computrons agree");
         assert_eq!(
             cont.write_snapshot(&sig()).expect("continuous snapshots"),

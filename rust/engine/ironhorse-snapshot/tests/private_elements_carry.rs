@@ -33,7 +33,12 @@ fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
     let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
+    (
+        outcome.completed,
+        format!("{:?}", outcome.halt),
+        outcome.result,
+        outcome.computrons,
+    )
 }
 
 const FIRST: &str = "var A = 0; var a = 0; var t = 0; \
@@ -118,9 +123,7 @@ fn duplicate_private_element_rows_are_refused() {
         .values
         .push(image.private_elements.values[0].clone());
     match from_snapshot_bytes(&write_machine(&image), &sig()) {
-        Err(SnapshotError::Corrupt(
-            "private values: rows not strictly ascending",
-        )) => {}
+        Err(SnapshotError::Corrupt("private values: rows not strictly ascending")) => {}
         Err(other) => panic!("wrong private-row refusal: {other:?}"),
         Ok(_) => panic!("duplicate private element rows must not restore"),
     }

@@ -360,7 +360,10 @@ fn a_stale_handle_does_not_splice_over_a_store_another_handle_upgraded() {
 
     // A second handle upgrades the file to the current schema.
     let mut fresh = FileStore::open(&path).expect("second handle");
-    assert!(migrate_store(&mut fresh, &sig()).expect("migrate"), "the ladder ran");
+    assert!(
+        migrate_store(&mut fresh, &sig()).expect("migrate"),
+        "the ladder ran"
+    );
     drop(fresh);
     let after_upgrade = std::fs::read(&path).expect("read upgraded file");
 

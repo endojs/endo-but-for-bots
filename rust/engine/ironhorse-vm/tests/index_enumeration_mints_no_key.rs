@@ -72,7 +72,10 @@ fn enumeration_still_answers_correctly() {
     for (source, want) in [
         ("Object.keys([7, 8, 9]).join('|')", "0|1|2"),
         ("Object.values([7, 8, 9]).join('|')", "7|8|9"),
-        ("Object.entries([7, 8]).map(function (e) { return e[0] + ':' + e[1]; }).join('|')", "0:7|1:8"),
+        (
+            "Object.entries([7, 8]).map(function (e) { return e[0] + ':' + e[1]; }).join('|')",
+            "0:7|1:8",
+        ),
         ("Object.getOwnPropertyNames([7, 8]).join('|')", "0|1|length"),
         ("Reflect.ownKeys([7]).join('|')", "0|length"),
         ("JSON.stringify([7, 8, 9])", "[7,8,9]"),
@@ -86,16 +89,26 @@ fn enumeration_still_answers_correctly() {
         // Sparse: only present indices enumerate.
         ("var a = []; a[3] = 1; Object.keys(a).join('|')", "3"),
         // Freeze still freezes, and the descriptors it leaves are right.
-        ("var a = [1, 2]; Object.freeze(a); String(Object.isFrozen(a))", "true"),
+        (
+            "var a = [1, 2]; Object.freeze(a); String(Object.isFrozen(a))",
+            "true",
+        ),
         (
             "var a = [1]; Object.freeze(a); var d = Object.getOwnPropertyDescriptor(a, 0); \
              d.value + ',' + d.writable + ',' + d.configurable",
             "1,false,false",
         ),
-        ("var a = [1, 2]; Object.seal(a); String(Object.isSealed(a))", "true"),
+        (
+            "var a = [1, 2]; Object.seal(a); String(Object.isSealed(a))",
+            "true",
+        ),
     ] {
         let out = run(source);
-        assert!(out.completed, "must complete; halt {:?}\n  {source}", out.halt);
+        assert!(
+            out.completed,
+            "must complete; halt {:?}\n  {source}",
+            out.halt
+        );
         assert_eq!(out.result, want, "{source}");
     }
 }
@@ -128,14 +141,12 @@ fn a_key_named_mid_stringify_is_still_serialized() {
     assert_eq!(out.result, r#"{"0":1,"1":99}"#);
 
     // Promoted by a replacer function, from an accessor descriptor.
-    let out = run(
-        "(function () { var args = arguments; \
+    let out = run("(function () { var args = arguments; \
            return JSON.stringify(args, function (k, v) { \
              if (k === '0') { Object.defineProperty(args, '1', \
                { get: function () { return 99; }, enumerable: true, configurable: true }); } \
              return v; }); \
-         })(1, 2)",
-    );
+         })(1, 2)");
     assert!(out.completed, "halt {:?}", out.halt);
     assert_eq!(out.result, r#"{"0":1,"1":99}"#);
 
@@ -166,12 +177,24 @@ fn a_long_replacer_list_mints_no_key() {
 fn json_stringify_still_answers_correctly() {
     for (source, want) in [
         ("JSON.stringify([1, 2, 3])", "[1,2,3]"),
-        ("JSON.stringify({ a: [1, { b: 2 }] })", r#"{"a":[1,{"b":2}]}"#),
-        ("JSON.stringify({ a: 1, b: 2 }, ['b', 'a', 'b'])", r#"{"b":2,"a":1}"#),
+        (
+            "JSON.stringify({ a: [1, { b: 2 }] })",
+            r#"{"a":[1,{"b":2}]}"#,
+        ),
+        (
+            "JSON.stringify({ a: 1, b: 2 }, ['b', 'a', 'b'])",
+            r#"{"b":2,"a":1}"#,
+        ),
         ("JSON.stringify([1, 2, 3], [0, 1])", "[1,2,3]"),
         ("JSON.stringify([1, , 3])", "[1,null,3]"),
-        ("JSON.stringify({ toJSON: function (k) { return 'tj:' + k; } })", r#""tj:""#),
-        ("JSON.stringify(new Uint8Array(3))", r#"{"0":0,"1":0,"2":0}"#),
+        (
+            "JSON.stringify({ toJSON: function (k) { return 'tj:' + k; } })",
+            r#""tj:""#,
+        ),
+        (
+            "JSON.stringify(new Uint8Array(3))",
+            r#"{"0":0,"1":0,"2":0}"#,
+        ),
     ] {
         let out = run(source);
         assert!(out.completed, "halt {:?}\n  {source}", out.halt);

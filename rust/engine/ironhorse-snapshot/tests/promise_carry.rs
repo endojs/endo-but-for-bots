@@ -77,7 +77,10 @@ fn twin(
         .iter()
         .map(|s| crank(session.machine_mut(), s))
         .collect();
-    assert_eq!(continuous, resumed, "resumed observes exactly as uninterrupted");
+    assert_eq!(
+        continuous, resumed,
+        "resumed observes exactly as uninterrupted"
+    );
     continuous
 }
 
@@ -90,7 +93,10 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[(bool,
         .iter()
         .map(|(c, h, r, _)| (*c, if *c { r.as_str() } else { h.as_str() }))
         .collect();
-    assert_eq!(got, expect, "the continuous observations are the real answers");
+    assert_eq!(
+        got, expect,
+        "the continuous observations are the real answers"
+    );
 
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
@@ -438,8 +444,15 @@ fn the_unhandled_rejection_latch_survives_resume() {
     let mut cont = Interp::new();
     cont.link_intrinsics(&n1);
     assert!(cont.run(&b1).completed, "crank 1 (continuous)");
-    assert!(cont.has_unhandled_rejection(), "the fixture rejects unobserved");
-    let cont_obs = (crank(&mut cont, observe), cont.has_unhandled_rejection(), crank(&mut cont, read));
+    assert!(
+        cont.has_unhandled_rejection(),
+        "the fixture rejects unobserved"
+    );
+    let cont_obs = (
+        crank(&mut cont, observe),
+        cont.has_unhandled_rejection(),
+        crank(&mut cont, read),
+    );
 
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
@@ -462,7 +475,10 @@ fn the_unhandled_rejection_latch_survives_resume() {
     );
     assert_eq!(cont_obs, res_obs, "twin observations agree");
     assert!(!cont_obs.1, "the late catch clears the report");
-    assert_eq!(cont_obs.2 .2, "caught:boom", "the stored reason reaches the handler");
+    assert_eq!(
+        cont_obs.2 .2, "caught:boom",
+        "the stored reason reaches the handler"
+    );
 }
 
 /// A resumed machine holding restored promise rows must checkpoint
@@ -495,11 +511,17 @@ fn a_resumed_machine_checkpoints_its_restored_promise_rows() {
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint after resume");
     validate_store(&store, &sig()).expect("post-crank store validates");
     let mut session = resume_from_store(&store, &sig()).expect("second resume");
-    let (done, _, _, _) = crank(session.machine_mut(), "var p; var res; var g; var t; res(3); 0");
+    let (done, _, _, _) = crank(
+        session.machine_mut(),
+        "var p; var res; var g; var t; res(3); 0",
+    );
     assert!(done);
     let (done, _, result, _) = crank(session.machine_mut(), "var p; var res; var g; var t; g");
     assert!(done);
-    assert_eq!(result, "3", "the twice-resumed resolver still settles its promise");
+    assert_eq!(
+        result, "3",
+        "the twice-resumed resolver still settles its promise"
+    );
 }
 
 /// The blob verbs share the carry: suspend to container bytes, rebuild,
@@ -523,7 +545,9 @@ fn blob_snapshot_carries_the_promise_cluster_too() {
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
     assert!(m.run(&b1).completed, "crank 1 (blob)");
-    let bytes = m.write_snapshot(&sig()).expect("suspend with live promise state");
+    let bytes = m
+        .write_snapshot(&sig())
+        .expect("suspend with live promise state");
     let mut r = from_snapshot_bytes(&bytes, &sig()).expect("rebuild");
     let resumed: Vec<_> = obs.iter().map(|s| crank(&mut r, s)).collect();
     assert_eq!(resumed, continuous, "blob twin agrees");

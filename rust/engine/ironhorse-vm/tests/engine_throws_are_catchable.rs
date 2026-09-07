@@ -146,9 +146,18 @@ fn an_uncaught_throw_renders_with_its_guest_tostring_once_at_the_host_boundary()
     // inner unit's static `[object Object]` text.
     for (source, rendered) in [
         ("throw { toString(){ return 'custom' } }", "custom"),
-        ("eval(\"throw { toString: function(){ return 'custom'; } }\")", "custom"),
-        ("function f(){ throw { toString(){ return 'deep' } } } [1].forEach(f)", "deep"),
-        ("var n=0; throw { toString(){ n++; return 'n=' + n } }", "n=1"),
+        (
+            "eval(\"throw { toString: function(){ return 'custom'; } }\")",
+            "custom",
+        ),
+        (
+            "function f(){ throw { toString(){ return 'deep' } } } [1].forEach(f)",
+            "deep",
+        ),
+        (
+            "var n=0; throw { toString(){ n++; return 'n=' + n } }",
+            "n=1",
+        ),
     ] {
         let out = run(source);
         assert!(!out.completed, "{source}");

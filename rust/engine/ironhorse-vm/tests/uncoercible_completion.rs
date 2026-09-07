@@ -22,7 +22,10 @@ fn a_symbol_completion_is_a_completion_the_harness_coerces_to_a_typeerror() {
     let (out, quiescent) = run("var s = 0; s = Symbol('k'); s");
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed, "the engine's verdict is a completion");
-    assert_eq!(out.result, "Symbol(k)", "the engine's own display rendering");
+    assert_eq!(
+        out.result, "Symbol(k)",
+        "the engine's own display rendering"
+    );
     assert_eq!(
         out.coercion_error.as_deref(),
         Some("TypeError: cannot coerce symbol to string")
@@ -74,22 +77,45 @@ fn ordinary_completions_and_halts_pass_through_the_fold_unchanged() {
     assert!(out.completed && quiescent);
     assert_eq!(out.result, "[object Object]");
     assert_eq!(out.coercion_error, None, "a plain object coerces");
-    let before = (out.completed, out.result.clone(), out.halt.clone(), out.computrons);
+    let before = (
+        out.completed,
+        out.result.clone(),
+        out.halt.clone(),
+        out.computrons,
+    );
     let after = out.host_coerced();
     assert_eq!(
         before,
-        (after.completed, after.result.clone(), after.halt.clone(), after.computrons)
+        (
+            after.completed,
+            after.result.clone(),
+            after.halt.clone(),
+            after.computrons
+        )
     );
 
     let (out, quiescent) = run("var x = 0; throw 'boom';");
     assert!(!out.completed && !quiescent);
-    assert_eq!(out.coercion_error, None, "a halt has no completion to coerce");
+    assert_eq!(
+        out.coercion_error, None,
+        "a halt has no completion to coerce"
+    );
     assert!(matches!(out.halt, Halt::Throw { .. }));
-    let before = (out.completed, out.result.clone(), out.halt.clone(), out.computrons);
+    let before = (
+        out.completed,
+        out.result.clone(),
+        out.halt.clone(),
+        out.computrons,
+    );
     let after = out.host_coerced();
     assert_eq!(
         before,
-        (after.completed, after.result.clone(), after.halt.clone(), after.computrons),
+        (
+            after.completed,
+            after.result.clone(),
+            after.halt.clone(),
+            after.computrons
+        ),
         "a halt passes through the fold untouched, message included"
     );
 }
@@ -101,10 +127,8 @@ fn ordinary_completions_and_halts_pass_through_the_fold_unchanged() {
 /// to the predicate is a deliberate edit here, not drift.
 #[test]
 fn the_object_arm_is_a_prototype_link_test() {
-    let (out, _) = run(
-        "var o = 0; o = Object.create(null); \
-         o.toString = function () { return 'custom'; }; o",
-    );
+    let (out, _) = run("var o = 0; o = Object.create(null); \
+         o.toString = function () { return 'custom'; }; o");
     assert!(out.completed);
     assert_eq!(
         out.coercion_error.as_deref(),

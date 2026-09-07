@@ -69,7 +69,11 @@ fn large_integer_result_renders_shortest_round_tripping_decimal() {
     let inner: i32 = (!1_i32) << (1_i32 << 1); // (~true) << (true << true) = -8
     let right: i32 = (!a).wrapping_shl(inner as u32); // (~a) << (−8 mod 32 = 24)
     let value: f64 = (left as f64) * (right as f64);
-    assert_eq!(value.to_bits(), FINDING_VALUE.to_bits(), "program value is -(93*2^48)");
+    assert_eq!(
+        value.to_bits(),
+        FINDING_VALUE.to_bits(),
+        "program value is -(93*2^48)"
+    );
 
     // The port renders the ECMA-262 shortest decimal, exactly as V8/Node does.
     assert_eq!(

@@ -55,11 +55,7 @@ impl Default for XsOracleResultRaw {
 }
 
 extern "C" {
-    fn xs_oracle_run(
-        source: *const c_char,
-        source_len: u32,
-        out: *mut XsOracleResultRaw,
-    ) -> c_int;
+    fn xs_oracle_run(source: *const c_char, source_len: u32, out: *mut XsOracleResultRaw) -> c_int;
     fn xs_oracle_compile_module(
         source: *const c_char,
         source_len: u32,
@@ -273,8 +269,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         Vec::new()
     } else {
         unsafe {
-            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
-                .to_vec()
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize).to_vec()
         }
     };
 
@@ -311,8 +306,7 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         Vec::new()
     } else {
         unsafe {
-            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
-                .to_vec()
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize).to_vec()
         }
     };
     let outcome = OracleOutcome {
@@ -352,8 +346,9 @@ pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
         .map(|s| s.as_bytes().as_ptr() as *const c_char)
         .collect();
     let lens: Vec<u32> = sources.iter().map(|s| s.as_bytes().len() as u32).collect();
-    let mut raws: Vec<XsOracleResultRaw> =
-        (0..sources.len()).map(|_| XsOracleResultRaw::default()).collect();
+    let mut raws: Vec<XsOracleResultRaw> = (0..sources.len())
+        .map(|_| XsOracleResultRaw::default())
+        .collect();
     // Safety: `ptrs`/`lens`/`raws` are valid for `sources.len()` slots;
     // the C side reads the sources by (pointer, length) and writes only
     // within each out slot and heap buffers we copy out and free.
@@ -424,8 +419,7 @@ pub fn compile_module(source: &str) -> Option<ModuleOutcome> {
         Vec::new()
     } else {
         unsafe {
-            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
-                .to_vec()
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize).to_vec()
         }
     };
 
@@ -542,9 +536,16 @@ mod tests {
         // usable buffer, comfortably inside the current one.
         let out = run("'x'.repeat(2000)").expect("oracle machine must start");
         assert!(out.completed, "program completes: {}", out.error);
-        assert_eq!(out.result.len(), 2000, "the full string is captured, not a 1023-byte prefix");
+        assert_eq!(
+            out.result.len(),
+            2000,
+            "the full string is captured, not a 1023-byte prefix"
+        );
         assert!(out.result.bytes().all(|b| b == b'x'));
-        assert!(!out.result_truncated, "a result within the buffer is not flagged truncated");
+        assert!(
+            !out.result_truncated,
+            "a result within the buffer is not flagged truncated"
+        );
     }
 
     /// Materialize `files` into a unique temp dir, run `main` as a module
@@ -569,8 +570,14 @@ mod tests {
         let o = run_module_graph(
             "fulfill",
             &[
-                ("dep.js", "export const x = 41; export function inc(n){ return n + 1; }"),
-                ("main.mjs", "import { x, inc } from './dep.js'; globalThis.result = inc(x);"),
+                (
+                    "dep.js",
+                    "export const x = 41; export function inc(n){ return n + 1; }",
+                ),
+                (
+                    "main.mjs",
+                    "import { x, inc } from './dep.js'; globalThis.result = inc(x);",
+                ),
             ],
             "main.mjs",
         );
@@ -592,7 +599,11 @@ mod tests {
             "main.mjs",
         );
         assert!(!o.completed, "throwing dependency must reject");
-        assert!(o.error.contains("boom"), "reason should carry the throw, got {:?}", o.error);
+        assert!(
+            o.error.contains("boom"),
+            "reason should carry the throw, got {:?}",
+            o.error
+        );
     }
 
     #[test]
@@ -612,7 +623,11 @@ mod tests {
             ],
             "main.mjs",
         );
-        assert!(o.completed, "dynamic import + meta should fulfill, err={:?}", o.error);
+        assert!(
+            o.completed,
+            "dynamic import + meta should fulfill, err={:?}",
+            o.error
+        );
         assert_eq!(o.result, "v7:object");
     }
 
@@ -849,7 +864,11 @@ mod tests {
             "'use strict'; let y = 3; y",
         ] {
             let o = run(src).expect("machine");
-            assert!(o.completed, "script {src:?} should complete, err={:?}", o.error);
+            assert!(
+                o.completed,
+                "script {src:?} should complete, err={:?}",
+                o.error
+            );
             assert!(
                 !o.bytecode.is_empty(),
                 "script {src:?} must still emit bytecode"

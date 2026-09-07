@@ -67,8 +67,7 @@ use crate::sha256::{hex, Sha256};
 use crate::store::{
     chunk_extent_count, compute_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
     slot_page_count, store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState,
-    StoreError, StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL,
-    STORE_SCHEMA_VERSION,
+    StoreError, StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL, STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -92,7 +91,9 @@ pub enum MachineSnapshotError {
     /// (wave-6 W6-9: proxies, accessors, typed arrays) - a resumed
     /// machine would answer wrong values, so persist refuses by name
     /// until the row's atom lands (error data graduated to `ERRD`).
-    PendingStateUnsupported { row: &'static str },
+    PendingStateUnsupported {
+        row: &'static str,
+    },
 }
 
 impl std::fmt::Display for MachineSnapshotError {
@@ -104,7 +105,10 @@ impl std::fmt::Display for MachineSnapshotError {
                 write!(f, "machine is not at a quiescent crank boundary")
             }
             MachineSnapshotError::PendingStateUnsupported { row } => {
-                write!(f, "heap holds live {row}: that side table does not travel yet")
+                write!(
+                    f,
+                    "heap holds live {row}: that side table does not travel yet"
+                )
             }
         }
     }
@@ -379,7 +383,6 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let buffers = interp
         .array_buffers_snapshot()
         .into_iter()
-
         .map(|(owner, data, length, flags)| crate::image::BufferImage {
             owner,
             data,
@@ -390,23 +393,27 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let typed_arrays = interp
         .typed_arrays_snapshot()
         .into_iter()
-        .map(|(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
-            owner,
-            kind,
-            buffer,
-            offset,
-            length,
-        })
+        .map(
+            |(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
+                owner,
+                kind,
+                buffer,
+                offset,
+                length,
+            },
+        )
         .collect();
     let data_views = interp
         .data_views_snapshot()
         .into_iter()
-        .map(|(owner, buffer, offset, size)| crate::image::DataViewImage {
-            owner,
-            buffer,
-            offset,
-            size,
-        })
+        .map(
+            |(owner, buffer, offset, size)| crate::image::DataViewImage {
+                owner,
+                buffer,
+                offset,
+                size,
+            },
+        )
         .collect();
     let wrappers = interp
         .wrappers_snapshot()
@@ -416,12 +423,14 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let regexps = interp
         .regexps_snapshot()
         .into_iter()
-        .map(|(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
-            owner,
-            source,
-            flags,
-            last_index_bits,
-        })
+        .map(
+            |(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
+                owner,
+                source,
+                flags,
+                last_index_bits,
+            },
+        )
         .collect();
     let arguments_brands = interp.arguments_brands_snapshot();
     let (instants, durations, plains, zoneds) = interp.temporal_snapshot();
@@ -517,10 +526,15 @@ fn restore_side_tables(
             .into_iter()
             .map(|c| (c.owner, c.kind, c.table_length, c.entries))
             .collect(),
-        registry.into_iter().map(|r| (r.key, r.descriptor)).collect(),
+        registry
+            .into_iter()
+            .map(|r| (r.key, r.descriptor))
+            .collect(),
     );
     if !ok {
-        return Err(SnapshotError::Corrupt("side-table restore: unknown kind code"));
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: unknown kind code",
+        ));
     }
     // The error-data rows (name validated at decode against the
     // engine's closed error-name set, so this cannot fail on a
@@ -532,7 +546,9 @@ fn restore_side_tables(
             .collect(),
     );
     if !ok {
-        return Err(SnapshotError::Corrupt("side-table restore: unknown error name"));
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: unknown error name",
+        ));
     }
     // The typed-array family (kinds, flags, extents and view geometry
     // all validated at decode/bounds; the vm re-validates against its
@@ -561,9 +577,7 @@ fn restore_side_tables(
     // (source, flags) and carry either the standard current lastIndex heap
     // descriptor or the legacy numeric fallback; a plain record's kind was
     // validated at decode.
-    interp.restore_wrapper_data(
-        wrappers.into_iter().map(|w| (w.owner, w.value)).collect(),
-    );
+    interp.restore_wrapper_data(wrappers.into_iter().map(|w| (w.owner, w.value)).collect());
     let ok = interp.restore_regexps(
         regexps
             .into_iter()
@@ -575,12 +589,7 @@ fn restore_side_tables(
             "side-table restore: invalid persisted regexp state",
         ));
     }
-    interp.restore_dates(
-        dates
-            .into_iter()
-            .map(|d| (d.owner, d.value_bits))
-            .collect(),
-    );
+    interp.restore_dates(dates.into_iter().map(|d| (d.owner, d.value_bits)).collect());
     if !interp.restore_proxy_state(proxy_state) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed proxy state",
@@ -591,7 +600,9 @@ fn restore_side_tables(
     // at decode/bounds, and the vm re-validates them on the way in.
     let ok = interp.restore_intl(intl);
     if !ok {
-        return Err(SnapshotError::Corrupt("side-table restore: malformed intl record"));
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed intl record",
+        ));
     }
     // The Intl bound natives (schema 18) install BEFORE the retained
     // function state, not after: they are the one function-shaped
@@ -931,12 +942,7 @@ impl StoreSession {
 /// formulas are exactly [`MachineImage::from_arenas`]'s, so a store
 /// checkpointed incrementally exports byte-identically to a blob
 /// written by [`MachineSnapshot::write_snapshot`].
-fn manifest_of(
-    interp: &Interp,
-    signature: &Signature,
-    epoch: u64,
-    cranks: u64,
-) -> StoreManifest {
+fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) -> StoreManifest {
     StoreManifest {
         version: crate::format::Version::current(),
         store_schema: STORE_SCHEMA_VERSION,
@@ -1238,7 +1244,8 @@ pub fn checkpoint_to_store(
             // The page-edge summary (phase 6) falls out of the records
             // already in hand — a pure function of page content.
             page_edges.push((page, derive_page_edges(page, &records)));
-            let mut bytes = Vec::with_capacity(records.len() * crate::slot_codec::SLOT_RECORD_BYTES);
+            let mut bytes =
+                Vec::with_capacity(records.len() * crate::slot_codec::SLOT_RECORD_BYTES);
             for slot in &records {
                 crate::slot_codec::encode_slot(slot, &mut bytes);
             }
@@ -1271,7 +1278,8 @@ pub fn checkpoint_to_store(
     let free_segs: Vec<(u32, Vec<u8>)> = free_all
         .into_iter()
         .filter(|(i, bytes)| {
-            prior_frees.get(*i as usize).copied() != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
+            prior_frees.get(*i as usize).copied()
+                != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
         })
         .collect();
     // Root maintenance: prior state + this commit's dirty
@@ -1407,9 +1415,10 @@ pub fn checkpoint_to_store(
             {
                 let mut leaves = pin.leaves.borrow_mut();
                 leaves.pages.resize(page_count as usize, [0u8; 32]);
-                leaves
-                    .exts
-                    .resize(chunk_extent_count(batch.manifest.chunk_len) as usize, [0u8; 32]);
+                leaves.exts.resize(
+                    chunk_extent_count(batch.manifest.chunk_len) as usize,
+                    [0u8; 32],
+                );
                 leaves.frees.resize(
                     crate::store::free_seg_count(batch.manifest.free_len) as usize,
                     [0u8; 32],
@@ -1428,7 +1437,10 @@ pub fn checkpoint_to_store(
             // geometry: rows appended past the attach-time range are
             // now store-backed (evictable, re-faultable), and the
             // tail row's expected fault length is the committed one.
-            session.interp.slots.advance_backing(batch.manifest.chunk_len);
+            session
+                .interp
+                .slots
+                .advance_backing(batch.manifest.chunk_len);
             session.interp.chunks.advance_backing();
         }
     }
@@ -1466,11 +1478,9 @@ pub fn resume_from_store(
     // resume), and the incremental checkpoint only ever writes ids a
     // live machine minted, so no store this code produces can hold one.
     if image.stored_unregistered_key_id().is_some() {
-        return Err(StoreError::Snapshot(
-            crate::format::SnapshotError::Corrupt(
-                "stored property id outside the name and symbol-key tables",
-            ),
-        ));
+        return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables",
+        )));
     }
     // Re-check the manifest after the row reads: the reads above are
     // not one atomic snapshot on every backend, so a concurrent commit
@@ -1491,7 +1501,11 @@ pub fn resume_from_store(
         leaves.frees,
         &edges,
     );
-    debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
+    debug_assert_eq!(
+        root_ledger.root(),
+        manifest.root,
+        "seed from validated state"
+    );
     Ok(StoreSession {
         gen_dirty: std::collections::BTreeSet::new(),
         interp: image_to_interp(ValidatedSnapshot::from_validated_image(image))
@@ -1604,8 +1618,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, small, leaves) =
-        validate_store(&*store.borrow(), expected_sig)?.into_parts();
+    let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?.into_parts();
     // Ledger seed material (V6-c), read before the torn-read re-check
     // below so the guard covers it too.
     let edges = store.borrow().page_edges()?;
@@ -1633,7 +1646,11 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         leaves.frees.clone(),
         &edges,
     );
-    debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
+    debug_assert_eq!(
+        root_ledger.root(),
+        manifest.root,
+        "seed from validated state"
+    );
     let pin = std::rc::Rc::new(LazyPin {
         epoch: std::cell::Cell::new(manifest.epoch),
         seal: std::cell::RefCell::new(manifest.seal.clone()),
@@ -1782,11 +1799,9 @@ mod tests {
         let batch = image_to_batch(&image, 1, "");
         crate::store::HeapStore::commit(&mut store, &batch)
             .expect("the forged batch seals consistently");
-        let mut resumed = resume_from_store_lazy(
-            std::rc::Rc::new(std::cell::RefCell::new(store)),
-            &sig(),
-        )
-        .expect("lazy attach");
+        let mut resumed =
+            resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())
+                .expect("lazy attach");
         // Force every page resident - the poisoned one faults.
         resumed.machine_mut().collect_garbage();
     }
@@ -1818,11 +1833,9 @@ mod tests {
         let batch = image_to_batch(&image, 1, "");
         crate::store::HeapStore::commit(&mut store, &batch)
             .expect("the forged batch seals consistently");
-        let mut resumed = resume_from_store_lazy(
-            std::rc::Rc::new(std::cell::RefCell::new(store)),
-            &sig(),
-        )
-        .expect("lazy attach");
+        let mut resumed =
+            resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())
+                .expect("lazy attach");
         // Force every page resident - the poisoned one faults.
         resumed.machine_mut().collect_garbage();
     }
@@ -1852,7 +1865,9 @@ mod tests {
         let a = m.run(&PROG_A);
         assert!(a.completed);
 
-        let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
+        let bytes = m
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots");
         let snapshot = read_validated_machine(&bytes, &sig()).expect("validates");
         assert_eq!(
             snapshot.image().meter.to_state(),
@@ -1863,7 +1878,11 @@ mod tests {
         // The restored machine carries the same metering state.
         assert_eq!(m2.meter_state(), m.meter_state());
         // Re-serializing the restored machine is byte-identical.
-        assert_eq!(m2.write_snapshot(&sig()).expect("quiescent machine snapshots"), bytes);
+        assert_eq!(
+            m2.write_snapshot(&sig())
+                .expect("quiescent machine snapshots"),
+            bytes
+        );
     }
 
     /// The row-6 bar: run-to-a-crank, suspend, resume, run-to-end equals
@@ -1881,7 +1900,9 @@ mod tests {
         let mut m1 = Interp::new();
         let a1 = m1.run(&PROG_A);
         assert!(a1.completed);
-        let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
+        let bytes = m1
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots");
         let mut m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
         let b2 = m2.run(&PROG_B);
 
@@ -1908,7 +1929,9 @@ mod tests {
         let armed_state = m1.meter_state();
         assert!(armed_state.interval > 0, "meter is armed");
 
-        let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
+        let bytes = m1
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots");
         let m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
         // The armed interval and the accumulated index both survive.
         assert_eq!(m2.meter_state(), armed_state);
@@ -1978,8 +2001,10 @@ mod tests {
         let mut m2 = resume_from_cas(&dir, &hash, &sig()).expect("resumes from cas");
         let b2 = m2.run(&PROG_B);
         assert_eq!(b2.result, ub.result);
-        assert_eq!(b2.computrons, ub.computrons, "meter continued through the CAS round-trip");
-
+        assert_eq!(
+            b2.computrons, ub.computrons,
+            "meter continued through the CAS round-trip"
+        );
     }
 }
 

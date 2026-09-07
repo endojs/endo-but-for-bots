@@ -79,7 +79,11 @@ pub fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<Strin
     if fm.flags.iter().any(|f| f == "module") {
         return Err("structural:module".into());
     }
-    if fm.flags.iter().any(|f| f == "async" || f == "CanBlockIsFalse") {
+    if fm
+        .flags
+        .iter()
+        .any(|f| f == "async" || f == "CanBlockIsFalse")
+    {
         return Err("structural:async-or-can-block".into());
     }
     if fm.flags.iter().any(|f| f == "raw") {
@@ -451,7 +455,10 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(!files.is_empty(), "the UTF-16 String sections must have tests");
+        assert!(
+            !files.is_empty(),
+            "the UTF-16 String sections must have tests"
+        );
         let rep = run_files(&harness, &root, &files);
         eprintln!(
             "test262 String.prototype (UTF-16 sections): total={} covered={} divergent={}",
@@ -517,7 +524,10 @@ mod tests {
         for s in sections {
             files.extend(collect_js(&root.join(s)));
         }
-        assert!(!files.is_empty(), "covered-grammar language sections must have tests");
+        assert!(
+            !files.is_empty(),
+            "covered-grammar language sections must have tests"
+        );
         let rep = run_files(&harness, &root, &files);
 
         eprintln!(

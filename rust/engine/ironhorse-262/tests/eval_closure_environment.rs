@@ -49,10 +49,7 @@ fn eval_declared_var_is_visible_through_the_published_cell() {
     publish(&mut code, 1, 7, Opcode::XS_CODE_NULL);
     code.extend_from_slice(&[op(Opcode::XS_CODE_UNWIND_1), 1]);
     read_result(&mut code, 1);
-    code.extend_from_slice(&[
-        op(Opcode::XS_CODE_WITHOUT),
-        op(Opcode::XS_CODE_END),
-    ]);
+    code.extend_from_slice(&[op(Opcode::XS_CODE_WITHOUT), op(Opcode::XS_CODE_END)]);
 
     let run = run_program(&code);
     assert_eq!(run.halt, Halt::Return);

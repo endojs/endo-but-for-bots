@@ -21,14 +21,22 @@ fn dump_module(src: &str) -> String {
 
 fn assert_module(src: &str, want: &str) {
     let got = dump_module(src);
-    assert_eq!(got, want.trim_start_matches('\n'), "\n--- module ---\n{src}\n--- got ---\n{got}");
+    assert_eq!(
+        got,
+        want.trim_start_matches('\n'),
+        "\n--- module ---\n{src}\n--- got ---\n{got}"
+    );
 }
 
 /// Assert the dump equals `want` (leading newline in `want` trimmed for
 /// readable raw-string fixtures).
 fn assert_dump(src: &str, want: &str) {
     let got = dump(src);
-    assert_eq!(got, want.trim_start_matches('\n'), "\n--- source ---\n{src}\n--- got ---\n{got}");
+    assert_eq!(
+        got,
+        want.trim_start_matches('\n'),
+        "\n--- source ---\n{src}\n--- got ---\n{got}"
+    );
 }
 
 // ---- program-level var / function are global (closure) slots ----
@@ -304,7 +312,11 @@ rec -> s1:d0
 fn scope_err(src: &str) -> String {
     match scope_program(src, false) {
         Err(e) => {
-            assert_eq!(e.kind, ParseErrorKind::Syntax, "expected a scoper SyntaxError for {src}");
+            assert_eq!(
+                e.kind,
+                ParseErrorKind::Syntax,
+                "expected a scoper SyntaxError for {src}"
+            );
             e.message
         }
         Ok(_) => panic!("expected an early error for {src}"),
@@ -323,7 +335,10 @@ fn duplicate_strict_argument_is_error() {
     // Dup params are legal sloppy but an early error once strict. Sloppy,
     // the second `a` reuses the first arg slot (one ARG, both accesses
     // resolve to it); strict, it is a duplicate-argument early error.
-    assert_eq!(scope_err("function f(a, a) { 'use strict'; }"), "duplicate argument");
+    assert_eq!(
+        scope_err("function f(a, a) { 'use strict'; }"),
+        "duplicate argument"
+    );
     assert_dump(
         "function f(a, a) { return a; }",
         "\
@@ -510,8 +525,9 @@ fn duplicate_private_names_are_error() {
     }
     // The single sanctioned exception: one getter and one setter.
     assert!(scope_program("class C { get #m() { return 1; } set #m(v) {} }", false).is_ok());
-    assert!(
-        scope_program("class C { static get #m() { return 1; } static set #m(v) {} }", false)
-            .is_ok()
-    );
+    assert!(scope_program(
+        "class C { static get #m() { return 1; } static set #m(v) {} }",
+        false
+    )
+    .is_ok());
 }

@@ -506,7 +506,9 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
             }
         }
         Agreement::BothAbort => match &run.ironhorse_halt {
-            Halt::Throw { rendered: thrown, .. } => {
+            Halt::Throw {
+                rendered: thrown, ..
+            } => {
                 if run.error_agrees {
                     // A meter-exact gate outranks every abort disposition: an
                     // armed case that burns a different computron budget is a
@@ -634,9 +636,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // Pinned XS does coerce the guest comparator result, then
                     // returns without performing the required post-coercion
                     // detachment check. The official case observes both facts.
-                    Verdict::RunSkip(
-                        "oracle-xs-typedarray-sort-post-coercion-detach".into(),
-                    )
+                    Verdict::RunSkip("oracle-xs-typedarray-sort-post-coercion-detach".into())
                 } else if oracle_eval_frames_script_declarations(run) {
                     // The oracle shim compiles every source with the `eval`
                     // builtin's flags, so a *strict* Script's top-level
@@ -675,7 +675,9 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         // ran to completion is the dominant wrong-answer shape of a
         // conformance run, not a limitation.
         Agreement::OracleOnlyComplete => match &run.ironhorse_halt {
-            Halt::Throw { rendered: thrown, .. } if constructor_name(thrown) == "Test262Error" => {
+            Halt::Throw {
+                rendered: thrown, ..
+            } if constructor_name(thrown) == "Test262Error" => {
                 // ironhorse computed a value the harness's own assertion
                 // rejected, on a case XS passes: the assertion is the report.
                 // This is the case's own contract failing, not a disagreement
@@ -1427,9 +1429,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // skip rather than a divergence, and it also keeps the oracle off the
     // `wait` cases where XS blocks past the watchdog. The single-agent Atomics
     // surface (load/store/add/…) runs and is covered.
-    if src.contains("$262.agent")
-        || src.contains("Atomics.wait")
-        || src.contains("Atomics.notify")
+    if src.contains("$262.agent") || src.contains("Atomics.wait") || src.contains("Atomics.notify")
     {
         return preskip("structural:multi-agent");
     }
@@ -2106,10 +2106,8 @@ impl XstReport {
                 Verdict::PreSkip(reason) if reason.starts_with("onlyStrict")
             );
             if only_strict {
-                self.observed.insert(
-                    (path.to_string(), Mode::Strict),
-                    outcome.clone(),
-                );
+                self.observed
+                    .insert((path.to_string(), Mode::Strict), outcome.clone());
             } else {
                 self.observed
                     .insert((path.to_string(), Mode::Sloppy), outcome.clone());
@@ -2322,7 +2320,11 @@ fn run_case_bounded(
 fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time::Duration) -> bool {
     let fm = frontmatter::parse(src);
     let (mut run_sloppy, mut run_strict, only_strict) = strict_mode_status(&fm.flags);
-    if fm.features.iter().any(|feature| feature == "ironhorse-meter-exact") {
+    if fm
+        .features
+        .iter()
+        .any(|feature| feature == "ironhorse-meter-exact")
+    {
         if only_strict {
             return true;
         }
@@ -2807,7 +2809,12 @@ mod tests {
         let body = "this['v'] = 'x'; if (v !== 'x') { throw new Test262Error('#2'); } var v;";
         let source = format!("\"use strict\";\n{harness}{body}");
         let run = dual_run(&source).expect("oracle machine");
-        assert_eq!(run.agreement, Agreement::IronhorseOnlyComplete, "{:?}", run.oracle_error);
+        assert_eq!(
+            run.agreement,
+            Agreement::IronhorseOnlyComplete,
+            "{:?}",
+            run.oracle_error
+        );
         assert!(oracle_eval_frames_script_declarations(&run));
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
@@ -2824,7 +2831,10 @@ mod tests {
         // The sloppy twin agrees on both engines: nothing to exclude.
         let sloppy = dual_run(&format!("{harness}{body}")).expect("oracle machine");
         assert!(!oracle_eval_frames_script_declarations(&sloppy));
-        assert_eq!(evaluate_positive(&Config::default(), &sloppy, false), Verdict::Covered);
+        assert_eq!(
+            evaluate_positive(&Config::default(), &sloppy, false),
+            Verdict::Covered
+        );
 
         // The same mechanism surfacing as a plain ReferenceError rather than a
         // failed assertion: an **indirect** eval evaluates in the global scope,
@@ -2849,7 +2859,8 @@ mod tests {
         // A strict program with no top-level `var`/function declaration is not
         // this class, whatever the oracle's Test262Error says.
         let mut other = synthetic_ironhorse_only_complete(true, "Test262Error: #1");
-        other.source = "\"use strict\";\nlet v = 1; if (v !== 2) { throw new Test262Error('#1'); }".to_string();
+        other.source = "\"use strict\";\nlet v = 1; if (v !== 2) { throw new Test262Error('#1'); }"
+            .to_string();
         assert!(!oracle_eval_frames_script_declarations(&other));
         assert!(matches!(
             evaluate_positive(&Config::default(), &other, false),
@@ -2863,7 +2874,9 @@ mod tests {
         // top-level `var` — a large share of the corpus.
         let mut unreproduced = synthetic_ironhorse_only_complete(true, "Test262Error: #1");
         unreproduced.source = format!("\"use strict\";\n{harness}var v = 1;");
-        assert!(ironhorse_compile::script_goal_deviates(&unreproduced.source));
+        assert!(ironhorse_compile::script_goal_deviates(
+            &unreproduced.source
+        ));
         assert_eq!(constructor_name(&unreproduced.oracle_error), "Test262Error");
         assert_eq!(crate::ironhorse_eval_goal_error(&unreproduced.source), None);
         assert!(!oracle_eval_frames_script_declarations(&unreproduced));
@@ -2873,16 +2886,23 @@ mod tests {
         ));
 
         // The bare-constructor relaxation, and its limits.
-        assert!(reframed_abort_matches("TypeError: call: not a function", "TypeError"));
+        assert!(reframed_abort_matches(
+            "TypeError: call: not a function",
+            "TypeError"
+        ));
         assert!(reframed_abort_matches("TypeError: x", "TypeError: x"));
-        assert!(!reframed_abort_matches("TypeError: call: not a function", "RangeError"));
+        assert!(!reframed_abort_matches(
+            "TypeError: call: not a function",
+            "RangeError"
+        ));
         assert!(!reframed_abort_matches("TypeError: a", "TypeError: b"));
         assert!(!reframed_abort_matches("TypeError", "Test262Error"));
 
         // And a source in the class that reproduces a *different* thrown value
         // under the oracle's framing also stays gating.
         let mut mismatched = synthetic_ironhorse_only_complete(true, "Test262Error: expected-#9");
-        mismatched.source = format!("\"use strict\";\n{harness}var v = 1; throw new Test262Error('#2');");
+        mismatched.source =
+            format!("\"use strict\";\n{harness}var v = 1; throw new Test262Error('#2');");
         assert_eq!(
             crate::ironhorse_eval_goal_error(&mismatched.source).as_deref(),
             Some("Test262Error: #2")
@@ -3311,8 +3331,7 @@ mod tests {
         // strict (ironhorse terminates at parse), an infinite loop under
         // sloppy. An `onlyStrict` case therefore must report `true` — the
         // buggy sloppy-only probe would run the loop and hang to `false`.
-        let strict_diverges =
-            "/*---\nflags: [onlyStrict]\n---*/\nwith ({}) { while (true) {} }\n";
+        let strict_diverges = "/*---\nflags: [onlyStrict]\n---*/\nwith ({}) { while (true) {} }\n";
         assert!(
             ironhorse_terminates_alone(&harness, strict_diverges, std::time::Duration::from_secs(10)),
             "an onlyStrict case must be probed via its strict assembly (a strict early error terminates), not the sloppy infinite loop"

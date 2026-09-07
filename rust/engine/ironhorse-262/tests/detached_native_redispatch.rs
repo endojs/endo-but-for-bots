@@ -64,7 +64,9 @@ fn detached_native_dot_apply_is_metered_exactly() {
     assert_bit_exact(
         "var n = 0; var a = 0; a = [1, 2]; n = a.push; n.apply(a, [7, 8, 9, 10]); a.length",
     );
-    assert_bit_exact("var n = 0; var o = 0; o = { a: 1 }; n = Object.keys; n.apply(null, [o]).length");
+    assert_bit_exact(
+        "var n = 0; var o = 0; o = { a: 1 }; n = Object.keys; n.apply(null, [o]).length",
+    );
 }
 
 #[test]

@@ -294,7 +294,8 @@ const WRAPPER_RECEIVERS: &[(&str, &str)] = &[
 #[test]
 fn a_wrapper_prototype_getter_runs_for_a_primitive_receiver() {
     for (wrapper, receiver) in WRAPPER_RECEIVERS {
-        let define = format!("Object.defineProperty({wrapper}.prototype,'zz',{{get(){{return 9}}}}); ");
+        let define =
+            format!("Object.defineProperty({wrapper}.prototype,'zz',{{get(){{return 9}}}}); ");
         assert_result_agrees(&format!("{define}'' + {receiver}.zz"), "9");
         assert_result_agrees(&format!("{define}'' + {receiver}['zz']"), "9");
     }
@@ -391,8 +392,14 @@ fn a_primitive_strings_length_and_index_reads_are_unchanged() {
     // instead of boxing.
     assert_result_agrees("'' + 'abc'.length", "3");
     assert_result_agrees("'' + 'abc'['length']", "3");
-    assert_result_agrees("'' + 'abc'[1] + ',' + 'abc'['1'] + ',' + 'abc'[9]", "b,b,undefined");
-    assert_result_agrees("var o = Object('ab'); '' + o.length + ',' + o[0] + ',' + o[2]", "2,a,undefined");
+    assert_result_agrees(
+        "'' + 'abc'[1] + ',' + 'abc'['1'] + ',' + 'abc'[9]",
+        "b,b,undefined",
+    );
+    assert_result_agrees(
+        "var o = Object('ab'); '' + o.length + ',' + o[0] + ',' + o[2]",
+        "2,a,undefined",
+    );
 }
 
 #[test]

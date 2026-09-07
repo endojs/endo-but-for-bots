@@ -166,8 +166,9 @@ fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, Str
 /// hook for the batch.
 fn ironhorse_compile(source: &str) -> Result<Result<Vec<u8>, String>, String> {
     // The eval-goal entry: the goal the oracle shim compiles (module doc).
-    let caught =
-        panic::catch_unwind(AssertUnwindSafe(|| ironhorse_compile::compile_with(source, false)));
+    let caught = panic::catch_unwind(AssertUnwindSafe(|| {
+        ironhorse_compile::compile_with(source, false)
+    }));
     match caught {
         Ok(Ok(bytes)) => Ok(Ok(bytes)),
         Ok(Err(e)) => Ok(Err(format!("{:?}", e))),

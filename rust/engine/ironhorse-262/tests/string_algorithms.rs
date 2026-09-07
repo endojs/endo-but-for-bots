@@ -207,14 +207,13 @@ fn index_of_missing_search_uses_undefined_despite_the_pinned_oracle_shortcut() {
     // The pinned XS oracle has an `argc < 1` shortcut returning -1; lock the
     // standards-correct IronHorse result without laundering that host bug into
     // the general oracle-agreement helper.
-    let run = dual_run("'undefined value'.indexOf()")
-        .expect("the XS oracle machine must start");
+    let run = dual_run("'undefined value'.indexOf()").expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete);
     assert_eq!(run.ironhorse_result, "0");
     assert_eq!(run.oracle_result, "-1");
 
-    let run = dual_run("'undefined value'.lastIndexOf()")
-        .expect("the XS oracle machine must start");
+    let run =
+        dual_run("'undefined value'.lastIndexOf()").expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete);
     assert_eq!(run.ironhorse_result, "0");
     assert_eq!(run.oracle_result, "-1");

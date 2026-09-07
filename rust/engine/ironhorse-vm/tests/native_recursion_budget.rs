@@ -224,7 +224,10 @@ fn every_forwarded_proxy_internal_method_is_bounded_for_an_index_key() {
         ("[[Get]]", "p[0]"),
         ("[[HasProperty]]", "0 in p"),
         ("[[Delete]]", "delete p[0]"),
-        ("[[GetOwnProperty]]", "Object.getOwnPropertyDescriptor(p, 0)"),
+        (
+            "[[GetOwnProperty]]",
+            "Object.getOwnPropertyDescriptor(p, 0)",
+        ),
         ("[[Get]] via Reflect", "Reflect.get(p, 0)"),
         ("[[HasProperty]] via Reflect", "Reflect.has(p, 0)"),
         ("[[Delete]] via Reflect", "Reflect.deleteProperty(p, 0)"),

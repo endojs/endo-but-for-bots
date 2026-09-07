@@ -26,11 +26,11 @@ use crate::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     resume_from_store_lazy, MachineSnapshot, StoreSession,
 };
+use crate::sha256::hex_sha256;
 use crate::store::{
     chunk_extent_count, derive_page_edges, export_to_container, root_hash, slot_page_count,
     store_to_image, HeapStore, SLOTS_PER_PAGE,
 };
-use crate::sha256::hex_sha256;
 use crate::Signature;
 use ironhorse_vm::{parse_symbols, Interp};
 
@@ -98,7 +98,9 @@ fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline
     Baseline {
         results,
         computrons,
-        final_blob: m.write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        final_blob: m
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
     }
 }
 
@@ -111,15 +113,18 @@ fn assert_agrees(
     final_blob: &[u8],
 ) {
     assert_eq!(
-        results, &baseline.results[..],
+        results,
+        &baseline.results[..],
         "[{scenario}/{variant}] per-crank results agree"
     );
     assert_eq!(
-        computrons, &baseline.computrons[..],
+        computrons,
+        &baseline.computrons[..],
         "[{scenario}/{variant}] per-crank computron vector agrees"
     );
     assert_eq!(
-        final_blob, &baseline.final_blob[..],
+        final_blob,
+        &baseline.final_blob[..],
         "[{scenario}/{variant}] final canonical blob agrees byte-for-byte"
     );
 }
@@ -132,14 +137,21 @@ fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<CrankResult>, Vec<u64>,
     let mut computrons = Vec::new();
     for (i, (bytecode, _)) in compiled.iter().enumerate() {
         if i > 0 {
-            let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
+            let bytes = m
+                .write_snapshot(&sig())
+                .expect("quiescent machine snapshots");
             m = from_snapshot_bytes(&bytes, &sig()).expect("blob resumes");
         }
         let o = m.run(bytecode);
         results.push(crank_result(&o));
         computrons.push(o.computrons);
     }
-    (results, computrons, m.write_snapshot(&sig()).expect("quiescent machine snapshots"))
+    (
+        results,
+        computrons,
+        m.write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+    )
 }
 
 /// How a store-backed variant resumes between cranks.
@@ -253,7 +265,14 @@ fn run_store<S: HeapStore + 'static>(
             "the adversarial-evict arm must actually evict"
         );
     }
-    (results, computrons, session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"))
+    (
+        results,
+        computrons,
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+    )
 }
 
 /// Variant 7: one surviving machine, checkpoint after every crank, one
@@ -284,7 +303,14 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     }
     drop(session);
     let resumed = resume_from_store_lazy(store.clone(), &sig()).expect("final lazy resume");
-    (results, computrons, resumed.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"))
+    (
+        results,
+        computrons,
+        resumed
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
+    )
 }
 
 fn metamorphic<S: HeapStore + 'static>(
@@ -363,7 +389,8 @@ fn carry<S: HeapStore + 'static>(
     for (i, crank) in cranks.iter().enumerate().skip(1) {
         let names = compile(crank).1;
         assert_eq!(
-            names, anchor,
+            names,
+            anchor,
             "{scenario} crank {} must intern exactly crank 1's program symbols, in order \
              (add the ones it is missing to the scenario's mention block)",
             i + 1
@@ -373,7 +400,11 @@ fn carry<S: HeapStore + 'static>(
 }
 
 pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
-    metamorphic(&mut fresh, "globals", &["var x = 5;", "x = x + 1;", "x + 10"]);
+    metamorphic(
+        &mut fresh,
+        "globals",
+        &["var x = 5;", "x = x + 1;", "x + 10"],
+    );
     metamorphic(
         &mut fresh,
         "strings",
@@ -575,7 +606,10 @@ pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut()
         // The two uncoercible completions: the engine completed, the
         // oracle harness's `String(result)` could not coerce the value.
         ("a Symbol completion", "let s = Symbol('k'); s"),
-        ("a null-prototype completion", "let s = Object.create(null); s"),
+        (
+            "a null-prototype completion",
+            "let s = Object.create(null); s",
+        ),
     ] {
         let (b1, n1) = compile(&format!(
             "{pre} let a = {{ p: 1 }}; let b = {{ q: 2 }}; g = b; {completion}"
@@ -586,7 +620,11 @@ pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut()
         let mut cont = Interp::new();
         cont.link_intrinsics(&n1);
         let o1 = cont.run(&b1);
-        assert!(cont.is_quiescent(), "{name}: crank 1 leaves a boundary ({:?})", o1.halt);
+        assert!(
+            cont.is_quiescent(),
+            "{name}: crank 1 leaves a boundary ({:?})",
+            o1.halt
+        );
 
         let store = Rc::new(RefCell::new(fresh()));
         let mut sleeper = Interp::new();
@@ -683,11 +721,17 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     assert_eq!(session.epoch(), 1);
     assert_eq!(
         store_to_image(store).unwrap(),
-        session.machine().snapshot_image(&sig()).expect("gated image")
+        session
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image")
     );
     assert_eq!(
         export_to_container(store).unwrap(),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "store export byte-equals the machine's own blob"
     );
 
@@ -696,15 +740,26 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     assert_eq!(epoch, 2);
     assert_eq!(
         store_to_image(store).unwrap(),
-        session.machine().snapshot_image(&sig()).expect("gated image")
+        session
+            .machine()
+            .snapshot_image(&sig())
+            .expect("gated image")
     );
     assert_eq!(
         export_to_container(store).unwrap(),
-        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots")
+        session
+            .machine()
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots")
     );
     assert_eq!(
         root_hash(store).unwrap(),
-        hex_sha256(&session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"))
+        hex_sha256(
+            &session
+                .machine()
+                .write_snapshot(&sig())
+                .expect("quiescent machine snapshots")
+        )
     );
     assert_edges_match_content(store);
 }
@@ -758,8 +813,11 @@ pub fn resume_equals_uninterrupted(store: &mut dyn HeapStore) {
 /// Two real-JS cranks with one shared anchored symbol set, compiled
 /// fresh (the checkpoint/resume acceptance fixtures).
 fn real_progs() -> Vec<(Vec<u8>, Vec<String>)> {
-    ["var a = { n: 1 }; var s = 'seed'; a.n + 1", "var a; s = s + '-more'; a.n = a.n + 2; a.n"]
-        .iter()
-        .map(|s| compile(s))
-        .collect()
+    [
+        "var a = { n: 1 }; var s = 'seed'; a.n + 1",
+        "var a; s = s + '-more'; a.n = a.n + 2; a.n",
+    ]
+    .iter()
+    .map(|s| compile(s))
+    .collect()
 }

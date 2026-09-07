@@ -71,7 +71,9 @@ fn fractional_length_truncates() {
 
 #[test]
 fn negative_length_throws_catchable_range_error() {
-    assert_result_agrees("try { new Uint8Array(-1); 'none' } catch (e) { e instanceof RangeError }");
+    assert_result_agrees(
+        "try { new Uint8Array(-1); 'none' } catch (e) { e instanceof RangeError }",
+    );
     assert_result_agrees(
         "try { new Int16Array(-Infinity); 'none' } catch (e) { e instanceof RangeError }",
     );
@@ -101,9 +103,7 @@ fn symbol_length_throws_catchable_type_error() {
 
 #[test]
 fn bigint_length_throws_catchable_type_error() {
-    assert_result_agrees(
-        "try { new Uint8Array(1n); 'none' } catch (e) { e instanceof TypeError }",
-    );
+    assert_result_agrees("try { new Uint8Array(1n); 'none' } catch (e) { e instanceof TypeError }");
 }
 
 #[test]

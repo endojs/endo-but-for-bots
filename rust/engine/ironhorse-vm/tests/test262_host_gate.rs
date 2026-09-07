@@ -52,7 +52,10 @@ fn a_default_machine_has_no_test262_host() {
     machine.link_intrinsics(&names);
     let outcome = machine.run(&bytecode);
     assert!(outcome.completed, "{:?}", outcome.halt);
-    assert_eq!(outcome.result, "undefined", "`$262` leaked into a default machine");
+    assert_eq!(
+        outcome.result, "undefined",
+        "`$262` leaked into a default machine"
+    );
 }
 
 #[test]

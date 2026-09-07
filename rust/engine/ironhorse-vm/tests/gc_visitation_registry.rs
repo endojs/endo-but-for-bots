@@ -36,7 +36,9 @@ const SRC: &str = include_str!("../src/interp.rs");
 /// The body (including braces) of the function that starts at the
 /// first occurrence of `marker`.
 fn fn_body(marker: &str) -> &'static str {
-    let i = SRC.find(marker).unwrap_or_else(|| panic!("marker not found: {marker}"));
+    let i = SRC
+        .find(marker)
+        .unwrap_or_else(|| panic!("marker not found: {marker}"));
     let j = i + SRC[i..].find('{').expect("fn body opens");
     let bytes = SRC.as_bytes();
     let mut depth = 0usize;
@@ -110,7 +112,9 @@ fn type_defs() -> BTreeMap<&'static str, String> {
         if name.is_empty() {
             continue;
         }
-        let Some(brace_rel) = SRC[name_end..].find(['{', ';', '(']) else { continue };
+        let Some(brace_rel) = SRC[name_end..].find(['{', ';', '(']) else {
+            continue;
+        };
         if SRC.as_bytes()[name_end + brace_rel] != b'{' {
             continue; // tuple struct / decl form — rare here, skip
         }
@@ -190,7 +194,10 @@ fn interp_fields() -> Vec<(String, String)> {
                 None => break,
             }
         }
-        out.push((name.to_string(), ty.trim().trim_end_matches(',').to_string()));
+        out.push((
+            name.to_string(),
+            ty.trim().trim_end_matches(',').to_string(),
+        ));
     }
     out
 }
@@ -382,13 +389,19 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     let defs = type_defs();
     let bearing_types = slot_bearing_types(&defs);
     let fields = interp_fields();
-    assert!(fields.len() > 140, "parse sanity: found {} fields", fields.len());
+    assert!(
+        fields.len() > 140,
+        "parse sanity: found {} fields",
+        fields.len()
+    );
 
     let is_bearing = |ty: &str| {
         mentions(ty, "Slot")
             || mentions(ty, "SlotIndex")
             || mentions(ty, "ChunkOffset")
-            || bearing_types.iter().any(|t| *t != "Interp" && mentions(ty, t))
+            || bearing_types
+                .iter()
+                .any(|t| *t != "Interp" && mentions(ty, t))
     };
 
     let slot_fields: Vec<&(String, String)> =
@@ -442,9 +455,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     let full_sweep = strip_comments(fn_body("pub fn collect_garbage(&mut self)"));
     let partial_sweep = strip_comments(fn_body("pub fn free_pages(&mut self, pages: &[u32])"));
 
-    let value_type_of = |name: &str| -> &str {
-        &fields.iter().find(|(n, _)| n == name).unwrap().1
-    };
+    let value_type_of = |name: &str| -> &str { &fields.iter().find(|(n, _)| n == name).unwrap().1 };
 
     let mut violations: Vec<String> = Vec::new();
     for (name, (reqs, _)) in &registry {

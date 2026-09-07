@@ -100,9 +100,13 @@ fn an_accessor_holding_an_intl_bound_function_persists() {
 #[test]
 fn a_heap_holding_only_the_boot_seed_accessor_persists() {
     let mut store = MemoryStore::new();
-    begin_store_session(machine_running("var t = 0; t = typeof Intl; 0;"), &sig(), &mut store)
-        .map_err(|(_, e)| e)
-        .expect("the boot-seeded accessor is re-derived at restore, not lost");
+    begin_store_session(
+        machine_running("var t = 0; t = typeof Intl; 0;"),
+        &sig(),
+        &mut store,
+    )
+    .map_err(|(_, e)| e)
+    .expect("the boot-seeded accessor is re-derived at restore, not lost");
 }
 
 /// A COLLECTED instance is no longer a hazard — the witness asks what
