@@ -1668,7 +1668,10 @@ const makeLivePolicy = async sidecarName => {
       openFiles: 1024,
       coreBytes: 0n,
       shmBytes: 16n * mib,
-      writableBytes: 112n * mib,
+      maxConcurrentOperations: 1,
+      // tmpfs-only, so every ceiling is per container: the anchor and
+      // the one operation each get their own.
+      writableBytes: (96n * mib + 16n * mib) * 2n,
     }),
     mounts: harden([
       harden({

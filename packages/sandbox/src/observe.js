@@ -56,18 +56,23 @@ export const parseNamespaceInode = target => {
 harden(parseNamespaceInode);
 
 /**
- * Report, for each namespace the profile constrains, whether the target
- * process holds a different one from this process.
+ * Report, for each namespace the profile constrains, which one the
+ * target process holds and whether it differs from this process's.
  *
- * A namespace link that cannot be read is reported as not unshared:
- * "we could not tell" and "it is shared" have the same safe collapse
- * here, because both leave the isolation unproved.
+ * A namespace link that cannot be read is reported as not unshared and
+ * without an identity: "we could not tell" and "it is shared" have the
+ * same safe collapse here, because both leave the isolation unproved.
+ *
+ * `unshared` says the namespace is not the observer's. It does not by
+ * itself say the namespace is nobody else's — that takes comparing the
+ * `id` against the other namespaces in play, which is why the id is
+ * reported rather than folded away into the boolean.
  *
  * @param {ProcReader} proc
  * @param {number} pid
- * @returns {Promise<{ user: boolean, pid: boolean, ipc: boolean, mount: boolean }>}
+ * @returns {Promise<Record<'user' | 'pid' | 'ipc' | 'mount', { id: string | null, unshared: boolean }>>}
  */
-export const readUnsharedNamespaces = async (proc, pid) => {
+export const readNamespaceIdentities = async (proc, pid) => {
   const entries = await Promise.all(
     Object.entries(NAMESPACE_FILES).map(async ([kind, file]) => {
       await null;
@@ -80,22 +85,29 @@ export const readUnsharedNamespaces = async (proc, pid) => {
         const theirsInode = parseNamespaceInode(theirs);
         return /** @type {const} */ ([
           kind,
-          mineInode !== null &&
-            theirsInode !== null &&
-            mineInode !== theirsInode,
+          harden({
+            id: theirsInode,
+            unshared:
+              mineInode !== null &&
+              theirsInode !== null &&
+              mineInode !== theirsInode,
+          }),
         ]);
       } catch {
-        return /** @type {const} */ ([kind, false]);
+        return /** @type {const} */ ([
+          kind,
+          harden({ id: null, unshared: false }),
+        ]);
       }
     }),
   );
   return harden(
-    /** @type {{ user: boolean, pid: boolean, ipc: boolean, mount: boolean }} */ (
+    /** @type {Record<'user' | 'pid' | 'ipc' | 'mount', { id: string | null, unshared: boolean }>} */ (
       Object.fromEntries(entries)
     ),
   );
 };
-harden(readUnsharedNamespaces);
+harden(readNamespaceIdentities);
 
 /**
  * Parse the interface names out of `/proc/<pid>/net/dev`.
@@ -346,21 +358,42 @@ export const readProcessStatus = async (proc, pid) => {
       ? BigInt(`0x${mask}`)
       : null;
   };
-  // `Uid:\t<real>\t<effective>\t<saved>\t<fs>`
-  const outsideUid = numericField('Uid', 2);
-  const outsideGid = numericField('Gid', 2);
-  if (outsideUid === null || outsideGid === null) {
+  // `Uid:\t<real>\t<effective>\t<saved>\t<fs>` — all four, because
+  // `setuid()` back to the real or the saved id needs no capability at
+  // all. A process whose effective id is 1000 while its saved id is 0
+  // is one call away from being root inside its user namespace, which
+  // is the identity a policy is not even allowed to ask for.
+  const outsideUids = [1, 2, 3, 4].map(field => numericField('Uid', field));
+  const outsideGids = [1, 2, 3, 4].map(field => numericField('Gid', field));
+  if (
+    outsideUids.some(value => value === null) ||
+    outsideGids.some(value => value === null)
+  ) {
     throw makeError(X`slice process identity is not readable`);
   }
   const [uidMap, gidMap] = await Promise.all([
     proc.readFile(`/proc/${pid}/uid_map`).then(parseIdMap, () => harden([])),
     proc.readFile(`/proc/${pid}/gid_map`).then(parseIdMap, () => harden([])),
   ]);
-  const uid = mapIdInward(uidMap, outsideUid);
-  const gid = mapIdInward(gidMap, outsideGid);
-  if (uid === null || gid === null) {
+  const uids = outsideUids.map(value =>
+    mapIdInward(uidMap, /** @type {number} */ (value)),
+  );
+  const gids = outsideGids.map(value =>
+    mapIdInward(gidMap, /** @type {number} */ (value)),
+  );
+  if (
+    uids.some(value => value === null) ||
+    gids.some(value => value === null)
+  ) {
     throw makeError(
-      X`slice process identity ${q(outsideUid)}:${q(outsideGid)} is outside the slice user namespace map`,
+      X`slice process identity ${q(outsideUids)}:${q(outsideGids)} is outside the slice user namespace map`,
+    );
+  }
+  const [uid] = /** @type {number[]} */ (uids);
+  const [gid] = /** @type {number[]} */ (gids);
+  if (uids.some(value => value !== uid) || gids.some(value => value !== gid)) {
+    throw makeError(
+      X`slice process holds more than one identity: uids ${q(uids)}, gids ${q(gids)}`,
     );
   }
   const noNewPrivs = numericField('NoNewPrivs', 1);

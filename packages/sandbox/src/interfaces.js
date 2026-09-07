@@ -121,6 +121,7 @@ const SlicePolicyRequestShape = M.splitRecord({
     openFiles: M.number(),
     coreBytes: M.nat(),
     shmBytes: M.nat(),
+    maxConcurrentOperations: M.number(),
     writableBytes: M.nat(),
   }),
   mounts: M.arrayOf(SlicePolicyMountShape),

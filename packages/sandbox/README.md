@@ -444,8 +444,13 @@ const slice = await E(sandbox).make({
       // `/dev/shm`: a writable path the runtime attaches whether or
       // not anyone asks, sized by its own flag rather than the table.
       shmBytes: 64n * 1024n ** 2n,
-      // shmBytes plus the mount table's ceilings, exactly.
-      writableBytes: 16n * 1024n ** 3n + 64n * 1024n ** 2n,
+      // Every ceiling above is applied *per container*, and the driver
+      // runs one container per spawn beside the anchor. This is what
+      // makes the aggregate below a number rather than a wish.
+      maxConcurrentOperations: 1,
+      // The volumes (shared: every container mounts the same storage)
+      // plus the tmpfs and shared-memory ceilings once per container.
+      writableBytes: 12n * 1024n ** 3n + (4n * 1024n ** 3n + 64n * 1024n ** 2n) * 2n,
     },
     // The whole mount table. `mounts` must be empty and there is no
     // scratch layer: an undeclared writable path is what this excludes.
@@ -496,6 +501,7 @@ files, cores — stay `number`.
 | no-new-privileges           | `/proc/<pid>/status` `NoNewPrivs:`           |
 | seccomp filter loaded       | `/proc/<pid>/status` `Seccomp:` mode         |
 | dropped capabilities        | `CapEff`, `CapPrm` and `CapBnd` all empty     |
+| uid / gid cannot be regained | real, saved and fs ids match the effective  |
 | no devices, no host binds   | resolved `Devices` and the mount table       |
 | memory, swap, pids, cpu     | resolved `HostConfig`, and cgroup v2         |
 | `/dev/shm` ceiling          | resolved `HostConfig.ShmSize`                |
@@ -525,9 +531,22 @@ uses, running the caller's `attestationArgv`.
 Attesting a live container rather than a created-but-unstarted one is
 what makes the namespace, identity, and interface checks answers from
 the kernel instead of the runtime's echo of its own flags.
-Because the prefix is one frozen array shared by the anchor and every
-operation, no spawn can run at a weaker configuration than the one that
-was proved.
+The anchor is re-inspected after those reads and must still be running
+at the same pid, so a command that did not in fact block cannot have
+its attestation read from whatever process inherited the pid.
+
+Every later operation is created from that same frozen prefix — and
+then inspected, before it starts, so its *resolved* configuration must
+fingerprint identically to the anchor's.
+Argv identity alone would be exactly the inference this module refuses;
+comparing what the runtime resolved catches a host whose cgroup
+delegation was revoked, or an engine upgrade that resolves a flag
+differently, between the slice being proved and the operation being
+admitted.
+What an operation does not get is its own kernel-state read: that was
+proved of the anchor and carries across on the runtime applying the
+same resolved configuration on the same host — a smaller step than
+trusting argv, and not the same as proving it again.
 
 ### What it does not cover
 
@@ -535,6 +554,16 @@ was proved.
   over the slice's own and the attestation says nothing about either,
   so an operator's `make()` must place no credential or proxy setting
   there.
+- **Kernel state per operation.** See above: an operation's resolved
+  configuration is compared to the anchor's, not re-read from the
+  kernel.
+- **Namespace privacy beyond this driver.** `procfs` answers "not the
+  observer's"; the driver additionally refuses a namespace another of
+  its live slices holds. Two slices under *different* daemons sharing
+  one namespace is not something either can see.
+- **`/dev/shm` mount options.** Its ceiling is read back; its
+  `nosuid` is not. `no-new-privileges` — which is proved — makes a
+  setuid binary written there grant nothing on exec.
 - **Anything inside the slice.** A pinned runtime's own inner sandbox,
   its per-command policy, and what it does with its state are that
   runtime's guarantees, not this one's; the outer slice bounds what a

@@ -8,6 +8,7 @@ import {
   attestSlicePolicy,
   brokerNetworkArg,
   parseByteSize,
+  sliceConfigFingerprint,
   SLICE_POLICY_ATTESTATION_VERSION,
 } from '../src/policy.js';
 
@@ -37,7 +38,11 @@ const makeRequest = (overrides = {}) =>
       openFiles: 4096,
       coreBytes: 0n,
       shmBytes: 64n * MIB,
-      writableBytes: 16n * GIB + 64n * MIB,
+      maxConcurrentOperations: 1,
+      // Volumes are shared storage every container mounts (12 GiB);
+      // the tmpfs entries and /dev/shm are per container, so they count
+      // for the anchor and for the one operation.
+      writableBytes: 12n * GIB + (4n * GIB + 64n * MIB) * 2n,
     }),
     mounts: harden([
       harden({
@@ -132,6 +137,21 @@ const makeInspect = mutate => {
 };
 
 /**
+ * Namespace identities the kernel reports for a compliant anchor: each
+ * distinct from the observer's, each with a readable identity.
+ *
+ * @param {Record<string, unknown>} [overrides]
+ */
+const makeNamespaces = (overrides = {}) =>
+  harden({
+    user: harden({ id: 'user-4026532100', unshared: true }),
+    pid: harden({ id: 'pid-4026532101', unshared: true }),
+    ipc: harden({ id: 'ipc-4026532102', unshared: true }),
+    mount: harden({ id: 'mnt-4026532103', unshared: true }),
+    ...overrides,
+  });
+
+/**
  * Per-process posture the kernel reports for a compliant anchor.
  *
  * @param {Record<string, unknown>} [overrides]
@@ -157,12 +177,7 @@ const makeState = (overrides = {}) =>
   harden({
     inspect: makeInspect(),
     rootless: true,
-    unsharedNamespaces: harden({
-      user: true,
-      pid: true,
-      ipc: true,
-      mount: true,
-    }),
+    namespaces: makeNamespaces(),
     network: harden({
       namespaceId: 'net-4026532567',
       brokerNamespaceId: 'net-4026532567',
@@ -170,9 +185,9 @@ const makeState = (overrides = {}) =>
       routableRoutes: 0,
     }),
     processIdentity: makeIdentity(),
-    volumeQuotas: new Map([
-      ['workspace-s1', 8n * GIB],
-      ['codex-state-s1', 4n * GIB],
+    volumes: new Map([
+      ['workspace-s1', { sizeBytes: 8n * GIB, hostPath: null }],
+      ['codex-state-s1', { sizeBytes: 4n * GIB, hostPath: null }],
     ]),
     resources: harden({
       cgroupControllers: harden(['cpu', 'io', 'memory', 'pids']),
@@ -236,7 +251,7 @@ test('a request rejects a writable ceiling its mounts do not add up to', t => {
         ...request,
         resources: { ...request.resources, writableBytes: 32n * GIB },
       }),
-    { message: /does not equal the sum of its writable paths/ },
+    { message: /does not equal what its writable paths add up to/ },
   );
 });
 
@@ -272,7 +287,7 @@ test('a request rejects a duplicated destination', t => {
         ],
         resources: {
           ...request.resources,
-          writableBytes: 17n * GIB + 64n * MIB,
+          writableBytes: 12n * GIB + (5n * GIB + 64n * MIB) * 2n,
         },
       }),
     { message: /destination .* is duplicated/ },
@@ -398,7 +413,8 @@ test('an observed slice attests every control', t => {
       openFiles: 4096,
       coreBytes: 0n,
       shmBytes: 64n * MIB,
-      writableBytes: 16n * GIB + 64n * MIB,
+      maxConcurrentOperations: 1,
+      writableBytes: 12n * GIB + (4n * GIB + 64n * MIB) * 2n,
     },
   );
   t.deepEqual(
@@ -436,26 +452,12 @@ const unprovedStates = [
   ],
   [
     'a shared pid namespace',
-    {
-      unsharedNamespaces: harden({
-        user: true,
-        pid: false,
-        ipc: true,
-        mount: true,
-      }),
-    },
+    { namespaces: makeNamespaces({ pid: { id: 'pid-1', unshared: false } }) },
     /pid namespace/,
   ],
   [
     'a shared user namespace',
-    {
-      unsharedNamespaces: harden({
-        user: false,
-        pid: true,
-        ipc: true,
-        mount: true,
-      }),
-    },
+    { namespaces: makeNamespaces({ user: { id: null, unshared: true } }) },
     /user namespace/,
   ],
   [
@@ -681,15 +683,19 @@ const unprovedStates = [
   ],
   [
     'a volume with no recorded quota',
-    { volumeQuotas: new Map([['codex-state-s1', 4n * GIB]]) },
+    {
+      volumes: new Map([
+        ['codex-state-s1', { sizeBytes: 4n * GIB, hostPath: null }],
+      ]),
+    },
     /mount workspace storage ceiling/,
   ],
   [
     'a volume whose quota is not the declared one',
     {
-      volumeQuotas: new Map([
-        ['workspace-s1', 64n * GIB],
-        ['codex-state-s1', 4n * GIB],
+      volumes: new Map([
+        ['workspace-s1', { sizeBytes: 64n * GIB, hostPath: null }],
+        ['codex-state-s1', { sizeBytes: 4n * GIB, hostPath: null }],
       ]),
     },
     /mount workspace storage ceiling/,
@@ -791,8 +797,81 @@ test('the writable total counts the shared-memory ceiling too', t => {
         // Exactly the mount-table sum, which now leaves shmBytes
         // uncovered — the aggregate must account for every writable
         // path, not only the ones in the table.
-        resources: { ...request.resources, writableBytes: 16n * GIB },
+        resources: {
+          ...request.resources,
+          // The mount table's own sum, which now leaves both the
+          // shared-memory ceiling and the second container uncovered.
+          writableBytes: 16n * GIB,
+        },
       }),
-    { message: /does not equal the sum of its writable paths/ },
+    { message: /does not equal what its writable paths add up to/ },
   );
+});
+
+test('a volume that is really a host bind is refused, not attested', t => {
+  const policy = assertSlicePolicyRequest(makeRequest());
+  // `podman volume create --opt device=/home/agent --opt o=bind` makes
+  // something the runtime reports as Type: 'volume', so the mount
+  // table's "no host binds" rule walks straight past it — and the
+  // attestation would stamp hostHome: 'none' over the operator's home.
+  t.throws(
+    () =>
+      attestSlicePolicy(
+        policy,
+        makeState({
+          volumes: new Map([
+            [
+              'workspace-s1',
+              { sizeBytes: 8n * GIB, hostPath: '/home/operator' },
+            ],
+            ['codex-state-s1', { sizeBytes: 4n * GIB, hostPath: null }],
+          ]),
+        }),
+      ),
+    { message: /backed by the host path/ },
+  );
+});
+
+test('a request rejects a netns path that could name a second network', t => {
+  const request = makeRequest();
+  // A runtime that reads `--network` as a comma-separated list would
+  // attach the slice to a network the policy never named.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest({
+        ...request,
+        brokerSidecar: { netnsPath: '/run/netns/broker-s1,podman' },
+      }),
+    { message: /absolute normal path/ },
+  );
+});
+
+test('a mount label is quoted once, not twice', t => {
+  const request = makeRequest();
+  t.throws(
+    () =>
+      assertSlicePolicyRequest({
+        ...request,
+        mounts: [
+          { ...request.mounts[2], surprise: 1 },
+          ...request.mounts.slice(3),
+        ],
+      }),
+    { message: /^slice policy "mount tmp" has unknown or missing fields/ },
+  );
+});
+
+test('the fingerprint ignores key order but not configuration', t => {
+  const one = makeInspect();
+  const other = makeInspect(record => {
+    // Same configuration, serialized with its keys the other way round.
+    record.HostConfig = Object.fromEntries(
+      Object.entries(record.HostConfig).reverse(),
+    );
+  });
+  t.is(sliceConfigFingerprint(one), sliceConfigFingerprint(other));
+  const weaker = makeInspect(record => {
+    record.HostConfig.PidsLimit = 0;
+  });
+  t.not(sliceConfigFingerprint(one), sliceConfigFingerprint(weaker));
 });
