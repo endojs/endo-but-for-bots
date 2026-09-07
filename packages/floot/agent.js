@@ -1852,15 +1852,36 @@ const REGISTRY_JOURNAL_DEPTH = 4;
 const VOICE_PREFS_NAME = 'floot-voice-preferences';
 
 // Only these keys are accepted from a client and mirrored to the petstore, each
-// coerced to its expected type. Anything else (or a non-finite number) is
-// dropped, so a malformed client can't poison the stored preferences. The TTS
-// capability still validates values against its own ranges at synthesis time.
+// held to its expected type. Anything else is dropped, so a malformed client
+// can't poison the stored preferences. The TTS capability still validates
+// values against its own ranges at synthesis time.
 const VOICE_PREF_NUMERIC_KEYS = harden([
   'speed',
   'noiseScale',
   'noiseW',
   'sentenceSilence',
 ]);
+// Piper voice ids run to a few dozen characters; anything longer is not one.
+const MAX_VOICE_ID_LENGTH = 128;
+
+/**
+ * A finite number, or a non-blank string that parses as one (a form control's
+ * value); anything else is `undefined`. Not `Number()` alone: '' and null
+ * would read as 0, true as 1, an array as its element, and a symbol throws.
+ *
+ * @param {unknown} value
+ * @returns {number | undefined}
+ */
+const finiteNumberOf = value => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+};
 
 /**
  * @param {unknown} input
@@ -1871,15 +1892,16 @@ const sanitizeVoicePrefs = input => {
   const clean = {};
   if (input && typeof input === 'object') {
     const prefs = /** @type {Record<string, unknown>} */ (input);
-    if (typeof prefs.voice === 'string') {
+    if (
+      typeof prefs.voice === 'string' &&
+      prefs.voice.length <= MAX_VOICE_ID_LENGTH
+    ) {
       clean.voice = prefs.voice;
     }
     for (const key of VOICE_PREF_NUMERIC_KEYS) {
-      if (prefs[key] !== undefined) {
-        const value = Number(prefs[key]);
-        if (Number.isFinite(value)) {
-          clean[key] = value;
-        }
+      const value = finiteNumberOf(prefs[key]);
+      if (value !== undefined) {
+        clean[key] = value;
       }
     }
   }
@@ -2257,36 +2279,58 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return result;
   };
 
-  // Whole-Floot voice/TTS preferences, kept in the factory's own petstore like
-  // the registry (lazy load, serialized remove-then-store writes). A single
-  // small record, so it needs none of the registry's journaling.
+  // Whole-Floot voice/TTS preferences, kept in the factory's own petstore. A
+  // single small record: `storeValue` overwrites a pet name in place, so a
+  // write is one atomic store and needs none of the registry's journaling. The
+  // load is memoized on its promise and every read-merge-write runs on one
+  // chain, so two devices changing different knobs at once both land, and the
+  // in-memory copy only ever reflects what the petstore holds.
   /** @type {Record<string, string | number> | undefined} */
   let voicePrefs;
-  const loadVoicePrefs = async () => {
-    if (voicePrefs) return voicePrefs;
-    const stored = await E(powers).has(VOICE_PREFS_NAME);
-    if (!stored) {
-      voicePrefs = {};
-      return voicePrefs;
+  /** @type {Promise<Record<string, string | number>> | undefined} */
+  let voicePrefsLoadP;
+  const loadVoicePrefs = () => {
+    if (voicePrefs) return Promise.resolve(voicePrefs);
+    if (!voicePrefsLoadP) {
+      voicePrefsLoadP = (async () => {
+        const stored = await E(powers).has(VOICE_PREFS_NAME);
+        if (!stored) {
+          voicePrefs = {};
+          return voicePrefs;
+        }
+        const record = await E(powers).lookup(VOICE_PREFS_NAME);
+        voicePrefs = sanitizeVoicePrefs(record);
+        return voicePrefs;
+      })().catch(error => {
+        voicePrefsLoadP = undefined;
+        throw error;
+      });
     }
-    const record = await E(powers).lookup(VOICE_PREFS_NAME);
-    voicePrefs = sanitizeVoicePrefs(record);
-    return voicePrefs;
+    return voicePrefsLoadP;
   };
+  /** @type {Promise<void>} */
   let voicePrefsWrite = Promise.resolve();
-  const saveVoicePrefs = () => {
-    const snapshot = harden({ ...(voicePrefs || {}) });
+  /**
+   * Merge an already-sanitized patch into the stored record and persist it.
+   *
+   * @param {Record<string, string | number>} patch
+   * @returns {Promise<Record<string, string | number>>} the persisted record
+   */
+  const updateVoicePrefs = patch => {
     const result = voicePrefsWrite.then(async () => {
-      await null;
-      if (await E(powers).has(VOICE_PREFS_NAME)) {
-        await E(powers).remove(VOICE_PREFS_NAME);
-      }
-      await E(powers).storeValue(snapshot, VOICE_PREFS_NAME);
+      const current = await loadVoicePrefs();
+      const next = { ...current, ...patch };
+      await E(powers).storeValue(harden({ ...next }), VOICE_PREFS_NAME);
+      voicePrefs = next;
+      return harden({ ...next });
     });
     // Preserve the rejection for the caller while keeping later writes possible.
-    voicePrefsWrite = result.catch(error => {
-      console.error('[floot-factory] voice preferences save failed:', error);
-    });
+    voicePrefsWrite = result.then(
+      () => undefined,
+      error => {
+        console.error('[floot-factory] voice preferences save failed:', error);
+      },
+    );
     return result;
   };
 
@@ -3273,10 +3317,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      * @returns {Promise<Record<string, string | number>>}
      */
     async setVoicePreferences(prefs) {
-      const current = await loadVoicePrefs();
-      voicePrefs = { ...current, ...sanitizeVoicePrefs(prefs) };
-      await saveVoicePrefs();
-      return harden({ ...voicePrefs });
+      return updateVoicePrefs(sanitizeVoicePrefs(prefs));
     },
 
     /**
@@ -3374,7 +3415,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         getVoicePreferences:
           'getVoicePreferences() — Return the whole-Floot voice/TTS preferences {voice?, speed?, noiseScale?, noiseW?, sentenceSilence?} shared across sessions and devices; empty when never set.',
         setVoicePreferences:
-          'setVoicePreferences(prefs) — Merge and persist whole-Floot voice/TTS preferences (unrecognized keys and non-numeric numbers are dropped); returns the merged set.',
+          'setVoicePreferences(prefs) — Merge and persist whole-Floot voice/TTS preferences: voice must be a string, the numeric knobs numbers (or numeric strings); anything else is dropped. Returns the persisted set.',
       };
       return docs[methodName] || `No documentation for method "${methodName}".`;
     },
