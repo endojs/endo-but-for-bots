@@ -1327,6 +1327,32 @@ fn the_promise_cluster_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn async_activations_survive_sqlite_sleep_cycles() {
+    for (name, settlement, expected) in [
+        ("async-fulfill", "release(5); 'released'", "21:finally"),
+        ("async-reject", "reject('no'); 'released'", "caught:no:finally"),
+    ] {
+        let last = run_scenario(
+            name,
+            &[
+                "var release, reject, next, result = '', trace = ''; \
+                 var gate = new Promise((r, j) => { release = r; reject = j; }); \
+                 async function f(x) { \
+                   try { x += await gate; x += await new Promise(r => { next = r; }); return x; } \
+                   catch (e) { return 'caught:' + e; } \
+                   finally { trace += 'finally'; } \
+                 } \
+                 f(7).then(v => { result = v; }); 'pending'",
+                settlement,
+                "if (next) { next(9); } 'continued'",
+                "result + ':' + trace",
+            ],
+        );
+        assert_eq!(last, expected);
+    }
+}
+
+#[test]
 fn a_custom_capability_executor_survives_sqlite_sleep_cycles() {
     let last = run_scenario(
         "promise-capability-executor",

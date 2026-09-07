@@ -29,7 +29,7 @@ fn incompatible_legacy_boot_store_is_rejected_before_adoption() {
     let mut store = SqliteHeapStore::open(&path).expect("open old store");
     match migrate_store(&mut store, &signature()) {
         Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
-        Ok(false) => {}
+        Ok(false) => panic!("legacy schema 23 requires migration"),
         Err(other) => panic!("legacy boot migration refused incorrectly: {other:?}"),
         Ok(true) => panic!("legacy boot layout must not be restamped"),
     }
@@ -41,8 +41,11 @@ fn incompatible_legacy_boot_store_is_rejected_before_adoption() {
     );
 
     let store = SqliteHeapStore::open(&path).expect("reopen old store");
+    // The schema-23 fixture is now older than the writer. Read-only resume
+    // names that gap before the signature check; migration above must still
+    // reject the incompatible boot signature without changing any bytes.
     match resume_from_store(&store, &signature()) {
-        Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
+        Err(StoreError::NeedsMigration { found: 23 }) => {}
         Err(other) => panic!("legacy boot refused for the wrong reason: {other:?}"),
         Ok(_) => panic!("legacy boot layout must not reach arena adoption"),
     }

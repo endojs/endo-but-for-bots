@@ -137,3 +137,43 @@ fn frozen_intrinsic_surfaces_and_deleted_symbols_survive_restore() {
     assert_eq!(crank(&mut machine, probe), crank(&mut resumed, probe));
     assert_eq!(crank(&mut resumed, "Object.isFrozen(Array.prototype)").0, "true");
 }
+
+#[test]
+fn closures_sharing_bytecode_resume_after_blob_and_store_checkpoints() {
+    let signature = Signature::new("shared-closure-frames");
+    for (source, observation) in [
+        (
+            "var release, result; var gate = new Promise(r => { release = r; }); \
+             function factory(x) { return async function () { return x + await gate; }; } \
+             var a = factory(1), b = factory(2); \
+             Promise.all([a(), b()]).then(values => { result = values.join(':'); });",
+            "release(5);",
+        ),
+        (
+            "function factory(x) { return function* () { return x + (yield); }; } \
+             var a = factory(1), b = factory(2), ai = a(), bi = b(), result; \
+             ai.next(); bi.next();",
+            "result = ai.next(5).value + ':' + bi.next(5).value;",
+        ),
+    ] {
+        let mut continuous = Interp::new();
+        crank(&mut continuous, source);
+        let mut checkpointed = Interp::new();
+        crank(&mut checkpointed, source);
+        let bytes = checkpointed.write_snapshot(&signature).unwrap();
+        let mut blob = from_snapshot_bytes(&bytes, &signature).unwrap();
+        let mut store = MemoryStore::new();
+        drop(
+            begin_store_session(checkpointed, &signature, &mut store)
+                .map_err(|(_, error)| error)
+                .unwrap(),
+        );
+        let mut stored = resume_from_store(&store, &signature).unwrap();
+        for source in [observation, "result"] {
+            let expected = crank(&mut continuous, source);
+            assert_eq!(crank(&mut blob, source), expected);
+            assert_eq!(crank(stored.machine_mut(), source), expected);
+        }
+        assert_eq!(crank(&mut continuous, "result").0, "6:7");
+    }
+}

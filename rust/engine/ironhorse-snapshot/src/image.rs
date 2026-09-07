@@ -4109,7 +4109,13 @@ pub(crate) fn check_image_slot_bounds(
                     ) else {
                         continue;
                     };
-                    if start >= body_start && end <= body_end {
+                    // Distinct closures of the same function share this exact
+                    // body range. They are peers, not nested functions, and
+                    // must not erase each other's valid resume cursors.
+                    if start >= body_start
+                        && end <= body_end
+                        && (start != body_start || end != body_end)
+                    {
                         set.retain(|&pc| pc < start || pc >= end);
                     }
                 }
