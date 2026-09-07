@@ -1,35 +1,30 @@
 # Ratchet refresh snapshot — 2026-09-04 (round 2)
 
-The authoritative whole-corpus totals **measured at the head of the round-2
-`feat/ironhorse-test262-compliance-ratchet` PR** (endojs/endo-but-for-bots#1113),
-produced by `scripts/full-run.sh --jobs 14` (oracle on, whole `test/**` tree)
-against the pinned corpus (`../../TEST262_REVISION`, `tc39/test262@be13516fb644`)
-and Moddable XS oracle (`23b4d6b0a65f`, XS 8.3.1) — the same pins as the
-2026-08-29 refresh in [`../refresh-20260829/`](../refresh-20260829/).
+This is the historical whole-corpus measurement at
+`54e438c8d1d03664fca8caba0d925a1191a9b2dd`, retained as the round-2 comparison
+snapshot for PR #1113.
+It was produced with `scripts/full-run.sh --jobs 14` (oracle on), against
+`tc39/test262@be13516fb6441b950ba8a3df97eb34062c186972` and Moddable XS
+`23b4d6b0a65f` (XS 8.3.1).
+The provenance commit predates the final iterator fix and the September 7 rebase.
+These totals do not describe the current PR head or certify a zero-failure merge.
 
-Provenance sha is the engine commit the sweep ran on
-(`baseline.json` `provenance.endo_sha`); the only commit after it on this branch
-is the one that adds this snapshot (no engine change), so these totals describe
-the tree that would merge. It replaces the PR's earlier `refresh-20260901`
-snapshot (30,232 covered), which was measured two engine-mutating commits below
-its own head and never lands; this re-measures at the true head after this
-round's panel fixes.
+The covered paths remain comparison evidence against the
+[August 29 snapshot](../refresh-20260829/).
+Floor comparisons are performed manually; no CI job consumes this `covered.txt`.
+Historical snapshots remain in-tree to make those comparisons reproducible.
+A new run must distinguish engine regressions from changes to the runner's verdict
+policy and must investigate timeout differences rather than automatically dismiss them.
+The current base reports unexpected throws as conformance failures and escaped
+internal control flow as engine failures, where this historical runner recorded skips.
 
-This snapshot is the **ratchet floor**, under these invariants:
-
-1. **No path in [`covered.txt`](./covered.txt) may regress.**
-2. **[`baseline.json`](./baseline.json)'s `failures` list is the complete
-   permitted `ironhorse-failure` set** (empty here); any new entry is a
-   regression unless a demonstrated oracle/harness cause reattributes it to
-   infrastructure.
-3. The exact-metering corpus stays passing — `cargo test -p ironhorse-262`,
-   which drives `--gate-meter-exact` over the dual-run suites under
-   [`../../tests/`](../../tests/) (the fixtures were consolidated there; there
-   is no `cases/` directory).
+Result agreement in the differential suites is separate from the exact-metering
+contracts in the [test suites](../../tests/).
+A passing result-only test does not establish computron agreement.
 
 ## What this round changed
 
-The round-2 branch resolved the 21 conformance failures the fresh before-sweep
+The measured round-2 branch resolved the 21 conformance failures the fresh before-sweep
 found at the branch point (llm @ `97d8de25da`), then closed the round-1 and
 round-2 jury panels. The engine changes, each locked by a dual-run suite:
 
@@ -39,7 +34,7 @@ round-2 jury panels. The engine changes, each locked by a dual-run suite:
 - **Uncatchable native-validation TypeErrors** — an `ironhorse-aborted`
   wrong-throw class (not a `Fail`): sixteen native argument/descriptor sites
   escaped as bare host `Halt::Throw`, now raised through the catchable chain
-  (`catchable_type_error_with_message`). Lock:
+  (`catchable_type_error_with_message` in the measured tree). Lock:
   [`../../tests/not_callable_caught_raise.rs`](../../tests/not_callable_caught_raise.rs).
 - **Three inherited floor regressions** (descriptor `ToBoolean`, generic-walk
   id-space exhaustion, TypedArray-from-array snapshot). Lock:
@@ -61,16 +56,16 @@ round-2 jury panels. The engine changes, each locked by a dual-run suite:
   `native_mxtry_boundary.rs`.
 
 The remaining 7 of the 21 branch-point failures were
-`RegExp/property-escapes/generated/*` `ironhorse-hang` classifications — wall-clock
-non-terminations of a contended sweep, not engine defects; the per-case timeout
-(`cfg.per_case_timeout_seconds`) reclassifies rather than regresses them, and
-this refresh's `--jobs 14` run records zero failures over that subtree.
+`RegExp/property-escapes/generated/*` `ironhorse-hang` classifications.
+This refresh's `--jobs 14` run records zero failures over that subtree.
+The before-run used 16 jobs, so these observations alone do not isolate contention
+from an engine change or establish a per-case timing bound.
 
 ### The `ironhorse-aborted` skip family
 
-`OracleOnlyComplete` (ironhorse aborted where the oracle completed) is split by
-halt kind so `report.json` ranks the backlog by root cause. The **emittable**
-tokens are:
+In the measured tree, `OracleOnlyComplete` (ironhorse aborted where the oracle
+completed) was split by
+halt kind so `report.json` ranks the backlog by root cause. The tokens emitted by that historical runner were:
 
 - `ironhorse-aborted:wrong-throw:<ctor>` — a behavioral divergence (ironhorse
   threw where the oracle completed);
