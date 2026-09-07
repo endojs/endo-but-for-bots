@@ -2075,7 +2075,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           await assertSessionReady(id);
           const current = turns.getCurrent();
           if (!current) return null;
-          return harden({ ...current, history: await current.history });
+          return current;
         },
         async getHistory() {
           await assertSessionReady(id);

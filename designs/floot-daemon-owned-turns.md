@@ -100,8 +100,10 @@ Recovery history is the baseline captured inside the serialized execution chain,
 before the turn starts (including earlier mail).
 It excludes the current turn even while its durable commit awaits acknowledgement;
 observers combine this baseline with the prompt and turn snapshot.
-Recovering a queued UI turn waits for earlier mail to finish before this baseline
-can be captured.
+Discovery returns the turn handle immediately, with a separate history promise.
+A queued turn can be observed or cancelled while earlier mail is still running.
+The view reconciles cached observations by daemon turn identity and retires obsolete
+streams without cancelling execution.
 
 ## Validation
 
@@ -110,6 +112,9 @@ execution completion after stream termination, slot retention, and factory-level
 recovery and history persistence after a view disconnect.
 Chat component tests exercise active and non-active deletion, last-session deletion,
 late events, cancellation reporting, and recovery of a turn absent from browser memory.
+Real CapTP tests disconnect and reconnect serialized transports, recover turn identity
+and snapshots, and cancel before a queued history promise resolves.
+Shared-view regressions cover retiring stale handles and waiting for replacement turns.
 
 ## Prompt
 

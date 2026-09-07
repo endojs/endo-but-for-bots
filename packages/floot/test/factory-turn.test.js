@@ -127,7 +127,7 @@ test('factory facets retain disconnected turns, commit history, and provision de
   await ackStarted;
   t.false((await E(turn).getStatus()).done);
   t.is((await E(session).getHistory()).length, 2);
-  t.deepEqual((await E(session).getCurrentTurn()).history, []);
+  t.deepEqual(await (await E(session).getCurrentTurn()).history, []);
   releaseAck();
   await E(turn).whenFinished();
   t.is(await E(session).getCurrentTurn(), null);

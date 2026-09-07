@@ -44,6 +44,7 @@
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/captp": "workspace:^",
     "@endo/cli": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@endo/workflow": "workspace:^",
