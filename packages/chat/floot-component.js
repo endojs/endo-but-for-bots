@@ -710,7 +710,21 @@ export const flootComponent = (
     const session = getActiveSession();
     const liveTurn = session ? liveTurnFor(session.id) : null;
     const base = session ? session.messages : [];
-    const allMessages = liveTurn ? [...base, ...liveTurn.messages] : base;
+    const sent = liveTurn ? [...base, ...liveTurn.messages] : base;
+    // Queued submissions render after the live turn's output: they run after
+    // it, and hiding them until then reads as a swallowed message. The view
+    // lifts them out by `pending` and puts them below the thinking indicator.
+    const queued = session
+      ? queuedSends
+          .filter(q => q.sessionId === session.id)
+          .map(q => ({
+            role: /** @type {const} */ ('user'),
+            text: q.text,
+            pending: true,
+            pendingId: q.id,
+          }))
+      : [];
+    const allMessages = [...sent.map(toViewMessage), ...queued];
     return harden({
       sessions: sessions.map(s => ({
         id: s.id,
@@ -736,7 +750,7 @@ export const flootComponent = (
         description: m.description,
         default: m.default,
       })),
-      messages: allMessages.map(toViewMessage),
+      messages: allMessages,
       streamingText: liveTurn ? liveTurn.streamingText : '',
       phase: liveTurn ? liveTurn.phase : '',
       busy: Boolean(liveTurn),
@@ -772,6 +786,35 @@ export const flootComponent = (
   let cancelled = false;
   let busy = false;
   let turnCancelled = false;
+  // Submissions accepted while a turn is still running (typed mid-stream, or a
+  // voice utterance after a soft barge-in) queue on submitChain. They must stay
+  // VISIBLE while queued: submit() clears the compose box immediately, and the
+  // optimistic session push only happens once the queued turn actually starts,
+  // so without this the message vanishes until the prior turn finishes.
+  //
+  // The queue is per-mount, unlike the turn registry above, which deliberately
+  // survives unmount. Leaving the space therefore drops whatever had not run
+  // yet, while the turn it was queued behind keeps going — the pre-existing
+  // behaviour, now more visible because the message looked accepted. Making it
+  // survive means holding the queue beside `inFlightTurns`; until then, a
+  // message queued behind a long turn is only as durable as the tab.
+  /** @type {Array<{ id: number, sessionId: string, text: string }>} */
+  let queuedSends = [];
+  let nextQueuedSendId = 1;
+
+  /**
+   * Forget a queued placeholder. Reports whether it was still there, so the
+   * caller can repaint only when something actually changed.
+   *
+   * @param {number} id 0 for "no placeholder was made"
+   * @returns {boolean}
+   */
+  const dropQueued = id => {
+    if (!id || !queuedSends.some(q => q.id === id)) return false;
+    queuedSends = queuedSends.filter(q => q.id !== id);
+    return true;
+  };
+
   /** @type {FlootTurn | null} */
   let activeTurn = null;
   // Detaches this component's view from the active turn without stopping it
@@ -940,10 +983,17 @@ export const flootComponent = (
     });
   };
 
-  const runConverse = async (/** @type {string} */ text) => {
+  /**
+   * @param {string} text
+   * @param {number} [queuedId] the placeholder this turn is running, if any
+   */
+  const runConverse = async (text, queuedId = 0) => {
     let session = getActiveSession();
     if (!session) session = await createSession();
 
+    // The queued placeholder is superseded by the optimistic session push
+    // below — the same text, now part of the running turn's transcript.
+    dropQueued(queuedId);
     session.messages.push({ role: 'user', text });
     // Sending a message is an explicit "follow along" intent — re-stick.
     stick = true;
@@ -987,36 +1037,92 @@ export const flootComponent = (
     const text = (raw || '').trim();
     if (!text) return submitChain;
     inputText = '';
-    notify();
     const submittedSessionId = activeSessionId;
+    // Stand a placeholder up now, so the message is visible for as long as it
+    // waits. Without an active session nothing is queued ahead of it, so it
+    // dispatches straight away and needs none.
+    let queuedId = 0;
+    if (submittedSessionId) {
+      queuedId = nextQueuedSendId;
+      nextQueuedSendId += 1;
+      queuedSends.push({ id: queuedId, sessionId: submittedSessionId, text });
+    }
+    notify();
     submitChain = submitChain.then(async () => {
-      // A shared observation can be superseded while we await its completion.
-      // Join the replacement view and turn too before dispatching queued input.
-      for (;;) {
-        const ready = viewReady;
-        // eslint-disable-next-line no-await-in-loop
-        await ready;
-        if (
-          cancelled ||
-          (submittedSessionId && activeSessionId !== submittedSessionId)
-        )
-          return;
-        const previous = turnPromise;
-        // eslint-disable-next-line no-await-in-loop
-        if (previous) await previous;
-        if (
-          cancelled ||
-          (submittedSessionId && activeSessionId !== submittedSessionId)
-        )
-          return;
-        if (ready === viewReady && previous === turnPromise) break;
+      try {
+        // A shared observation can be superseded while we await its completion.
+        // Join the replacement view and turn too before dispatching queued
+        // input.
+        for (;;) {
+          const ready = viewReady;
+          // eslint-disable-next-line no-await-in-loop
+          await ready;
+          if (
+            cancelled ||
+            (submittedSessionId && activeSessionId !== submittedSessionId)
+          )
+            return;
+          const previous = turnPromise;
+          // eslint-disable-next-line no-await-in-loop
+          if (previous) await previous;
+          if (
+            cancelled ||
+            (submittedSessionId && activeSessionId !== submittedSessionId)
+          )
+            return;
+          if (ready === viewReady && previous === turnPromise) break;
+        }
+        // Read the text back off the placeholder at the moment the turn starts,
+        // rather than closing over what was typed: a queued message can be
+        // edited or deleted while it waits, and the edit has to be what
+        // actually runs. A missing placeholder means it was deleted — skip the
+        // turn entirely.
+        let queuedText = text;
+        if (queuedId) {
+          const queued = queuedSends.find(q => q.id === queuedId);
+          if (!queued) return;
+          queuedText = queued.text;
+        }
+        turnPromise = runConverse(queuedText, queuedId).catch(error => {
+          if (!cancelled) setStatus(`error: ${error.message}`);
+        });
+        await turnPromise;
+      } finally {
+        // However this entry exits — deleted, superseded session, or the turn
+        // having adopted it — the placeholder must not outlive it.
+        if (dropQueued(queuedId) && !cancelled) notify();
       }
-      turnPromise = runConverse(text).catch(error => {
-        if (!cancelled) setStatus(`error: ${error.message}`);
-      });
-      await turnPromise;
     });
     return submitChain;
+  };
+
+  /**
+   * Rewrite a queued submission while it waits. No effect once its turn has
+   * started: the placeholder is gone by then.
+   *
+   * @param {number} id
+   * @param {string} raw
+   */
+  const editPending = (id, raw) => {
+    const text = (raw || '').trim();
+    // An empty edit is a no-op rather than a delete: deleting has its own
+    // button, and losing a message by clearing the box would be a surprising
+    // way to lose one.
+    if (!text) return;
+    if (!queuedSends.some(q => q.id === id)) return;
+    queuedSends = queuedSends.map(q => (q.id === id ? { ...q, text } : q));
+    notify();
+  };
+
+  /**
+   * Drop a queued submission before it runs. Its chain entry is already
+   * scheduled, so removing the placeholder is what cancels it: the entry finds
+   * nothing and skips its turn.
+   *
+   * @param {number} id
+   */
+  const cancelPending = id => {
+    if (dropQueued(id)) notify();
   };
 
   // ── Session actions (controller callbacks) ──────────────────────────────────
@@ -1247,12 +1353,31 @@ export const flootComponent = (
         ? `${pendingUtterance} ${text}`
         : text;
     }
+    // The recognizer's last result can land after the mic was switched off —
+    // the audio reader closes, and the final arrives behind it. A torn-down
+    // utterance neither repopulates the compose box nor arms a send: turning
+    // the mic off mid-sentence means "not that", not "send it in a second".
+    if (!micActive) {
+      pendingUtterance = '';
+      inputText = '';
+      notify();
+      return;
+    }
+    // Keep the buffered utterance visible in the compose box for the whole
+    // grace window. Blanking it made recognized speech vanish for about a
+    // second before it sent, which reads as a swallowed message.
+    inputText = pendingUtterance;
+    notify();
     if (resumeTimer) clearTimeout(resumeTimer);
     if (!pendingUtterance) return;
     resumeTimer = window.setTimeout(() => {
       resumeTimer = 0;
-      const full = pendingUtterance.trim();
       pendingUtterance = '';
+      // The buffer has been sitting in the compose box as ordinary editable
+      // text for the whole grace window, so the box IS the buffer: a correction
+      // typed there is what sends, and clearing it cancels the send. Sending
+      // what was recognized instead would silently discard the edit.
+      const full = inputText.trim();
       if (full) submit(full);
     }, VAD.RESUME_GRACE_MS);
   };
@@ -1319,13 +1444,14 @@ export const flootComponent = (
     silenceStart = 0;
     const tooShort = Date.now() - speechStart < VAD.MIN_SPEECH_MS;
     if (tooShort) {
-      // A blip below the minimum-speech duration — discard as noise.
+      // A blip below the minimum-speech duration — discard as noise, but keep
+      // any buffered continuation visible rather than blanking the box.
       if (channel)
         E(channel.reader)
           .return()
           .catch(() => {});
       channel = null;
-      inputText = '';
+      inputText = pendingUtterance;
       notify();
       return;
     }
@@ -1460,11 +1586,14 @@ export const flootComponent = (
     if (rafId) cancelAnimationFrame(rafId);
     rafId = 0;
     abortUtterance();
-    // Drop any buffered voice continuation that never got sent.
+    // Drop any buffered voice continuation that never got sent — including its
+    // compose-box mirror, so no orphaned text lingers after the mic is off. A
+    // box the user has since typed into is theirs, and is left alone.
     if (resumeTimer) {
       clearTimeout(resumeTimer);
       resumeTimer = 0;
     }
+    if (pendingUtterance && inputText === pendingUtterance) inputText = '';
     pendingUtterance = '';
     if (processor) processor.onaudioprocess = null;
     try {
@@ -1645,6 +1774,26 @@ export const flootComponent = (
     },
     stop() {
       cancelTurn();
+    },
+    // Queue-jump for the pending submission at the head of the queue. It is
+    // already scheduled on submitChain directly behind the turn in flight, so
+    // "send now" is precisely "cut that turn short": cancelling releases it.
+    //
+    // Only the head. Every entry runs the message it was scheduled with, so
+    // cancelling on behalf of a LATER one would end a turn that is not in front
+    // of it — throwing away that reply — and still leave it waiting. The view
+    // offers the control on the head row alone; this is the check that makes
+    // that a rule rather than a convention.
+    sendPendingNow(/** @type {number} */ id) {
+      const head = queuedSends.find(q => q.sessionId === activeSessionId);
+      if (!busy || !head || head.id !== id) return;
+      cancelTurn();
+    },
+    editPending(/** @type {number} */ id, /** @type {string} */ text) {
+      editPending(id, text);
+    },
+    cancelPending(/** @type {number} */ id) {
+      cancelPending(id);
     },
     selectSession(/** @type {string} */ id) {
       selectSession(id);
