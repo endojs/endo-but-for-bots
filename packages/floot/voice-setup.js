@@ -24,6 +24,8 @@
 // FLOOT_STT_ENABLE=0) and wrapped so a missing `uv`/model or a moonshine warmup
 // failure only skips STT rather than aborting TTS.
 
+import { existsSync } from 'node:fs';
+
 import { E } from '@endo/eventual-send';
 
 const audioCapletSpecifier = new URL(
@@ -51,7 +53,7 @@ const pickEnv = (...names) => {
 // Interpret an env flag as a boolean; unset (undefined) is decided by the
 // caller's default.
 const isTruthy = value =>
-  !['0', 'false', 'no', 'off'].includes(String(value).toLowerCase());
+  !['0', 'false', 'no', 'off'].includes(String(value).trim().toLowerCase());
 
 /**
  * Stand up (or replace) the floot-tts and (optionally) floot-stt caplets.
@@ -82,6 +84,12 @@ export const main = async agent => {
     console.warn(
       'Floot voice: no FLOOT_TTS_MODEL (or ENDO_FLOOT_TTS_MODEL); skipping TTS.',
     );
+  } else if (!existsSync(ttsModel) || !existsSync(`${ttsModel}.json`)) {
+    // Check before removing the existing caplet: the new one would fail to
+    // stand up over a missing model, leaving no TTS at all.
+    console.warn(
+      `Floot voice: TTS model ${ttsModel} or its .onnx.json is missing; leaving "${dir}/tts" as it is.`,
+    );
   } else {
     if (await E(agent).has(dir, 'tts')) {
       await E(agent).remove(dir, 'tts');
@@ -105,7 +113,9 @@ export const main = async agent => {
   // which may be unavailable on a headless host. Contain a failure to STT so it
   // never takes down the already-provisioned TTS half.
   if (!sttEnabled) {
-    console.log('Floot voice: STT disabled (FLOOT_STT_ENABLE=0); skipping.');
+    console.log(
+      'Floot voice: STT disabled (FLOOT_STT_ENABLE / ENDO_FLOOT_STT_ENABLE is off); skipping.',
+    );
   } else {
     try {
       if (await E(agent).has(dir, 'stt')) {
