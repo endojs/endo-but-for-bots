@@ -16,9 +16,11 @@
 // come. The client drops the earlier stream, and the branch feeding it closes
 // with it.
 
+import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { passStyleOf } from '@endo/pass-style';
 
 /** @import { BufferedReaderKit } from '@endo/exo-stream' */
 /** @import { TurnStatus, TurnViewEvent } from './session-turn.js' */
@@ -52,11 +54,42 @@ const saidSoFar = status => {
   return `${completed}${status.streamingText}`;
 };
 
+/** @param {string} text */
+const collapse = text => text.replace(/\s+/g, ' ').trim();
+
 /**
- * Fold the view's events into text-wire events. Tracks the assistant text
- * streamed for the current message so a `final` that merely restates the
- * deltas is not spoken twice, while one that arrives with no deltas at all (a
- * backend that reports only a final answer) is.
+ * What a `final` adds to the text already spoken, if anything. A final that
+ * restates spoken text — the current message's, or the whole turn's, as a
+ * backend that accumulates its final across tool rounds reports it — adds
+ * nothing; one with no deltas before it at all (a backend that reports only a
+ * final answer) is spoken whole. Whitespace is collapsed for the comparison:
+ * message separators and trimmed line ends differ between the two sides.
+ *
+ * @param {string} final
+ * @param {string} spoken everything spoken this turn
+ * @param {string} streamed the current message as streamed so far
+ * @returns {string}
+ */
+const unspokenOf = (final, spoken, streamed) => {
+  const finalText = collapse(final);
+  if (!finalText) return '';
+  const spokenText = collapse(spoken);
+  if (spokenText.endsWith(finalText)) return '';
+  if (finalText.startsWith(spokenText)) {
+    return finalText.slice(spokenText.length);
+  }
+  const streamedText = collapse(streamed);
+  if (finalText.startsWith(streamedText)) {
+    return finalText.slice(streamedText.length);
+  }
+  // A final that revises what streamed cannot be unsaid; it is left to the
+  // transcript rather than spoken twice.
+  return '';
+};
+
+/**
+ * Fold the view's events into text-wire events, so that each character the
+ * turn says reaches the wire exactly once.
  *
  * @param {AsyncIterable<unknown>} view
  * @param {(event: SpeechTextEvent) => void} push
@@ -65,6 +98,17 @@ const feedView = async (view, push) => {
   // The current assistant message as streamed so far. A tool round ends the
   // message; the text after it is a new one.
   let streamed = '';
+  // Everything spoken so far this turn (see unspokenOf).
+  let spoken = '';
+  /** @param {string} text */
+  const say = text => {
+    spoken += text;
+    push({ type: 'delta', text });
+  };
+  // A view opened on a turn already over ends on a synthetic terminal. An
+  // error the turn ended on is old news to a replay: its text is final and
+  // worth hearing to the end, not cut off at the first sentence.
+  let finishedAtOpen = false;
   await null;
   try {
     for await (const raw of view) {
@@ -72,23 +116,19 @@ const feedView = async (view, push) => {
       switch (event.type) {
         case 'snapshot': {
           const opening = saidSoFar(event.status);
-          if (opening) push({ type: 'delta', text: opening });
+          if (opening) say(opening);
           streamed = event.status.streamingText;
+          finishedAtOpen = event.status.done === true;
           break;
         }
         case 'delta': {
           streamed += event.text;
-          push({ type: 'delta', text: event.text });
+          say(event.text);
           break;
         }
         case 'final': {
-          // Speak only what the final text adds to what already streamed. A
-          // final that revises the streamed text cannot be unsaid; it is
-          // left to the transcript.
-          if (event.text.startsWith(streamed)) {
-            const rest = event.text.slice(streamed.length);
-            if (rest) push({ type: 'delta', text: rest });
-          }
+          const rest = unspokenOf(event.text, spoken, streamed);
+          if (rest) say(rest);
           streamed = event.text;
           break;
         }
@@ -104,7 +144,11 @@ const feedView = async (view, push) => {
           return;
         }
         case 'abort': {
-          push({ type: 'abort', reason: event.reason });
+          if (finishedAtOpen) {
+            push({ type: 'end' });
+          } else {
+            push({ type: 'abort', reason: event.reason });
+          }
           return;
         }
         default:
@@ -145,10 +189,15 @@ export const speakTurn = async ({ watch, ttsServer, ttsOptions = {} }) => {
       view.return().catch(() => {});
     },
   });
-  const audioReaderP = E(ttsServer).synthesize(
-    text.reader,
-    harden({ ...ttsOptions }),
-  );
+  const audioReaderP = E(ttsServer)
+    .synthesize(text.reader, harden({ ...ttsOptions }))
+    .then((/** @type {unknown} */ audioReader) => {
+      // The turn's guard refuses a non-remotable to the caller; refuse it
+      // here too, so the view is released along with it.
+      passStyleOf(audioReader) === 'remotable' ||
+        Fail`synthesize must return an audio reader, got ${q(audioReader)}`;
+      return audioReader;
+    });
   // Synthesis that never starts leaves nobody to drain the text wire. Release
   // the view rather than feed it a whole reply; the caller sees the rejection.
   audioReaderP.catch(() => text.close());

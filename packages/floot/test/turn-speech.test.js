@@ -278,3 +278,102 @@ test('speaking a finished turn replays it', async t => {
     { type: 'end' },
   ]);
 });
+
+test('a final restating text spoken before a tool round is not spoken again', async t => {
+  const { ttsServer, textReaders } = makeFakeTts();
+
+  // A backend whose final repeats the message completed before its last tool
+  // round (no text followed the tool result).
+  const repeated = makeDrivenView();
+  await speakTurn({ watch: () => repeated.view.reader, ttsServer });
+  repeated.view.push({ type: 'snapshot', status: emptyStatus });
+  repeated.view.push({ type: 'delta', text: 'The answer is 42. ' });
+  repeated.view.push({ type: 'tool_call', id: 't1', name: 'Read', args: '{}' });
+  repeated.view.push({
+    type: 'tool_result',
+    id: 't1',
+    name: 'Read',
+    result: 'x',
+  });
+  repeated.view.push({ type: 'final', text: 'The answer is 42.' });
+  repeated.view.push({ type: 'end' });
+  t.deepEqual(await collect(textReaders[0]), [
+    { type: 'delta', text: 'The answer is 42. ' },
+    { type: 'delta', text: '\n' },
+    { type: 'end' },
+  ]);
+
+  // A backend that accumulates its final across tool rounds.
+  const accumulated = makeDrivenView();
+  await speakTurn({ watch: () => accumulated.view.reader, ttsServer });
+  accumulated.view.push({ type: 'snapshot', status: emptyStatus });
+  accumulated.view.push({ type: 'delta', text: 'Checking. ' });
+  accumulated.view.push({
+    type: 'tool_call',
+    id: 't1',
+    name: 'Read',
+    args: '{}',
+  });
+  accumulated.view.push({ type: 'delta', text: 'Found it.' });
+  accumulated.view.push({ type: 'final', text: 'Checking. Found it.' });
+  accumulated.view.push({ type: 'end' });
+  t.deepEqual(await collect(textReaders[1]), [
+    { type: 'delta', text: 'Checking. ' },
+    { type: 'delta', text: '\n' },
+    { type: 'delta', text: 'Found it.' },
+    { type: 'end' },
+  ]);
+
+  // The same, viewed from a snapshot taken after the tool round.
+  const late = makeDrivenView();
+  await speakTurn({ watch: () => late.view.reader, ttsServer });
+  late.view.push({
+    type: 'snapshot',
+    status: {
+      ...emptyStatus,
+      messages: [
+        { role: 'assistant', text: 'Checking.' },
+        { role: 'tool', id: 't1', name: 'Read', args: '{}', result: 'x' },
+      ],
+    },
+  });
+  late.view.push({ type: 'final', text: 'Checking.' });
+  late.view.push({ type: 'end' });
+  t.deepEqual(await collect(textReaders[2]), [
+    { type: 'delta', text: 'Checking.\n' },
+    { type: 'end' },
+  ]);
+});
+
+test('speaking a turn that ended in an error plays its text to the end', async t => {
+  const driven = makeDrivenTurn();
+  driven.writer().delta('Some partial answer that was said.');
+  driven.writer().abort('provider failed');
+  driven.settle();
+  await E(driven.turn).whenFinished();
+  t.like(await E(driven.turn).getStatus(), { error: 'provider failed' });
+
+  const { ttsServer, textReaders } = makeFakeTts();
+  await E(driven.turn).speak(ttsServer);
+  const events = await collect(textReaders[0]);
+  t.is(events.length, 2);
+  t.regex(events[0].text, /^Some partial answer that was said\./);
+  // The synthetic terminal of a finished turn ends the wire cleanly, rather
+  // than aborting synthesis before the first sentence is out.
+  t.deepEqual(events[1], { type: 'end' });
+});
+
+test('a synthesize that yields no audio reader rejects and releases the view', async t => {
+  const ttsServer = Far('OddTtsServer', {
+    synthesize() {
+      return harden({ not: 'an audio reader' });
+    },
+  });
+  const { view, closed } = makeDrivenView();
+  await t.throwsAsync(
+    () => speakTurn({ watch: () => view.reader, ttsServer }),
+    { message: /must return an audio reader/ },
+  );
+  await until(closed);
+  t.true(closed());
+});
