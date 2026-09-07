@@ -22,6 +22,10 @@ edition = "2021"
 license = "Apache-2.0"
 publish = false
 
+# Guest-influenced arithmetic must not silently wrap in shipped builds.
+[profile.release]
+overflow-checks = true
+
 # Incremental W0 gate: only warning families observed with Rust 1.88.0
 # are grandfathered. New default Clippy warnings fail CI via -D warnings;
 # remove these named allowances as each family is cleaned up.

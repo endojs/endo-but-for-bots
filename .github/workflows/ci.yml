@@ -740,10 +740,18 @@ jobs:
   # needing a docs-only-style mirror workflow. Pushes to master always
   # run the full job.
   test-ironhorse:
-    name: test-ironhorse
+    name: ${{ matrix.check }}
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: debug
+            check: test-ironhorse
+          - profile: release
+            check: test-ironhorse-release
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -783,18 +791,29 @@ jobs:
             ~/.cargo/git
             target
             rust/engine/target
-          key: ${{ runner.os }}-ironhorse-${{ hashFiles('Cargo.lock', 'rust/engine/Cargo.lock') }}
+          key: ${{ runner.os }}-ironhorse-${{ matrix.profile }}-${{ hashFiles('Cargo.lock', 'rust/engine/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-ironhorse-
+            ${{ runner.os }}-ironhorse-${{ matrix.profile }}-
 
       - name: Test ironhorse engine crates (rust/engine workspace)
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
-        run: cargo test --locked -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp
+        env:
+          RUST_MIN_STACK: '33554432'
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
 
       - name: Test SQLite heap-store backend (root workspace)
         if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
-        run: cargo test -p ironhorse-store-sqlite
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
 
   # The oracle-linked ironhorse crate suites (ironhorse-compile,
   # ironhorse-regexp, ironhorse-262's bounded fixtures, and the fuzz
