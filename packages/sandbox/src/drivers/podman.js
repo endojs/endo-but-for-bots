@@ -1987,13 +1987,26 @@ export const makePodmanDriver = ({
       /** @type {import('child_process').ChildProcess} */
       let child;
       try {
+        // Rootless podman locates its storage, runtime state, and operator
+        // configuration through these variables. Passing PATH alone can make
+        // this process look in a different store than `prepareSlice`, yielding
+        // an opaque exit 127 even though the container is running.
+        const podmanEnv = Object.fromEntries(
+          [
+            ['PATH', process.env.PATH ?? '/usr/bin:/bin'],
+            ['HOME', process.env.HOME],
+            ['XDG_RUNTIME_DIR', process.env.XDG_RUNTIME_DIR],
+            ['XDG_CONFIG_HOME', process.env.XDG_CONFIG_HOME],
+            ['CONTAINERS_CONF', process.env.CONTAINERS_CONF],
+          ].filter(([, value]) => value !== undefined),
+        );
         child = cp.spawn('podman', startArgv, {
           stdio: [
             'pipe',
             opts.captureStdout === false ? 'ignore' : 'pipe',
             opts.captureStderr === false ? 'ignore' : 'pipe',
           ],
-          env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+          env: podmanEnv,
         });
       } catch (e) {
         await removeOperation();

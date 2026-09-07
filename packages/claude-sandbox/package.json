@@ -18,6 +18,7 @@
   "exports": {
     ".": "./factory.js",
     "./setup-host.js": "./setup-host.js",
+    "./setup-hosted.js": "./setup-hosted.js",
     "./setup-peer.js": "./setup-peer.js",
     "./factory.js": "./factory.js",
     "./credentials.js": "./credentials.js",
@@ -32,6 +33,7 @@
     "test:live": "ava test/live-daemon.test.js --timeout=180s",
     "test:ninep": "ava test/ninep-flow.test.js --timeout=180s",
     "setup:host": "endo run --UNCONFINED setup-host.js --powers @agent",
+    "setup:hosted": "endo run --UNCONFINED setup-hosted.js --powers @agent",
     "setup:peer": "endo run --UNCONFINED setup-peer.js --powers @agent",
     "factory": "endo run --UNCONFINED factory.js --powers @agent",
     "credentials": "endo run --UNCONFINED credentials.js --powers @agent",
