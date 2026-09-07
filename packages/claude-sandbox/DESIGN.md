@@ -324,7 +324,9 @@ Stream-json → `ReplyEvent` normalisation:
   `claude -p`, so partial tool side-effects already written to the workspace
   persist (a "dirtier" stop).
 - **Streaming granularity.** API yields true token deltas; claude-code yields
-  coarser structured-event deltas. Both map onto `delta`/`tool_call`.
+  them too, now that the CLI runs with `--include-partial-messages` (the
+  complete assistant records that follow are deduplicated by message id).
+  Both map onto `delta`/`tool_call`.
 - **Auth.** Both take a `ClaudeCredentials` cap. Container injects it as env
   (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`); API threads it into the
   provider. Uniform at the cap boundary.

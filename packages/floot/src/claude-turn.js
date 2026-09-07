@@ -74,9 +74,17 @@ export const makeClaudeEventTranslator = writer => {
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
   let usage;
   // With `--include-partial-messages`, text arrives first as Anthropic
-  // content-block deltas and is repeated in the following complete assistant
-  // event. Track whether this message was already emitted so the UI/TTS branches
-  // receive each character exactly once.
+  // content-block deltas and is repeated in the complete assistant event(s)
+  // for the same message (the CLI emits one assistant record per content
+  // block). Remember which messages streamed — by the id `message_start`
+  // announces and assistant records carry — so the UI/TTS branches receive
+  // each character exactly once whatever order the records interleave in (a
+  // thinking-only record between a message's deltas and its text record, say).
+  // The boolean is the fallback for a wire without message ids.
+  /** @type {string | undefined} */
+  let streamingMessageId;
+  /** @type {Set<string>} */
+  const streamedMessageIds = new Set();
   let streamedCurrentAssistant = false;
 
   const handle = event => {
@@ -90,13 +98,20 @@ export const makeClaudeEventTranslator = writer => {
       }
       case 'stream_event': {
         const streamEvent = event.event;
-        if (
+        if (streamEvent?.type === 'message_start') {
+          const id = streamEvent.message?.id;
+          streamingMessageId = typeof id === 'string' ? id : undefined;
+          streamedCurrentAssistant = false;
+        } else if (
           streamEvent?.type === 'content_block_delta' &&
           streamEvent.delta?.type === 'text_delta' &&
           streamEvent.delta.text
         ) {
           const text = `${streamEvent.delta.text}`;
           streamed += text;
+          if (streamingMessageId !== undefined) {
+            streamedMessageIds.add(streamingMessageId);
+          }
           streamedCurrentAssistant = true;
           w.delta(text);
         }
@@ -105,9 +120,14 @@ export const makeClaudeEventTranslator = writer => {
       case 'assistant': {
         const blocks = event.message?.content;
         if (!Array.isArray(blocks)) break;
+        const messageId = event.message?.id;
+        const alreadyStreamed =
+          typeof messageId === 'string'
+            ? streamedMessageIds.has(messageId)
+            : streamedCurrentAssistant;
         for (const block of blocks) {
           if (block?.type === 'text' && block.text) {
-            if (!streamedCurrentAssistant) {
+            if (!alreadyStreamed) {
               streamed += `${block.text}`;
               w.delta(`${block.text}`);
             }
