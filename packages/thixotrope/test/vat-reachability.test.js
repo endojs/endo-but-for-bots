@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
+import { createHash } from 'node:crypto';
 
 import { inspectVatReachability } from '../src/vat-reachability.js';
 
@@ -78,7 +79,7 @@ test('remote sessions explain connected and retained disconnected roots', t => {
   t.deepEqual(report.workers[0].roots, [
     {
       kind: 'remote-session',
-      session: 'peer',
+      session: `session:${createHash('sha256').update('peer').digest('hex')}`,
       connected: true,
       durable: false,
     },
@@ -86,7 +87,7 @@ test('remote sessions explain connected and retained disconnected roots', t => {
   t.deepEqual(report.workers[1].roots, [
     {
       kind: 'remote-session',
-      session: 'offline',
+      session: `session:${createHash('sha256').update('offline').digest('hex')}`,
       connected: false,
       durable: true,
     },
@@ -265,4 +266,33 @@ test('a pending gift waiter retains its callback owner until the hub releases th
       .collectible,
     ['a', 'b', 'c'],
   );
+});
+
+test('external session fingerprints hide resumption tokens in roots and reference holders', t => {
+  const token = 'peer:bearer-resumption-token';
+  const fingerprint = `session:${createHash('sha256').update(token).digest('hex')}`;
+  const report = inspectVatReachability({
+    workers,
+    endpointExports: {},
+    connectedSessions: [token],
+    hubState: {
+      refs: { external: ref('a', [token]), internal: ref('b', ['a']) },
+      sessions: { [token]: { durable: true } },
+    },
+  });
+  t.false(JSON.stringify(report).includes(token));
+  t.false(JSON.stringify(report).includes('bearer-resumption-token'));
+  t.is(report.workers[0].roots[0].session, fingerprint);
+  t.true(report.workers[0].roots[0].connected);
+  t.true(report.workers[0].roots[0].durable);
+  t.true(
+    report.references.some(
+      edge => edge.holder === fingerprint && edge.target === 'a',
+    ),
+  );
+  t.true(
+    report.references.some(edge => edge.holder === 'a' && edge.target === 'b'),
+  );
+  t.deepEqual(report.collectible, ['c']);
+  t.deepEqual(report.workers[1].path, ['a', 'b']);
 });

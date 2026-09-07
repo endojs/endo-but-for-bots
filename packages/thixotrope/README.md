@@ -570,6 +570,8 @@ waking guest vats; `thix collect ./private-state` retires currently collectible 
 The JSON report contains each worker's diagnostic label, awake state, direct roots,
 one path from a root, and the cross-session references used by collection.
 Publication roots never reveal their secrets.
+External session identifiers appear as SHA256 fingerprints so bearer resumption tokens
+are not exposed.
 Both commands use the same graph through `daemon.inspectReachability({ keep })`.
 The embedder's `keep` option can explicitly retain known worker ids for a collection.
 
