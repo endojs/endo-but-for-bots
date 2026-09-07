@@ -48081,9 +48081,11 @@ impl Interp {
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
         let boolean = self.truthy(&result);
         if !boolean {
-            if let Some(d) =
-                self.mop_get_own_property_read(code, target, ReadKey::Index(index))?
-            {
+            // The trap may have NAMED this index, promoting it to an ordinary
+            // slot the index arm cannot see; refresh or the invariant check is
+            // silently skipped.
+            let key_id = self.refresh_read_key(ReadKey::Index(index));
+            if let Some(d) = self.mop_get_own_property_read(code, target, key_id)? {
                 if d.configurable == Some(false) {
                     return Err(self.catchable_type_error());
                 }
@@ -51620,6 +51622,10 @@ impl Interp {
         if trap_result.kind != Kind::Undefined && trap_result.kind != Kind::Reference {
             return Err(self.catchable_type_error());
         }
+        // The trap may have named this index mid-flight (see
+        // `refresh_read_key`); a stale `Index` would miss the very property
+        // the invariant check exists to find.
+        let key_id = self.refresh_read_key(key_id);
         let target_desc = self.mop_get_own_property_read(code, target, key_id)?;
         if trap_result.kind == Kind::Undefined {
             match target_desc {
@@ -51850,11 +51856,13 @@ impl Interp {
         let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver]);
         self.array_iterator_proxy_get_context = saved_context;
         let trap_result = trap_result?;
-        // Naming the key back to the target, deferred past the trap (which may
-        // itself have interned it). Asked by INDEX when the table still has no
-        // name for it: an array / TypedArray / String-wrapper / proxy target
-        // answers out of its side table, so `new Proxy([], handler)[i]` needs
-        // no name either.
+        // Ask the target by INDEX when the table still has no name for it: an
+        // array / TypedArray / String-wrapper / proxy target answers out of
+        // its side table, so `new Proxy([], handler)[i]` needs no name. But
+        // the trap has just run and may itself have NAMED this index —
+        // promoting it to an ordinary slot the index arm cannot see — so
+        // refresh first, or the invariant check is silently skipped.
+        let key_id = self.refresh_read_key(key_id);
         if let Some(d) = self.mop_get_own_property_read(code, target, key_id)? {
             if d.configurable == Some(false) {
                 if d.is_data()
@@ -51946,6 +51954,10 @@ impl Interp {
         if !self.truthy(&result) {
             return Ok(false);
         }
+        // The trap may have named this index mid-flight (see
+        // `refresh_read_key`); a stale `Index` would miss the very property
+        // the invariant check exists to find.
+        let key_id = self.refresh_read_key(key_id);
         let target_desc = self.mop_get_own_property_read(code, target, key_id)?;
         match target_desc {
             None => Ok(true),
