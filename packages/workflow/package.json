@@ -36,6 +36,7 @@
     "./src/simulate.js": "./src/simulate.js",
     "./src/graph.js": "./src/graph.js",
     "./src/sync.js": "./src/sync.js",
+    "./setup.js": "./setup.js",
     "./package.json": "./package.json"
   },
   "scripts": {
