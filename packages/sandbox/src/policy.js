@@ -25,9 +25,16 @@
  * from the request would restate the intent. Every field below is
  * therefore derived from observation, and anything unobserved, absent,
  * or in an unrecognized shape throws rather than attesting: the safe
- * collapse for "the runtime reported something we do not understand" is
- * "this control is not proved", which fails provisioning, never
- * "provisioning succeeded under an unverified control".
+ * collapse for "what we read back does not make sense to us" is "this
+ * control is not proved", which fails provisioning, never "provisioning
+ * succeeded under an unverified control".
+ *
+ * Where the kernel answers for the live process directly — seccomp mode,
+ * no-new-privileges, the effective capability mask, the namespace links,
+ * the interface inventory, the identity inside the user namespace — that
+ * is the answer used, because a container runtime reports the
+ * configuration it was handed rather than the one that took effect, and
+ * on the controls it disables by default it reports nothing at all.
  *
  * Byte quantities are `bigint`. Linux expresses cgroup ceilings as
  * unsigned 64-bit quantities, so a `number` would advertise
@@ -515,7 +522,7 @@ const unproved = (control, saw) => {
   throw saw === undefined
     ? makeError(X`slice policy control ${q(control)} is not enforced`)
     : makeError(
-        X`slice policy control ${q(control)} is not enforced; runtime reported ${q(saw)}`,
+        X`slice policy control ${q(control)} is not enforced; observed ${q(saw)}`,
       );
 };
 
@@ -777,25 +784,25 @@ export const attestSlicePolicy = (policy, state) => {
   if (observed(inspect, 'HostConfig.ReadonlyRootfs') !== true) {
     return unproved('read-only root');
   }
-  const securityOpts = observed(inspect, 'HostConfig.SecurityOpt');
-  const securityOptList = Array.isArray(securityOpts)
-    ? securityOpts.map(String)
-    : [];
-  if (!securityOptList.some(option => option.startsWith('no-new-privileges'))) {
-    return unproved('no-new-privileges', securityOptList.join(' '));
+  // The three per-process privilege controls all have a kernel answer
+  // for the live anchor, so none of them is taken from the runtime's
+  // report of its own configuration. That report is not merely weaker:
+  // an engine whose defaults already disable seccomp says nothing about
+  // it in `SecurityOpt` at all, so reading the flag list would attest a
+  // filter nobody loaded.
+  if (state.processIdentity.noNewPrivs !== true) {
+    return unproved('no-new-privileges', state.processIdentity.noNewPrivs);
   }
-  // Seccomp is the one posture control the runtime's own report cannot
-  // settle: a host whose engine defaults to an unconfined profile says
-  // nothing about it in `SecurityOpt` at all. The kernel's answer for
-  // the live process is whether a filter is loaded.
   if (state.processIdentity.seccompMode !== SECCOMP_MODE_FILTER) {
     return unproved('seccomp', state.processIdentity.seccompMode);
   }
-  // An empty effective capability set is the kernel's answer, not the
-  // `--cap-drop ALL` we asked for.
-  const effectiveCaps = observed(inspect, 'EffectiveCaps');
-  if (!Array.isArray(effectiveCaps) || effectiveCaps.length !== 0) {
-    return unproved('dropped capabilities', effectiveCaps);
+  if (state.processIdentity.effectiveCapabilities !== 0n) {
+    return unproved(
+      'dropped capabilities',
+      state.processIdentity.effectiveCapabilities === null
+        ? null
+        : `0x${state.processIdentity.effectiveCapabilities.toString(16)}`,
+    );
   }
   const devices = observed(inspect, 'HostConfig.Devices');
   if (!Array.isArray(devices) || devices.length !== 0) {

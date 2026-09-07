@@ -141,7 +141,7 @@ const PROC_FILES = harden({
   [`/proc/${ANCHOR_PID}/net/ipv6_route`]:
     '00000000000000000000000000000001 80 00000000000000000000000000000000 00 00000000000000000000000000000000 00000000 00000001 00000001 80200001 lo\n',
   [`/proc/${ANCHOR_PID}/status`]:
-    'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nSeccomp:\t2\n',
+    'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nNoNewPrivs:\t1\nSeccomp:\t2\nCapEff:\t0000000000000000\n',
   [`/proc/${ANCHOR_PID}/uid_map`]: '         0     100000      65536\n',
   [`/proc/${ANCHOR_PID}/gid_map`]: '         0     100000      65536\n',
 });
@@ -528,7 +528,7 @@ test('a slice whose kernel loaded no seccomp filter fails construction', async t
     // only the kernel says whether a filter is actually loaded.
     procfs: makeProcfs({
       [`/proc/${ANCHOR_PID}/status`]:
-        'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nSeccomp:\t0\n',
+        'Uid:\t101000\t101000\t101000\t101000\nGid:\t101000\t101000\t101000\t101000\nNoNewPrivs:\t1\nSeccomp:\t0\nCapEff:\t0000000000000000\n',
     }),
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {

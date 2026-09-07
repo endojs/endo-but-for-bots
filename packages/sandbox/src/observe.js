@@ -258,7 +258,8 @@ harden(SECCOMP_MODE_FILTER);
 
 /**
  * Read what the kernel says about a live process: the uid and gid it
- * holds *inside its own user namespace*, and its seccomp mode.
+ * holds *inside its own user namespace*, its seccomp mode, whether it
+ * can regain privileges, and its effective capability set.
  *
  * `/proc/<pid>/status` reports the ids in the reader's namespace, which
  * for a rootless container is the unprivileged host id the subuid range
@@ -266,12 +267,12 @@ harden(SECCOMP_MODE_FILTER);
  * through the target's own `uid_map` is what turns the host's view back
  * into the slice's.
  *
- * `seccompMode` is `null` on a kernel that reports no `Seccomp:` line,
- * which callers read as "no filter proved" rather than as "no filter".
+ * A field this kernel does not report comes back `null`, which callers
+ * read as "not proved" rather than as an answer either way.
  *
  * @param {ProcReader} proc
  * @param {number} pid
- * @returns {Promise<{ uid: number, gid: number, seccompMode: number | null }>}
+ * @returns {Promise<{ uid: number, gid: number, seccompMode: number | null, noNewPrivs: boolean | null, effectiveCapabilities: bigint | null }>}
  */
 export const readProcessStatus = async (proc, pid) => {
   await null;
@@ -295,6 +296,22 @@ export const readProcessStatus = async (proc, pid) => {
     const value = Number(line.trim().split(/\s+/)[field]);
     return Number.isInteger(value) ? value : null;
   };
+  /**
+   * Capability sets are reported as a fixed-width hexadecimal mask. It
+   * is a bit set, not a quantity, so it is read as a `bigint` rather
+   * than narrowed to whatever fits a double.
+   *
+   * @param {string} key
+   * @returns {bigint | null}
+   */
+  const capabilityField = key => {
+    const line = lines.find(candidate => candidate.startsWith(`${key}:`));
+    if (line === undefined) return null;
+    const mask = line.trim().split(/\s+/)[1];
+    return mask !== undefined && /^[0-9a-fA-F]+$/.test(mask)
+      ? BigInt(`0x${mask}`)
+      : null;
+  };
   // `Uid:\t<real>\t<effective>\t<saved>\t<fs>`
   const outsideUid = numericField('Uid', 2);
   const outsideGid = numericField('Gid', 2);
@@ -312,7 +329,14 @@ export const readProcessStatus = async (proc, pid) => {
       X`slice process identity ${q(outsideUid)}:${q(outsideGid)} is outside the slice user namespace map`,
     );
   }
-  return harden({ uid, gid, seccompMode: numericField('Seccomp', 1) });
+  const noNewPrivs = numericField('NoNewPrivs', 1);
+  return harden({
+    uid,
+    gid,
+    seccompMode: numericField('Seccomp', 1),
+    noNewPrivs: noNewPrivs === null ? null : noNewPrivs === 1,
+    effectiveCapabilities: capabilityField('CapEff'),
+  });
 };
 harden(readProcessStatus);
 

@@ -481,9 +481,10 @@ files, cores — stay `number`.
 | private user/pid/ipc/mnt ns | `/proc/<pid>/ns/*` differs from the daemon's |
 | `broker-only` network       | `/proc/<pid>/net/dev` holds exactly `lo`     |
 | network namespace identity  | `/proc/<pid>/ns/net` inode                   |
-| read-only root, no-new-priv | resolved `HostConfig`                        |
+| read-only root              | resolved `HostConfig`                        |
+| no-new-privileges           | `/proc/<pid>/status` `NoNewPrivs:`           |
 | seccomp filter loaded       | `/proc/<pid>/status` `Seccomp:` mode         |
-| dropped capabilities        | the container's empty `EffectiveCaps`        |
+| dropped capabilities        | `/proc/<pid>/status` `CapEff:` mask          |
 | no devices, no host binds   | resolved `Devices` and the mount table       |
 | memory, swap, pids, cpu     | resolved `HostConfig`, and cgroup v2         |
 | open-file and core ceilings | resolved `Ulimits`                           |
