@@ -1,6 +1,7 @@
 # Subscription authentication requirements
 
-The credential broker is an external dependency of this PR.
+The API-key inference broker and isolated listener are implemented in this PR.
+Subscription authentication and refresh are separate requirements.
 Hosted subscription mode remains disabled until the relevant stock CLI is
 proven to work through this boundary using a vendor-supported configuration.
 

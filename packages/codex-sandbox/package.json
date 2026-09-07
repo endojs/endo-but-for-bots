@@ -23,7 +23,10 @@
     "./app-server-transport.js": "./app-server-transport.js",
     "./protocol.js": "./protocol.js",
     "./package.json": "./package.json",
-    "./sandbox-policy.js": "./src/sandbox-policy.js"
+    "./sandbox-policy.js": "./src/sandbox-policy.js",
+    "./runtime-verifier.js": "./src/runtime-verifier.js",
+    "./durable-volumes.js": "./src/durable-volumes.js",
+    "./volume-host.js": "./src/volume-host.js"
   },
   "scripts": {
     "build": "exit 0",

@@ -316,6 +316,8 @@ harden(assertHostedAgentPolicyV1);
  * @param {(workspace: any, spec: any) => Promise<{ unmount: () => Promise<void> }>} powers.mountWorkspace
  * @param {(spec: any) => Promise<{ revoke: () => Promise<void>, attestation: () => Promise<any> }>} powers.issueBrokerLease
  * @param {(options: any) => Promise<{ policy: () => Promise<any>, dispose: () => Promise<void> }>} powers.makeSlice
+ * @param {() => Promise<void>} [powers.retrySliceCleanup]
+ *   Reap slices retained by a failed makeSlice before releasing workspace leases.
  * @param {(options: any) => Promise<any>} powers.startTransport
  * @param {(sessionId: string) => Promise<{ threadId?: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }>} powers.loadThreadState
  * @param {(sessionId: string, state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>} powers.saveThreadState
@@ -339,6 +341,46 @@ export const makeCodexResourceProvisioner = powers => {
     powers.accountRef !== '' &&
     powers.accountRef.length <= 256) ||
     Fail`Codex resource provisioner requires an operator account reference`;
+  /** @type {Set<() => Promise<void>>} */
+  const pendingCleanup = new Set();
+  const retryPending = async () => {
+    await null;
+    const failures = [];
+    try {
+      await powers.retrySliceCleanup?.();
+    } catch (error) {
+      failures.push(error);
+    }
+    for (const cleanup of [...pendingCleanup]) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await cleanup();
+        pendingCleanup.delete(cleanup);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        'Provisioning cleanup remains pending',
+      );
+    }
+  };
+  let admission = Promise.resolve();
+  /**
+   * @template T
+   * @param {() => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  const enqueue = operation => {
+    const result = admission.then(operation);
+    admission = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
   const provision = async spec => {
     assertSessionId(spec?.sessionId);
     spec.accountRef === undefined ||
@@ -350,9 +392,10 @@ export const makeCodexResourceProvisioner = powers => {
     /** @type {Array<{ run: () => Promise<void>, done: boolean }>} */
     const undo = [];
     let auditJournal;
-    const unwind = async primaryError => {
+    let sliceReleased = true;
+    const runCleanup = async () => {
       await null;
-      const failures = [primaryError];
+      const failures = [];
       for (const cleanup of [...undo].reverse()) {
         if (!cleanup.done) {
           try {
@@ -363,6 +406,37 @@ export const makeCodexResourceProvisioner = powers => {
             failures.push(error);
           }
         }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          'Provisioning cleanup remains pending',
+        );
+      }
+    };
+    /** @type {Promise<void> | undefined} */
+    let cleanupFlight;
+    const cleanupStages = () => {
+      if (!cleanupFlight) {
+        cleanupFlight = runCleanup().finally(() => {
+          cleanupFlight = undefined;
+        });
+      }
+      return cleanupFlight;
+    };
+    const unwind = async primaryError => {
+      await null;
+      const failures = [primaryError];
+      pendingCleanup.add(cleanupStages);
+      try {
+        await cleanupStages();
+        pendingCleanup.delete(cleanupStages);
+      } catch (cleanupError) {
+        failures.push(
+          ...(cleanupError instanceof AggregateError
+            ? cleanupError.errors
+            : [cleanupError]),
+        );
       }
       if (failures.length > 1 && auditJournal) {
         try {
@@ -403,7 +477,14 @@ export const makeCodexResourceProvisioner = powers => {
       // `makeWorkspace` contract above.
       const workspace = await powers.makeWorkspace(spec);
       const workspaceMount = await powers.mountWorkspace(workspace, spec);
-      undo.push({ run: () => E(workspaceMount).unmount(), done: false });
+      undo.push({
+        run: async () => {
+          await powers.retrySliceCleanup?.();
+          sliceReleased || Fail`Workspace remains leased until slice is reaped`;
+          await E(workspaceMount).unmount();
+        },
+        done: false,
+      });
       const brokerLease = await powers.issueBrokerLease(
         harden({
           ...spec,
@@ -418,7 +499,14 @@ export const makeCodexResourceProvisioner = powers => {
         workspaceMount,
         brokerLease,
       });
-      undo.push({ run: () => E(slice).dispose(), done: false });
+      sliceReleased = false;
+      undo.push({
+        run: async () => {
+          await E(slice).dispose();
+          sliceReleased = true;
+        },
+        done: false,
+      });
       const policy = await E(slice).policy();
       // Validate here, before app-server can start, and again in the backend
       // factory at the authority handoff.
@@ -459,22 +547,15 @@ export const makeCodexResourceProvisioner = powers => {
         async dispose() {
           await null;
           if (disposed) return;
-          const failures = [];
-          for (const cleanup of [...undo].reverse()) {
-            if (!cleanup.done) {
-              try {
-                // eslint-disable-next-line no-await-in-loop
-                await cleanup.run();
-                cleanup.done = true;
-              } catch (error) {
-                failures.push(error);
-              }
-            }
-          }
-          if (failures.length > 0) {
+          pendingCleanup.add(cleanupStages);
+          try {
+            await cleanupStages();
+            pendingCleanup.delete(cleanupStages);
+          } catch (error) {
             throw new AggregateError(
-              failures,
+              [error],
               'Codex provisioned resources did not fully dispose',
+              { cause: error },
             );
           }
           disposed = true;
@@ -502,7 +583,16 @@ export const makeCodexResourceProvisioner = powers => {
       return unwind(failure);
     }
   };
-  return harden(provision);
+  return harden(
+    Object.assign(
+      spec =>
+        enqueue(async () => {
+          await retryPending();
+          return provision(spec);
+        }),
+      { retryCleanup: () => enqueue(retryPending) },
+    ),
+  );
 };
 harden(makeCodexResourceProvisioner);
 

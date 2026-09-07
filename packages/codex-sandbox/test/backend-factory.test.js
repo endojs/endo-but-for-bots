@@ -581,11 +581,121 @@ test('resource provisioner journals rollback failures', async t => {
     {
       payload: {
         sessionId: 'session-1',
-        failures: ['slice reap failed'],
+        failures: [
+          'slice reap failed',
+          'Workspace remains leased until slice is reaped',
+        ],
       },
     },
   );
 });
+
+for (const failedStage of [
+  'slice',
+  'broker',
+  'mount',
+  'slice-creation',
+  'slice-creation-and-broker',
+]) {
+  test(`failed provisioning retains ${failedStage} cleanup before admission`, async t => {
+    t.timeout(5000);
+    const calls = { workspace: 0, slice: 0, broker: 0, mount: 0 };
+    let failing = true;
+    let hiddenSlice = false;
+    const provision = makeCodexResourceProvisioner({
+      imageDigest,
+      providerOrigin,
+      accountRef,
+      makeAuditJournal: async () => ({
+        writer: harden({ append: async () => undefined }),
+      }),
+      makeWorkspace: async () => {
+        calls.workspace += 1;
+        return harden({});
+      },
+      mountWorkspace: async () =>
+        harden({
+          unmount: async () => {
+            calls.mount += 1;
+            if (failing && failedStage === 'mount') throw Error('mount failed');
+          },
+        }),
+      issueBrokerLease: async () =>
+        harden({
+          attestation: async () => validLease(),
+          revoke: async () => {
+            calls.broker += 1;
+            if (failing && failedStage === 'broker')
+              throw Error('broker failed');
+            if (
+              failedStage === 'slice-creation-and-broker' &&
+              calls.broker === 1
+            ) {
+              throw Error('broker transiently failed');
+            }
+          },
+        }),
+      makeSlice: async () => {
+        if (failedStage.startsWith('slice-creation')) {
+          hiddenSlice = true;
+          throw Error('slice creation failed');
+        }
+        return harden({
+          policy: async () => ({ ...validPolicy(), network: 'private' }),
+          dispose: async () => {
+            calls.slice += 1;
+            if (failing && failedStage === 'slice') throw Error('slice failed');
+          },
+        });
+      },
+      retrySliceCleanup: async () => {
+        if (!hiddenSlice) return;
+        if (failing) throw Error('hidden slice remains');
+        hiddenSlice = false;
+      },
+      startTransport: async () => {
+        throw Error('not reached');
+      },
+      loadThreadState: async () => ({}),
+      saveThreadState: async () => undefined,
+    });
+    await t.throwsAsync(() => provision({ sessionId: 'session-1' }), {
+      instanceOf: AggregateError,
+      message: /provisioning and rollback failed/,
+    });
+    if (failedStage.startsWith('slice')) {
+      t.is(calls.mount, 0, 'workspace lease survives incomplete slice cleanup');
+      t.is(calls.broker, 1, 'orphan inference authority is revoked promptly');
+    }
+    await t.throwsAsync(() => provision({ sessionId: 'session-2' }), {
+      message: /cleanup remains pending|hidden slice remains/,
+    });
+    t.is(calls.workspace, 1, 'no acquisition can overtake failed cleanup');
+    if (failedStage === 'slice-creation-and-broker') {
+      t.is(
+        calls.broker,
+        2,
+        'revocation retries despite persistent slice failure',
+      );
+      t.is(calls.mount, 0, 'workspace still remains leased');
+    }
+    failing = false;
+    await Promise.all([provision.retryCleanup(), provision.retryCleanup()]);
+    t.false(hiddenSlice);
+    t.is(calls.mount, failedStage === 'mount' ? 3 : 1);
+    const expectedBrokerCalls = {
+      slice: 1,
+      broker: 3,
+      mount: 1,
+      'slice-creation': 1,
+      'slice-creation-and-broker': 2,
+    };
+    t.is(calls.broker, expectedBrokerCalls[failedStage]);
+    const afterCleanup = { ...calls };
+    await provision.retryCleanup();
+    t.deepEqual(calls, afterCleanup, 'settled inverses are not repeated');
+  });
+}
 
 test('resource disposal retries only unfinished cleanup stages', async t => {
   const calls = { slice: 0, broker: 0, mount: 0, workspace: 0 };

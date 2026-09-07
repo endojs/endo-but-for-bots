@@ -10,11 +10,13 @@ Session staging, reverse-order rollback, retryable teardown, run/admin facet
 attenuation, dynamic model discovery, direct Endo dynamic tools, checkpointed
 failed-history reconciliation, durable audit primitives, and the reproducible
 image recipe are implemented here.
-The following foundations remain blockers before a production hosted deployment
-can satisfy the asserted contract.
-The implemented broker core and outer-policy adapter close repository gaps;
-they do not replace the live evidence listed in
-[deployment acceptance](./DEPLOYMENT-ACCEPTANCE.md).
+The repository foundations below are implemented and have passed the applicable
+Linux checks recorded in [deployment acceptance](./DEPLOYMENT-ACCEPTANCE.md).
+The supported review scope is the API-key gateway substrate.
+Subscription modes and a Claude hosted implementation remain disabled, so this
+PR makes no claim that those modes satisfy the contract.
+Production activation still requires the operator's approved images, storage
+and reaper authorities, selected account, and vendor inference acceptance.
 
 ## Attestable sandbox enforcement
 
@@ -46,11 +48,14 @@ asserts claims the outer sandbox cannot observe:
   The sandbox proves the namespace holds nothing routable; it does not prove
   what the listener inside it is, that it is credential-free, or that its route
   is denied to model-launched descendants.
-- `toolSandbox`, `toolCodexHomeAccess`, and `toolBrokerAccess` are the pinned
-  app-server's claims about the inner `workspaceWrite` policy it applies before
-  starting untrusted commands.
-- The slice environment is still not attested, so an operator's `makeSlice` must
-  still place no credential or proxy setting there.
+- `toolSandbox`, `toolCodexHomeAccess`, and `toolBrokerAccess` require the pinned
+  runtime's inner `workspaceWrite` policy.
+  The default runtime verifier now probes these controls using that CLI and
+  the same launch policy, including direct and indirect control-state mutations.
+  The pinned runtime remains trusted to apply this policy to later commands.
+- The default verifier also measures the probe's effective environment and
+  rejects unexpected credential or proxy settings.
+  This is a bounded preflight, not continuous observation of future processes.
 
 `makeAttestedCodexResourceProvisioner` now provides the adapter that composes `HostedAgentPolicyV1` from
 `E(slice).policy()` plus attestations the broker and the pinned runtime supply
@@ -58,7 +63,9 @@ for their own halves.
 Stamping the unproved fields into the record from a configuration constant
 would make `assertHostedAgentPolicyV1` accept a claim nothing established,
 which is the failure the whole attestation exists to exclude.
-The remaining halves are the two sections below.
+The successful Linux preflight, strict outer-policy gate, and independent XFS
+quota observations are recorded in [Linux acceptance evidence](./ACCEPTANCE-2026-09-07.md).
+Production composition and authentication remain subject to the gates below.
 
 ## Provider credential broker
 
@@ -67,10 +74,15 @@ credential: individual ChatGPT or Claude.ai OAuth refresh state, or supported
 enterprise access-token/workload-identity material.
 It issues revocable, quota-bound, provider-only session endpoints.
 This branch defines and validates the exact `BrokerLeaseV1` attestation at the
-provisioning seam; the broker and sidecar implementation remain external.
-The stock pinned CLIs must be verified against vendor-supported proxy or gateway
-configuration without putting a real bearer in the slice.
-If that is impossible for a provider, its subscription mode remains disabled.
+provisioning seam.
+The inference broker, incremental HTTP adapter, pinned namespace worker,
+private-pipe CapTP transport, and observed lease issuer are implemented.
+Their live Linux acceptance covers streaming, revocation, crash invalidation,
+and cleanup with a controlled upstream.
+Stock Codex configuration and catalog admission have passed through the concrete
+gateway composition without putting a bearer in the slice.
+Vendor inference and subscription authentication are separate acceptance gates.
+Until a provider's subscription flow is verified, that mode remains disabled.
 
 The complete Codex and Claude Code requirements are in
 [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md).
@@ -88,11 +100,14 @@ A `SecretBlob` hands its holder the bytes on request by design, so it cannot
 bound a credential to a provider origin, model allowlist, quota, or session
 lease, and it cannot refresh OAuth state.
 The broker core now implements inference admission, fresh SecretBlob reads,
-quotas, revocation, redaction, and a bounded transport.
-The namespace listener, process isolation, and subscription refresh implementation
-remain external and unverified; the broker must hold the upstream credential itself; the
-secret manager is where the broker's own durable material belongs, not a way to
-put a bearer token inside the slice.
+quotas, revocation, redaction, and bounded incremental transport.
+The credential-free HTTP listener limits connections, uploads, and slow consumers.
+The concrete namespace runtime keeps process state and private pipes separate
+from the model slice while sharing only the isolated network namespace.
+Subscription refresh and actual vendor authentication remain deployment gates;
+the broker must hold the upstream credential itself.
+The secret manager is where its durable material belongs, not a way to put a
+bearer token inside the slice.
 
 ## Runtime mount replacement
 

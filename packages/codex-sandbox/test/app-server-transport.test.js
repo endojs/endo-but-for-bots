@@ -373,3 +373,36 @@ test('partial construction reports cleanup failures with setup failure', async t
   );
   t.deepEqual(fixture.counts(), { stdinReturns: 0, kills: 1, waits: 1 });
 });
+
+test('transport derives provider routing from the admitted broker lease', async t => {
+  const fixture = makeFixture();
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+    brokerLease: harden({
+      attestation: async () => harden({ endpoint: 'http://127.0.0.1:23456' }),
+    }),
+  });
+  t.teardown(() => transport.close());
+  t.is(transport.brokerEndpoint, 'http://127.0.0.1:23456');
+  const argv = fixture.getSpawnCall()?.argv;
+  t.true(argv?.includes('model_provider="endo_broker"'));
+  t.true(
+    argv?.some(arg => arg.includes('base_url="http://127.0.0.1:23456/v1"')),
+  );
+});
+
+test('transport refuses a credential-bearing broker endpoint before spawn', async t => {
+  const fixture = makeFixture();
+  await t.throwsAsync(
+    () =>
+      startAppServerTransport({
+        slice: /** @type {any} */ (fixture.slice),
+        brokerLease: harden({
+          attestation: async () =>
+            harden({ endpoint: 'http://token@127.0.0.1:23456' }),
+        }),
+      }),
+    { message: /credential-free loopback/ },
+  );
+  t.is(fixture.getSpawnCall(), undefined);
+});
