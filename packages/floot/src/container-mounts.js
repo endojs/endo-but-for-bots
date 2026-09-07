@@ -38,8 +38,20 @@ import { createHash } from 'node:crypto';
 
 import { E } from '@endo/eventual-send';
 
-/** Petstore name (in the factory's own petstore) persisting attach records. */
-const REGISTRY_NAME = 'floot-container-mounts';
+/**
+ * Petstore name prefix (in the factory's own petstore) for the append-only
+ * attach journal. Every snapshot gets a fresh sequence-numbered name, so a
+ * failed or interrupted write can never erase the previous one — the same
+ * shape the session registry in `agent.js` uses, and for the same reason: a
+ * remove-then-store against a single name destroys the only record the moment
+ * the store fails.
+ */
+const REGISTRY_PREFIX = 'floot-container-mounts-v1-';
+/**
+ * Snapshots kept behind the newest one, so a snapshot that turns out to be
+ * unreadable is not the only record.
+ */
+const REGISTRY_JOURNAL_DEPTH = 4;
 
 /**
  * Normalize and validate a guest-chosen container path. Attaches may only
@@ -109,15 +121,20 @@ const petNamePathOf = petName => {
  * a replay after a daemon restart re-lands on the same layout. The leading
  * letter keeps it a valid pet-name fragment regardless of the hash prefix.
  *
+ * Exported because it is the record's whole identity: a persisted record whose
+ * `key` is not the one this derives is rejected on load, and a test that
+ * seeds the journal has to derive the same key the registrar will.
+ *
  * @param {string} clientKey
  * @param {string} capId
  * @param {string} innerPath
  */
-const attachKeyFor = (clientKey, capId, innerPath) =>
+export const attachKeyFor = (clientKey, capId, innerPath) =>
   `a${createHash('sha256')
     .update(`${clientKey}\n${capId}\n${innerPath}`)
     .digest('hex')
     .slice(0, 40)}`;
+harden(attachKeyFor);
 
 /**
  * @typedef {object} AttachRecord
@@ -149,10 +166,24 @@ const isValidRecord = value => {
     return false;
   }
   try {
-    return normalizeInnerPath(record.innerPath) === record.innerPath;
+    if (normalizeInnerPath(record.innerPath) !== record.innerPath) {
+      return false;
+    }
   } catch {
     return false;
   }
+  // `key` is the bridge's whole identity — it names the 9P mountpoint and the
+  // host mount pet name, and it is what `bridges`, `extrasSignature` and
+  // `releaseContainerMountBridge` index by. Accepting it as written would let
+  // two records sharing a key collapse onto ONE bridge, so a second bind would
+  // silently serve the first record's capability. Recompute it instead: the
+  // stored key must be exactly the one this (clientKey, capId, innerPath)
+  // derives, which also guarantees the alphabet the bridge's own key guard
+  // demands.
+  return (
+    record.key ===
+    attachKeyFor(record.clientKey, record.capId, record.innerPath)
+  );
 };
 
 /**
@@ -169,15 +200,21 @@ const isValidRecord = value => {
  *   methods), or a falsy value when this deployment has none. Resolved
  *   lazily per use so a provider bound later in the boot (ENDO_EXTRA
  *   ordering) is still found.
- * @param {string} [options.registryName]
+ * @param {string} [options.registryPrefix]
  */
 export const makeContainerMountRegistrar = ({
   powers,
   getBridgeProvider,
-  registryName = REGISTRY_NAME,
+  registryPrefix = REGISTRY_PREFIX,
 }) => {
+  /** @param {bigint} sequence */
+  const journalName = sequence =>
+    `${registryPrefix}${`${sequence}`.padStart(20, '0')}`;
+
   /** @type {readonly AttachRecord[] | undefined} */
   let records;
+  /** Sequence the next snapshot claims. */
+  let recordsSequence = 0n;
   // Memoize the first load so overlapping callers share one petstore read —
   // a second read resolving after a mutation landed would otherwise assign
   // over the mutated set and resurrect dropped records.
@@ -188,20 +225,41 @@ export const makeContainerMountRegistrar = ({
     if (!recordsLoad) {
       const pending = (async () => {
         await null;
+        const names = await E(powers).list();
+        const journalNames = (Array.isArray(names) ? names : [])
+          .filter(
+            name =>
+              typeof name === 'string' &&
+              name.startsWith(registryPrefix) &&
+              /^[0-9]{20}$/.test(name.slice(registryPrefix.length)),
+          )
+          .sort();
         /** @type {unknown[]} */
         let stored = [];
-        if (await E(powers).has(registryName)) {
-          const value = await E(powers).lookup(registryName);
-          stored = Array.isArray(value) ? [...value] : [];
+        let sequence = 0n;
+        if (journalNames.length > 0) {
+          const latestName = /** @type {string} */ (journalNames.at(-1));
+          const snapshot = await E(powers).lookup(latestName);
+          if (
+            snapshot?.version !== 1 ||
+            !Array.isArray(snapshot.records) ||
+            typeof snapshot.sequence !== 'bigint' ||
+            latestName !== journalName(snapshot.sequence)
+          ) {
+            throw Error('Floot container-mount journal is corrupt');
+          }
+          stored = [...snapshot.records];
+          sequence = snapshot.sequence + 1n;
         }
         const valid = stored.filter(isValidRecord);
         if (valid.length !== stored.length) {
-          console.warn(
-            `[floot] dropped ${stored.length - valid.length} malformed container-mount record(s) from "${registryName}"`,
+          console.error(
+            `[floot] dropped ${stored.length - valid.length} malformed container-mount record(s) from "${registryPrefix}"`,
           );
         }
         if (records === undefined) {
           records = harden(valid);
+          recordsSequence = sequence;
         }
         return records;
       })();
@@ -216,27 +274,63 @@ export const makeContainerMountRegistrar = ({
     }
     return recordsLoad;
   };
-  // Serialize writes: storeValue can't overwrite, so each save removes then
-  // stores, and concurrent saves would interleave (same pattern as the
-  // session registry in agent.js).
+  // Serialize writes, and make each one append-only: every snapshot claims a
+  // fresh sequence-numbered name, so an interrupted or rejected write leaves
+  // the previous complete snapshot intact. A remove-then-store against one
+  // name would destroy the only record the moment the store failed — and
+  // would do so silently, since callers cannot see a swallowed rejection.
   /** @type {Promise<void>} */
   let registryWrite = Promise.resolve();
   const saveRecords = () => {
     const snapshot = harden([...(records || [])]);
     const result = registryWrite.then(async () => {
       await null;
-      if (await E(powers).has(registryName)) {
-        await E(powers).remove(registryName);
+      // Reserve the name before the remote write: a rejected acknowledgement
+      // does not prove that storeValue failed to commit. Later saves must use
+      // a new name rather than colliding forever with that uncertain snapshot.
+      const sequence = recordsSequence;
+      recordsSequence += 1n;
+      await E(powers).storeValue(
+        harden({ version: 1, sequence, records: snapshot }),
+        journalName(sequence),
+      );
+      // Trim only after the new snapshot is durable, so the journal is never
+      // momentarily empty, and keep a few behind it so a snapshot that turns
+      // out to be unreadable is not the only record.
+      if (sequence >= BigInt(REGISTRY_JOURNAL_DEPTH)) {
+        await E(powers)
+          .remove(journalName(sequence - BigInt(REGISTRY_JOURNAL_DEPTH)))
+          .catch(() => undefined);
       }
-      await E(powers).storeValue(snapshot, registryName);
     });
+    // Preserve the rejection for the caller while keeping later writes
+    // possible and recording failures even when a caller discards its promise.
     registryWrite = result.catch(error => {
       console.error(
         '[floot] could not persist container-mount records:',
         error instanceof Error ? error.message : String(error),
       );
     });
-    return registryWrite;
+    return result;
+  };
+
+  /**
+   * Replace the record set and persist it. A failed write restores the prior
+   * set and rethrows, so the registrar never reports a bind it did not record
+   * — the failure mode the swallowed-rejection version hid.
+   *
+   * @param {readonly AttachRecord[]} next
+   */
+  const commitRecords = async next => {
+    await null;
+    const previous = records;
+    records = harden([...next]);
+    try {
+      await saveRecords();
+    } catch (error) {
+      records = previous;
+      throw error;
+    }
   };
 
   // Worker-local runtime state, rebuilt each boot: live bridges by record
@@ -296,6 +390,46 @@ export const makeContainerMountRegistrar = ({
     );
     bridges.set(record.key, bridge);
     return bridge;
+  };
+
+  /**
+   * Tear down the host-side bridge for a record whose last reference is gone.
+   * Best-effort, because the record is already dropped and nothing would
+   * retry — but never silent: an unreleased bridge is a live 9P export of the
+   * guest's capability and a named, restart-surviving daemon `Mount` formula
+   * that no record points at any more, so an operator has to be told which
+   * key to reap by hand.
+   *
+   * @param {string} key
+   */
+  const releaseBridge = async key => {
+    await null;
+    /** @type {any} */
+    let provider;
+    try {
+      provider = await getBridgeProvider();
+    } catch (error) {
+      provider = undefined;
+      console.error(
+        `[floot] could not resolve the container-mount bridge provider to release ${key}; its 9P mount and host mount name are now orphaned:`,
+        error instanceof Error ? error.message : String(error),
+      );
+      return;
+    }
+    if (!provider) {
+      console.error(
+        `[floot] no container-mount bridge provider is available to release ${key}; its 9P mount and host mount name are now orphaned`,
+      );
+      return;
+    }
+    await E(provider)
+      .releaseContainerMountBridge(key)
+      .catch(error => {
+        console.error(
+          `[floot] could not release container mount bridge ${key}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
   };
 
   /**
@@ -365,21 +499,29 @@ export const makeContainerMountRegistrar = ({
   };
 
   /**
-   * The session-facing description of an attach. Deliberately omits the
-   * record's `capId`: formula ids are bearer-capable, and a shared client's
-   * list would otherwise disclose ids for caps this session never held.
+   * The session-facing description of an attach. Two fields are withheld from
+   * a session that does not hold the record. `capId`, because formula ids are
+   * bearer-capable and a shared client's list would otherwise disclose ids for
+   * caps this session never held. And `petName`, because it is guest-authored
+   * naming out of ANOTHER session's petstore — "my-secret-repo" says something
+   * its owner never offered to share, and it names nothing this session could
+   * resolve anyway.
    *
    * @param {AttachRecord} record
    * @param {string} sessionId
+   * @param {string} [petName] - the name this session used, when it differs
+   *   from the one the first attacher recorded.
    */
-  const describeRecord = (record, sessionId) =>
-    harden({
+  const describeRecord = (record, sessionId, petName) => {
+    const heldByThisSession = record.sessionIds.includes(sessionId);
+    return harden({
       innerPath: record.innerPath,
       mode: record.mode,
-      petName: record.petName,
+      ...(heldByThisSession ? { petName: petName ?? record.petName } : {}),
       sessions: record.sessionIds.length,
-      heldByThisSession: record.sessionIds.includes(sessionId),
+      heldByThisSession,
     });
+  };
 
   /**
    * Translate a live-apply failure after a persisted record mutation into
@@ -460,7 +602,7 @@ export const makeContainerMountRegistrar = ({
       // Idempotent attach to the same (capId, innerPath): join the
       // reference set; the container view does not change.
       if (!existing.sessionIds.includes(sessionId)) {
-        records = harden(
+        await commitRecords(
           (records || []).map(record =>
             record === existing
               ? harden({
@@ -470,7 +612,6 @@ export const makeContainerMountRegistrar = ({
               : record,
           ),
         );
-        await saveRecords();
       }
       await ensureBridge(existing);
       await applyOrExplain(clientKey, innerPath);
@@ -479,6 +620,10 @@ export const makeContainerMountRegistrar = ({
           (records || []).find(record => record.key === existing.key)
         ),
         sessionId,
+        // The record's own `petName` is whichever session attached first;
+        // report the name THIS session used instead of handing it another
+        // session's naming.
+        petLabel,
       );
     }
     const overlap = clientRecords.find(
@@ -504,8 +649,16 @@ export const makeContainerMountRegistrar = ({
     // Bridge before persisting: a cap the bridge cannot serve (or a 9P
     // failure) must not leave a phantom record poisoning every replay.
     await ensureBridge(record);
-    records = harden([...(records || []), record]);
-    await saveRecords();
+    try {
+      await commitRecords([...(records || []), record]);
+    } catch (error) {
+      // The record did not land, so nothing will ever reference — or release
+      // — the bridge just minted. Drop it rather than orphan a live 9P
+      // export of the guest's capability.
+      bridges.delete(record.key);
+      await releaseBridge(record.key);
+      throw error;
+    }
     await applyOrExplain(clientKey, innerPath);
     return describeRecord(record, sessionId);
   };
@@ -538,18 +691,18 @@ export const makeContainerMountRegistrar = ({
     }
     const remaining = record.sessionIds.filter(id => id !== sessionId);
     if (remaining.length > 0) {
-      records = harden(
+      await commitRecords(
         (records || []).map(candidate =>
           candidate === record
             ? harden({ ...record, sessionIds: harden(remaining) })
             : candidate,
         ),
       );
-      await saveRecords();
       return harden({ innerPath, released: false, sessions: remaining.length });
     }
-    records = harden((records || []).filter(candidate => candidate !== record));
-    await saveRecords();
+    await commitRecords(
+      (records || []).filter(candidate => candidate !== record),
+    );
     // Order matters: recreate the slice WITHOUT the bind first, then release
     // the bridge — unmounting 9P under a live container bind would be busy.
     // The release must run even when the recreate push fails (the record is
@@ -565,19 +718,7 @@ export const makeContainerMountRegistrar = ({
       );
     }
     bridges.delete(record.key);
-    const provider = await Promise.resolve(getBridgeProvider()).catch(
-      () => undefined,
-    );
-    if (provider) {
-      await E(provider)
-        .releaseContainerMountBridge(record.key)
-        .catch(error => {
-          console.warn(
-            `[floot] could not release container mount bridge ${record.key}:`,
-            error instanceof Error ? error.message : String(error),
-          );
-        });
-    }
+    await releaseBridge(record.key);
     return harden({ innerPath, released: true, sessions: 0 });
   };
 
@@ -627,7 +768,7 @@ export const makeContainerMountRegistrar = ({
     const dropped = [];
     /** @type {Set<string>} */
     const shrunkClients = new Set();
-    records = harden(
+    await commitRecords(
       (records || []).flatMap(record => {
         if (!record.sessionIds.includes(sessionId)) return [record];
         const remaining = record.sessionIds.filter(id => id !== sessionId);
@@ -639,7 +780,6 @@ export const makeContainerMountRegistrar = ({
         return [harden({ ...record, sessionIds: harden(remaining) })];
       }),
     );
-    await saveRecords();
     for (const clientKey of shrunkClients) {
       // eslint-disable-next-line no-await-in-loop
       await pushExtras(clientKey).catch(error => {
@@ -649,22 +789,10 @@ export const makeContainerMountRegistrar = ({
         );
       });
     }
-    const provider = await Promise.resolve(getBridgeProvider()).catch(
-      () => undefined,
-    );
     for (const record of dropped) {
       bridges.delete(record.key);
-      if (provider) {
-        // eslint-disable-next-line no-await-in-loop
-        await E(provider)
-          .releaseContainerMountBridge(record.key)
-          .catch(error => {
-            console.warn(
-              `[floot] could not release container mount bridge ${record.key}:`,
-              error instanceof Error ? error.message : String(error),
-            );
-          });
-      }
+      // eslint-disable-next-line no-await-in-loop
+      await releaseBridge(record.key);
     }
   };
 
@@ -707,6 +835,15 @@ export const makeContainerMountRegistrar = ({
     const arm = async ({ clientKey, client }) => {
       armed = { clientKey, client };
       armedSessions.set(sessionId, clientKey);
+      // A fresh presence for a client identity we have pushed to before — the
+      // client formula's worker restarted, or a second session resolved the
+      // same formula to its own presence — has an empty bind set of its own.
+      // The push signature is per identity, so leaving it in place would let
+      // `pushExtras` dedupe the replay away and bring the new container up
+      // with no /mnt/ binds at all, silently.
+      if (clients.get(clientKey) !== client) {
+        lastPushedByClient.delete(clientKey);
+      }
       clients.set(clientKey, client);
       // The replay itself takes the registrar lock: a tool-driven attach
       // arriving while the replay is mid-push must serialize behind it.
@@ -748,8 +885,14 @@ export const makeContainerMountRegistrar = ({
       return list({ sessionId, clientKey });
     };
 
-    const tools = harden({
-      attachContainerMount: harden({
+    // A Map, not a record: floot merges tool sets with
+    // `for (const [name, tool] of ...)` (see src/tool-registry.js), so an
+    // object here would throw at merge time.
+    /** @type {Map<string, any>} */
+    const tools = new Map();
+    tools.set(
+      'attachContainerMount',
+      harden({
         schema: () =>
           harden({
             type: 'function',
@@ -807,7 +950,10 @@ export const makeContainerMountRegistrar = ({
         help: () =>
           'attachContainerMount({petName, innerPath, mode?}) — bind a held filesystem capability into the sandbox under /mnt/ (restarts the sandbox).',
       }),
-      detachContainerMount: harden({
+    );
+    tools.set(
+      'detachContainerMount',
+      harden({
         schema: () =>
           harden({
             type: 'function',
@@ -845,7 +991,10 @@ export const makeContainerMountRegistrar = ({
         help: () =>
           'detachContainerMount({innerPath}) — drop this session’s reference to a /mnt/ bind; the last reference removes it.',
       }),
-      listContainerMounts: harden({
+    );
+    tools.set(
+      'listContainerMounts',
+      harden({
         schema: () =>
           harden({
             type: 'function',
@@ -868,7 +1017,7 @@ export const makeContainerMountRegistrar = ({
         help: () =>
           'listContainerMounts() — list the runtime /mnt/ binds for this session’s sandbox.',
       }),
-    });
+    );
 
     return harden({
       arm,
