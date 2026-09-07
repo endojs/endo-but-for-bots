@@ -154,6 +154,8 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   refreshCredentials: M.callWhen().returns(M.undefined()),
   getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
   getAccountOracle: M.callWhen().returns(M.remotable()),
+  getVoicePreferences: M.callWhen().returns(M.record()),
+  setVoicePreferences: M.callWhen(M.record()).returns(M.record()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -1844,6 +1846,47 @@ const REGISTRY_PREFIX = 'floot-sessions-v1-';
  */
 const REGISTRY_JOURNAL_DEPTH = 4;
 
+// Petname where whole-Floot voice/TTS preferences (voice, speed, expression…)
+// are persisted. These are a property of the Floot instance — shared across
+// every session and every device — not of any one session or browser.
+const VOICE_PREFS_NAME = 'floot-voice-preferences';
+
+// Only these keys are accepted from a client and mirrored to the petstore, each
+// coerced to its expected type. Anything else (or a non-finite number) is
+// dropped, so a malformed client can't poison the stored preferences. The TTS
+// capability still validates values against its own ranges at synthesis time.
+const VOICE_PREF_NUMERIC_KEYS = harden([
+  'speed',
+  'noiseScale',
+  'noiseW',
+  'sentenceSilence',
+]);
+
+/**
+ * @param {unknown} input
+ * @returns {Record<string, string | number>}
+ */
+const sanitizeVoicePrefs = input => {
+  /** @type {Record<string, string | number>} */
+  const clean = {};
+  if (input && typeof input === 'object') {
+    const prefs = /** @type {Record<string, unknown>} */ (input);
+    if (typeof prefs.voice === 'string') {
+      clean.voice = prefs.voice;
+    }
+    for (const key of VOICE_PREF_NUMERIC_KEYS) {
+      if (prefs[key] !== undefined) {
+        const value = Number(prefs[key]);
+        if (Number.isFinite(value)) {
+          clean[key] = value;
+        }
+      }
+    }
+  }
+  return clean;
+};
+harden(sanitizeVoicePrefs);
+
 const newSessionId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -2210,6 +2253,39 @@ export const make = (hostPowers, _context, { env } = {}) => {
     // and recording failures even when callers discard their promise.
     registryWrite = result.catch(error => {
       console.error('[floot-factory] session registry save failed:', error);
+    });
+    return result;
+  };
+
+  // Whole-Floot voice/TTS preferences, kept in the factory's own petstore like
+  // the registry (lazy load, serialized remove-then-store writes). A single
+  // small record, so it needs none of the registry's journaling.
+  /** @type {Record<string, string | number> | undefined} */
+  let voicePrefs;
+  const loadVoicePrefs = async () => {
+    if (voicePrefs) return voicePrefs;
+    const stored = await E(powers).has(VOICE_PREFS_NAME);
+    if (!stored) {
+      voicePrefs = {};
+      return voicePrefs;
+    }
+    const record = await E(powers).lookup(VOICE_PREFS_NAME);
+    voicePrefs = sanitizeVoicePrefs(record);
+    return voicePrefs;
+  };
+  let voicePrefsWrite = Promise.resolve();
+  const saveVoicePrefs = () => {
+    const snapshot = harden({ ...(voicePrefs || {}) });
+    const result = voicePrefsWrite.then(async () => {
+      await null;
+      if (await E(powers).has(VOICE_PREFS_NAME)) {
+        await E(powers).remove(VOICE_PREFS_NAME);
+      }
+      await E(powers).storeValue(snapshot, VOICE_PREFS_NAME);
+    });
+    // Preserve the rejection for the caller while keeping later writes possible.
+    voicePrefsWrite = result.catch(error => {
+      console.error('[floot-factory] voice preferences save failed:', error);
     });
     return result;
   };
@@ -3177,6 +3253,33 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
+     * Whole-Floot voice/TTS preferences (voice, speed, expression…), shared by
+     * every session and every device. Empty when never set — a client then
+     * falls back to the TTS capability's own defaults.
+     *
+     * @returns {Promise<Record<string, string | number>>}
+     */
+    async getVoicePreferences() {
+      const prefs = await loadVoicePrefs();
+      return harden({ ...prefs });
+    },
+
+    /**
+     * Merge and persist voice/TTS preferences. Partial updates are allowed:
+     * only the recognized keys present in `prefs` change. Returns the full
+     * merged, persisted set.
+     *
+     * @param {Record<string, unknown>} prefs
+     * @returns {Promise<Record<string, string | number>>}
+     */
+    async setVoicePreferences(prefs) {
+      const current = await loadVoicePrefs();
+      voicePrefs = { ...current, ...sanitizeVoicePrefs(prefs) };
+      await saveVoicePrefs();
+      return harden({ ...voicePrefs });
+    },
+
+    /**
      * Drop the memoized provider config and the providers built from it.
      *
      * A rotation (`SecretAdmin.replaceBase64`) or a revocation needs no help:
@@ -3245,7 +3348,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(). Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn } | null, getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(); getVoicePreferences()/setVoicePreferences(prefs) for whole-Floot voice/TTS settings. Session facets expose startTurn() -> FlootTurn, getCurrentTurn() -> { input, turn } | null, getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -3268,6 +3371,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
           'getAccount(refresh?) — { available, plan, rateLimits, rateCard }. Each section carries observedAt and a source of observed | declared | remembered | unavailable; counts are bigints, and null means the provider does not publish that figure.',
         getAccountOracle:
           'getAccountOracle() — The read-only HostedAccount capability itself, for a holder that should be able to check plan and quota without reaching the credential.',
+        getVoicePreferences:
+          'getVoicePreferences() — Return the whole-Floot voice/TTS preferences {voice?, speed?, noiseScale?, noiseW?, sentenceSilence?} shared across sessions and devices; empty when never set.',
+        setVoicePreferences:
+          'setVoicePreferences(prefs) — Merge and persist whole-Floot voice/TTS preferences (unrecognized keys and non-numeric numbers are dropped); returns the merged set.',
       };
       return docs[methodName] || `No documentation for method "${methodName}".`;
     },
