@@ -3,9 +3,12 @@
 
 /** @import { SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { EndoMount, EndoMountControl, FilePowers, MountNameChange } from './types.js' */
+/** @import { ERef } from '@endo/eventual-send' */
+/** @import { PassableReader } from '@endo/exo-stream' */
 
 import { E } from '@endo/eventual-send';
 import { q } from '@endo/errors';
+import { M } from '@endo/patterns';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
@@ -22,6 +25,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { fromHex } from './hex.js';
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
@@ -36,6 +40,110 @@ import {
 // post-sort cap). Kept as a `mount.js` export so consumers and the
 // cross-language contract test bind to the one canonical constant.
 export { GLOB_MAX_RESULTS };
+
+// Ceiling on a streaming search's pre-ack buffer window. The streaming variants
+// have no result cap — the consumer's pull-based flow control is the bound — and
+// this clamps the producer's pre-acknowledge window, the number of elements
+// pre-pulled ahead of demand. The search readers are minted `once`
+// (`readerFromIterator({ once: true })`), so a reader has at most one active
+// `stream()`; the pre-ack window and the post-revoke delivery window are thus
+// bounded per *reader*, not merely per stream — a grantee holding the reader
+// cannot open k concurrent streams to multiply either. Two important limits on
+// what it does *not* bound:
+//  - It is not the whole daemon-side memory high-water mark, but for the
+//    streaming methods that high-water mark now tracks demand rather than tree
+//    size. `streamGlob` walks in *walk order* (`globPaths`, `sorted: false`),
+//    yielding each match as it is discovered instead of draining and sorting the
+//    whole set first, so a consumer's pull-based flow control (plus early close)
+//    bounds how far the walk runs and thus its in-daemon commitment — the walk
+//    no longer runs to completion regardless of demand. `streamGrep` does not
+//    walk — it consumes an external file stream and reads one file at a time —
+//    so its own commitment is one file's contents, and any walk commitment lives
+//    in whatever producer feeds it (e.g. `streamGlob`, now demand-bounded). The
+//    clamp bounds only the marshalled pre-ack window on top of that.
+//  - It bounds element *count*, not aggregate bytes: a `streamGrep` record's
+//    `text` is one whole matched line, so 1024 buffered records can still be
+//    large in bytes (the same per-line cost eager `grep` carries).
+// The ceiling also bounds the revocation-latency window: each pre-acknowledged
+// element is already settled by the time a mid-stream `revoke()` lands, so up to
+// this many elements may still be delivered after revocation (see
+// `clampStreamBuffer` and designs/mount-stream-glob-grep.md § Revocation).
+// The specific value 1,024 is an unmeasured provisional ceiling: it is large
+// enough not to constrain a high-latency consumer in practice and small enough
+// that its worst-case pre-materialization is a bounded element count. No
+// round-trip or memory benchmark backs the exact number; treat it as a knob to
+// revisit under measurement, not a validated optimum.
+export const STREAM_BUFFER_MAX = 1024;
+
+/**
+ * Clamp a caller-requested stream buffer to `[0, STREAM_BUFFER_MAX]`. A
+ * non-number, a negative, or a non-finite request collapses to the fully
+ * synchronized `0`; a fractional request floors so the pre-ack window is a
+ * whole number of elements. The `MountInterface` guard already rejects a
+ * non-number `buffer`, so the type coercion here is defense in depth for a
+ * direct (non-exo) caller.
+ *
+ * The clamp bounds the reader's pre-ack memory commitment and its
+ * revocation-latency window: at `buffer: 0` the producer never pre-pulls, so a
+ * mid-stream `revoke()` rejects the next pull with no further delivery; at
+ * `buffer: n` up to `n` already-settled elements may still be delivered after
+ * `revoke()`. The search readers are minted `once`, so this bound is
+ * per-reader — a grantee cannot open a second concurrent stream to multiply it
+ * (see `STREAM_BUFFER_MAX`). A caller that needs `revoke()` to be a hard
+ * content cutoff must keep the default `0`.
+ *
+ * @param {number} [requested]
+ * @returns {number}
+ */
+export const clampStreamBuffer = requested => {
+  if (typeof requested !== 'number' || !Number.isFinite(requested)) {
+    return 0;
+  }
+  if (requested <= 0) {
+    return 0;
+  }
+  if (requested > STREAM_BUFFER_MAX) {
+    return STREAM_BUFFER_MAX;
+  }
+  return Math.floor(requested);
+};
+harden(clampStreamBuffer);
+
+// The stream element patterns opt *out* of `@endo/patterns`' default
+// `stringLengthLimit` of 100,000 (a `streamGrep` match line, or a `streamGlob`
+// path, may be arbitrarily long). The reader pump enforces `readPattern` with
+// `mustMatch` on *every* element, so *any* finite ceiling would make a single
+// over-limit line (a minified bundle, single-line JSON, a lock file, a
+// base64/SVG blob) throw there and abort the *whole* stream — dropping every
+// later match — a parity break the eager `grep` (which has no such limit) does
+// not share. A ceiling also buys no memory protection: `grepFiles` has already
+// read the whole file into one string and split it
+// (`packages/platform/src/fs/search.js`) before the pump's per-element check
+// ever runs, so the daemon-side memory is committed upstream of any pattern
+// limit. `Infinity` therefore both restores grep parity and drops a check that
+// could only abort, never bound. Per-element byte size is unbounded exactly as
+// eager `grep`'s is; the stream still bounds element *count* through the
+// consumer's pull-based flow control and the pre-ack window (`buffer`).
+const STREAM_STRING_LENGTH_LIMIT = Infinity;
+
+// Element shape a `streamGrep` reader self-describes through the exo-stream
+// `readPattern()` facility: the same `{ file, line, text }` record the eager
+// `grep` yields, as a `splitRecord` so a pluggable native search engine
+// (`SearchFilePowers.search`) that adds a field does not abort the stream —
+// matching the tolerance of every other `GrepMatch` surface. `text` carries one
+// whole matched line, so it opts out of the default 100,000 `stringLengthLimit`
+// (see `STREAM_STRING_LENGTH_LIMIT`) rather than aborting the stream on a long
+// line. `file` is a mount-relative path that can itself run past the default
+// (a deep tree of long segments), so it opts out on the same reasoning — a
+// single over-limit path would otherwise abort the whole stream and drop every
+// later match. `streamGlob`'s element pattern is `M.string()` with the same
+// opt-out (the symmetry keeps both stream surfaces uniform), inlined at the call
+// site.
+const grepMatchPattern = M.splitRecord({
+  file: M.string({ stringLengthLimit: STREAM_STRING_LENGTH_LIMIT }),
+  line: M.number(),
+  text: M.string({ stringLengthLimit: STREAM_STRING_LENGTH_LIMIT }),
+});
 
 const mountEntryRecords = new WeakMap();
 const mountRecords = new WeakMap();
@@ -881,6 +989,205 @@ const makeMountExo = ctx => {
     return harden(matches.slice(0, maxResults));
   };
 
+  // A liveness-checked view over a path-batch source: asserts the mount is
+  // still live before surfacing each batch to the consumer of this iterable.
+  // Interposed on the path source each streaming method feeds into its engine —
+  // the `globPaths` walk for `streamGlob`, the *supplied external file reader*
+  // for `streamGrep` (which no longer walks).
+  //
+  // For `streamGlob` (`sorted: false`) this *does* interrupt the directory
+  // enumeration: `globPaths` yields each match in walk order as it is discovered
+  // (one path per singleton batch), so this check runs *between* walk steps. A
+  // `revoke()` landing mid-walk is therefore observed on the next batch and the
+  // enumeration halts within one path rather than running the whole tree to
+  // completion (see designs/mount-stream-glob-grep.md § Revocation).
+  //
+  // For `streamGrep` the source is the external file stream, pulled one path per
+  // singleton batch, so this check runs between file-stream pulls and thus
+  // between the content reads `grepFiles` performs per batch. It is load-bearing
+  // across the whole `streamGrep` pipeline: asserting between batches bounds
+  // post-revoke *content reads* to a single file, including a sparse grep that
+  // matches nothing for many files (where the per-yield `assertLive()` below
+  // would otherwise not run until the next, never-arriving match and the daemon
+  // would keep reading files after revocation). The `streamGlob` walk earns the
+  // symmetric bound: post-revoke enumeration stops within one walk step, so a
+  // revoked walk over a large tree cannot run to completion behind the consumer's
+  // back.
+  const assertLivePathBatches = async function* assertLivePathBatches(source) {
+    for await (const batch of source) {
+      assertLive();
+      yield batch;
+    }
+  };
+
+  // Streaming counterpart of `glob`: a `PassableReader` over the same platform
+  // walk, yielding one mount-relative path per element instead of a single
+  // capped array. Built on the shared engine generator, so confinement, deny
+  // filtering, the two-metacharacter dialect, and symlink-cycle termination are
+  // identical to `glob` by construction (no second walker to drift). Unlike
+  // `glob`, it drives the walk in *walk order* (`sorted: false`): the engine
+  // yields each matched path as it is discovered rather than draining and
+  // sorting the whole match set first, so — like `streamGrep` — it is
+  // incremental in the directory walk (first path before the tree is fully
+  // walked) and its in-daemon commitment tracks consumer demand rather than
+  // total tree size, so a slow or early-closing consumer bounds the walk. That
+  // demand-boundedness is the streaming win over eager `glob`: no marshalled
+  // full-array round-trip, no 10,000-path cap, no whole-tree materialization
+  // ahead of demand, and time-to-first-result. The trade is order — elements
+  // arrive in walk order, not glob's global UTF-16 sort, so a caller needing
+  // glob-identical ordering uses eager `glob` (which sorts and caps). This is
+  // also what keeps `streamGrep(p, streamGlob('**'))` walk-incremental end to
+  // end: a sorted producer would run the whole walk before grep's first read.
+  // `assertLive()` runs at invocation (synchronously, so a revoked mount throws
+  // here) and is re-checked both per path batch (via `assertLivePathBatches`)
+  // and before each yield, so a mid-stream revoke cuts the next pull — and,
+  // because the walk is incremental, halts the enumeration itself within one
+  // batch rather than after the whole walk.
+  /**
+   * @param {string} pattern
+   * @param {{ buffer?: number }} [options]
+   */
+  const streamGlob = (pattern, options = {}) => {
+    assertLive();
+    const { buffer = 0 } = options;
+    const search = provideSearch(filePowers);
+    const generate = async function* generate() {
+      assertLive();
+      // `batchSize: 1` sets the engine's yield granularity to one path per
+      // batch. In walk order (`sorted: false`) the engine yields each match as
+      // the walk discovers it, so this genuinely bounds read-ahead to demand:
+      // the consumer's pull-based flow control (plus `buffer`) is the read-ahead
+      // bound, and the per-path granularity lets the interposed
+      // `assertLivePathBatches` liveness check observe a revoke within one path.
+      const paths = assertLivePathBatches(
+        search.globPaths(currentDir, pattern, {
+          deniedSegments:
+            deniedSegments === undefined ? undefined : [...deniedSegments],
+          confinementRoot,
+          batchSize: 1,
+          sorted: false,
+        }),
+      );
+      for await (const batch of paths) {
+        for (const relativePath of batch) {
+          assertLive();
+          yield relativePath;
+        }
+      }
+    };
+    return readerFromIterator(generate(), {
+      buffer: clampStreamBuffer(buffer),
+      readPattern: M.string({ stringLengthLimit: STREAM_STRING_LENGTH_LIMIT }),
+      // Once-only: a per-search reader has no meaningful second stream, and
+      // latching it bounds the pre-ack / post-revoke window to the reader rather
+      // than to k concurrent streams a grantee could otherwise open.
+      once: true,
+    });
+  };
+
+  // Streaming counterpart of `grep`, decoupled from enumeration: it takes a
+  // *mandatory* external stream of files to search — `files`, a
+  // `PassableReader<string>` of mount-relative paths, exactly the shape
+  // `streamGlob` returns — and yields one `{ file, line, text }` record per
+  // element. Grep does not glob: the file set is the producer's concern, the
+  // streaming twin of the eager seam `grep(pattern, glob(g))` (grep's `paths`
+  // argument), not a fused glob+grep. "Search everything" and "search a glob
+  // subset" are expressed by composition:
+  //   everything:  E(mount).streamGrep('TODO', E(mount).streamGlob('**'))
+  //   glob subset: E(mount).streamGrep('TODO', E(mount).streamGlob('*.js'))
+  // The supplied reader is adapted into the async-iterable-of-path-batches the
+  // shared engine consumes (`iterateReader`, one path per singleton batch), so
+  // there is ONE walker — in the producer — and grep never walks the tree
+  // itself. Confinement, deny filtering, and directory/unreadable skipping still
+  // run in `grepFiles` per supplied path, so a hand-supplied file stream cannot
+  // widen authority: a path that is denied, escapes confinement, is a directory,
+  // or is unreadable is skipped silently — the same uniform envelope eager
+  // `grep(pattern, paths)` guarantees. There is deliberately no `maxResults`;
+  // the consumer bounds the stream by closing it (an early `for await` break
+  // stops grep's remaining content reads, and pulls no further paths from the
+  // producer — so a producer whose own walk is incremental stops too).
+  //
+  // Incrementality now depends on the producer. Grep reads the supplied files'
+  // *contents* lazily, but "one file per pull" holds only for a *matching* file:
+  // grep reads ahead to the next match before yielding, so a run of non-matching
+  // (sparse) files is content-read within a *single* consumer pull — bounded not
+  // by backpressure but by the per-file liveness check (`assertLivePathBatches`,
+  // a revocation mechanism), which stops that run within one file on `revoke()`.
+  // Backpressure thus bounds *delivery* to one match per pull, and early close
+  // leaves later supplied files unread. Whether the *directory walk* is
+  // incremental is the producer's concern: `streamGlob` walks in walk order
+  // (`sorted: false`), yielding each path as it is discovered, so
+  // `streamGrep(p, streamGlob('**'))` is walk-incremental end to end — grep's
+  // first read can happen before the producer has walked the whole tree.
+  // `assertLive()` runs at invocation, between file-stream pulls (via
+  // `assertLivePathBatches`, so a revoke during a sparse grep is observed within
+  // one file rather than after the whole stream), and before each yield.
+  //
+  // Ordering: `streamGrep`'s flattened sequence follows the order of the
+  // supplied file stream (path-then-line as each file is read). Fed
+  // `streamGlob(g)`, that is glob's *walk order*, so it collects to the same
+  // multiset as eager `grep(pattern, glob(g))` (order-independent equality;
+  // walk order is not glob's UTF-16 sort).
+  /**
+   * @param {string} pattern
+   * @param {ERef<PassableReader<string, any>>} files
+   * @param {{ buffer?: number }} [options]
+   */
+  const streamGrep = (pattern, files, options = {}) => {
+    assertLive();
+    const { buffer = 0 } = options;
+    const search = provideSearch(filePowers);
+    const deniedSegmentsCopy =
+      deniedSegments === undefined ? undefined : [...deniedSegments];
+    const generate = async function* generate() {
+      assertLive();
+      // Adapt the external file reader into the async-iterable-of-path-batches
+      // `grepFiles` consumes: pull one path at a time from the supplied reader
+      // and frame it as a singleton batch, so grep reads one file per pull
+      // (bounded read-ahead) and a mid-stream `revoke()` is observed within one
+      // file via the interposed `assertLivePathBatches`. Each element is
+      // validated as a string — the shape `streamGlob` yields — mirroring eager
+      // `grep`'s `M.arrayOf(M.string())` paths guard, so a malformed file stream
+      // fails the reader rather than throwing deep in the walk.
+      const fileBatches = assertLivePathBatches(
+        (async function* singletonBatches() {
+          for await (const relativePath of iterateReader(files, {
+            readPattern: M.string({
+              stringLengthLimit: STREAM_STRING_LENGTH_LIMIT,
+            }),
+          })) {
+            yield [relativePath];
+          }
+        })(),
+      );
+      // `batchSize: 1` keeps grep's file reads bounded to demand: the engine
+      // reads only as far as the next match before yielding, so a consumer that
+      // closes early leaves the remaining supplied files unread.
+      for await (const batch of search.grepFiles(
+        currentDir,
+        pattern,
+        fileBatches,
+        {
+          deniedSegments: deniedSegmentsCopy,
+          confinementRoot,
+          batchSize: 1,
+        },
+      )) {
+        for (const match of batch) {
+          assertLive();
+          yield match;
+        }
+      }
+    };
+    return readerFromIterator(generate(), {
+      buffer: clampStreamBuffer(buffer),
+      readPattern: grepMatchPattern,
+      // Once-only: see `streamGlob`. Bounds the pre-ack / post-revoke window to
+      // the reader rather than to k concurrent streams a grantee could open.
+      once: true,
+    });
+  };
+
   // Fused glob+grep: enumerate the files matching the `glob` pattern and
   // search them for the `grep` pattern, returning grep's `{ file, line, text }`
   // records. Both patterns are required positionals (unlike grep's optional
@@ -1362,6 +1669,8 @@ const makeMountExo = ctx => {
     glob,
     grep,
     glorp,
+    streamGlob,
+    streamGrep,
     lookup,
     maybeLookup,
     subView,
@@ -1852,7 +2161,24 @@ harden(makeMount);
  * spread, a single `revoke()` trips the `assertLive()` gate on the root mount
  * and every face derived from it — sub-views, entries, opened files,
  * `readOnly()` views, `makeDirectory` results, and any open `followNameChanges`
- * stream. The daemon's `mount` / `scratch-mount` formulas wire
+ * stream. Revocation is an atomic cutoff for every face *except* a
+ * `streamGlob`/`streamGrep` reader minted with `buffer > 0`: up to that many
+ * already-pre-acknowledged elements (bounded by `STREAM_BUFFER_MAX`) may still
+ * deliver after `revoke()` before the next pull rejects. These readers are
+ * minted once-only, so that window is bounded per reader: a grantee cannot open
+ * a second concurrent stream over the reader to multiply it. A `buffer: 0`
+ * stream (the default) is a hard delivery cutoff like every other face. For
+ * `streamGlob` this cutoff governs *delivery* and the directory enumeration
+ * alike: its `globPaths` runs in walk order (`sorted: false`), yielding each
+ * path as it is discovered, so the per-path-batch liveness check
+ * (`assertLivePathBatches`) bounds a post-revoke walk to one path batch — the
+ * enumeration halts within one walk step rather than running the whole tree to
+ * completion. `streamGrep` no longer walks — it reads the files a supplied
+ * stream hands it — so the per-file liveness check bounds its post-revoke
+ * *content reads* to one file; any post-revoke *walk* belongs to the producer
+ * feeding it (and is likewise bounded when that producer is `streamGlob`).
+ * The daemon's `mount` /
+ * `scratch-mount` formulas wire
  * `context.onCancel(() => control.revoke())`, tying revocation to formula
  * cancellation, and keep the `control` captive so only the daemon can revoke.
  *

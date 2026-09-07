@@ -225,6 +225,111 @@ test('batch boundaries are not semantic: flattened output is invariant across ba
   }
 });
 
+test('globPaths sorted:false yields walk order — same multiset, sorting recovers the sorted result', async t => {
+  const { root } = buildMountFixture(t);
+  const search = makeSearch(makeNodeSearchPowers());
+  await null;
+  for (const pattern of ['**', 'src/**', 'src/**/*.js']) {
+    // eslint-disable-next-line no-await-in-loop
+    const sorted = await collect(
+      search.globPaths(root, pattern, { deniedSegments }),
+    );
+    // eslint-disable-next-line no-await-in-loop
+    const unsorted = await collect(
+      search.globPaths(root, pattern, { deniedSegments, sorted: false }),
+    );
+    t.deepEqual(
+      [...unsorted].sort(),
+      sorted,
+      `${pattern}: sorted:false is the same match set, only unordered`,
+    );
+    t.true(sorted.length > 0, `${pattern}: the fixture matched something`);
+  }
+});
+
+test('globPaths sorted:false sorts each directory while keeping the walk lazy', async t => {
+  await null;
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'search-directory-order-'),
+  );
+  t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'b'));
+  fs.mkdirSync(path.join(root, 'a'));
+  fs.writeFileSync(path.join(root, 'm.txt'), '');
+  fs.writeFileSync(path.join(root, 'a', 'zeta.txt'), '');
+  fs.writeFileSync(path.join(root, 'a', 'alpha.txt'), '');
+
+  const base = makeNodeSearchPowers();
+  const search = makeSearch({
+    ...base,
+    // Deliberately make the platform enumeration hostile to deterministic
+    // ordering. The engine, not the filesystem, owns directory-local order.
+    readDirectory: async directory => {
+      await null;
+      return [...(await base.readDirectory(directory))].sort().reverse();
+    },
+  });
+
+  t.deepEqual(
+    await collect(
+      search.globPaths(root, '**', { sorted: false, batchSize: 1 }),
+    ),
+    ['a', 'a/alpha.txt', 'a/zeta.txt', 'b', 'm.txt'],
+  );
+});
+
+test('globPaths sorted:false is incremental: a first path before the whole walk', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'search-walk-incr-'));
+  t.teardown(() => fs.rmSync(root, { recursive: true, force: true }));
+  // A global sort walks every directory before the first path; walk order
+  // descends into just the first subtree it visits.
+  const dirs = 20;
+  for (let i = 0; i < dirs; i += 1) {
+    const sub = path.join(root, `d${String(i).padStart(3, '0')}`);
+    fs.mkdirSync(sub);
+    fs.writeFileSync(path.join(sub, 'f.txt'), '');
+  }
+  const base = makeNodeSearchPowers();
+  const counters = { readDirectory: 0 };
+  const search = makeSearch({
+    ...base,
+    readDirectory: async dir => {
+      counters.readDirectory += 1;
+      return base.readDirectory(dir);
+    },
+  });
+
+  // Sorted mode: the first batch arrives only after the whole tree is walked.
+  counters.readDirectory = 0;
+  const sortedGenerator = search.globPaths(root, '**', {
+    deniedSegments,
+    batchSize: 1,
+  });
+  await sortedGenerator.next();
+  const sortedWalkAtFirst = counters.readDirectory;
+  await sortedGenerator.return(undefined);
+
+  // Walk order: the first batch arrives after descending only one subtree.
+  counters.readDirectory = 0;
+  const unsortedGenerator = search.globPaths(root, '**', {
+    deniedSegments,
+    batchSize: 1,
+    sorted: false,
+  });
+  await unsortedGenerator.next();
+  const unsortedWalkAtFirst = counters.readDirectory;
+  await unsortedGenerator.return(undefined);
+
+  t.true(
+    sortedWalkAtFirst > dirs,
+    `sorted walked the whole tree first (${sortedWalkAtFirst} dirs)`,
+  );
+  t.true(
+    unsortedWalkAtFirst < dirs,
+    `sorted:false walked only ${unsortedWalkAtFirst} of ${dirs} dirs before the first path`,
+  );
+});
+
 test('provideSearch falls back to the JS engine and honors a native override', async t => {
   const { root } = buildMountFixture(t);
   const powers = makeNodeSearchPowers();

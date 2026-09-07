@@ -308,6 +308,32 @@ test('passable reader consumed once', async t => {
   t.is(results2.length, 0);
 });
 
+test('once-only reader rejects a second stream()', async t => {
+  const values = [1, 2, 3];
+
+  const readerRef = readerFromIterator(values, { once: true });
+
+  // First consumer drains normally.
+  const reader1 = iterateReader(readerRef);
+  const results1 = [];
+  for await (const value of reader1) {
+    results1.push(value);
+  }
+  t.deepEqual(results1, values);
+
+  // A second consumer must reject rather than silently split the iterator:
+  // `once: true` latches the reader to a single active stream.
+  const reader2 = iterateReader(readerRef);
+  await t.throwsAsync(
+    (async () => {
+      for await (const value of reader2) {
+        t.fail(`unexpected value ${value} from a once-only reader's re-stream`);
+      }
+    })(),
+    { message: /once-only/ },
+  );
+});
+
 test('native async generator with explicit return value', async t => {
   async function* generate() {
     yield 1;
