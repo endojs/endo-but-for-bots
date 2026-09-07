@@ -1,6 +1,6 @@
 // @ts-check
 /* global setImmediate */
-import { Far } from '@endo/far';
+import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import {
@@ -23,9 +23,12 @@ import { fileURLToPath } from 'node:url';
 import { makeThixotropeDaemon } from './daemon.js';
 import { makeIronhorseEngine } from './ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
+import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
+import { makeObservableInventory } from './observable-inventory.js';
 import { makeFsStore } from './store-fs.js';
 
 /** @import { WorkerEngine } from './worker-engine.js' */
+/** @import { Socket } from 'node:net' */
 
 /**
  * @param {string} path
@@ -120,6 +123,10 @@ export const serveThixotrope = async (
     },
   });
   const sockets = new Set();
+  /** @type {Set<Promise<void>>} */
+  const pendingDisconnects = new Set();
+  /** @type {Map<Socket, () => Promise<void>>} */
+  const disconnectViews = new Map();
   const server = createServer();
   let listening = false;
   let requested = false;
@@ -137,6 +144,9 @@ export const serveThixotrope = async (
     const closed = new Promise(resolveClose =>
       server.close(() => resolveClose(undefined)),
     );
+    const viewCleanup = Promise.allSettled(
+      [...disconnectViews.values()].map(disconnect => disconnect()),
+    );
     // Flush the stop acknowledgement, then bound the wait for clients to close.
     for (const socket of sockets) socket.end();
     const timer = setTimeout(closeSocket, 1000);
@@ -144,6 +154,20 @@ export const serveThixotrope = async (
       await closed;
     } finally {
       clearTimeout(timer);
+    }
+    // A failed guest may never settle subscription setup or cancellation.
+    // Continue to daemon shutdown after a grace period; startup discards any
+    // ephemeral registrations that survive in the guest's persistent image.
+    let cleanupTimer;
+    try {
+      await Promise.race([
+        Promise.all([viewCleanup, ...pendingDisconnects]),
+        new Promise(resolveCleanup => {
+          cleanupTimer = setTimeout(resolveCleanup, 1000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(cleanupTimer);
     }
     await rm(socketPath, { force: true });
   };
@@ -214,9 +238,20 @@ export const serveThixotrope = async (
       config.initialized = true;
       await save(configPath, config);
     }
+    let inventory;
+    if (
+      !daemon
+        .inspectWorkers()
+        .find(worker => worker.workerId === config.workerId)?.failure
+    ) {
+      inventory = await workspace.evaluate(
+        `(globalThis.inventory ??= (${makeObservableInventory.toString()})())`,
+      );
+      await E(inventory).disconnectEphemeral();
+    }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
     await rm(socketPath, { force: true });
-    const admin = Far('ThixotropeLocalAdmin', {
+    const adminMethods = {
       help: () => 'Local supervisor: evaluate(source), status(), stop().',
       evaluate: async source => {
         if (requested) throw Error('Supervisor is stopping');
@@ -247,10 +282,37 @@ export const serveThixotrope = async (
         setImmediate(requestStop);
         return 'Stopping supervisor';
       },
-    });
+      inventoryStatus: () => E(inventory).subscriptionCounts(),
+    };
     server.on('connection', socket => {
+      if (requested) {
+        socket.destroy();
+        return;
+      }
       sockets.add(socket);
-      socket.once('close', () => sockets.delete(socket));
+      const view = makeInventoryViewLifetime(inventory);
+      const disconnect = () => {
+        disconnectViews.delete(socket);
+        return view.disconnect();
+      };
+      disconnectViews.set(socket, disconnect);
+      socket.once('close', () => {
+        sockets.delete(socket);
+        const cleanup = disconnect().catch(error => {
+          // A quarantined vat cannot run cancellation; its ephemeral listeners
+          // will be discarded if it is ever recovered in a new supervisor.
+          if (!requested) console.error('Inventory disconnect:', error.message);
+        });
+        pendingDisconnects.add(cleanup);
+        void cleanup.finally(() => pendingDisconnects.delete(cleanup));
+      });
+      const admin = Far('ThixotropeLocalAdmin', {
+        ...adminMethods,
+        watchInventory: listener => {
+          if (requested) throw Error('Connection is closing');
+          return view.watch(listener);
+        },
+      });
       void makeLocalControl(socket, 'worker', admin).catch(() =>
         socket.destroy(),
       );

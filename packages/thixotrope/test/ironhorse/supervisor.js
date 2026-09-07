@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/test.js';
+import { Far } from '@endo/far';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
@@ -52,6 +53,75 @@ const connect = async (t, path) => {
   t.teardown(() => client.close());
   return client;
 };
+
+for (const phase of ['subscribe', 'unsubscribe']) {
+  test.serial(
+    `supervisor stop is bounded when inventory ${phase} stalls`,
+    async t => {
+      t.timeout(30_000);
+      const path = await mkdtemp('/tmp/thix-stalled-view-');
+      t.teardown(() => rm(path, { recursive: true, force: true }));
+      const first = await start(t, path);
+      const initial = await connect(t, path);
+      await initial.call(
+        'evaluate',
+        `(() => {
+      globalThis.watchStarted = false;
+      globalThis.unsubscribeStarted = false;
+      globalThis.inventory = Far('StalledInventory', {
+        disconnectEphemeral: () => {},
+        subscribe: () => {
+          watchStarted = true;
+          ${phase === 'subscribe' ? 'return new Promise(() => {});' : "return Far('StalledSubscription', { unsubscribe: () => { unsubscribeStarted = true; return new Promise(() => {}); } });"}
+        },
+      });
+    })()`,
+      );
+      await initial.call('stop');
+      t.is((await first.exited)[0], 0);
+
+      // Restart selects the persisted inventory rather than the old host reference.
+      const second = await start(t, path);
+      const admin = await connect(t, path);
+      const view = await connect(t, path);
+      const watching = view.call(
+        'watchInventory',
+        Far('View', { changed: () => {} }),
+      );
+      const handledWatch = watching.catch(() => undefined);
+      if (phase === 'unsubscribe') await watching;
+      let entered = false;
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        if ((await admin.call('evaluate', 'watchStarted')) === 'true') {
+          entered = true;
+          break;
+        }
+      }
+      t.true(entered, 'the intended stalled operation was reached');
+      t.is(await admin.call('stop'), 'Stopping supervisor');
+      t.is(
+        (await second.exited)[0],
+        0,
+        'shutdown must not wait forever for guest cancellation',
+      );
+      await handledWatch;
+      t.deepEqual(await readdir(join(path, 'heaps', 'incarnations')), []);
+
+      const third = await start(t, path);
+      const restored = await connect(t, path);
+      t.is(await restored.call('evaluate', 'watchStarted'), 'true');
+      if (phase === 'unsubscribe')
+        t.is(await restored.call('evaluate', 'unsubscribeStarted'), 'true');
+      await restored.call('stop');
+      t.is(
+        (await third.exited)[0],
+        0,
+        'state ownership is reusable after bounded cleanup',
+      );
+    },
+  );
+}
 
 test.serial(
   'interrupted workspace selection and publication reuse the same roots',
@@ -260,6 +330,235 @@ test.serial(
     const stop = await transcript(t, path, '', 'stop');
     t.is(stop.code, 0);
     t.regex(stop.output, /Stopping supervisor/);
+    t.is((await supervisor.exited)[0], 0);
+  },
+);
+
+/**
+ * @param {ExecutionContext} t
+ * @param {Awaited<ReturnType<typeof connectLocalControl>>} client
+ * @param {bigint} expected
+ */
+const waitForViews = async (t, client, expected) => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const counts = await client.call('inventoryStatus');
+    if (counts.ephemeral === expected) return counts;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  t.fail(`Expected ${expected} ephemeral subscriptions`);
+};
+
+test.serial(
+  'observable inventory crosses a persistent guest and ephemeral views without retaining closed subscriptions',
+  async t => {
+    t.timeout(120_000);
+    const path = await mkdtemp('/tmp/thix-inventory-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const first = await start(t, path);
+    const admin = await connect(t, path);
+    await admin.call(
+      'evaluate',
+      `(() => {
+    globalThis.retainedCounter = Far('Counter', { read: () => 42 });
+    inventory.set('counter', retainedCounter);
+    globalThis.observedRevisions = [];
+    globalThis.durableSubscription = inventory.subscribe(Far('GuestObserver', {
+      changed: snapshot => { observedRevisions.push(snapshot.revision); },
+    }));
+  })()`,
+    );
+    const view = await connect(t, path);
+    const updates = [];
+    let nextUpdate;
+    const observer = Far('TestView', {
+      changed: update => {
+        updates.push(update);
+        nextUpdate?.();
+        nextUpdate = undefined;
+      },
+    });
+    await view.call('watchInventory', observer);
+    while (updates.length === 0) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => {
+        nextUpdate = resolve;
+      });
+    }
+    t.deepEqual(updates[0].entries, [['counter', '<object / capability>']]);
+    t.deepEqual(await admin.call('inventoryStatus'), {
+      durable: 1n,
+      ephemeral: 1n,
+    });
+    await admin.call('evaluate', "inventory.set('color', 'blue'); undefined");
+    while (
+      !updates.some(update => update.entries.some(([key]) => key === 'color'))
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => {
+        nextUpdate = resolve;
+      });
+    }
+    view.close();
+    t.deepEqual(await waitForViews(t, admin, 0n), {
+      durable: 1n,
+      ephemeral: 0n,
+    });
+    const stalled = await connect(t, path);
+    await stalled.call(
+      'watchInventory',
+      Far('StalledView', {
+        changed: () => new Promise(() => {}),
+      }),
+    );
+    await admin.call('evaluate', "inventory.set('slow', true); undefined");
+    stalled.close();
+    await waitForViews(t, admin, 0n);
+    const received = updates.length;
+    await admin.call('evaluate', "inventory.delete('color'); undefined");
+    t.is(updates.length, received);
+    // Persist an attached view, then kill the supervisor. Its successor must
+    // discard that old UI subscription while retaining the guest's subscriber.
+    const abandoned = await connect(t, path);
+    await abandoned.call(
+      'watchInventory',
+      Far('AbandonedView', { changed: () => {} }),
+    );
+    t.deepEqual(await admin.call('inventoryStatus'), {
+      durable: 1n,
+      ephemeral: 1n,
+    });
+    // Let the actual idle policy snapshot both kinds of subscription while
+    // the UI remains connected. status is read-only and does not wake the vat.
+    let slept = false;
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const status = await admin.call('status');
+      if (
+        !status.workers.find(worker => worker.workerId === status.workspace)
+          .awake
+      ) {
+        slept = true;
+        break;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    t.true(slept, 'workspace slept with an attached UI');
+    await admin.call('evaluate', "inventory.set('woke', true); undefined");
+    t.deepEqual(await admin.call('inventoryStatus'), {
+      durable: 1n,
+      ephemeral: 1n,
+    });
+    first.child.kill('SIGKILL');
+    await first.exited;
+    const second = await start(t, path);
+    const restored = await connect(t, path);
+    t.deepEqual(await restored.call('inventoryStatus'), {
+      durable: 1n,
+      ephemeral: 0n,
+    });
+    t.is(
+      await restored.call('evaluate', "E(inventory.get('counter')).read()"),
+      '42',
+    );
+    await restored.call(
+      'evaluate',
+      "inventory.set('restored', true); undefined",
+    );
+    t.is(
+      await restored.call(
+        'evaluate',
+        'observedRevisions.includes(inventory.snapshot().revision)',
+      ),
+      'true',
+    );
+    await restored.call('stop');
+    t.is((await second.exited)[0], 0);
+  },
+);
+
+test.serial(
+  'inventory TUI disconnects on stdin close and removes its guest subscription',
+  async t => {
+    t.timeout(120_000);
+    const path = await mkdtemp('/tmp/thix-tui-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const supervisor = await start(t, path);
+    const admin = await connect(t, path);
+    await admin.call('evaluate', "inventory.set('example', 123); undefined");
+    const ui = spawn(process.execPath, [cli, 'inventory', path], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const exited = once(ui, 'exit');
+    t.teardown(async () => {
+      ui.kill('SIGKILL');
+      await exited;
+    });
+    let output = '';
+    let diagnostic = '';
+    ui.stderr.on('data', data => {
+      diagnostic += String(data);
+    });
+    const rendered = new Promise(resolve => {
+      ui.stdout.on('data', data => {
+        output += String(data);
+        if (output.includes('example  123')) resolve(undefined);
+      });
+    });
+    await Promise.race([
+      rendered,
+      exited.then(() => {
+        throw Error(diagnostic);
+      }),
+    ]);
+    t.is((await admin.call('inventoryStatus')).ephemeral, 1n);
+    const refreshed = new Promise(resolve =>
+      ui.stdout.on('data', () => {
+        if (output.includes('changed  true')) resolve(undefined);
+      }),
+    );
+    await admin.call('evaluate', "inventory.set('changed', true); undefined");
+    await refreshed;
+    ui.stdin.end();
+    t.is((await exited)[0], 0);
+    await waitForViews(t, admin, 0n);
+    t.is(await admin.call('evaluate', "inventory.get('example')"), '123');
+    for (const mode of ['q', 'SIGTERM', 'SIGKILL', 'early EOF']) {
+      t.log(`closing TUI with ${mode}`);
+      const another = spawn(process.execPath, [cli, 'inventory', path], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const ended = once(another, 'exit');
+      t.teardown(async () => {
+        another.kill('SIGKILL');
+        await ended;
+      });
+      const visible = new Promise(resolve =>
+        another.stdout.on('data', () => resolve(undefined)),
+      );
+      if (mode !== 'early EOF') {
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.race([
+          visible,
+          ended.then(() => {
+            throw Error('TUI exited before rendering');
+          }),
+        ]);
+      }
+      if (mode === 'q') another.stdin.write('q\n');
+      else if (mode === 'early EOF') another.stdin.end();
+      else if (mode === 'SIGTERM' || mode === 'SIGKILL') another.kill(mode);
+      // eslint-disable-next-line no-await-in-loop
+      const [code, signal] = await ended;
+      if (mode === 'SIGKILL') t.is(signal, 'SIGKILL');
+      else t.is(code, 0);
+      // eslint-disable-next-line no-await-in-loop
+      await waitForViews(t, admin, 0n);
+    }
+
+    await admin.call('stop');
     t.is((await supervisor.exited)[0], 0);
   },
 );

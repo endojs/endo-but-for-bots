@@ -77,7 +77,51 @@ E(counter).incr()
 Detach, stop and restart the supervisor, then attach and call `E(counter).incr()` again.
 Both vats retain their state and the reference between them; calls pass through comms.
 A publication keeps the workspace vat reachable without an inventory layer.
-Optional user inventories can be ordinary guest Maps.
+The observable inventory is an optional guest convenience, with no special GC role.
+
+The workspace also provides `inventory`, a special object backed by an ordinary Map.
+It supports `get`, `has`, `set`, `delete`, `clear`, `keys`, `entries`, and `getSize`.
+Keys are strings; values retain their ordinary identity and reachability.
+To watch it in another terminal:
+
+```sh
+yarn workspace @endo/thixotrope thix inventory ./private-state
+```
+
+Then use `attach` to modify it:
+
+```js
+inventory.set('counter', counter)
+inventory.set('note', 'hello')
+inventory.delete('note')
+```
+
+The TUI redraws from subscribed snapshots and displays object/capability placeholders;
+it receives no references to the inventory's actual capability values.
+Press `q` then Enter, Ctrl-D, or Ctrl-C to close the view.
+The TUI always disconnects its dedicated socket on close, including EOF and signals.
+An abruptly killed TUI also loses its socket, so the supervisor cancels its subscription.
+
+Guest code can call `inventory.subscribe(listener)` where the listener has a
+`changed(snapshot)` method.
+The subscription immediately sends the current display snapshot and returns an
+object with `unsubscribe()`.
+Snapshots contain a bigint revision and `[key, displaySummary]` entries.
+Unchanged `set` calls, missing-key deletes, and empty clears do not notify.
+Slow listeners receive the latest coalesced snapshot rather than an unbounded history.
+
+This exercises three lifetimes: persistent inventory state, persistent guest
+subscribers, and ephemeral UI subscribers bridged by the running supervisor.
+An attached UI can continue across guest sleep/wake.
+Closing it explicitly cancels its guest subscription and drops the bridge's observer
+reference, even if a notification is pending.
+On supervisor restart, old UI subscriptions are discarded while guest subscriptions remain.
+Shutdown bounds its wait for guest cancellation so a stalled guest cannot prevent
+worker cleanup and store release; restart discards any remaining UI registrations.
+Cancellation makes subscription objects collectible; physical reclamation follows
+normal heap GC and snapshot/journal cleanup rather than a special inventory GC rule.
+`inventory.subscriptionCounts()` reports the durable and ephemeral registrations for
+experiments; it is not a measure of physical heap reclamation.
 
 `status` reports worker state and cumulative process-local counts and milliseconds
 for delivery (including its commit cranks), snapshot creation, and engine startup/wake.

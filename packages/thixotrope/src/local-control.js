@@ -27,6 +27,8 @@ export const makeLocalControl = async (socket, role, admin = undefined) => {
     finish = resolve;
   });
   let ended = false;
+  /** @type {Awaited<ReturnType<typeof makeOcapn>> | undefined} */
+  let client;
   const pipe = makePipeNetwork({
     codec: syrupCodec,
     workerId: 'local-admin-v1',
@@ -75,16 +77,18 @@ export const makeLocalControl = async (socket, role, admin = undefined) => {
   socket.once('close', () => {
     ended = true;
     pipe.close();
+    client?.shutdown();
     finish();
   });
-  const client = await makeOcapn({
+  client = await makeOcapn({
     codec: syrupCodec,
     network: pipe.network,
     locator: new Map(admin === undefined ? [] : [['admin', admin]]),
   });
-  await client.provideSession(pipe.peerLocation);
+  if (ended) client.shutdown();
+  else await client.provideSession(pipe.peerLocation);
   const close = () => {
-    client.shutdown();
+    client?.shutdown();
     pipe.close();
     socket.destroy();
   };
@@ -92,6 +96,7 @@ export const makeLocalControl = async (socket, role, admin = undefined) => {
     closed,
     close,
     getAdmin: async () => {
+      if (!client || ended) throw Error('Supervisor disconnected');
       const session = await client.provideSession(pipe.peerLocation);
       return E(/** @type {any} */ (session.getBootstrap())).fetch(secret);
     },
