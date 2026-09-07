@@ -46916,8 +46916,17 @@ impl Interp {
             _ => crate::value::SlotIndex::NULL,
         };
         if !boxed_proto.is_null() {
+            // An integer index arrives without a name key. LOOK one up rather
+            // than minting it: a read creates nothing, and interning per
+            // distinct index would burn the u16 id space (and meter a slot
+            // apiece) on a loop like `for (i…) n[i]` that can only read
+            // `undefined`. A key some `Prototype[0] = v` already defined is in
+            // the table, so that read still resolves.
             let id = if id == crate::value::XS_NO_ID {
-                self.intern_key(&index.to_string())
+                match self.symbol_ids.get(&index.to_string()).copied() {
+                    Some(id) => id,
+                    None => return Ok(Slot::undefined()),
+                }
             } else {
                 id
             };
