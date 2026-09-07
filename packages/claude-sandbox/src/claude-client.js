@@ -328,6 +328,9 @@ export const makeClaudeClient = ({
       String(prompt),
       '--output-format',
       'stream-json',
+      // Emit Anthropic content-block deltas as `stream_event` records instead
+      // of waiting for each complete assistant message.
+      '--include-partial-messages',
       // `stream-json` print mode requires --verbose to emit the full
       // per-event stream rather than only the final result.
       '--verbose',
