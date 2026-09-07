@@ -8,6 +8,7 @@
 // snapshotting JS engines.
 export { makeThixotropeDaemon } from './src/daemon.js';
 export { makeXsEngine } from './src/xs-engine.js';
+export { makeIronhorseEngine } from './src/ironhorse-engine.js';
 export { makeFsStore } from './src/store-fs.js';
 export { makeTimerResource } from './src/resources.js';
 export { makeDurableNetLayer } from './src/durable-netlayer.js';

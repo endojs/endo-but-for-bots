@@ -3,6 +3,7 @@
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
+import { WorkerHaltError } from './worker-engine.js';
 
 /**
  * @import {WorkerEngine, WorkerIncarnation} from './worker-engine.js'
@@ -60,6 +61,7 @@ import { Fail, q } from '@endo/errors';
  *   it. If a future engine surfaces its own dormancy signal, it can
  *   feed this same seam.
  * @param {string} [options.debugLabel]
+ * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = ({
   workerId,
@@ -68,6 +70,7 @@ export const makeDurableWorkerTransport = ({
   onFrame,
   idleSleepMs = undefined,
   debugLabel = undefined,
+  onFatal = () => {},
 }) => {
   typeof onFrame === 'function' ||
     Fail`durable worker transport requires an onFrame callback`;
@@ -167,6 +170,12 @@ export const makeDurableWorkerTransport = ({
     if (dying !== undefined) {
       Promise.resolve(dying.terminate()).catch(() => {});
     }
+    if (error instanceof WorkerHaltError) {
+      // Preserve the last snapshot for inspection, but do not endlessly
+      // replay an input known to exhaust its budget or hit an engine gap.
+      store.setMeta({ ...store.getMeta(), failure: error.message });
+      onFatal();
+    }
     throw error;
   };
 
@@ -194,6 +203,7 @@ export const makeDurableWorkerTransport = ({
     }
     seenOutbound = 0;
     const meta = store.getMeta();
+    if (meta.failure !== undefined) throw new WorkerHaltError(meta.failure);
     outboundBase = meta.outboundBase ?? 0;
     const snapshotRef = meta.snapshot?.ref ?? null;
     const cut = meta.snapshot?.cut ?? 0;

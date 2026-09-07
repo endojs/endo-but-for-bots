@@ -2,15 +2,18 @@
 import harden from '@endo/harden';
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { Fail, q } from '@endo/errors';
 
@@ -26,6 +29,7 @@ import { Fail, q } from '@endo/errors';
  * @typedef {object} WorkerMeta
  * @property {string} [debugLabel] optional human-readable label; used
  *   only in diagnostics, never as an identifier
+ * @property {string} [failure] deterministic halt; retained for inspection
  * @property {{ ref: unknown, cut?: number } | null} [snapshot]
  *   the engine snapshot and the absolute journal index (`cut`) it
  *   subsumes
@@ -126,16 +130,35 @@ const readJsonMaybe = path => {
 };
 
 /**
- * Crash-safe JSON write: temp file plus atomic rename, so a crash
- * mid-write leaves the previous version intact rather than a torn file.
- *
+ * @param {string} path
+ */
+const syncPath = path => {
+  const fd = openSync(path, 'r');
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+};
+
+/** @param {string} path */
+const makeDirectory = path => {
+  if (existsSync(path)) return;
+  makeDirectory(dirname(path));
+  mkdirSync(path);
+  syncPath(dirname(path));
+};
+
+/**
  * @param {string} path
  * @param {string} text
  */
 const writeFileAtomic = (path, text) => {
   const tempPath = `${path}.tmp`;
   writeFileSync(tempPath, text);
+  syncPath(tempPath);
   renameSync(tempPath, path);
+  syncPath(dirname(path));
 };
 
 /**
@@ -156,13 +179,14 @@ const writeFileAtomic = (path, text) => {
 export const makeFsStore = statePath => {
   const workersPath = join(statePath, 'workers');
   const sessionsPath = join(statePath, 'sessions');
-  mkdirSync(workersPath, { recursive: true });
+  makeDirectory(workersPath);
+  makeDirectory(sessionsPath);
 
   /** @param {string} token */
   const makeSessionStore = token => {
     assertSessionToken(token);
     const sessionPath = join(sessionsPath, token);
-    mkdirSync(sessionPath, { recursive: true });
+    makeDirectory(sessionPath);
     const metaPath = join(sessionPath, 'meta.json');
     const framesPath = join(sessionPath, 'frames.jsonl');
 
@@ -218,6 +242,7 @@ export const makeFsStore = statePath => {
           framesRepaired = true;
         }
         appendFileSync(framesPath, `${JSON.stringify(entry)}\n`);
+        syncPath(framesPath);
       },
       readFrames: readFramesFile,
       truncateFramesUpTo: upToN => {
@@ -231,7 +256,7 @@ export const makeFsStore = statePath => {
   const makeWorkerStore = workerId => {
     assertWorkerId(workerId);
     const workerPath = join(workersPath, workerId);
-    mkdirSync(workerPath, { recursive: true });
+    makeDirectory(workerPath);
     const tablesPath = join(workerPath, 'tables.json');
     const metaPath = join(workerPath, 'meta.json');
     const journalPath = join(workerPath, 'journal.jsonl');
@@ -285,9 +310,7 @@ export const makeFsStore = statePath => {
      */
     const writeJournalFile = (base, lines) => {
       const text = [JSON.stringify({ base }), ...lines, ''].join('\n');
-      const tempPath = `${journalPath}.tmp`;
-      writeFileSync(tempPath, text);
-      renameSync(tempPath, journalPath);
+      writeFileAtomic(journalPath, text);
       journalRepaired = true;
     };
 
@@ -313,6 +336,7 @@ export const makeFsStore = statePath => {
         }
         ensureJournalRepaired();
         appendFileSync(journalPath, `${JSON.stringify(entry)}\n`);
+        syncPath(journalPath);
       },
       readJournal: (from = 0) => {
         const { base, lines } = readJournalFile();
@@ -345,6 +369,7 @@ export const makeFsStore = statePath => {
     deleteWorker: workerId => {
       assertWorkerId(workerId);
       rmSync(join(workersPath, workerId), { recursive: true, force: true });
+      syncPath(workersPath);
     },
     getHubState: () => readJsonMaybe(join(statePath, 'hub.json')),
     setHubState: state =>
@@ -358,6 +383,7 @@ export const makeFsStore = statePath => {
     deleteSession: token => {
       assertSessionToken(token);
       rmSync(join(sessionsPath, token), { recursive: true, force: true });
+      syncPath(sessionsPath);
     },
   };
   return harden(store);

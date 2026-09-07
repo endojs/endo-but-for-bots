@@ -37,7 +37,12 @@
     "test": "ses-ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0",
-    "build:xs-bundles": "node scripts/bundle-xs-worker.mjs"
+    "build:xs-bundles": "node scripts/bundle-xs-worker.mjs",
+    "build:ironhorse-bundles": "node scripts/bundle-ironhorse-worker.mjs",
+    "demo:ironhorse": "node scripts/ironhorse-demo.mjs counter",
+    "test:ironhorse": "ava --config ava.ironhorse.config.mjs",
+    "demo:ironhorse:counter": "node scripts/ironhorse-demo.mjs counter",
+    "demo:ironhorse:promise": "node scripts/ironhorse-demo.mjs promise"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
