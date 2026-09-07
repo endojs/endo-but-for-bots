@@ -521,11 +521,19 @@ export const assemblePolicyArgv = policy => {
   const argv = [
     '--user',
     `${policy.uid}:${policy.gid}`,
-    // Namespaces are named explicitly rather than left to the runtime
-    // default so the attestation can read a definite value back instead
-    // of an empty string that means "whatever this host does".
-    '--userns',
-    'private',
+    // The user namespace is deliberately *not* requested here.
+    // `--userns private` asks a rootless engine to nest a second one
+    // inside its own, which needs subordinate id ranges to map from and
+    // fails outright on a host that has none — while adding nothing:
+    // rootless containers already run outside the daemon's user
+    // namespace, and `attestSlicePolicy` proves that from
+    // `/proc/<pid>/ns/user` rather than from any flag. The driver
+    // additionally refuses a namespace another of its live slices
+    // holds. Both are observations, which is the point.
+    //
+    // The two below are named explicitly because they cost nothing and
+    // let the attestation read a definite value back instead of an
+    // empty string meaning "whatever this host does".
     '--pid',
     'private',
     '--ipc',

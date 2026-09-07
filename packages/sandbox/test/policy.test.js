@@ -335,8 +335,6 @@ test('policy argv carries every ceiling the request named', t => {
     [
       '--user',
       '1000:1000',
-      '--userns',
-      'private',
       '--pid',
       'private',
       '--ipc',

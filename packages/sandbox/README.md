@@ -515,6 +515,13 @@ cgroup v2 controllers to be delegated to the daemon's user; a host that
 cannot delegate them cannot apply the ceilings, whatever the runtime
 echoed back, so the slice is refused.
 
+The user namespace is proved but never requested. Asking a rootless
+engine for `--userns private` makes it nest a second namespace inside
+its own, which needs subordinate id ranges to map from and fails
+outright on a host that has none — while adding nothing, since a
+rootless container already runs outside the daemon's user namespace and
+the `/proc/<pid>/ns/user` comparison is what establishes that.
+
 All three capability masks are read, not just the effective one: a
 process whose permitted set is populated is one `capset()` from having
 it back, so an empty `CapEff` beside a populated `CapPrm` or `CapBnd`

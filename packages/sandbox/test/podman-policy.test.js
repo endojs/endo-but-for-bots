@@ -355,8 +355,11 @@ test('the anchor is created under the whole policy prefix', async t => {
     argv.flatMap((arg, index) => (arg === flag ? [argv[index + 1]] : []));
 
   t.deepEqual(valuesOf('--user'), ['1000:1000']);
-  t.deepEqual(valuesOf('--userns'), ['private']);
   t.deepEqual(valuesOf('--pid'), ['private']);
+  // Deliberately absent: see `assemblePolicyArgv`. The user namespace
+  // is proved from the kernel, not asked for with a flag a rootless
+  // engine cannot satisfy.
+  t.deepEqual(valuesOf('--userns'), []);
   t.deepEqual(valuesOf('--ipc'), ['private']);
   t.deepEqual(valuesOf('--cap-drop'), ['ALL']);
   t.deepEqual(valuesOf('--network'), ['container:broker-sidecar-s1']);
