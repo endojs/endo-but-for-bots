@@ -192,10 +192,10 @@ export const makeBufferedReader = (options = {}) => {
       // advance. A node that points back at itself can never carry a close
       // signal, so it is rejected outright below. NOTE: a longer cycle (node A
       // resolving to an earlier node B) still spins this loop through the
-      // microtask queue, as it does in `makeReaderPump`'s equivalent walk;
-      // defending against that needs a protocol-level bound, not a per-walk
-      // one, and is deliberately left to the shared pump rather than solved
-      // differently here.
+      // microtask queue. `makeReaderPump` bounds its own walk by parking once
+      // it holds `MAX_CREDIT` unspent credit, which has no counterpart here:
+      // this responder spends no credit, so there is nothing for the walk to
+      // wait on, and a bound for it is still open.
       for (;;) {
         /** @type {StreamNode<undefined, undefined> | typeof DONE | undefined} */
         let synNode;

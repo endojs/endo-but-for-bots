@@ -257,6 +257,223 @@ test('passable reader immediate close via raw stream API', async t => {
   t.false(started);
 });
 
+/**
+ * Yield to the microtask queue until `condition` holds, giving up after a
+ * generous number of turns so a regression fails fast rather than hanging.
+ *
+ * @param {() => boolean} condition
+ * @returns {Promise<boolean>}
+ */
+const settled = async condition => {
+  await null;
+  for (let i = 0; i < 1000; i += 1) {
+    if (condition()) {
+      return true;
+    }
+    await null;
+  }
+  return condition();
+};
+
+/**
+ * A source whose `next()` parks until the test pushes a value, recording how
+ * many pulls were issued and whether `return()` ever overlapped one.
+ */
+const makeBlockingSource = () => {
+  /** @type {unknown[]} */
+  const queue = [];
+  /** @type {Array<(value: unknown) => void>} */
+  const waiting = [];
+  let pulls = 0;
+  let inFlight = 0;
+  let returned = false;
+  let returnedDuringPull = false;
+
+  /** @param {unknown} value */
+  const push = value => {
+    const resolve = waiting.shift();
+    if (resolve) {
+      resolve(value);
+    } else {
+      queue.push(value);
+    }
+  };
+
+  const source = harden({
+    async next() {
+      pulls += 1;
+      if (queue.length > 0) {
+        return harden({ value: queue.shift(), done: false });
+      }
+      inFlight += 1;
+      const value = await new Promise(resolve => {
+        waiting.push(resolve);
+      });
+      inFlight -= 1;
+      return harden({ value, done: false });
+    },
+    async return() {
+      returned = true;
+      if (inFlight > 0) {
+        returnedDuringPull = true;
+      }
+      return harden({ value: undefined, done: true });
+    },
+  });
+
+  return harden({
+    source,
+    push,
+    pulls: () => pulls,
+    returned: () => returned,
+    returnedDuringPull: () => returnedDuringPull,
+  });
+};
+
+test('an early return() behind unspent prefetch credit costs one in-flight pull', async t => {
+  // A hang here is the regression: the close mark queued behind credit the
+  // source would never pay for.
+  t.timeout(10_000);
+  const src = makeBlockingSource();
+  const readerRef = readerFromIterator(src.source);
+  const reader = iterateReader(readerRef, { buffer: 64 });
+
+  src.push('one');
+  const first = await reader.next();
+  t.is(first.value, 'one');
+  // The pump spends a second credit at once and parks in the idle source,
+  // with the rest of the prefetched credit still ahead of any close.
+  t.true(await settled(() => src.pulls() === 2));
+
+  assert(reader.return, 'iterator should have return method');
+  const closing = reader.return(undefined);
+  await settled(() => src.returned());
+  t.false(src.returned(), 'the in-flight pull has to settle before the close');
+
+  // One further value settles that pull; the close is honoured right after
+  // it, not dozens of values later.
+  src.push('two');
+  const closed = await closing;
+  t.true(closed.done);
+  t.true(src.returned(), 'the source was released');
+  t.false(src.returnedDuringPull(), 'return() never overlapped a pull');
+  t.is(src.pulls(), 2, 'no pull was issued once the close was observed');
+
+  // The unspent credit is discarded, not paid for.
+  src.push('three');
+  await settled(() => src.pulls() > 2);
+  t.is(src.pulls(), 2);
+});
+
+test('a close during the responder pre-pull allowance stops further pulls', async t => {
+  t.timeout(10_000);
+  const src = makeBlockingSource();
+  // The responder pulls four values ahead without waiting for credit.
+  const readerRef = readerFromIterator(src.source, { buffer: 4 });
+  const reader = iterateReader(readerRef);
+
+  // The first pre-pull is in flight against an idle source.
+  const pulling = await settled(() => src.pulls() === 1);
+  t.true(pulling);
+  assert(reader.return, 'iterator should have return method');
+  const closing = reader.return(undefined);
+  await settled(() => src.returned());
+  t.false(src.returned(), 'the in-flight pull has to settle before the close');
+  src.push('one');
+  const closed = await closing;
+  t.true(closed.done);
+  t.true(src.returned(), 'the source was released');
+  t.false(src.returnedDuringPull(), 'return() never overlapped a pull');
+  t.is(src.pulls(), 1, 'the remaining pre-pull allowance was not spent');
+});
+
+test('a self-referential synchronize node is refused as a protocol error', async t => {
+  t.timeout(10_000);
+  let produced = 0;
+  let returned = false;
+  const source = harden({
+    async next() {
+      produced += 1;
+      return harden({ value: produced, done: false });
+    },
+    async return() {
+      returned = true;
+      return harden({ value: undefined, done: true });
+    },
+  });
+  const readerRef = readerFromIterator(source);
+  // A node whose next promise is the promise that produced it: a chain that
+  // can never carry a close.
+  const { promise, resolve } = makePromiseKit();
+  resolve(harden({ value: undefined, promise }));
+
+  // Whether the pump refuses the chain before or after its first pull, the
+  // acknowledge chain ends in the rejection.
+  const ackHead = readerRef.stream(promise);
+  await t.throwsAsync(
+    async () => {
+      let node = await ackHead;
+      while (node.promise !== null) {
+        node = await node.promise;
+      }
+    },
+    { instanceOf: TypeError, message: /self-referential/ },
+  );
+  t.true(returned, 'the source was released');
+});
+
+test('a source whose return() throws still terminates the acknowledge chain', async t => {
+  t.timeout(10_000);
+  let produced = 0;
+  let returns = 0;
+  const source = harden({
+    async next() {
+      produced += 1;
+      return harden({ value: produced, done: false });
+    },
+    async return() {
+      returns += 1;
+      throw Error('cleanup failed');
+    },
+  });
+  const reader = iterateReader(readerFromIterator(source));
+  const first = await reader.next();
+  t.is(first.value, 1);
+  assert(reader.return, 'iterator should have return method');
+  // The cleanup error is what ends the stream. It reaches the initiator
+  // rather than stranding its drain of the acknowledge chain.
+  await t.throwsAsync(reader.return(undefined), { message: /cleanup failed/ });
+  t.is(returns, 1, 'return() is called once');
+});
+
+test('a node promise carrying its own then is observed through the intrinsic, once', async t => {
+  t.timeout(10_000);
+  const src = makeBlockingSource();
+  const readerRef = readerFromIterator(src.source);
+  // The only honest credit is the first node's: its promise never resolves.
+  // That promise carries an own `then` which would hand out a further node
+  // twice, if anything dispatched through it instead of the intrinsic.
+  const { promise: tail } = makePromiseKit();
+  const further = harden({ value: undefined, promise: tail });
+  const hostile = new Promise(() => {});
+  Object.defineProperty(hostile, 'then', {
+    /** @param {(node: unknown) => void} onFulfilled */
+    value: onFulfilled => {
+      onFulfilled(further);
+      onFulfilled(further);
+    },
+  });
+  const { promise: head, resolve } = makePromiseKit();
+  resolve(Object.freeze({ value: undefined, promise: hostile }));
+  readerRef.stream(head);
+
+  src.push('one');
+  src.push('two');
+  src.push('three');
+  await settled(() => src.pulls() > 1);
+  t.is(src.pulls(), 1, 'one credit, one pull');
+});
+
 test('passable reader many items', async t => {
   const count = 100;
   const values = Array.from({ length: count }, (_, i) => i);
