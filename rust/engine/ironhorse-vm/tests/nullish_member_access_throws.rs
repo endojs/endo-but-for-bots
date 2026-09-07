@@ -111,6 +111,32 @@ fn the_computed_key_path_boxes_a_primitive_base_the_same_way() {
 }
 
 #[test]
+fn an_index_read_on_a_boxed_primitive_mints_no_key() {
+    // A read creates nothing, so an integer index must be LOOKED UP in the
+    // name table, never interned into it. Minting one id per distinct index
+    // walks the u16 key space into `Unsupported("property-key:id-space-
+    // exhausted")` — and meters a slot apiece — for a loop that can only
+    // ever read `undefined`.
+    for base in ["42", "true", "1n", "Symbol('x')"] {
+        let source = format!("var b={base}; for (var i=0;i<70000;i++){{ b[i] }} 'ok'");
+        let out = run(&source);
+        assert!(
+            out.completed,
+            "`{base}[i]` over the id space must complete; halt: {:?}",
+            out.halt
+        );
+        assert_eq!(out.result, "ok", "{base}");
+    }
+    // An index key some assignment already interned still resolves.
+    let out = run(
+        "Number.prototype[0]=7; Boolean.prototype[3]=9; \
+         String((42)[0]) + ',' + String(true[3])",
+    );
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "7,9");
+}
+
+#[test]
 fn a_computed_read_on_a_symbol_does_not_reach_its_description_slot() {
     // A symbol value carries `Payload::Reference(desc)`, so before the kind
     // match `property_at_get` treated the description slot as the receiver:
