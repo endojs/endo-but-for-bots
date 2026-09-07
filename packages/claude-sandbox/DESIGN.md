@@ -208,13 +208,23 @@ enqueuing, so it preempts the in-flight turn cleanly.
 The analogy is exact; only the _abort action_ differs (floot aborts a fetch
 stream; here we **kill the `claude -p` OS process** in the slice):
 
-| floot                              | claude-sandbox                          |
-| ---------------------------------- | --------------------------------------- |
-| `converse(input) → replyReader`    | `send(prompt) → replyReader`            |
-| a turn = provider HTTP stream      | a turn = `claude -p` process            |
-| abort = `controller.abort()`       | abort = `E(proc).kill()` (on `onClose`) |
-| `turnChain` serializes turns       | `turnChain` serializes turns            |
-| reply channel `onClose → abort`    | reply channel `onClose → kill`          |
+| floot                                | claude-sandbox                          |
+| ------------------------------------ | --------------------------------------- |
+| `startTurn(input) → FlootTurn`       | `send(prompt) → replyReader`            |
+| a turn = provider HTTP stream        | a turn = `claude -p` process            |
+| abort = `controller.abort()`         | abort = `E(proc).kill()` (on `onClose`) |
+| `turnChain` serializes turns         | `turnChain` serializes turns            |
+| reply channel drained by the daemon  | reply channel `onClose → kill`          |
+| abort on `Turn.cancel()` only        | abort on the consumer's close           |
+
+Floot's half of the last two rows changed with
+[floot-daemon-owned-turns](../../designs/floot-daemon-owned-turns.md): a Floot
+session hands out a `FlootTurn` and drains its own reply channel, so nobody's
+disconnect ends a turn.
+This package still hands its reply channel to its caller, which is the right
+default for a client the daemon holds directly — but a caller that reaches it
+across a browser CapTP connection wants a turn object in front of it for the
+same reason floot does.
 
 `send()` returns the buffered reader immediately; the turn queues on `turnChain`
 and the reader yields the parsed stream-json events then a terminal
@@ -255,7 +265,7 @@ completion provider; it is an entire agent). The only common seam is the
 
 ### The common Session interface
 
-Synthesised from floot's `FlootSession` (`converse(input) → replyReader`,
+Synthesised from floot's `FlootSession` (`startTurn(input) → FlootTurn`,
 `getHistory`, `getUsage`, `getInfo`) and this package's `ClaudeClient`
 (`send`/`interrupt`/`terminate`/`status`):
 

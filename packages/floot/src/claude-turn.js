@@ -12,8 +12,8 @@
 // conversation-context assembly are all bypassed, and the events streamed back
 // (text, tool_use, tool_result, result) are surfaced for display only.
 //
-// Abort: when the Floot reply consumer stops (UI Stop / barge-in), the reply
-// channel's onClose aborts `signal`; we close the CLI reader in response,
+// Abort: when the turn is cancelled (UI Stop / barge-in, via
+// `FlootTurn.cancel`), `signal` aborts; we close the CLI reader in response,
 // which kills the in-flight `claude -p` process in the sandbox.
 
 import { E } from '@endo/eventual-send';
