@@ -119,6 +119,15 @@ impl SideRefCounts {
 pub(crate) struct ArrayData {
     pub(crate) length: u32,
     items: std::collections::BTreeMap<u32, Slot>,
+    /// How many items carry a non-default descriptor flag — a sealed,
+    /// frozen, non-enumerable or non-writable element.
+    ///
+    /// Kept as a COUNT rather than recomputed because
+    /// [`Self::has_attributed_items`] gates the dense fast paths, which run
+    /// per element: an O(items) scan there would make `push` in a loop
+    /// quadratic. Every mutation of the map goes through the counted methods
+    /// below for exactly this reason; there is deliberately no `items_mut`.
+    attributed: u32,
 }
 
 impl ArrayData {
@@ -127,10 +136,61 @@ impl ArrayData {
         &self.items
     }
 
-    /// Mutable access for integrity-level transitions that change only an
-    /// element's descriptor flags, never its value or reference topology.
-    pub(crate) fn items_mut(&mut self) -> &mut std::collections::BTreeMap<u32, Slot> {
-        &mut self.items
+    /// Whether any element carries a non-default descriptor flag.
+    ///
+    /// The dense fast paths ([`Interp::dense_array_this`] and the
+    /// `*_fast_safe` predicates) may only run when this is false. They write
+    /// items directly, without carrying attributes across, so over an
+    /// attributed element they would erase or relocate its flags — turning
+    /// `Object.freeze(a); a.reverse()` into a silent mutation of a frozen
+    /// array. Attributed elements used to be PROMOTED out of the item map by
+    /// `array_define_index`, which broke `items().len() == length` and made
+    /// these paths decline as a side effect; stamping them in place removed
+    /// that accident, so the condition is now stated outright.
+    pub(crate) fn has_attributed_items(&self) -> bool {
+        self.attributed != 0
+    }
+
+    fn count_added(&mut self, value: &Slot) {
+        if value.flag != 0 {
+            self.attributed += 1;
+        }
+    }
+
+    fn count_removed(&mut self, value: &Slot) {
+        if value.flag != 0 {
+            self.attributed -= 1;
+        }
+    }
+
+    /// Set one item's descriptor flags, keeping the attributed count in step.
+    /// Returns false when there is no item at `index`.
+    pub(crate) fn set_item_flag(&mut self, index: u32, flag: u8) -> bool {
+        let Some(item) = self.items.get_mut(&index) else {
+            return false;
+        };
+        let was = item.flag;
+        item.flag = flag;
+        if was == 0 && flag != 0 {
+            self.attributed += 1;
+        } else if was != 0 && flag == 0 {
+            self.attributed -= 1;
+        }
+        true
+    }
+
+    /// OR `mask` into every item's descriptor flags (the template-array
+    /// freeze), keeping the attributed count in step.
+    pub(crate) fn or_all_item_flags(&mut self, mask: u8) {
+        if mask == 0 {
+            return;
+        }
+        for item in self.items.values_mut() {
+            if item.flag == 0 {
+                self.attributed += 1;
+            }
+            item.flag |= mask;
+        }
     }
 
     pub(crate) fn insert_item(
@@ -140,9 +200,12 @@ impl ArrayData {
         refs: &mut SideRefCounts,
     ) -> Option<Slot> {
         refs.add_slot(&value);
+        self.count_added(&value);
         let displaced = self.items.insert(index, value);
         if let Some(old) = &displaced {
             refs.remove_slot(old);
+            let old = *old;
+            self.count_removed(&old);
         }
         displaced
     }
@@ -151,6 +214,8 @@ impl ArrayData {
         let removed = self.items.remove(index);
         if let Some(old) = &removed {
             refs.remove_slot(old);
+            let old = *old;
+            self.count_removed(&old);
         }
         removed
     }
@@ -160,6 +225,7 @@ impl ArrayData {
             refs.remove_slot(s);
         }
         self.items.clear();
+        self.attributed = 0;
     }
 
     /// Decrement every item's refs — the whole-row removal path (the
@@ -182,8 +248,12 @@ impl ArrayData {
         for s in self.items.values() {
             refs.remove_slot(s);
         }
+        self.attributed = 0;
         for s in new_items.values() {
             refs.add_slot(s);
+            if s.flag != 0 {
+                self.attributed += 1;
+            }
         }
         self.items = new_items;
     }
@@ -192,7 +262,9 @@ impl ArrayData {
     /// every value WITHOUT a refs delta, sound because chunk
     /// compaction never changes which SLOTS a value references
     /// (slots do not move). Do not use for anything else — the debug
-    /// parity assertion in the page projection is watching.
+    /// parity assertion in the page projection is watching, and the
+    /// attributed count is not maintained here, so the callback must not
+    /// change any item's `flag`.
     pub(crate) fn for_each_value_mut_chunk_remap(&mut self, mut f: impl FnMut(&mut Slot)) {
         for s in self.items.values_mut() {
             f(s);

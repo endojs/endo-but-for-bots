@@ -15203,12 +15203,8 @@ impl Interp {
                             Payload::At(crate::value::XS_NO_ID, index),
                         ) = (obj.value, key.value)
                         {
-                            if let Some(item) = self
-                                .arrays
-                                .get_mut(&inst)
-                                .and_then(|array| array.items_mut().get_mut(&index))
-                            {
-                                item.flag = property_flag;
+                            if let Some(array) = self.arrays.get_mut(&inst) {
+                                array.set_item_flag(index, property_flag);
                             }
                         }
                     }
@@ -29431,6 +29427,9 @@ impl Interp {
         v.id = 0;
         v.next = crate::value::SlotIndex::NULL;
         let data = self.arrays.get_mut(&inst).unwrap();
+        // Overwriting an item replaces its VALUE, never its attributes. See
+        // `array_item_set` for why dropping them is a seal bypass.
+        v.flag = data.items().get(&i).map_or(v.flag, |item| item.flag);
         data.insert_item(i, v, &mut self.side_refs);
         if i + 1 > data.length {
             data.length = i + 1;
@@ -41105,7 +41104,20 @@ impl Interp {
         while !cur.is_null() {
             // Array index keys first (ascending), then string keys.
             if let Some(a) = self.arrays.get(&cur) {
-                let mut idxs: Vec<u32> = a.items().keys().copied().collect();
+                // A non-enumerable ITEM is skipped, exactly as the
+                // non-enumerable named property below is. Items could not
+                // carry `XS_DONT_ENUM_FLAG` in practice while
+                // `array_define_index` promoted an attributed element out of
+                // the map, so the filter was never needed here; now that such
+                // an element stays an item, `for-in` over
+                // `Object.defineProperty(a, '1', {enumerable: false})` would
+                // otherwise yield the key that `Object.keys` correctly omits.
+                let mut idxs: Vec<u32> = a
+                    .items()
+                    .iter()
+                    .filter(|(_, item)| item.flag & XS_DONT_ENUM_FLAG == 0)
+                    .map(|(index, _)| *index)
+                    .collect();
                 idxs.sort_unstable();
                 for i in idxs {
                     let k = (crate::value::XS_NO_ID, i);
@@ -41350,7 +41362,15 @@ impl Interp {
             return None;
         }
         let a = self.arrays.get(&inst)?;
-        if a.items().len() as u32 == a.length {
+        // An ATTRIBUTED element disqualifies every dense fast path. Those
+        // paths write items directly and do not carry descriptor flags
+        // across, so over a sealed, frozen, non-enumerable or non-writable
+        // element they erase or relocate its attributes — `reverse` on a
+        // frozen array would silently reorder it. This used to be enforced by
+        // accident: `array_define_index` PROMOTED such an element out of the
+        // item map, which broke the density test below. Stamping it in place
+        // removed the accident, so the requirement is stated directly.
+        if a.items().len() as u32 == a.length && !a.has_attributed_items() {
             Some(inst)
         } else {
             None
@@ -48195,20 +48215,20 @@ impl Interp {
 
     /// `[[DefineOwnProperty]]` dispatched on a [`ReadKey`].
     ///
-    /// Only a TypedArray element can be defined without a name: its store is
-    /// the buffer, addressed by index, and nothing is ever promoted out of it.
+    /// A TypedArray element needs no name: its store is the buffer, addressed
+    /// by index, and nothing is ever promoted out of it.
     ///
-    /// An ARRAY cannot, despite holding its items in a side table.
-    /// `array_define_index` falls through to `set_own_unmetered_with_flag` +
-    /// `ordinary_define_own_property` whenever the descriptor is not a bare
-    /// value — which is exactly the flags-only descriptor `Object.freeze` and
-    /// `Object.seal` apply — PROMOTING the compact item to an ordinary named
-    /// slot. That promotion needs a real id (passing `XS_NO_ID` mints a
-    /// property under id 0, which `mop_own_keys` then cannot name, halting
-    /// with `ordinary-ownKeys:unknown-key`). So freezing a large array costs
-    /// one name per element here, the same representation limit that makes
-    /// `o[i] = 1` in a loop and `Object.assign({}, bigArray)` cost one each.
-    /// XS has no such limit: it stamps the flags on the array slot in place.
+    /// An ARRAY element needs none either, now that `array_define_index`
+    /// stamps a data descriptor onto the item slot in place the way XS does.
+    /// That is what makes `Object.freeze`/`Object.seal`/`harden` of a large
+    /// array possible at all: promoting one item per element used to mint one
+    /// name per element, which walked the `u16` id space into the saturation
+    /// guard that poisons the machine. Only an ACCESSOR on an index still
+    /// promotes, and it mints its own name when it does.
+    ///
+    /// Everything else — an ordinary object, a String wrapper, a Proxy that
+    /// forwards to one — still routes through a real id, because in this
+    /// representation the define is what CREATES a distinct named property.
     fn mop_define_own_property_read(
         &mut self,
         code: &[u8],
@@ -48224,6 +48244,16 @@ impl Interp {
             if let Some(&ta) = self.typed_arrays.get(&inst) {
                 return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
                     vm.ta_index_define(code, ta, f64::from(index), desc)
+                });
+            }
+            if self.arrays.contains_key(&inst) {
+                // Not `array_define_own_property`: an index is never `length`
+                // and never an ordinary expando, so its dispatch has nothing
+                // to decide — and deciding would need the name this call
+                // exists to avoid materializing.
+                let id = self.index_read_key_id(index);
+                return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+                    Ok(vm.array_define_index(inst, id, index, desc))
                 });
             }
         }
@@ -48356,7 +48386,7 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        let _ = self.array_define_index(inst, key_id, index, descriptor);
+                        let _ = self.array_define_index(inst, Some(key_id), index, descriptor);
                         self.meter.tick_builtin();
                     } else {
                         let accepted = self.ordinary_set(code, inst, key_id, value, obj)?;
@@ -48502,6 +48532,19 @@ impl Interp {
             let mut v = value;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
+            // A write to an EXISTING item replaces its value and leaves its
+            // attributes alone, as XS's `fxOrdinarySetProperty` writes
+            // `kind`/`value` into the slot it found without touching `flag`.
+            //
+            // Taking the incoming value's flag (always the default 0) instead
+            // is a SEAL BYPASS: `Object.seal` marks each element
+            // non-configurable, and a sealed element is still writable, so
+            // `a[1] = 9` would clear the very `XS_DONT_DELETE_FLAG` that seal
+            // had just stamped and `delete a[1]` would then succeed —
+            // `false|9` on XS, `true|undefined` here. It was unreachable
+            // while sealing PROMOTED each element out of the item map; making
+            // seal stamp items in place is what exposed it.
+            v.flag = a.items().get(&index).map_or(v.flag, |item| item.flag);
             a.insert_item(index, v, &mut self.side_refs);
             if index + 1 > a.length {
                 a.length = index + 1;
@@ -48558,9 +48601,7 @@ impl Interp {
             return false;
         };
         self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG | XS_DONT_SET_FLAG;
-        for item in array.items_mut().values_mut() {
-            item.flag |= XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG;
-        }
+        array.or_all_item_flags(XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG);
         for property in self.own_property_slots(inst) {
             let slot = self.slots.get_mut(property);
             slot.flag |= XS_DONT_DELETE_FLAG;
@@ -48637,6 +48678,19 @@ impl Interp {
                         return false;
                     }
                 } else {
+                    // An item can be non-configurable now that
+                    // `array_define_index` stamps attributes onto the item
+                    // slot instead of promoting it to a named property, so
+                    // this branch has to refuse the same way the named branch
+                    // above does. `ArraySetLength` (ECMA-262 10.4.2.4) stops
+                    // at the first index it cannot delete, leaves `length` one
+                    // past it, and returns false — without this,
+                    // `Object.seal(a); a.length = 1` silently truncated a
+                    // sealed array.
+                    if self.arrays[&inst].items()[&index].flag & XS_DONT_DELETE_FLAG != 0 {
+                        self.arrays.get_mut(&inst).unwrap().length = index + 1;
+                        return false;
+                    }
                     self.arrays
                         .get_mut(&inst)
                         .unwrap()
@@ -48729,10 +48783,17 @@ impl Interp {
     /// chain so the existing descriptor, accessor, snapshot, and GC machinery
     /// carries the full shape. The side item is removed, making array
     /// algorithms select their generic MOP path.
+    ///
+    /// `id` is the index's interned name, or `None` when the name table has
+    /// never held it. `None` is not a weaker form of the same call: a name
+    /// that was never minted cannot key an ordinary shadow slot or an
+    /// `accessors` entry, so the two lookups it would serve provably miss, and
+    /// only the accessor path below — which genuinely creates a named
+    /// property — has to mint one.
     fn array_define_index(
         &mut self,
         inst: crate::value::SlotIndex,
-        id: u16,
+        id: Option<u16>,
         index: u32,
         descriptor: OrdinaryDescriptor,
     ) -> bool {
@@ -48741,19 +48802,21 @@ impl Interp {
             return false;
         }
 
-        if let Some(current) = self.ordinary_get_own_descriptor(inst, id) {
-            if !self.is_compatible_descriptor(
-                self.instance_extensible(inst),
-                &descriptor,
-                Some(&current),
-            ) {
-                return false;
+        if let Some(id) = id {
+            if let Some(current) = self.ordinary_get_own_descriptor(inst, id) {
+                if !self.is_compatible_descriptor(
+                    self.instance_extensible(inst),
+                    &descriptor,
+                    Some(&current),
+                ) {
+                    return false;
+                }
+                let accepted = self.ordinary_define_own_property(inst, id, descriptor);
+                if accepted && index >= old_len {
+                    self.arrays.get_mut(&inst).unwrap().length = index + 1;
+                }
+                return accepted;
             }
-            let accepted = self.ordinary_define_own_property(inst, id, descriptor);
-            if accepted && index >= old_len {
-                self.arrays.get_mut(&inst).unwrap().length = index + 1;
-            }
-            return accepted;
         }
 
         if let Some(value) = self.arrays[&inst].items().get(&index).copied() {
@@ -48814,33 +48877,80 @@ impl Interp {
                             replacement,
                             &mut self.side_refs,
                         );
-                    } else if let Some(item) = self.arrays.get_mut(&inst).unwrap().items_mut().get_mut(&index) {
-                        item.flag = flag;
+                    } else {
+                        self.arrays.get_mut(&inst).unwrap().set_item_flag(index, flag);
                     }
                     return true;
                 }
             }
-            if descriptor.value.is_some()
-                && descriptor.writable.is_none()
-                && descriptor.get.is_none()
-                && descriptor.set.is_none()
-                && descriptor.enumerable.is_none()
-                && descriptor.configurable.is_none()
-            {
-                let mut replacement = descriptor.value.unwrap();
-                replacement.id = 0;
-                replacement.flag = value.flag;
-                replacement.next = crate::value::SlotIndex::NULL;
-                self.arrays
-                    .get_mut(&inst)
-                    .unwrap()
-                    .remove_item(&index, &mut self.side_refs);
-                self.arrays
-                    .get_mut(&inst)
-                    .unwrap()
-                    .insert_item(index, replacement, &mut self.side_refs);
+            // XS stamps the ITEM SLOT in place. `fxArrayDefineOwnProperty`
+            // hands an index straight to `fxOrdinaryDefineOwnProperty`
+            // (`xsType.c`), which takes `mxBehaviorGetProperty(…, id, index,
+            // XS_OWN)` — the slot living inside the array's item chunk — and
+            // writes that slot's flag and value. Nothing is promoted to a
+            // named property, so nothing is interned.
+            //
+            // Ironhorse cannot follow XS for an ACCESSOR: `self.accessors` is
+            // keyed by `(instance, id)`, so a getter/setter on an index needs
+            // a real name and still promotes below. Every DATA descriptor,
+            // though — including the `{writable: false, configurable: false}`
+            // that `Object.freeze` stamps on each element — is exactly the
+            // item slot's three flags plus its value.
+            //
+            // Promoting each element instead made `Object.freeze` on a
+            // 70,000-element array mint a key per element, walking the `u16`
+            // id space into the saturation guard that POISONS the machine
+            // (`harden`, which Hardened JS is built on, is `Object.freeze`
+            // over a graph). It also made the freeze quadratic: each promoted
+            // element lengthened the named chain the next element's
+            // `find_property` has to scan.
+            if !descriptor.is_accessor() {
+                let mut flag = value.flag;
+                if let Some(writable) = descriptor.writable {
+                    if writable {
+                        flag &= !XS_DONT_SET_FLAG;
+                    } else {
+                        flag |= XS_DONT_SET_FLAG;
+                    }
+                }
+                if let Some(enumerable) = descriptor.enumerable {
+                    if enumerable {
+                        flag &= !XS_DONT_ENUM_FLAG;
+                    } else {
+                        flag |= XS_DONT_ENUM_FLAG;
+                    }
+                }
+                if let Some(configurable) = descriptor.configurable {
+                    if configurable {
+                        flag &= !XS_DONT_DELETE_FLAG;
+                    } else {
+                        flag |= XS_DONT_DELETE_FLAG;
+                    }
+                }
+                match descriptor.value {
+                    // A new value replaces the item, so the side-reference
+                    // counts move with it.
+                    Some(mut replacement) => {
+                        replacement.id = 0;
+                        replacement.flag = flag;
+                        replacement.next = crate::value::SlotIndex::NULL;
+                        self.arrays.get_mut(&inst).unwrap().insert_item(
+                            index,
+                            replacement,
+                            &mut self.side_refs,
+                        );
+                    }
+                    // Attributes only: the value and its reference topology
+                    // are untouched, so stamp the flag where it lies.
+                    None => {
+                        self.arrays.get_mut(&inst).unwrap().set_item_flag(index, flag);
+                    }
+                }
                 return true;
             }
+            // An accessor on an index: `self.accessors` is keyed by
+            // `(instance, id)`, so this one genuinely needs a name.
+            let id = self.array_index_promotion_id(id, index);
             self.arrays
                 .get_mut(&inst)
                 .unwrap()
@@ -48852,11 +48962,26 @@ impl Interp {
         if !self.instance_extensible(inst) {
             return false;
         }
+        let id = self.array_index_promotion_id(id, index);
         let accepted = self.ordinary_define_own_property(inst, id, descriptor);
         if accepted && index >= old_len {
             self.arrays.get_mut(&inst).unwrap().length = index + 1;
         }
         accepted
+    }
+
+    /// The name id for an array index that is about to become a real ordinary
+    /// property, minting one only if the table has never held it.
+    ///
+    /// Unmetered, because XS charges nothing for it: XS never interns an index
+    /// name at all (`fxOrdinaryDefineOwnProperty` addresses the item slot by
+    /// `(XS_NO_ID, index)`), so a `tick_slot_alloc` here would be an
+    /// overcharge, not parity.
+    fn array_index_promotion_id(&mut self, id: Option<u16>, index: u32) -> u16 {
+        match id {
+            Some(id) => id,
+            None => self.intern_key_unmetered(&index.to_string()),
+        }
     }
 
     /// Array exotic `[[DefineOwnProperty]]` (ECMA-262 10.4.2.1): dispatch
@@ -48874,7 +48999,7 @@ impl Interp {
             return self.array_define_length(code, inst, descriptor);
         }
         if let Some(index) = name.as_deref().and_then(string_to_index) {
-            return Ok(self.array_define_index(inst, id, index, descriptor));
+            return Ok(self.array_define_index(inst, Some(id), index, descriptor));
         }
         Ok(self.ordinary_define_own_property(inst, id, descriptor))
     }
