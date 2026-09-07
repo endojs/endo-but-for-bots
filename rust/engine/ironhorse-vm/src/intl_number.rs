@@ -792,9 +792,7 @@ fn should_group(grouping: Grouping, int_digit_count: usize, notation: Notation) 
         Grouping::Never => false,
         // Notation `compact`/`scientific`/`engineering` never group unless
         // explicitly `always` — the mantissa is below the group threshold.
-        Grouping::Always => {
-            int_digit_count > 3 || notation == Notation::Standard && int_digit_count > 3
-        }
+        Grouping::Always => int_digit_count > 3,
         Grouping::Auto => notation == Notation::Standard && int_digit_count > 3,
         Grouping::Min2 => notation == Notation::Standard && int_digit_count > 4,
     }
