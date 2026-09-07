@@ -151,6 +151,12 @@ fn error_model_agrees_with_the_oracle() {
         "true.valueOf()",
         "true.constructor === Boolean",
         "var r=0; try { true.x = 1; r='silent' } catch(e){ r='threw' } r",
+        // The computed-key form of the same access boxes identically.
+        "true['toString']()",
+        "var k='toString'; true[k]()",
+        "(42)['toString'](2)",
+        "typeof true?.['toString']",
+        "String(true[0]) + ',' + String((42)[0]) + ',' + String(true['nosuch'])",
         "var r=0; class A { m(){ return super.x } } try { new A().m(); r='ok' } catch(e){ r='threw' } r",
         "var r=0; try { null[0] = 1 } catch(e){ r=e.name+':'+e.message } r",
         // --- cross segment (F024) ---

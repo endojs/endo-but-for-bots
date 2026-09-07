@@ -86,6 +86,31 @@ fn a_non_nullish_primitive_base_boxes_to_its_wrapper_prototype() {
 }
 
 #[test]
+fn the_computed_key_path_boxes_a_primitive_base_the_same_way() {
+    // `o[k]` (`GET_PROPERTY_AT` → `property_at_get`) is the same access, so
+    // `true['toString']` must name the method `true.toString` names. Only
+    // string and bigint were boxed there; a number or boolean base fell
+    // through to the reference match's `undefined`.
+    for (source, expected) in [
+        ("true['toString']()", "true"),
+        ("var k='toString'; true[k]()", "true"),
+        ("typeof true?.['toString']", "function"),
+        ("(42)['toString'](2)", "101010"),
+        ("(1n)['toString']()", "1"),
+        ("'abc'['length']", "3"),
+        // An index or an absent name on a boxed primitive is `undefined`,
+        // not a throw: only `null`/`undefined` fail the coercion.
+        ("String(true[0])", "undefined"),
+        ("String((42)[0])", "undefined"),
+        ("String(true['nosuch'])", "undefined"),
+    ] {
+        let out = run(source);
+        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert_eq!(out.result, expected, "{source}");
+    }
+}
+
+#[test]
 fn a_sloppy_write_through_a_non_nullish_primitive_base_stays_silent() {
     // `RequireObjectCoercible` passes for a number/string/boolean base, so
     // the store targets a throwaway wrapper: sloppy code sees the assignment

@@ -46900,15 +46900,24 @@ impl Interp {
             }
             return Ok(self.string_property_get(off, id));
         }
-        // A primitive BigInt boxes to `%BigInt.prototype%` for a computed
-        // property read just as it does for the static `GET_PROPERTY` path.
-        if obj.kind == Kind::BigInt && !self.bigint_proto.is_null() {
+        // A primitive bigint, number or boolean boxes to its wrapper prototype
+        // for a computed property read just as it does for the static
+        // `GET_PROPERTY` path: `true['toString']` and `true.toString` must name
+        // the same inherited method. (A primitive symbol carries a
+        // `Payload::Reference`, so it is excluded here and handled below.)
+        let boxed_proto = match obj.kind {
+            Kind::BigInt => self.bigint_proto,
+            Kind::Integer | Kind::Number => self.number_proto,
+            Kind::Boolean => self.boolean_proto,
+            _ => crate::value::SlotIndex::NULL,
+        };
+        if !boxed_proto.is_null() {
             let id = if id == crate::value::XS_NO_ID {
                 self.intern_key(&index.to_string())
             } else {
                 id
             };
-            return Ok(self.instance_get(self.bigint_proto, id));
+            return Ok(self.instance_get(boxed_proto, id));
         }
         // `null[k]` / `undefined[k]`: `fxToInstance` throws (review F007).
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
