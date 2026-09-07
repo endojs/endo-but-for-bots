@@ -150,3 +150,37 @@ fn a_resumed_builtin_iterator_is_still_its_own_iterable() {
         &["function", "1"],
     );
 }
+
+#[test]
+fn a_resumed_primitive_boolean_still_boxes_to_boolean_prototype() {
+    // `boolean_proto` is the same class of handle as the three
+    // `@@iterator` values above: a `SlotIndex` the interpreter holds
+    // outside the heap, which resume re-derives only because
+    // `create_intrinsics` records it BELOW `boot_slot_count`. Recorded
+    // at link time instead, a resumed machine would carry
+    // `SlotIndex::NULL`, the boxing arms' `is_null` guard would fall
+    // through, and `true.toString()` would throw again on the resumed
+    // side alone — green uninterrupted, broken after a suspend, which is
+    // the defect class this whole file exists for. Both spellings of the
+    // access, so neither read path can regress silently.
+    assert_twin(
+        "ih-boot-native-boolproto",
+        "var t = 0; t = 7; t",
+        &[
+            "var t; t = true.toString(); t",
+            "var t; t = String(false.valueOf()); t",
+            "var t; t = true['toString'](); t",
+            "var t; var k = 'valueOf'; t = String(true[k]()); t",
+            "var t; t = String(true.constructor === Boolean); t",
+            // The siblings, so a resume that lost one wrapper-prototype
+            // handle while keeping another is still caught here.
+            "var t; t = (42).toString(2); t",
+            "var t; t = (1n).toString(); t",
+            "var t; t = Symbol('t').toString(); t",
+            "var t; t = String('abc'.length); t",
+        ],
+        &[
+            "true", "false", "true", "true", "true", "101010", "1", "Symbol(t)", "3",
+        ],
+    );
+}
