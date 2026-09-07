@@ -285,7 +285,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // review F143) — the conformance harness installs them explicitly
         // above `boot_slot_count`. Boot-layout signature generation 18;
         // format unchanged.
-        "b7e4bdc3da463e5151fffd2d32e91da58c12077045e708aae3b67662a3eb4f95",
+        // Re-pinned 2026-09-07 for a boot-heap CONTENT move: the
+        // `get Symbol.prototype.description` accessor function is now
+        // boot-minted beside `%Symbol.prototype%`'s other members (the
+        // accessor property itself installs at link time, guarded on
+        // `Symbol`). Boot-layout signature generation 19; format unchanged.
+        "b33525029755f02ed9ac6901c5708847516d527966f8da783f4c3a8945a5ac53",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -477,7 +482,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob on 2026-09-06 for the removal of the
         // test262 `$262` host object from the boot heap (harness-only now),
         // with boot generation 18. Schema and format remain unchanged.
-        "a2fb5b877c8ac1487af3ebe77105657bc64d2974265c13ce8e6281c44fbddc82",
+        // Re-pinned with the blob on 2026-09-07 for the boot-minted
+        // `get Symbol.prototype.description` accessor function, with boot
+        // generation 19. Schema and format remain unchanged.
+        "6d9b82aa744983f99e694950614df88145ec6dfe12c7b0274bede92b51e58c0e",
         "epoch-3 seal chain"
     );
 }

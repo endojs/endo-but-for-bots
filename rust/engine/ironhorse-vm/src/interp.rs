@@ -2329,6 +2329,11 @@ pub enum NativeMethod {
     /// symbol primitive itself (unwrapping a Symbol wrapper object, though
     /// ironhorse's covered grammar has only the primitive receiver).
     SymbolValueOf,
+    /// `get Symbol.prototype.description` (`fx_Symbol_prototype_get_description`):
+    /// the receiver symbol's `[[Description]]` — the description string it was
+    /// created with, or `undefined` for `Symbol()`. `thisSymbolValue` accepts a
+    /// symbol primitive or a Symbol wrapper and throws `TypeError` otherwise.
+    SymbolDescriptionGetter,
     /// `Symbol.prototype[Symbol.toPrimitive](hint)`: the symbol primitive
     /// itself, unwrapping a Symbol wrapper object. The hint is ignored.
     SymbolToPrimitive,
@@ -6617,6 +6622,26 @@ impl Interp {
                     "[Symbol.toPrimitive]",
                     1,
                 );
+                // `get Symbol.prototype.description` (ECMA-262 20.4.3.2): a
+                // real get-only accessor property, so
+                // `getOwnPropertyDescriptor` reveals `{get, set: undefined,
+                // enumerable: false, configurable: true}` and a `.description`
+                // read runs the getter with the receiver as `this`. Guarded on
+                // `Symbol` (the owning constructor) like every other
+                // `proto_accessors` entry, because conformance tests reach the
+                // key reflectively by string as well as statically.
+                let description_getter = self.alloc_named_method(
+                    NativeMethod::SymbolDescriptionGetter,
+                    "get description",
+                    0,
+                );
+                self.proto_accessors.push((
+                    p,
+                    ProtoAccessorKey::String("description"),
+                    description_getter,
+                    None,
+                    "Symbol",
+                ));
             }
             let f = self.alloc_method(NativeMethod::SymbolFor);
             self.proto_methods.push((symbol_ctor, "for", f));
@@ -13449,6 +13474,34 @@ impl Interp {
         out
     }
 
+    /// A symbol's `[[Description]]` (`get Symbol.prototype.description`): the
+    /// description string it was created with, or `undefined` when it has
+    /// none. Reads the same descriptor slot [`Self::symbol_descriptive_bytes`]
+    /// renders, so the two views of `[[Description]]` cannot disagree.
+    ///
+    /// The `Kind::String` gate is not a spec step — it tracks a NAMED,
+    /// pre-existing gap one level up: the `Native::Symbol` constructor stores
+    /// its argument slot verbatim instead of performing the spec's
+    /// `ToString(description)` (`fxToString` in XS's `fx_Symbol`), so
+    /// `Symbol(1)`'s descriptor slot holds an Integer rather than `"1"`.
+    /// Reporting that raw slot as `[[Description]]` would answer a NUMBER
+    /// where the spec answers a string, so both readers treat a non-string
+    /// descriptor as "no description" — the view `toString` already takes
+    /// (`Symbol(1).toString()` renders `"Symbol()"`). Fixing the coercion at
+    /// the constructor — where it also needs the `ToString`-of-a-symbol
+    /// `TypeError` and a re-entrant `ToPrimitive`, and moves metering — fixes
+    /// both readers at once; it is the separate change
+    /// `built-ins/Symbol/desc-to-string.js` is waiting on.
+    fn symbol_description(&self, sym: Slot) -> Slot {
+        if let Payload::Reference(d) = sym.value {
+            let slot = self.slots.get(d);
+            if slot.kind == Kind::String {
+                return Slot::of(slot.kind, slot.value);
+            }
+        }
+        Slot::undefined()
+    }
+
     /// Run a program bytecode buffer to completion.
     /// Run under a dispatch-count ceiling: identical to [`Self::run`] but
     /// halts with [`Halt::StepLimit`] if the program dispatches `step_limit`
@@ -15616,10 +15669,43 @@ impl Interp {
                         // (A symbol value carries `Payload::Reference(desc)`,
                         // so this must precede the generic reference arm and be
                         // gated on `Kind::Symbol`.)
+                        //
+                        // The full `OrdinaryGet`, not the slot-chain walk:
+                        // `%Symbol.prototype%` carries a real accessor
+                        // property (`description`), and an accessor slot's
+                        // stored kind/value is an inert `undefined` — a chain
+                        // walk would answer `undefined` without ever running
+                        // the getter. `obj` is the Receiver, which is the
+                        // PRIMITIVE symbol (`GetThisValue` of a non-super
+                        // property reference is `V.[[Base]]`), so the getter's
+                        // `thisSymbolValue` sees the symbol itself. Metering is
+                        // unchanged for a data property: the non-proxy
+                        // `mop_get` path charges nothing a chain walk did not.
+                        //
+                        // This is a WIDENING, not a `description` special
+                        // case: every MOP path the chain walk skipped is now
+                        // reachable from a primitive-symbol receiver — a guest
+                        // accessor anywhere on the chain, its `Halt::Resume`
+                        // unwind (hence `dispatch_result!` and not a bare
+                        // `?`), and a Proxy prototype's `get` trap. Two
+                        // consequences are named and pinned in
+                        // `ironhorse-262/tests/symbol_description_accessor.rs`:
+                        // XS boxes a trap's Receiver where this passes the
+                        // primitive, and symbols are for now the ONLY
+                        // primitive whose reads take this path — the Number /
+                        // String / BigInt arms below still walk the chain raw,
+                        // so an inherited accessor stays invisible to them.
+                        // Their arms want the same widening; converting them
+                        // is a separate change with its own metering surface.
                         Payload::Reference(_)
                             if obj.kind == Kind::Symbol && !self.symbol_proto.is_null() =>
                         {
-                            self.instance_get(self.symbol_proto, id)
+                            dispatch_result!(
+                                self.ordinary_get(code, self.symbol_proto, id, obj),
+                                pc,
+                                self,
+                                return_depth
+                            )
                         }
                         // A proxy `p.k` routes through the `get` trap
                         // (ECMA-262 10.5.8), never the ordinary store.
@@ -32159,6 +32245,13 @@ impl Interp {
             // `Symbol.prototype.valueOf()`: the symbol primitive itself.
             NativeMethod::SymbolValueOf | NativeMethod::SymbolToPrimitive => {
                 self.symbol_this_value(this)?
+            }
+            // `get Symbol.prototype.description`: `thisSymbolValue(this)`,
+            // then its `[[Description]]`. Accepts a symbol primitive or a
+            // Symbol wrapper; anything else is a `TypeError`.
+            NativeMethod::SymbolDescriptionGetter => {
+                let symbol = self.symbol_this_value(this)?;
+                self.symbol_description(symbol)
             }
             NativeMethod::DateToPrimitive => {
                 if !matches!(
