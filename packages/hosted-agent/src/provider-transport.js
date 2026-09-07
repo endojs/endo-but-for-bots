@@ -1,0 +1,192 @@
+// @ts-check
+
+import { Fail, makeError, X } from '@endo/errors';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
+
+/** @import { UpstreamRequest } from './provider-broker.js' */
+
+/**
+ * Per-lease fetch transport. Fetch is an explicit trusted power, never ambient
+ * network authority. Responses are buffered only up to the configured byte
+ * ceiling; this adapter does not yet forward SSE incrementally to a CLI.
+ * Abort and disposal settle callers even if an injected fetch ignores abort.
+ * Such a fetch is still responsible for stopping its underlying network work.
+ *
+ * @param {object} options
+ * @param {typeof globalThis.fetch} options.fetch
+ * @param {number} options.timeoutMs - Host timers have a signed 32-bit delay range.
+ * @param {bigint} options.maxRequestBytes
+ * @param {bigint} options.maxResponseBytes
+ * @param {(callback: () => void, delay: number) => unknown} [options.setTimer]
+ * @param {(timer: unknown) => void} [options.clearTimer]
+ */
+export const makeProviderFetchTransport = ({
+  fetch,
+  timeoutMs,
+  maxRequestBytes,
+  maxResponseBytes,
+  setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
+  clearTimer = timer =>
+    globalThis.clearTimeout(
+      /** @type {ReturnType<typeof globalThis.setTimeout>} */ (timer),
+    ),
+}) => {
+  (typeof fetch === 'function' &&
+    Number.isInteger(timeoutMs) &&
+    timeoutMs > 0 &&
+    timeoutMs <= 2_147_483_647) ||
+    Fail`Invalid transport timeout`;
+  (typeof maxRequestBytes === 'bigint' &&
+    maxRequestBytes > 0n &&
+    typeof maxResponseBytes === 'bigint' &&
+    maxResponseBytes > 0n) ||
+    Fail`Invalid transport byte limits`;
+  let disposed = false;
+  /** @type {Set<() => void>} */
+  const pending = new Set();
+  const transport = makeExo(
+    'ProviderFetchTransport',
+    M.interface('ProviderFetchTransport', {
+      request: M.call(
+        M.splitRecord({
+          url: M.string(),
+          method: M.string(),
+          headers: M.recordOf(M.string(), M.string()),
+          body: M.string(),
+          redirect: /** @type {const} */ ('error'),
+          maxResponseBytes: M.bigint(),
+        }),
+      ).returns(M.promise()),
+    }),
+    {
+      /** @param {UpstreamRequest} request */
+      async request(request) {
+        !disposed || Fail`Provider transport disposed`;
+        const controller = new AbortController();
+        /** @type {ReadableStreamDefaultReader<Uint8Array> | undefined} */
+        let reader;
+        let finished = false;
+        const cancelBody = () => {
+          if (reader) {
+            // Cancellation is best effort and cannot extend the request deadline.
+            void reader.cancel().catch(() => {});
+          }
+        };
+        /** @type {(error: Error) => void} */
+        let rejectStopped;
+        /** @type {Promise<never>} */
+        const stopped = new Promise((_, reject) => {
+          rejectStopped = reject;
+        });
+        const stop = () => {
+          controller.abort();
+          cancelBody();
+          rejectStopped(makeError(X`Provider transport stopped`));
+        };
+        pending.add(stop);
+        const timer = setTimer(stop, timeoutMs);
+        try {
+          const url = new URL(request.url);
+          (url.protocol === 'https:' &&
+            !url.username &&
+            !url.password &&
+            !url.hash &&
+            request.method === 'POST' &&
+            request.redirect === 'error' &&
+            typeof request.body === 'string' &&
+            BigInt(new TextEncoder().encode(request.body).length) <=
+              maxRequestBytes &&
+            typeof request.maxResponseBytes === 'bigint' &&
+            request.maxResponseBytes > 0n) ||
+            Fail`Invalid provider request`;
+          const limit =
+            request.maxResponseBytes < maxResponseBytes
+              ? request.maxResponseBytes
+              : maxResponseBytes;
+          for (const [name, value] of Object.entries(request.headers)) {
+            ([
+              'authorization',
+              'x-api-key',
+              'anthropic-version',
+              'content-type',
+            ].includes(name) &&
+              typeof value === 'string' &&
+              /^[\x20-\x7e]*$/.test(value)) ||
+              Fail`Invalid provider header`;
+          }
+          const fetching = Promise.resolve(
+            fetch(url.href, {
+              method: 'POST',
+              headers: request.headers,
+              body: request.body,
+              redirect: 'error',
+              credentials: 'omit',
+              signal: controller.signal,
+              cache: 'no-store',
+              referrerPolicy: 'no-referrer',
+            }),
+          ).then(response => {
+            if (finished || controller.signal.aborted) {
+              void response.body?.cancel().catch(() => {});
+              Fail`Provider transport stopped`;
+            }
+            return response;
+          });
+          const response = await Promise.race([fetching, stopped]);
+          // Only successful inference bodies are exposed; never redirects,
+          // authentication challenges, response headers, or error payloads.
+          reader = response.body?.getReader();
+          (Number.isInteger(response.status) &&
+            response.status >= 200 &&
+            response.status < 300 &&
+            !response.redirected &&
+            response.body) ||
+            Fail`Invalid provider response`;
+          const bodyReader = reader;
+          if (!bodyReader) throw Fail`Missing provider body`;
+          const length = response.headers.get('content-length');
+          length === null ||
+            (/^\d+$/.test(length) && BigInt(length) <= limit) ||
+            Fail`Provider response too large`;
+          const decoder = new TextDecoder('utf-8', { fatal: true });
+          let bytes = 0n;
+          const parts = [];
+          for (;;) {
+            // eslint-disable-next-line no-await-in-loop
+            const chunk = await Promise.race([bodyReader.read(), stopped]);
+            if (chunk.done) break;
+            chunk.value instanceof Uint8Array || Fail`Invalid provider bytes`;
+            bytes += BigInt(chunk.value.byteLength);
+            bytes <= limit || Fail`Provider response too large`;
+            parts.push(decoder.decode(chunk.value, { stream: true }));
+          }
+          parts.push(decoder.decode());
+          !controller.signal.aborted || Fail`Provider transport stopped`;
+          return harden({ status: response.status, body: parts.join('') });
+        } catch (_error) {
+          controller.abort();
+          cancelBody();
+          return Fail`Provider transport failed`;
+        } finally {
+          finished = true;
+          pending.delete(stop);
+          clearTimer(timer);
+          try {
+            reader?.releaseLock();
+          } catch (_error) {
+            /* A pending read releases when cancellation settles. */
+          }
+        }
+      },
+    },
+  );
+  return harden({
+    transport,
+    dispose: () => {
+      disposed = true;
+      for (const stop of pending) stop();
+    },
+  });
+};
+harden(makeProviderFetchTransport);

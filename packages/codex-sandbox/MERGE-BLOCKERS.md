@@ -10,8 +10,11 @@ Session staging, reverse-order rollback, retryable teardown, run/admin facet
 attenuation, dynamic model discovery, direct Endo dynamic tools, checkpointed
 failed-history reconciliation, durable audit primitives, and the reproducible
 image recipe are implemented here.
-The following foundations remain external blockers before a production hosted
-deployment can satisfy the asserted contract.
+The following foundations remain blockers before a production hosted deployment
+can satisfy the asserted contract.
+The implemented broker core and outer-policy adapter close repository gaps;
+they do not replace the live evidence listed in
+[deployment acceptance](./DEPLOYMENT-ACCEPTANCE.md).
 
 ## Attestable sandbox enforcement
 
@@ -34,9 +37,9 @@ Anything absent, unreadable, or in an unrecognized shape fails `make()`, so a
 slice that cannot prove its confinement never exists.
 See `packages/sandbox/README.md` § "Slice policy and attestation".
 
-`makeCodexBackendFactory` still rejects the policy and app-server still does not
-start, because `HostedAgentPolicyV1` also asserts claims the outer sandbox
-cannot observe:
+`makeCodexBackendFactory` rejects a bare outer attestation and does not start
+app-server without the remaining evidence, because `HostedAgentPolicyV1` also
+asserts claims the outer sandbox cannot observe:
 
 - `credentialInjection: "broker-only"` and `brokerTransport:
   "loopback-sidecar"` are the broker's claims.
@@ -49,7 +52,7 @@ cannot observe:
 - The slice environment is still not attested, so an operator's `makeSlice` must
   still place no credential or proxy setting there.
 
-An operator's `makeSlice` must therefore compose `HostedAgentPolicyV1` from
+`makeAttestedCodexResourceProvisioner` now provides the adapter that composes `HostedAgentPolicyV1` from
 `E(slice).policy()` plus attestations the broker and the pinned runtime supply
 for their own halves.
 Stamping the unproved fields into the record from a configuration constant
@@ -84,7 +87,10 @@ That is not the broker.
 A `SecretBlob` hands its holder the bytes on request by design, so it cannot
 bound a credential to a provider origin, model allowlist, quota, or session
 lease, and it cannot refresh OAuth state.
-The broker remains external and must hold the upstream credential itself; the
+The broker core now implements inference admission, fresh SecretBlob reads,
+quotas, revocation, redaction, and a bounded transport.
+The namespace listener, process isolation, and subscription refresh implementation
+remain external and unverified; the broker must hold the upstream credential itself; the
 secret manager is where the broker's own durable material belongs, not a way to
 put a bearer token inside the slice.
 
