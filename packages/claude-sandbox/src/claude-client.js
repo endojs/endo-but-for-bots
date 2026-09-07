@@ -9,9 +9,14 @@
  * `claude -p <prompt> --output-format stream-json` process inside the
  * slice. Turns **queue** on an internal chain so two processes never
  * race the same workspace conversation; `--continue` on every turn
- * after the first resumes the conversation persisted in the workspace,
- * letting a sequence of `send()` calls build on each other (no
- * long-lived stdin plumbing).
+ * after the first resumes the conversation persisted in the session's
+ * Claude config dir (a dedicated per-session mount that survives daemon
+ * restarts — see `claude-client-module.js`), letting a sequence of
+ * `send()` calls build on each other (no long-lived stdin plumbing).
+ * A client reincarnated after a restart is constructed with
+ * `resumePriorConversation: true` when that config dir already holds a
+ * transcript, so its very first post-restart turn resumes instead of
+ * forking a fresh, context-free conversation.
  *
  * `send()` returns a **buffered reply reader** immediately (consume it
  * with `makeRefIterator`): it yields the parsed stream-json events, then
@@ -181,7 +186,7 @@ const defaultStderrIterable = proc =>
  * @property {{ unmount: () => Promise<void> }} [mountHandle] - Host-side
  *   9P mount handle for the workspace. Unmounted on `terminate()`.
  *   Omitted when the workspace was bound by some other means (tests).
- * @property {(extraMounts?: readonly ExtraMountSpec[]) => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
+ * @property {(extraMounts?: readonly ExtraMountSpec[]) => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
  *   - Lazy workspace provisioner. When present, `slice` / `mountHandle`
  *   are ignored and the slice + mount are created on first use (the
  *   first `send()` or `initialPrompt`), memoized thereafter. This is
@@ -201,6 +206,49 @@ const defaultStderrIterable = proc =>
  * @property {string} [rootfsLabel] - Human-readable rootfs label
  *   (diagnostic).
  * @property {string} [model] - Default `--model` for every send.
+ * @property {string} [systemPrompt] - Default system prompt appended to
+ *   every spawn via `--append-system-prompt`, so the CLI's own agent loop
+ *   runs under the caller's persona/instructions in addition to Claude
+ *   Code's built-in prompt. Overridable per turn via `send(prompt, {
+ *   systemPrompt })`. Omitted argv when neither is set.
+ * @property {boolean} [resumePriorConversation] - Seed
+ *   `conversationStarted` so the very first `send()` passes `--continue`.
+ *   Set by `claude-client-module.js` when a reincarnated session's
+ *   persistent Claude config dir already holds a transcript, so a
+ *   post-restart turn resumes the pre-restart conversation instead of
+ *   starting a fresh, context-free one. Defaults to `false` (a brand-new
+ *   session has nothing to resume).
+ * @property {() => boolean} [detectPriorConversation] - Ground-truth
+ *   check for a persisted transcript, consulted before *every* spawn
+ *   (not once at construction). When provided it decides `--continue`
+ *   directly, which closes two gaps the in-memory flag cannot: a first
+ *   turn killed before Claude persisted anything must NOT make the next
+ *   turn pass `--continue` (there is nothing to resume — the CLI would
+ *   error or silently fork a fresh conversation), and a post-restart
+ *   turn must resume whenever a transcript exists even if the one-shot
+ *   construction-time detection raced or failed. A detector throw falls
+ *   back to the in-memory flag. Also gates `initialPrompt`, so a
+ *   reincarnated formula does not re-fire its initial prompt as a
+ *   spurious extra turn on every daemon restart.
+ * @property {() => string | undefined} [resolveResumeSessionId] - The id
+ *   of the newest persisted conversation, read from the session's config
+ *   dir before every spawn. When it yields an id the turn resumes that
+ *   conversation by name (`--resume <id>`) rather than asking the CLI to
+ *   infer "the most recent conversation" (`--continue`); a named resume
+ *   that cannot be honoured fails loudly instead of silently forking a
+ *   fresh, context-free conversation. Absent for sessions with no
+ *   persistent config dir, which fall back to `--continue`.
+ * @property {() => unknown} [describeTranscripts] - Opt-in resume
+ *   diagnostic (see `ENDO_CLAUDE_DEBUG_RESUME` in
+ *   `claude-client-module.js`). When set, every spawn reports the
+ *   resume decision, Claude's own `system/init` event, and whether the
+ *   turn's prompt chained onto earlier ones. Absent in production.
+ * @property {string} [mcpConfigPath] - Slice-internal path to an MCP
+ *   config file (see the floot package's mcp-socket-server). When set,
+ *   every spawn passes `--mcp-config` (with this path) and
+ *   `--strict-mcp-config`, wiring the CLI to the session's Endo tool
+ *   bridge over a mounted Unix socket and ignoring any ambient
+ *   project/user MCP config.
  * @property {Record<string, string>} [env] - Extra per-spawn env
  *   merged on top of the slice's env. The slice's env already carries
  *   the credential, so this is normally empty.
@@ -236,8 +284,14 @@ export const makeClaudeClient = ({
   backend,
   rootfsLabel = '',
   model,
+  systemPrompt,
+  mcpConfigPath,
   env = {},
   initialPrompt,
+  resumePriorConversation = false,
+  detectPriorConversation,
+  resolveResumeSessionId,
+  describeTranscripts,
   makeStdoutIterable = defaultStdoutIterable,
   makeStderrIterable = defaultStderrIterable,
   stderrReadLimit = 16_384,
@@ -268,10 +322,32 @@ export const makeClaudeClient = ({
     }
   };
   let terminated = false;
-  // `--continue` resumes the most recent conversation; the first turn
-  // has nothing to resume, so it is omitted until one prompt has been
-  // dispatched.
-  let conversationStarted = false;
+  // `--continue` resumes the most recent conversation persisted in the
+  // session's Claude config dir. A brand-new session has nothing to
+  // resume, so `--continue` is omitted until one prompt has been
+  // dispatched. A session reincarnated after a daemon restart, whose
+  // persistent config dir already holds a transcript, is constructed with
+  // `resumePriorConversation: true` so its first post-restart turn
+  // resumes the pre-restart conversation rather than forking a fresh one.
+  let conversationStarted = resumePriorConversation;
+  // Whether the *next* spawn should resume at all, and whether `initialPrompt`
+  // has already been answered. The detector, when present, is the ground truth
+  // (it reads the persisted transcript), so a turn killed before Claude
+  // persisted anything does not poison the next turn with a resume that has
+  // nothing to resume, and a post-restart turn resumes whenever a transcript
+  // actually exists. Which conversation to resume is a separate question,
+  // answered by `resolveResumeSessionId`. Without a detector (tests, ephemeral
+  // tmpfs config dirs) the in-memory flag is all we have.
+  const priorConversation = () => {
+    if (detectPriorConversation) {
+      try {
+        return detectPriorConversation();
+      } catch {
+        // Unreadable backing dir (transient fs race): fall back to the flag.
+      }
+    }
+    return conversationStarted;
+  };
   /** @type {ProcessHandle | null} */
   let inFlight = null;
   // Closes the reply channel of the most recent turn (queued or running).
@@ -389,7 +465,7 @@ export const makeClaudeClient = ({
    * `ProcessHandle`.
    *
    * @param {string} prompt
-   * @param {{ model?: string }} [opts]
+   * @param {{ model?: string, systemPrompt?: string }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (prompt, opts = {}) => {
@@ -411,12 +487,61 @@ export const makeClaudeClient = ({
       // CLI execute its agentic tool loop within that OS-level boundary.
       '--dangerously-skip-permissions',
     ];
+    if (mcpConfigPath) {
+      // Wire the session's Endo tool bridge (mounted Unix socket) and ignore
+      // any project/user .mcp.json so only these capability-bounded tools load.
+      argv.push('--mcp-config', mcpConfigPath, '--strict-mcp-config');
+    }
     const useModel = opts.model || model;
     if (useModel) {
       argv.push('--model', useModel);
     }
-    if (conversationStarted) {
+    // Append the caller's persona/instructions to Claude Code's built-in
+    // system prompt so the CLI's own agent loop honors them (the CLI never
+    // sees the conversation-tree system message the API path injects). Sent
+    // on every spawn — each `claude -p` is a fresh process — so a resumed
+    // (`--continue`) turn keeps the same persona as the first.
+    const useSystemPrompt = opts.systemPrompt || systemPrompt;
+    if (useSystemPrompt) {
+      argv.push('--append-system-prompt', String(useSystemPrompt));
+    }
+    // Resume the conversation by its own id when we can read one off the
+    // persisted transcript. `--continue` asks the CLI to pick "the most recent
+    // conversation" by its own reckoning; naming the session removes that
+    // inference and fails loudly ("No conversation found with session ID")
+    // instead of silently starting a fresh, context-free one. Sessions with no
+    // persistent config dir (older ones, on the ephemeral tmpfs) have no id to
+    // read, so they keep the `--continue` behaviour.
+    let resumeSessionId;
+    if (resolveResumeSessionId) {
+      try {
+        resumeSessionId = resolveResumeSessionId();
+      } catch {
+        // Unreadable backing dir (transient fs race): fall back to --continue.
+      }
+    }
+    const resuming = resumeSessionId !== undefined || priorConversation();
+    if (resumeSessionId !== undefined) {
+      argv.push('--resume', resumeSessionId);
+    } else if (resuming) {
       argv.push('--continue');
+    }
+    if (describeTranscripts) {
+      // The prompt is user content; report only its length so the journal
+      // carries the resume decision without the conversation itself.
+      console.error(
+        '[claude-sandbox] spawn',
+        JSON.stringify({
+          sessionId,
+          resuming,
+          resumeSessionId,
+          detector: Boolean(detectPriorConversation),
+          conversationStarted,
+          promptChars: String(prompt).length,
+          argv: argv.filter(arg => arg !== String(prompt)),
+          transcripts: describeTranscripts(),
+        }),
+      );
     }
     const proc = await E(activeSlice).spawn(
       harden(argv),
@@ -444,7 +569,7 @@ export const makeClaudeClient = ({
    * queued when closed bails before it spawns.
    *
    * @param {string} prompt
-   * @param {{ model?: string }} [opts]
+   * @param {{ model?: string, systemPrompt?: string }} [opts]
    * @returns {object} reply reader
    */
   const runTurn = (prompt, opts = {}) => {
@@ -499,7 +624,34 @@ export const makeClaudeClient = ({
         for await (const event of parseStreamJsonLines(
           makeStdoutIterable(proc),
         )) {
+          if (
+            describeTranscripts &&
+            event?.type === 'system' &&
+            event?.subtype === 'init'
+          ) {
+            // What the CLI itself believes it opened. A `session_id` other than
+            // the one we asked to resume means the resume did not take.
+            console.error(
+              '[claude-sandbox] init',
+              JSON.stringify({
+                sessionId,
+                claudeSessionId: event.session_id,
+                cwd: event.cwd,
+                model: event.model,
+                version: event.claude_code_version,
+                apiKeySource: event.apiKeySource,
+              }),
+            );
+          }
           push(event);
+        }
+        if (describeTranscripts) {
+          // Ground truth for the turn: whether the prompt Claude just persisted
+          // chained onto the conversation, or started a fresh root.
+          console.error(
+            '[claude-sandbox] after-turn',
+            JSON.stringify({ sessionId, transcripts: describeTranscripts() }),
+          );
         }
         // Stdout EOF alone does not mean the turn succeeded: `claude` exits
         // non-zero on auth failure, an internal error, or an external kill,
@@ -564,7 +716,13 @@ export const makeClaudeClient = ({
   // Fire-and-forget the initial prompt: queue it as the first turn and
   // drain it in the background so the buffer does not grow unbounded if
   // the caller never pulls. Explicit `send()`s queue after it.
-  if (initialPrompt) {
+  //
+  // Only on a genuinely fresh session: the prompt rides in the formula env,
+  // so a reincarnated formula would otherwise re-fire it as a spurious extra
+  // turn on every daemon restart (and, when resume detection missed, that
+  // re-fired turn would become the fresh conversation all later `--continue`
+  // turns build on — total context loss).
+  if (initialPrompt && !priorConversation()) {
     const initReader = runTurn(initialPrompt);
     (async () => {
       // Drain without closing: closing would fire onClose and kill the very
@@ -728,7 +886,10 @@ export const makeClaudeClient = ({
      * `{ type: 'abort', reason }`). Closing the reader aborts the turn.
      *
      * @param {string} prompt
-     * @param {object} [opts]
+     * @param {{ model?: string, systemPrompt?: string }} [opts] - Per-turn
+     *   overrides: `model` for `--model`, `systemPrompt` for
+     *   `--append-system-prompt` (each falls back to the constructor
+     *   default when omitted).
      */
     async send(prompt, opts = {}) {
       guardLive();
@@ -827,7 +988,7 @@ export const makeClaudeClient = ({
       if (provisioned === undefined) {
         return;
       }
-      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> } | undefined} */
+      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> } | undefined} */
       let resolved;
       try {
         resolved = await provisioned;
@@ -843,6 +1004,17 @@ export const makeClaudeClient = ({
       if (resolved.mountHandle) {
         try {
           await E(resolved.mountHandle).unmount();
+        } catch {
+          // best-effort; the mount caplet also unmounts on teardown
+        }
+      }
+      // The persistent Claude config dir is a second host-side 9P mount; it
+      // must be released too. Its backing directory survives (that is the
+      // whole point — the transcript persists for the next revival); only the
+      // live mount is torn down.
+      if (resolved.configMountHandle) {
+        try {
+          await E(resolved.configMountHandle).unmount();
         } catch {
           // best-effort; the mount caplet also unmounts on teardown
         }

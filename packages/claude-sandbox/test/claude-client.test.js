@@ -179,6 +179,42 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.false(argv.includes('--continue'));
 });
 
+test('resumePriorConversation makes the first send use --continue', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { resumePriorConversation: true }),
+  );
+  await drain(await client.send('after restart'));
+  t.is(fake.spawned.length, 1);
+  // A session reincarnated after a daemon restart, whose persistent config dir
+  // already held a transcript, resumes it on its very first post-restart turn
+  // rather than forking a fresh, context-free conversation.
+  t.true(fake.spawned[0].argv.includes('--continue'));
+  const status = await client.status();
+  t.true(status.conversationStarted);
+});
+
+test('an mcpConfigPath adds --mcp-config and --strict-mcp-config', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      mcpConfigPath: '/endo-mcp/mcp.json',
+    }),
+  );
+  await drain(await client.send('do a thing'));
+  const { argv } = fake.spawned[0];
+  t.true(argv.includes('--mcp-config'));
+  t.is(argv[argv.indexOf('--mcp-config') + 1], '/endo-mcp/mcp.json');
+  t.true(argv.includes('--strict-mcp-config'));
+});
+
+test('without an mcpConfigPath no MCP flags are passed', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  await drain(await client.send('do a thing'));
+  t.false(fake.spawned[0].argv.includes('--mcp-config'));
+});
+
 test('send() adds --continue after the first turn and forwards --model', async t => {
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(
@@ -195,6 +231,41 @@ test('send() adds --continue after the first turn and forwards --model', async t
     t.true(proc.argv.includes('--model'));
     t.true(proc.argv.includes('claude-sonnet-4-6'));
   }
+});
+
+test('a constructor systemPrompt adds --append-system-prompt to every spawn', async t => {
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { systemPrompt: 'You are Floot.' }),
+  );
+
+  await drain(await client.send('first'));
+  await drain(await client.send('second'));
+
+  t.is(fake.spawned.length, 2);
+  for (const proc of fake.spawned) {
+    const i = proc.argv.indexOf('--append-system-prompt');
+    t.true(i !== -1, 'argv carries --append-system-prompt');
+    t.is(proc.argv[i + 1], 'You are Floot.');
+  }
+});
+
+test('a per-turn systemPrompt overrides the constructor default', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), { systemPrompt: 'default persona' }),
+  );
+  await drain(await client.send('hi', { systemPrompt: 'turn persona' }));
+  const { argv } = fake.spawned[0];
+  const i = argv.indexOf('--append-system-prompt');
+  t.is(argv[i + 1], 'turn persona');
+});
+
+test('without a systemPrompt no --append-system-prompt is passed', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+  await drain(await client.send('do a thing'));
+  t.false(fake.spawned[0].argv.includes('--append-system-prompt'));
 });
 
 test('overlapping sends queue and run in order (serialized)', async t => {
@@ -395,6 +466,80 @@ test('help() describes the ClaudeClient surface', async t => {
   const client = makeClaudeClient(baseArgs(makeFakeSlice(), makeFakeMount()));
   t.regex(client.help(), /ClaudeClient/);
   t.regex(client.help(), /send\(prompt/);
+});
+
+test('detectPriorConversation decides --continue per spawn', async t => {
+  const fake = makeFakeSlice([[], [], []]);
+  let persisted = false;
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => persisted,
+    }),
+  );
+
+  // First turn: no transcript yet → fresh conversation.
+  await drain(await client.send('first'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+
+  // Simulate claude having persisted the first turn's transcript.
+  persisted = true;
+  await drain(await client.send('second'));
+  t.true(fake.spawned[1].argv.includes('--continue'));
+
+  // Transcript gone again (e.g. config dir wiped) → detector wins over the
+  // in-memory conversationStarted flag, so the turn does not pass a
+  // --continue that has nothing to resume.
+  persisted = false;
+  await drain(await client.send('third'));
+  t.false(fake.spawned[2].argv.includes('--continue'));
+});
+
+test('a first turn killed before claude persisted does not poison the next with --continue', async t => {
+  // The in-memory flag alone would flip to true after the first spawn even
+  // when the process was killed before writing a transcript; the detector
+  // (still reporting no transcript) must override it.
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => false,
+    }),
+  );
+  await drain(await client.send('killed early'));
+  await drain(await client.send('retry'));
+  t.is(fake.spawned.length, 2);
+  t.false(fake.spawned[0].argv.includes('--continue'));
+  t.false(fake.spawned[1].argv.includes('--continue'));
+});
+
+test('a detector throw falls back to the in-memory flag', async t => {
+  const fake = makeFakeSlice([[], []]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      detectPriorConversation: () => {
+        throw new Error('EACCES');
+      },
+    }),
+  );
+  await drain(await client.send('first'));
+  await drain(await client.send('second'));
+  t.false(fake.spawned[0].argv.includes('--continue'));
+  t.true(fake.spawned[1].argv.includes('--continue'));
+});
+
+test('initialPrompt is skipped when a prior conversation exists', async t => {
+  // The prompt rides in the formula env, so a reincarnated formula would
+  // otherwise re-fire it as a spurious extra turn on every daemon restart.
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      initialPrompt: 'hello',
+      detectPriorConversation: () => true,
+    }),
+  );
+  await drain(await client.send('next'));
+  t.is(fake.spawned.length, 1);
+  t.is(fake.spawned[0].argv[2], 'next');
+  t.true(fake.spawned[0].argv.includes('--continue'));
 });
 
 test('initialPrompt is fired and drained at construction', async t => {

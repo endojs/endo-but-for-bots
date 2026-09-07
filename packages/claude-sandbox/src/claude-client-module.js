@@ -34,6 +34,16 @@
  *                         under.
  *   WORKSPACE_PATH        Slice-internal workspace path (default
  *                         `/workspace`).
+ *   CONFIG_MOUNT_POINT    Host path the persistent Claude config 9P mount
+ *                         lives at (present only when a dedicated config
+ *                         filesystem was provisioned; its presence enables
+ *                         cross-restart conversation persistence).
+ *   CONFIG_PET_NAME       Pet name for the config Mount cap.
+ *   CLAUDE_CONFIG_INNER_DIR Slice-internal mount path for the config dir
+ *                         (default `/claude-config`); also CLAUDE_CONFIG_DIR.
+ *   CLAUDE_CONFIG_HOST_DIR Plain host backing directory of the config
+ *                         filesystem, read directly at construction to detect
+ *                         a pre-restart transcript worth resuming.
  *   BACKEND               Sandbox backend (default `podman`).
  *   NETWORK               Sandbox network profile (default `private`).
  *   CLAUDE_ROOTFS         Raw `rootfs` form value (may be empty).
@@ -54,6 +64,9 @@
  * @module
  */
 
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import nodePath from 'node:path';
+
 import { E } from '@endo/eventual-send';
 import { makeError, q, X } from '@endo/errors';
 
@@ -71,6 +84,10 @@ const CREDENTIAL_ENV_VARS = harden({
   apiKey: 'ANTHROPIC_API_KEY',
   oauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
 });
+
+/** Claude Code names each conversation transcript `<session-uuid>.jsonl`. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Create a cancellation context kit: an in-process passable context and
@@ -98,9 +115,20 @@ export const makeCancellationKit = () => {
 harden(makeCancellationKit);
 
 /**
- * Capture the caplet's cancellation promise from the daemon-context
- * passable shape. A context presence exposes `whenCancelled()`.
- * `null`/absent means no teardown signal.
+ * Capture the caplet's cancellation promise from the daemon context.
+ * `null`/absent context means no teardown signal.
+ *
+ * Called, never duck-typed. In production the context arrives over CapTP as
+ * a *presence* — an empty object whose methods are reachable only through
+ * `E()` — so `typeof resolvedContext.whenCancelled` is `'undefined'` there
+ * however the daemon defined it. Testing for the property answered "no
+ * teardown signal" for every real session, and `cancel`/`remove` then left
+ * the container, both 9P mounts, their pet names, and the credential grant
+ * running. Three settlements reach the subscriber and all three mean stop:
+ * the formula was cancelled or collected; the connection to the daemon
+ * dropped; or the context does not implement the method, a construction bug
+ * better surfaced as a torn-down session than as one nothing can stop
+ * (`packages/sandbox/src/factory.js` makes the same collapse).
  *
  * Note: we return the promise captured into a local, not via an
  * `async` return. An `async` return would adopt (flatten) the
@@ -112,10 +140,7 @@ harden(makeCancellationKit);
  */
 const cancellationPromiseOf = resolvedContext => {
   if (!resolvedContext) return null;
-  if (typeof resolvedContext.whenCancelled === 'function') {
-    return E(resolvedContext).whenCancelled();
-  }
-  return null;
+  return E(resolvedContext).whenCancelled();
 };
 
 /**
@@ -158,6 +183,142 @@ export const make = (powers, context, contextWrapper = {}) => {
   const network = env.NETWORK || 'private';
   const model = env.MODEL || undefined;
   const initialPrompt = env.INITIAL_PROMPT || undefined;
+  // Optional Endo tool bridge (see @endo/floot). When the factory provisioned
+  // one, MCP_CONFIG_PATH is the slice-internal path to its mcp.json and
+  // MCP_INNER_DIR is where the bridge's socket directory bind-mounts (read-only).
+  // The Mount cap itself is bundled by reference into the session powers, so the
+  // client never resolves a host name for it.
+  const mcpConfigPath = env.MCP_CONFIG_PATH || undefined;
+  const mcpInnerDir = env.MCP_INNER_DIR || '/endo-mcp';
+
+  // Persistent per-session Claude config dir. When the factory provisioned a
+  // dedicated config filesystem (new sessions do), CONFIG_MOUNT_POINT /
+  // CONFIG_PET_NAME are set and the client mounts it rw at CLAUDE_CONFIG_INNER_DIR
+  // and points CLAUDE_CONFIG_DIR there, so the CLI's conversation transcript
+  // lands on a host directory that outlives the container. Absent (older
+  // sessions minted before this mount existed), the config dir stays on the
+  // ephemeral tmpfs and conversations do not survive a daemon restart.
+  const configMountPoint = env.CONFIG_MOUNT_POINT || '';
+  const configPetName = env.CONFIG_PET_NAME || '';
+  const configInnerDir = env.CLAUDE_CONFIG_INNER_DIR || '/claude-config';
+  const configHostDir = env.CLAUDE_CONFIG_HOST_DIR || '';
+  const persistConfig = Boolean(configMountPoint && configPetName);
+
+  // A session reincarnated after a daemon restart whose persistent config dir
+  // already holds a transcript must resume it on the first post-restart turn,
+  // not fork a fresh, context-free conversation (the reported bug). Detect
+  // that by reading the config dir's plain host backing directory directly:
+  // Claude Code persists a conversation under
+  // `<config>/projects/<encoded-cwd>/*.jsonl`, so any project entry means at
+  // least one turn already ran for this session. The detector is handed to
+  // the client and consulted before EVERY spawn — a one-shot check at
+  // construction would silently fall back to "fresh" on a transient read
+  // failure, and could not notice a first turn that was killed before Claude
+  // persisted anything (which must not `--continue`).
+  /** @type {(() => string[]) | undefined} */
+  let listTranscripts;
+  /** @type {(() => string | undefined) | undefined} */
+  let resolveResumeSessionId;
+  /** @type {(() => boolean) | undefined} */
+  let detectPriorConversation;
+  if (persistConfig && configHostDir) {
+    const projectsDir = nodePath.join(configHostDir, 'projects');
+    listTranscripts = () => {
+      if (!existsSync(projectsDir)) return [];
+      return readdirSync(projectsDir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .flatMap(entry => {
+          const projectDir = nodePath.join(projectsDir, entry.name);
+          return readdirSync(projectDir)
+            .filter(file => file.endsWith('.jsonl'))
+            .map(file => nodePath.join(projectDir, file));
+        });
+    };
+    // The newest non-empty transcript, named for the Claude Code session it
+    // holds. Only a non-empty `*.jsonl` counts: Claude Code creates the per-cwd
+    // project directory (and sibling scratch dirs such as `memory/`) as soon as
+    // it starts, so a merely non-empty `projects/` is true even for a spawn that
+    // died before writing a resumable turn — and resuming that errors out or
+    // silently forks a fresh, context-free conversation.
+    resolveResumeSessionId = () =>
+      /** @type {() => string[]} */ (listTranscripts)()
+        .map(file => ({
+          // Claude Code names each transcript for its session id. Anything
+          // else is not ours to resume by name.
+          id: nodePath.basename(file, '.jsonl'),
+          // lstat, not stat: the config dir is guest-writable, so a planted
+          // symlink or FIFO must read as "not a transcript", never be
+          // followed.
+          stat: lstatSync(file),
+        }))
+        .filter(
+          ({ id, stat }) => stat.isFile() && stat.size > 0 && UUID_RE.test(id),
+        )
+        .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)[0]?.id;
+    // Deliberately broader than the resolver: any non-empty transcript means a
+    // turn already ran, even one this code cannot name. Such a session still
+    // resumes, via the `--continue` fallback, rather than reading as fresh.
+    detectPriorConversation = () =>
+      /** @type {() => string[]} */ (listTranscripts)().some(file => {
+        const stat = lstatSync(file);
+        return stat.isFile() && stat.size > 0;
+      });
+  }
+
+  // Opt-in resume diagnostics. Reads `process.env` rather than the formula env
+  // so it can be turned on for sessions whose env was frozen at provision time
+  // (set ENDO_CLAUDE_DEBUG_RESUME on the daemon and restart). Reports, per
+  // spawn, the transcripts the detector saw and whether the newest external
+  // user entry chained onto earlier turns — the ground truth for "did the model
+  // actually resume its history".
+  /** @type {(() => unknown) | undefined} */
+  let describeTranscripts;
+  if (listTranscripts && process.env.ENDO_CLAUDE_DEBUG_RESUME) {
+    describeTranscripts = () =>
+      /** @type {() => string[]} */ (listTranscripts)()
+        // Regular files only: a FIFO planted in the guest-writable config dir
+        // would otherwise block the worker in the read below.
+        .filter(file => lstatSync(file).isFile())
+        .map(file => {
+          const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
+          // A human turn: an external, non-sidechain user entry whose content is
+          // plain text. Tool results are also `user` entries, with array content.
+          const prompts = lines
+            .flatMap(line => {
+              try {
+                return [JSON.parse(line)];
+              } catch {
+                return [];
+              }
+            })
+            .filter(
+              entry =>
+                entry.type === 'user' &&
+                entry.userType === 'external' &&
+                !entry.isSidechain &&
+                typeof entry.message?.content === 'string',
+            );
+          return {
+            file: nodePath.basename(file),
+            entries: lines.length,
+            prompts: prompts.length,
+            // How many turns saw the conversation so far. Anything short of
+            // `prompts - 1` means context was lost mid-session.
+            chained: prompts.filter(entry => entry.parentUuid).length,
+            lastChained: prompts.length
+              ? Boolean(prompts[prompts.length - 1].parentUuid)
+              : null,
+          };
+        });
+  }
+  let resumePriorConversation = false;
+  if (detectPriorConversation) {
+    try {
+      resumePriorConversation = detectPriorConversation();
+    } catch {
+      // Unreadable backing dir (first run, races): treat as a fresh session.
+    }
+  }
 
   // Parse (and validate) the rootfs synchronously so a bad value fails
   // at construction rather than on first use.
@@ -202,6 +363,8 @@ export const make = (powers, context, contextWrapper = {}) => {
     // revoke the issued credential grant — rather than leak it.
     /** @type {any} */
     let mountHandle = null;
+    /** @type {any} */
+    let configMountHandle = null;
     try {
       // Materialise the credential immediately before it flows into the
       // slice env. The cap may live on a remote peer; the host only ever
@@ -246,30 +409,67 @@ export const make = (powers, context, contextWrapper = {}) => {
         workspaceMountPoint,
         workspacePetName,
       );
+      // The persistent Claude config dir, mounted rw at `configInnerDir`. It is
+      // a *separate* filesystem from the workspace, so the CLI's transcript
+      // never pollutes a new-project git worktree nor gets served by
+      // `publishWorkspace`. Its backing directory outlives the container, so
+      // the conversation survives a daemon restart. Only new sessions carry
+      // CONFIG_MOUNT_POINT; older ones keep the ephemeral tmpfs config dir.
+      /** @type {any} */
+      let configCap = null;
+      if (persistConfig) {
+        const configFs = await E(sessionPowers).configFilesystem();
+        if (!configFs) {
+          throw makeError(
+            X`claude-sandbox: no config Filesystem cap was provided`,
+          );
+        }
+        configMountHandle = await E(fsMounter).mount(
+          configFs,
+          configMountPoint,
+          harden({ lazyUnmount: true }),
+        );
+        configCap = await E(sessionPowers).provideMount(
+          configMountPoint,
+          configPetName,
+        );
+      }
+      // The Endo tool bridge's socket directory, if this session has one, bound
+      // read-only so the CLI's stdio relay can reach the host-side MCP server.
+      const mcpCap = mcpConfigPath
+        ? (await E(sessionPowers).mcpMount()) || null
+        : null;
+      const mounts = [
+        {
+          cap: workspaceCap,
+          innerPath: workspacePath,
+          mode: 'rw',
+        },
+        ...(configCap
+          ? [{ cap: configCap, innerPath: configInnerDir, mode: 'rw' }]
+          : []),
+        ...(mcpCap
+          ? [{ cap: mcpCap, innerPath: mcpInnerDir, mode: 'ro' }]
+          : []),
+        // Runtime-attached extras (designs/runtime-container-fs-mount.md):
+        // caps the session guest holds, already bridged over 9P by the host
+        // attach registrar and registered as daemon Mount caps. Read-write
+        // is the intended default — the primary use case is modifying the
+        // cap's tree with in-slice Linux tools (git especially) — but an
+        // unrecognized mode resolves to `ro`, not `rw`: `setExtraMounts`
+        // rejects one outright, and this last line must not be the place a
+        // malformed value widens a bind. Only the bind fields flow to the
+        // slice; the registrar's 9P handle stays host-side.
+        ...extraMounts.map(extra => ({
+          cap: extra.cap,
+          innerPath: extra.innerPath,
+          mode: extra.mode === 'rw' ? 'rw' : 'ro',
+        })),
+      ];
       const slice = await E(sandboxFactory).make(
         harden({
           rootfs: parsedRootfs,
-          mounts: [
-            {
-              cap: workspaceCap,
-              innerPath: workspacePath,
-              mode: 'rw',
-            },
-            // Runtime-attached extras (designs/runtime-container-fs-mount.md):
-            // caps the session guest holds, already bridged over 9P by the host
-            // attach registrar and registered as daemon Mount caps. Read-write
-            // is the intended default — the primary use case is modifying the
-            // cap's tree with in-slice Linux tools (git especially) — but an
-            // unrecognized mode resolves to `ro`, not `rw`: `setExtraMounts`
-            // rejects one outright, and this last line must not be the place a
-            // malformed value widens a bind. Only the bind fields flow to the
-            // slice; the registrar's 9P handle stays host-side.
-            ...extraMounts.map(extra => ({
-              cap: extra.cap,
-              innerPath: extra.innerPath,
-              mode: extra.mode === 'rw' ? 'rw' : 'ro',
-            })),
-          ],
+          mounts,
           network,
           env: credentialEnv,
           cwd: workspacePath,
@@ -279,16 +479,25 @@ export const make = (powers, context, contextWrapper = {}) => {
       return harden({
         slice,
         mountHandle,
+        configMountHandle,
         revoke: revokeCredential,
-        // Reclaim the workspace Mount pet name that `provideMount` registered
-        // at the host root, so a torn-down session leaves no live Mount
-        // formula behind. Scoped to this session's name by the powers cap.
+        // Reclaim the Mount pet names that `provideMount` registered at the
+        // host root (workspace and, when present, config), so a torn-down
+        // session leaves no live Mount formula behind. `removeMount()` drops
+        // every mount name the powers cap allows for this session.
         removeMount: () => E(sessionPowers).removeMount(),
       });
     } catch (error) {
       if (mountHandle) {
         try {
           await E(mountHandle).unmount();
+        } catch {
+          // best-effort
+        }
+      }
+      if (configMountHandle) {
+        try {
+          await E(configMountHandle).unmount();
         } catch {
           // best-effort
         }
@@ -318,19 +527,29 @@ export const make = (powers, context, contextWrapper = {}) => {
     backend,
     rootfsLabel: rootfsLabel(parsedRootfs),
     model,
+    mcpConfigPath,
     // The OCI root is intentionally read-only. Claude Code and its Bash tool
-    // still need per-session config/state, so keep both HOME and the explicit
-    // Claude config directory on the slice's writable tmpfs.
+    // still need per-session config/state, so HOME stays on the slice's
+    // writable tmpfs. CLAUDE_CONFIG_DIR — which holds the conversation
+    // transcript — points at the persistent config mount when one was
+    // provisioned (so history survives daemon restarts), falling back to the
+    // ephemeral tmpfs for older sessions minted before that mount existed.
     env: harden({
       HOME: '/tmp/claude-home',
       XDG_CONFIG_HOME: '/tmp/claude-home/.config',
-      CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
+      CLAUDE_CONFIG_DIR: persistConfig
+        ? configInnerDir
+        : '/tmp/claude-home/.claude',
       // Claude refuses bypass-permissions mode for uid 0 unless the caller
       // attests that the process is already inside a sandbox. This process is
       // root only inside a rootless Podman user namespace.
       IS_SANDBOX: '1',
     }),
     initialPrompt,
+    resumePriorConversation,
+    detectPriorConversation,
+    resolveResumeSessionId,
+    describeTranscripts,
   });
 
   // Tear down on cancellation/collection. `cancel` is transient (the
