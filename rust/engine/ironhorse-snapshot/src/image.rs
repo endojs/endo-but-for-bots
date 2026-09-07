@@ -3509,6 +3509,7 @@ pub(crate) struct LangRows<'a> {
     pub intl: &'a IntlTables,
 }
 
+#[cfg(test)]
 impl LangRows<'_> {
     /// The empty rows, for callers checking language-row-free content.
     pub(crate) const EMPTY: LangRows<'static> = LangRows {
@@ -3529,6 +3530,7 @@ impl LangRows<'_> {
     };
 }
 
+#[cfg(test)]
 static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
     ironhorse_vm::PromiseClusterSnapshot {
         promises: Vec::new(),
@@ -3538,6 +3540,7 @@ static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
         async_instances: Vec::new(),
     };
 
+#[cfg(test)]
 static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
     instants: Vec::new(),
     durations: Vec::new(),
@@ -3545,6 +3548,7 @@ static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
     zoneds: Vec::new(),
 };
 
+#[cfg(test)]
 static EMPTY_INTL: IntlTables = IntlTables {
     locales: Vec::new(),
     collators: Vec::new(),
@@ -3556,6 +3560,7 @@ static EMPTY_INTL: IntlTables = IntlTables {
     segment_iterators: Vec::new(),
     date_time_formats: Vec::new(),
 };
+#[cfg(test)]
 static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
     ironhorse_vm::FunctionStateSnapshot {
         segments: Vec::new(),
@@ -3564,10 +3569,12 @@ static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
         ctor_prototypes: Vec::new(),
         deleted_meta: Vec::new(),
     };
+#[cfg(test)]
 static EMPTY_PROXY_STATE: ironhorse_vm::ProxyStateSnapshot = ironhorse_vm::ProxyStateSnapshot {
     proxies: Vec::new(),
     revokers: Vec::new(),
 };
+#[cfg(test)]
 static EMPTY_PRIVATE_ELEMENTS: ironhorse_vm::PrivateElementSnapshot =
     ironhorse_vm::PrivateElementSnapshot {
         values: Vec::new(),

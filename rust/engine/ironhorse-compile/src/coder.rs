@@ -64,9 +64,9 @@ enum Payload {
     /// A branch/`CODE`/`CATCH` record referencing target `tid`.
     Branch { tid: usize },
     /// A `u1`/`u2` index operand (`BEGIN_*`, `RESERVE_1`, `UNWIND_1`,
-    /// `LINE`, `HOST`, `NEW_TEMPORARY`…). `plus_one` selects the
+    /// `LINE`, `HOST`, `NEW_TEMPORARY`…). The opcode selects the
     /// local/closure family whose serialized value is `index + 1`.
-    Index { index: i32, plus_one: bool },
+    Index { index: i32 },
     /// A signed integer operand (`INTEGER_1`, `RUN_1`, `RUN_TAIL_1`).
     Integer { value: i32 },
     /// An IEEE-754 double operand (`NUMBER`).
@@ -390,7 +390,6 @@ struct Code {
 /// finalizer.
 #[derive(Clone, Debug, Default)]
 struct Target {
-    index: u32,
     offset: i32,
     used: bool,
     /// The environment (`with`) nesting the target was created at.
@@ -418,7 +417,6 @@ pub struct Coder<'a> {
     stack_level: i32,
     scope_level: i32,
     environment_level: i32,
-    target_index: u32,
     program_flag: bool,
     eval_flag: bool,
     /// XS's `coder->firstBreakTarget` / `firstContinueTarget` /
@@ -511,7 +509,6 @@ impl<'a> Coder<'a> {
             stack_level: 0,
             scope_level: 0,
             environment_level: 0,
-            target_index: 0,
             program_flag: false,
             eval_flag: false,
             import_flag: false,
@@ -679,14 +676,7 @@ impl<'a> Coder<'a> {
     }
 
     fn add_index(&mut self, delta: i32, id: i32, index: i32) {
-        self.add(
-            delta,
-            Payload::Index {
-                index,
-                plus_one: false,
-            },
-            id,
-        );
+        self.add(delta, Payload::Index { index }, id);
     }
 
     fn add_integer(&mut self, delta: i32, id: i32, value: i32) {
@@ -714,10 +704,7 @@ impl<'a> Coder<'a> {
     /// current environment/scope/stack levels (break/continue resolution
     /// and the `try` finalizer read these back).
     fn create_target(&mut self) -> usize {
-        let index = self.target_index;
-        self.target_index += 1;
         self.targets.push(Target {
-            index,
             environment_level: self.environment_level,
             scope_level: self.scope_level,
             stack_level: self.stack_level,

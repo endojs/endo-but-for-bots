@@ -27155,17 +27155,6 @@ impl Interp {
         }
     }
 
-    /// Whether any promise jobs are pending (the pump-loop latch query — XS's
-    /// `the->promiseJobs` flag / `mxPendingJobs` non-empty). The host drains
-    /// with [`Self::run_promise_jobs`] after each turn. The design's daemon
-    /// pump loop queries this per-machine (replacing xsnap's global latch); the
-    /// in-process `run` drains internally, so it is exposed for the embedding.
-    #[inline]
-    #[allow(dead_code)]
-    fn has_pending_jobs(&self) -> bool {
-        !self.promise_jobs.is_empty()
-    }
-
     /// Drain the promise job queue (XS's `fxRunPromiseJobs`, the host-driven
     /// microtask drain the ironhorse embedding runs after a crank — the pump-loop
     /// latch). Each job runs its reaction handler against the settled value and
