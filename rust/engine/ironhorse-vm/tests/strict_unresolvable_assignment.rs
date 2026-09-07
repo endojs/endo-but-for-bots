@@ -62,6 +62,29 @@ fn strict_assignment_to_an_undeclared_name_throws_reference_error() {
 }
 
 #[test]
+fn the_store_side_miss_is_worded_as_xs_words_it() {
+    // The constructor-name assertions above pass for either noun, so they
+    // never pinned the message — the store side read `undefined variable`
+    // against the oracle's `undefined property` without a test noticing. XS
+    // raises `mxRunDebugID(XS_REFERENCE_ERROR, "set %s: undefined property")`
+    // from the `XS_CODE_SET_VARIABLE` strict arm (`xsRun.c`), so pin the text.
+    let halt = run("'use strict'; nope = 1").expect_err("must throw");
+    assert!(
+        halt.contains("set nope: undefined property"),
+        "expected XS's store-side wording, got: {halt}"
+    );
+
+    // The read side is a DIFFERENT message on a different XS path, and it is
+    // already correct: `XS_CODE_GET_VARIABLE`'s unresolved arm says `undefined
+    // variable`. Pin it here so a later sweep cannot "unify" the two nouns.
+    let halt = run("'use strict'; nope").expect_err("must throw");
+    assert!(
+        halt.contains("get nope: undefined variable"),
+        "expected XS's read-side wording, got: {halt}"
+    );
+}
+
+#[test]
 fn the_sloppy_twin_still_creates_the_global() {
     // The same program without the directive is *correct today* and must stay
     // correct: sloppy `PutValue` takes step 6.b's
