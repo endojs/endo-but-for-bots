@@ -748,9 +748,15 @@ jobs:
         include:
           - profile: debug
             check: test-ironhorse
+            os: ubuntu-latest
           - profile: release
             check: test-ironhorse-release
-    runs-on: ubuntu-latest
+            os: ubuntu-latest
+          # Run the same golden snapshots on a second host platform.
+          - profile: debug
+            check: test-ironhorse-macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     steps:
