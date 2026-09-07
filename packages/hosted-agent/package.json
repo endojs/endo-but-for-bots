@@ -23,7 +23,12 @@
     "./turn-ledger.js": "./src/turn-ledger.js",
     "./package.json": "./package.json",
     "./provider-broker.js": "./src/provider-broker.js",
-    "./provider-transport.js": "./src/provider-transport.js"
+    "./provider-transport.js": "./src/provider-transport.js",
+    "./provider-http.js": "./src/provider-http.js",
+    "./provider-pipe.js": "./src/provider-pipe.js",
+    "./provider-worker.js": "./src/provider-worker.js",
+    "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
+    "./provider-lease-issuer.js": "./src/provider-lease-issuer.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -34,16 +39,23 @@
     "test": "ava"
   },
   "dependencies": {
+    "@endo/captp": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
-    "@endo/patterns": "workspace:^"
+    "@endo/init": "workspace:^",
+    "@endo/netstring": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/sandbox": "workspace:^",
+    "@endo/stream-node": "workspace:^"
   },
   "devDependencies": {
     "@endo/far": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
-    "eslint": "catalog:dev"
+    "esbuild": "0.28.2",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
   },
   "ava": {
     "files": [

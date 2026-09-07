@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { M } from '@endo/patterns';
 
 import assert from 'node:assert';
@@ -355,6 +356,40 @@ test.serial('podman probe reports rootless availability + version', async t => {
     'rootless flag is reported in details',
   );
 });
+
+test.serial(
+  'alpine stdin remains open until the process writer closes',
+  async t => {
+    t.timeout(30_000);
+    if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+      t.pass('podman or alpine image unavailable');
+      return;
+    }
+    const driver = makePodmanDriver({ env: {}, ownerId: PODMAN_TEST_OWNER });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    t.teardown(() => cleanupTmpdirs(tmpdirs));
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: ALPINE_REF },
+        network: 'none',
+        backend: 'podman',
+      }),
+    );
+    t.teardown(() => E(handle).dispose());
+    const proc = await E(handle).spawn(harden(['/bin/cat']));
+    const stdout = drainReader(await E(proc).stdout());
+    const writer = iterateBytesWriter(E(proc).stdin(), { buffer: 0 });
+    await writer.next(new TextEncoder().encode('first-'));
+    await writer.next(new TextEncoder().encode('second\n'));
+    await writer.return();
+    t.is((await E(proc).wait()).code, 0);
+    t.is((await stdout).toString('utf8'), 'first-second\n');
+  },
+);
 
 test.serial(
   'listBackends() reports podman available via the factory',
@@ -1711,6 +1746,12 @@ const makeLivePolicy = async sidecarName => {
  */
 const skipUnlessPolicyHost = t => {
   if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+    if (process.env.ENDO_SANDBOX_REQUIRE_POLICY === '1') {
+      t.fail(
+        `Required policy host unavailable: ${podmanAvailability.reason ?? 'test image absent'}`,
+      );
+      return true;
+    }
     t.log('SKIPPED: podman or the test image is unavailable');
     t.pass(
       `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
@@ -1730,6 +1771,10 @@ test.serial(
     const driver = makePodmanDriver({ env: {}, ownerId: POLICY_TEST_OWNER });
     const probe = await driver.probe();
     if (!probe.available) {
+      if (process.env.ENDO_SANDBOX_REQUIRE_POLICY === '1') {
+        t.fail(`Required policy driver unavailable: ${probe.reason}`);
+        return;
+      }
       t.pass(`podman driver unavailable: ${probe.reason}`);
       return;
     }
@@ -1750,6 +1795,7 @@ test.serial(
         }),
       );
     } catch (e) {
+      if (process.env.ENDO_SANDBOX_REQUIRE_POLICY === '1') throw e;
       // Not a failure: a host that cannot satisfy a control is one the
       // policy is right to refuse, and which control that is depends on
       // the host, not on this code. Naming it is the useful outcome —

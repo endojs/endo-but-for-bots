@@ -312,3 +312,190 @@ test('operator configuration cannot enable administrative routes or subscription
     { message: /Unsupported broker authentication mode/ },
   );
 });
+
+/** @param {string[]} chunks */
+const streamingSetup = chunks => {
+  let cancelled = false;
+  const reader = Far('reader', {
+    async next() {
+      const value = chunks.shift();
+      return harden({ done: value === undefined, value: value ?? '' });
+    },
+    return() {
+      cancelled = true;
+    },
+  });
+  const lease = makeProviderBrokerLease(policy, {
+    secret: Far('secret', {
+      async readBase64() {
+        return btoa(credential);
+      },
+    }),
+    transport: Far('transport', {
+      async request() {
+        return harden({ status: 200, body: '' });
+      },
+      async requestStream() {
+        return harden({ status: 200, reader });
+      },
+    }),
+    now: () => 0,
+  });
+  return { ...lease, cancelled: () => cancelled };
+};
+
+test('stream rejects a credential split across chunks before disclosing its prefix', async t => {
+  const lease = streamingSetup([
+    `${'safe-prefix '.repeat(2)}canary-`,
+    'secret',
+  ]);
+  const response = await E(lease.endpoint).requestStream(request);
+  const first = await E(response.reader).next();
+  t.false(first.value.includes('canary'));
+  await t.throwsAsync(() => E(response.reader).next(), {
+    message: /Provider request failed/,
+  });
+  await Promise.resolve();
+  t.true(lease.cancelled());
+});
+
+test('stream delivers UTF8 intact and checks revocation on every pull', async t => {
+  const lease = streamingSetup([`${'a'.repeat(20)}😀`, 'z'.repeat(20)]);
+  const response = await E(lease.endpoint).requestStream(request);
+  t.is(response.contentType, 'application/json');
+  const first = await E(response.reader).next();
+  t.false(first.done);
+  await E(lease.admin).revoke();
+  await t.throwsAsync(() => E(response.reader).next(), {
+    message: /Provider request failed/,
+  });
+  t.true(lease.cancelled());
+});
+
+test('stream preserves buffered content and yields EOF after final held suffix', async t => {
+  const input = ['hello 😀', ' world!', 'x'.repeat(25)];
+  const lease = streamingSetup([...input]);
+  const response = await E(lease.endpoint).requestStream(request);
+  let output = '';
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const chunk = await E(response.reader).next();
+    if (chunk.done) break;
+    output += chunk.value;
+  }
+  t.is(output, input.join(''));
+});
+
+test('stream enforces response quota and rejects encoded credential across chunks', async t => {
+  for (const chunks of [
+    ['x'.repeat(101)],
+    [btoa(credential).slice(0, 8), btoa(credential).slice(8)],
+  ]) {
+    const lease = streamingSetup(chunks);
+    // eslint-disable-next-line no-await-in-loop
+    const response = await E(lease.endpoint).requestStream(request);
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(response.reader).next(), {
+      message: /Provider request failed/,
+    });
+    t.true(lease.cancelled());
+  }
+});
+
+test('cancel suppresses a pending delivery even if upstream ignores cancellation', async t => {
+  t.timeout(1000);
+  /** @type {(chunk: {done:boolean,value:string}) => void} */
+  let deliver = () => {};
+  const pending = new Promise(resolve => {
+    deliver = resolve;
+  });
+  const lease = makeProviderBrokerLease(policy, {
+    secret: Far('secret', {
+      async readBase64() {
+        return btoa(credential);
+      },
+    }),
+    transport: Far('transport', {
+      async request() {
+        return harden({ status: 200, body: '' });
+      },
+      async requestStream() {
+        return harden({
+          status: 200,
+          reader: Far('reader', {
+            async next() {
+              return pending;
+            },
+            return() {},
+          }),
+        });
+      },
+    }),
+    now: () => 0,
+  });
+  const response = await E(lease.endpoint).requestStream(request);
+  const pull = E(response.reader).next();
+  await E(response.reader).return();
+  deliver(harden({ done: false, value: 'x'.repeat(40) }));
+  await t.throwsAsync(pull, { message: /Provider request failed/ });
+});
+
+for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
+  test(`terminated stream is released after ${termination}`, async t => {
+    let returns = 0;
+    const upstream = Far('upstream reader', {
+      async next() {
+        if (termination === 'read failure') throw Error('upstream failed');
+        return harden({ done: true, value: '' });
+      },
+      return() {
+        returns += 1;
+      },
+      getReturnCount() {
+        return returns;
+      },
+    });
+    const lease = makeProviderBrokerLease(policy, {
+      secret: Far('secret', {
+        async readBase64() {
+          return btoa(credential);
+        },
+      }),
+      transport: Far('transport', {
+        async request() {
+          return harden({ status: 200, body: '' });
+        },
+        async requestStream() {
+          return harden({
+            status: termination === 'invalid status' ? 500 : 200,
+            reader: upstream,
+          });
+        },
+      }),
+      now: () => 0,
+    });
+    if (termination === 'invalid status') {
+      await t.throwsAsync(() => E(lease.endpoint).requestStream(request), {
+        message: /Provider request failed/,
+      });
+    } else {
+      const response = await E(lease.endpoint).requestStream(request);
+      if (termination === 'return') {
+        await E(response.reader).return();
+        await E(response.reader).return();
+      } else if (termination === 'read failure') {
+        await t.throwsAsync(() => E(response.reader).next(), {
+          message: /Provider request failed/,
+        });
+        await E(response.reader).return();
+      } else {
+        t.true((await E(response.reader).next()).done);
+        await E(response.reader).return();
+      }
+    }
+    await E(lease.admin).revoke();
+    await E(lease.admin).revoke();
+    // Drain eventual sends to the same upstream target before checking count.
+    t.is(await E(upstream).getReturnCount(), termination === 'EOF' ? 0 : 1);
+  });
+}

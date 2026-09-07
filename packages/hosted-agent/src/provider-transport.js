@@ -1,6 +1,7 @@
 // @ts-check
 
 import { Fail, makeError, X } from '@endo/errors';
+import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
@@ -8,8 +9,8 @@ import { M } from '@endo/patterns';
 
 /**
  * Per-lease fetch transport. Fetch is an explicit trusted power, never ambient
- * network authority. Responses are buffered only up to the configured byte
- * ceiling; this adapter does not yet forward SSE incrementally to a CLI.
+ * network authority. Responses support bounded, incremental pulls with a deadline that remains
+ * active until EOF or cancellation. The compatibility request method buffers.
  * Abort and disposal settle callers even if an injected fetch ignores abort.
  * Such a fetch is still responsible for stopping its underlying network work.
  *
@@ -58,10 +59,38 @@ export const makeProviderFetchTransport = ({
           maxResponseBytes: M.bigint(),
         }),
       ).returns(M.promise()),
+
+      requestStream: M.call(
+        M.splitRecord({
+          url: M.string(),
+          method: M.string(),
+          headers: M.recordOf(M.string(), M.string()),
+          body: M.string(),
+          redirect: /** @type {const} */ ('error'),
+          maxResponseBytes: M.bigint(),
+        }),
+      ).returns(M.promise()),
     }),
     {
       /** @param {UpstreamRequest} request */
       async request(request) {
+        !disposed || Fail`Provider transport disposed`;
+        try {
+          const response = await E(transport).requestStream(request);
+          const parts = [];
+          for (;;) {
+            // eslint-disable-next-line no-await-in-loop
+            const chunk = await E(response.reader).next();
+            if (chunk.done) break;
+            parts.push(chunk.value);
+          }
+          return harden({ status: response.status, body: parts.join('') });
+        } catch (_error) {
+          return Fail`Provider transport failed`;
+        }
+      },
+      /** @param {UpstreamRequest} request */
+      async requestStream(request) {
         !disposed || Fail`Provider transport disposed`;
         const controller = new AbortController();
         /** @type {ReadableStreamDefaultReader<Uint8Array> | undefined} */
@@ -79,10 +108,23 @@ export const makeProviderFetchTransport = ({
         const stopped = new Promise((_, reject) => {
           rejectStopped = reject;
         });
+        // A deadline may fire while the caller is not pulling.
+        void stopped.catch(() => {});
+        const finish = () => {
+          finished = true;
+          pending.delete(stop);
+          clearTimer(timer);
+          try {
+            reader?.releaseLock();
+          } catch (_error) {
+            // A pending read releases when cancellation settles.
+          }
+        };
         const stop = () => {
           controller.abort();
           cancelBody();
           rejectStopped(makeError(X`Provider transport stopped`));
+          finish();
         };
         pending.add(stop);
         const timer = setTimer(stop, timeoutMs);
@@ -151,32 +193,55 @@ export const makeProviderFetchTransport = ({
             Fail`Provider response too large`;
           const decoder = new TextDecoder('utf-8', { fatal: true });
           let bytes = 0n;
-          const parts = [];
-          for (;;) {
-            // eslint-disable-next-line no-await-in-loop
-            const chunk = await Promise.race([bodyReader.read(), stopped]);
-            if (chunk.done) break;
-            chunk.value instanceof Uint8Array || Fail`Invalid provider bytes`;
-            bytes += BigInt(chunk.value.byteLength);
-            bytes <= limit || Fail`Provider response too large`;
-            parts.push(decoder.decode(chunk.value, { stream: true }));
-          }
-          parts.push(decoder.decode());
-          !controller.signal.aborted || Fail`Provider transport stopped`;
-          return harden({ status: response.status, body: parts.join('') });
+          let reading = false;
+          const stream = makeExo(
+            'ProviderResponseReader',
+            M.interface('ProviderResponseReader', {
+              next: M.call().returns(M.promise()),
+              return: M.call().returns(M.undefined()),
+            }),
+            {
+              async next() {
+                !reading || Fail`Concurrent provider read`;
+                !controller.signal.aborted || Fail`Provider transport stopped`;
+                if (finished) return harden({ done: true, value: '' });
+                reading = true;
+                try {
+                  const chunk = await Promise.race([
+                    bodyReader.read(),
+                    stopped,
+                  ]);
+                  !controller.signal.aborted ||
+                    Fail`Provider transport stopped`;
+                  if (chunk.done) {
+                    const value = decoder.decode();
+                    finish();
+                    // The decoder can emit a final value; deliver it before EOF.
+                    return harden({ done: value.length === 0, value });
+                  }
+                  chunk.value instanceof Uint8Array ||
+                    Fail`Invalid provider bytes`;
+                  bytes += BigInt(chunk.value.byteLength);
+                  bytes <= limit || Fail`Provider response too large`;
+                  return harden({
+                    done: false,
+                    value: decoder.decode(chunk.value, { stream: true }),
+                  });
+                } catch (_error) {
+                  stop();
+                  return Fail`Provider transport failed`;
+                } finally {
+                  reading = false;
+                  if (finished) finish();
+                }
+              },
+              return: stop,
+            },
+          );
+          return harden({ status: response.status, reader: stream });
         } catch (_error) {
-          controller.abort();
-          cancelBody();
+          stop();
           return Fail`Provider transport failed`;
-        } finally {
-          finished = true;
-          pending.delete(stop);
-          clearTimer(timer);
-          try {
-            reader?.releaseLock();
-          } catch (_error) {
-            /* A pending read releases when cancellation settles. */
-          }
         }
       },
     },
