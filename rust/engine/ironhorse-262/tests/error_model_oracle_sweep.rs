@@ -157,6 +157,11 @@ fn error_model_agrees_with_the_oracle() {
         "(42)['toString'](2)",
         "typeof true?.['toString']",
         "String(true[0]) + ',' + String((42)[0]) + ',' + String(true['nosuch'])",
+        // A symbol base resolves `%Symbol.prototype%`, never its own
+        // description slot.
+        "var s=Symbol('x'); s['toString']()",
+        "var o={x:5}; var s=Symbol(o); String(s['x']) + ',' + String(s.x)",
+        "String(Symbol([1,2,3])[1])",
         "var r=0; class A { m(){ return super.x } } try { new A().m(); r='ok' } catch(e){ r='threw' } r",
         "var r=0; try { null[0] = 1 } catch(e){ r=e.name+':'+e.message } r",
         // --- cross segment (F024) ---
