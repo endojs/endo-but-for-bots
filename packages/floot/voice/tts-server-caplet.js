@@ -280,7 +280,9 @@ const makePiper = ({
     // and exited (all audio already streamed through onChunk).
     finish: () => {
       if (!child) return Promise.resolve();
-      child.stdin?.end();
+      // After abort() the child has been told to stop; ending its stdin as
+      // well would only race the signal (it could exit on the EOF first).
+      if (!aborted) child.stdin?.end();
       return /** @type {Promise<void>} */ (exited);
     },
     abort: () => {
