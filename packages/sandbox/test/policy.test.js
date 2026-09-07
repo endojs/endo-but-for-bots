@@ -148,7 +148,7 @@ const makeState = (overrides = {}) =>
       interfaces: harden(['lo']),
       routableRoutes: 0,
     }),
-    processIdentity: harden({ uid: 1000, gid: 1000 }),
+    processIdentity: harden({ uid: 1000, gid: 1000, seccompMode: 2 }),
     volumeQuotas: new Map([
       ['workspace-s1', 8n * GIB],
       ['codex-state-s1', 4n * GIB],
@@ -455,7 +455,7 @@ const unprovedStates = [
   ],
   [
     'a process running as a different identity',
-    { processIdentity: harden({ uid: 0, gid: 0 }) },
+    { processIdentity: harden({ uid: 0, gid: 0, seccompMode: 2 }) },
     /uid/,
   ],
   [
@@ -486,15 +486,13 @@ const unprovedStates = [
     /no-new-privileges/,
   ],
   [
-    'seccomp switched off',
-    {
-      inspect: makeInspect(record => {
-        record.HostConfig.SecurityOpt = [
-          'no-new-privileges',
-          'seccomp=unconfined',
-        ];
-      }),
-    },
+    'a process with no seccomp filter loaded',
+    { processIdentity: harden({ uid: 1000, gid: 1000, seccompMode: 0 }) },
+    /seccomp/,
+  ],
+  [
+    'a kernel that reports no seccomp mode at all',
+    { processIdentity: harden({ uid: 1000, gid: 1000, seccompMode: null }) },
     /seccomp/,
   ],
   [

@@ -9,7 +9,7 @@ import { makeCgroup2Probe } from '../limits.js';
 import {
   makeProcReader,
   readNetworkNamespace,
-  readProcessIdentity,
+  readProcessStatus,
   readUnsharedNamespaces,
 } from '../observe.js';
 import {
@@ -1260,7 +1260,7 @@ export const makePodmanDriver = ({
         await Promise.all([
           readUnsharedNamespaces(proc, pid),
           readNetworkNamespace(proc, pid),
-          readProcessIdentity(proc, pid),
+          readProcessStatus(proc, pid),
           cgroup2Probe.probe(),
         ]);
       /** @type {Map<string, bigint | null>} */

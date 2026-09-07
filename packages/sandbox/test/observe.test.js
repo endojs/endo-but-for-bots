@@ -10,7 +10,7 @@ import {
   parseNamespaceInode,
   parseNetDev,
   readNetworkNamespace,
-  readProcessIdentity,
+  readProcessStatus,
   readUnsharedNamespaces,
 } from '../src/observe.js';
 
@@ -202,14 +202,14 @@ test('process identity is reported inside the slice user namespace', async t => 
   const proc = makeFixtureProc(
     {
       '/proc/77/status':
-        'Name:\tsleep\nUid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\n',
+        'Name:\tsleep\nUid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nSeccomp:\t2\n',
       '/proc/77/uid_map': '         0     100000      65536\n',
       '/proc/77/gid_map': '         0     100000      65536\n',
     },
     {},
   );
-  const identity = await readProcessIdentity(proc, 77);
-  t.deepEqual({ ...identity }, { uid: 999, gid: 999 });
+  const identity = await readProcessStatus(proc, 77);
+  t.deepEqual({ ...identity }, { uid: 999, gid: 999, seccompMode: 2 });
 });
 
 test('an identity outside the slice map is an error, not a guess', async t => {
@@ -221,7 +221,21 @@ test('an identity outside the slice map is an error, not a guess', async t => {
     },
     {},
   );
-  await t.throwsAsync(readProcessIdentity(proc, 77), {
+  await t.throwsAsync(readProcessStatus(proc, 77), {
     message: /outside the slice user namespace map/,
   });
+});
+
+test('a kernel that reports no seccomp mode does not claim one', async t => {
+  const proc = makeFixtureProc(
+    {
+      '/proc/77/status':
+        'Uid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\n',
+      '/proc/77/uid_map': '         0     100000      65536\n',
+      '/proc/77/gid_map': '         0     100000      65536\n',
+    },
+    {},
+  );
+  const identity = await readProcessStatus(proc, 77);
+  t.is(identity.seccompMode, null);
 });

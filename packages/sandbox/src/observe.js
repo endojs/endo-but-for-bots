@@ -248,8 +248,17 @@ export const mapIdInward = (ranges, outside) => {
 harden(mapIdInward);
 
 /**
- * Read the effective uid and gid a process holds *inside its own user
- * namespace*.
+ * `SECCOMP_MODE_FILTER` — the value `/proc/<pid>/status` reports for a
+ * process running under a loaded BPF filter. Mode 0 is disabled and
+ * mode 1 is the ancient strict mode, neither of which is the control a
+ * container runtime's default profile is supposed to have installed.
+ */
+export const SECCOMP_MODE_FILTER = 2;
+harden(SECCOMP_MODE_FILTER);
+
+/**
+ * Read what the kernel says about a live process: the uid and gid it
+ * holds *inside its own user namespace*, and its seccomp mode.
  *
  * `/proc/<pid>/status` reports the ids in the reader's namespace, which
  * for a rootless container is the unprivileged host id the subuid range
@@ -257,32 +266,38 @@ harden(mapIdInward);
  * through the target's own `uid_map` is what turns the host's view back
  * into the slice's.
  *
+ * `seccompMode` is `null` on a kernel that reports no `Seccomp:` line,
+ * which callers read as "no filter proved" rather than as "no filter".
+ *
  * @param {ProcReader} proc
  * @param {number} pid
- * @returns {Promise<{ uid: number, gid: number }>}
+ * @returns {Promise<{ uid: number, gid: number, seccompMode: number | null }>}
  */
-export const readProcessIdentity = async (proc, pid) => {
+export const readProcessStatus = async (proc, pid) => {
   await null;
   let status;
   try {
     status = await proc.readFile(`/proc/${pid}/status`);
   } catch (e) {
     throw makeError(
-      X`cannot read the slice process identity: ${q(/** @type {Error} */ (e).message)}`,
+      X`cannot read the slice process status: ${q(/** @type {Error} */ (e).message)}`,
     );
   }
-  /** @param {string} key */
-  const effectiveId = key => {
-    const line = status
-      .split('\n')
-      .find(candidate => candidate.startsWith(`${key}:`));
+  const lines = status.split('\n');
+  /**
+   * @param {string} key
+   * @param {number} field
+   * @returns {number | null}
+   */
+  const numericField = (key, field) => {
+    const line = lines.find(candidate => candidate.startsWith(`${key}:`));
     if (line === undefined) return null;
-    // `Uid:\t<real>\t<effective>\t<saved>\t<fs>`
-    const effective = Number(line.trim().split(/\s+/)[2]);
-    return Number.isInteger(effective) ? effective : null;
+    const value = Number(line.trim().split(/\s+/)[field]);
+    return Number.isInteger(value) ? value : null;
   };
-  const outsideUid = effectiveId('Uid');
-  const outsideGid = effectiveId('Gid');
+  // `Uid:\t<real>\t<effective>\t<saved>\t<fs>`
+  const outsideUid = numericField('Uid', 2);
+  const outsideGid = numericField('Gid', 2);
   if (outsideUid === null || outsideGid === null) {
     throw makeError(X`slice process identity is not readable`);
   }
@@ -297,9 +312,9 @@ export const readProcessIdentity = async (proc, pid) => {
       X`slice process identity ${q(outsideUid)}:${q(outsideGid)} is outside the slice user namespace map`,
     );
   }
-  return harden({ uid, gid });
+  return harden({ uid, gid, seccompMode: numericField('Seccomp', 1) });
 };
-harden(readProcessIdentity);
+harden(readProcessStatus);
 
 /**
  * Build a `ProcReader` over Node's filesystem.
