@@ -9,8 +9,10 @@ that make it a hands-free voice assistant.
   (`src/stream.js`).
   The turn belongs to the daemon (`src/session-turn.js`): watching is how a
   client sees it; `cancel()` requests a stop and `whenFinished()` waits for teardown.
-  `getCurrentTurn()` on the session returns `{ input, turn }` or `null`, allowing
+  `getCurrentTurn()` on the session returns `{ input, turn, history }` or `null`, allowing
   a reloaded browser to recover the active turn.
+  Its history is captured before execution, after earlier queued mail, so recovery
+  can combine it with the prompt and live output without duplicating a durable commit.
   Each session accepts one outstanding UI turn; a competing `startTurn` rejects.
   Mail remains serialized through the session's execution queue.
   Turns survive browser disconnects, but daemon restarts recover committed history

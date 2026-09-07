@@ -283,3 +283,51 @@ test('a tool the backend never reported on is settled at turn end', async t => {
     { id: '1', name: 'shell', result: UNREPORTED_TOOL_RESULT },
   ]);
 });
+
+test('send failure during cancellation waits for the interrupt outcome', async t => {
+  t.timeout(5000);
+  let rejectSend = error => {};
+  let rejectInterrupt = error => {};
+  let signalStarted = () => {};
+  const started = new Promise(resolve => {
+    signalStarted = () => resolve(undefined);
+  });
+  const sendP = new Promise((resolve, reject) => {
+    rejectSend = reject;
+  });
+  const interruptP = new Promise((resolve, reject) => {
+    rejectInterrupt = reject;
+  });
+  const controller = new AbortController();
+  const turnP = runHostedTurn({
+    client: harden({
+      send: () => {
+        signalStarted();
+        return sendP;
+      },
+      interrupt: () => interruptP,
+    }),
+    text: 'cancel me',
+    writer: harden({}),
+    signal: controller.signal,
+  });
+  let settled = false;
+  void turnP.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  await started;
+  controller.abort();
+  rejectSend(Error('send disconnected'));
+  await new Promise(resolve => setImmediate(resolve));
+  t.false(settled, 'the backend interruption is still pending');
+  rejectInterrupt(Error('interrupt failed'));
+  await t.throwsAsync(turnP, {
+    instanceOf: AggregateError,
+    message: /interrupt failed/,
+  });
+});

@@ -27,6 +27,15 @@ test('factory facets retain disconnected turns, commit history, and provision de
     followMessages: () => inbox.reader,
   });
   let dispatched = false;
+  let releaseAck = () => {};
+  const ackBarrier = new Promise(resolve => {
+    releaseAck = () => resolve(undefined);
+  });
+  let signalAck = () => {};
+  const ackStarted = new Promise(resolve => {
+    signalAck = () => resolve(undefined);
+  });
+  t.teardown(releaseAck);
   /** @type {{ dynamicTools: Array<{ name: string }> } | undefined} */
   let catalog;
   const backend = Far('TestBackend', {
@@ -47,7 +56,10 @@ test('factory facets retain disconnected turns, commit history, and provision de
             return backendEvents.reader;
           },
           interrupt: () => undefined,
-          acknowledge: () => undefined,
+          acknowledge: () => {
+            signalAck();
+            return ackBarrier;
+          },
         }),
         admin: Far('TestAdmin', { terminate: () => undefined }),
       });
@@ -111,7 +123,12 @@ test('factory facets retain disconnected turns, commit history, and provision de
   if (!catalog) throw Error('Hosted catalog was not supplied');
   t.true(catalog.dynamicTools.some(tool => tool.name === 'spawnSubagent'));
   backendEvents.push(harden({ type: 'text-delta', text: 'hello back' }));
-  backendEvents.push(harden({ type: 'end' }));
+  backendEvents.push(harden({ type: 'end', checkpoint: 'committed' }));
+  await ackStarted;
+  t.false((await E(turn).getStatus()).done);
+  t.is((await E(session).getHistory()).length, 2);
+  t.deepEqual((await E(session).getCurrentTurn()).history, []);
+  releaseAck();
   await E(turn).whenFinished();
   t.is(await E(session).getCurrentTurn(), null);
   t.deepEqual(await E(session).getHistory(), [

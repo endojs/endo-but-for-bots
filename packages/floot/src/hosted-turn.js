@@ -4,6 +4,7 @@
 // Floot consumes this provider-neutral stream contract; Codex-specific JSON-RPC
 // names and item schemas stay behind @endo/codex-sandbox's capability boundary.
 
+import { makeError } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
@@ -62,12 +63,11 @@ export const runHostedTurn = async ({
         await closeP;
       } catch (error) {
         const details = error instanceof Error ? error.message : String(error);
-        const failure = new AggregateError(
-          [error],
+        throw makeError(
           `Hosted turn cancellation failed: ${details}`,
+          AggregateError,
+          { errors: [error instanceof Error ? error : makeError(details)] },
         );
-        failure.name = 'HostedTurnCancellationError';
-        throw failure;
       }
     })();
     cancellationP.then(resolveAbort, rejectAbort);
@@ -181,7 +181,6 @@ export const runHostedTurn = async ({
               });
             }
           }
-          if (signal?.aborted && cancellationP) await cancellationP;
           return harden({
             finalContent,
             usage,
@@ -194,10 +193,12 @@ export const runHostedTurn = async ({
     }
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort);
+    // Transport failures must not release the turn while interruption is pending.
+    // A failed barrier takes precedence so the session can quarantine itself.
+    if (cancellationP) await cancellationP;
   }
   if (!signal?.aborted)
     throw Error('hosted turn ended without a terminal event');
-  if (cancellationP) await cancellationP;
   return harden({
     finalContent,
     usage,
