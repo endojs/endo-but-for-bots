@@ -836,6 +836,7 @@ export const flootComponent = (
         thresholdPct: PCT(meterThreshold),
         transcript: voiceTranscript,
         replayingText,
+        micError,
         ttsSettings: { ...ttsSettings },
         ttsConfiguration: {
           voices: ttsConfiguration.voices.map(voice => ({ ...voice })),
@@ -1307,6 +1308,9 @@ export const flootComponent = (
   let micActive = false; // mic open and listening
   let speaking = false; // currently inside a detected utterance
   let calibrating = false;
+  // Actionable guidance shown when the browser/OS denies mic access (distinct
+  // from the transient status line, since it needs to persist until retried).
+  let micError = '';
   let noiseFloor = 0;
   let calibStart = 0;
   let speechStart = 0;
@@ -1572,6 +1576,26 @@ export const flootComponent = (
 
   const startMic = async () => {
     if (micActive || !audioServer) return;
+    // Preflight the two environment failures that deny the mic *without* a
+    // browser prompt, so the user gets an explanation instead of silence:
+    //   1. a non-secure context (mic is HTTPS/localhost only), and
+    //   2. a browser that doesn't expose `mediaDevices` (privacy hardening,
+    //      or an embedded webview with the API stripped).
+    if (typeof window !== 'undefined' && window.isSecureContext === false) {
+      micError =
+        'Microphone needs a secure (https) connection. Open this page over https and try again.';
+      notify();
+      return;
+    }
+    const media =
+      typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!media || typeof media.getUserMedia !== 'function') {
+      micError =
+        `This browser isn't exposing microphone access. Check the browser's ` +
+        `privacy/shields settings for this site, or try another browser.`;
+      notify();
+      return;
+    }
     micActive = true;
     calibrating = true;
     calibStart = Date.now();
@@ -1579,9 +1603,12 @@ export const flootComponent = (
     noiseFloor = 0;
     preroll = [];
     inputText = '';
+    micError = '';
     setStatus('calibrating microphone…');
     try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
+      // Called synchronously off the tap (no await precedes it) so the user
+      // gesture that mobile browsers require is still in effect.
+      mediaStream = await media.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -1614,7 +1641,60 @@ export const flootComponent = (
     } catch (err) {
       micActive = false;
       calibrating = false;
-      setStatus(`mic error: ${/** @type {Error} */ (err).message}`);
+      const name = /** @type {Error} */ (err).name;
+      const message = /** @type {Error} */ (err).message;
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        // Distinguish a *site*-level block from an *OS*-level one. If the
+        // browser reports the site permission as 'denied', the fix is in the
+        // browser's site settings. If it's still 'prompt'/'granted' yet
+        // getUserMedia was rejected without a dialog, the browser tried to ask
+        // but the OS withheld the mic from the browser app (or a system-wide
+        // mic switch is off) — this is the "set to Ask, yet no prompt" case.
+        let permState = '';
+        try {
+          const permStatus = await navigator.permissions?.query?.(
+            /** @type {any} */ ({ name: 'microphone' }),
+          );
+          permState = permStatus?.state || '';
+        } catch {
+          // Permissions API unsupported, or 'microphone' isn't a known name on
+          // this browser — leave permState empty and give generic guidance.
+        }
+        // A home-screen install (PWA/WebAPK, or a Chrome shortcut) has its own
+        // app entry, so its mic permission lives under that app in Android
+        // settings — not necessarily under the browser the user thinks of.
+        const standalone =
+          (typeof window !== 'undefined' &&
+            !!window.matchMedia?.('(display-mode: standalone)')?.matches) ||
+          /** @type {any} */ (navigator).standalone === true;
+        const appNote = standalone
+          ? ' (This is installed to your home screen, so its microphone ' +
+            'permission is under that installed app in Android Settings → ' +
+            'Apps, which may differ from the browser.)'
+          : '';
+        if (permState === 'denied') {
+          micError =
+            `Microphone blocked for this site. Tap the address-bar lock → ` +
+            `Permissions → Microphone → Allow (or “Reset permissions”), ` +
+            `reload, then tap 🎤 again.${appNote}`;
+        } else {
+          micError =
+            `The browser tried to ask for the microphone but got no answer, ` +
+            `so the block is at the phone’s OS level. Enable Android Settings ` +
+            `→ Apps → (your browser) → Permissions → Microphone, and turn on ` +
+            `the system “Microphone access” switch (swipe down → Privacy / ` +
+            `Quick Settings). Then tap 🎤 again.${appNote}`;
+        }
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        micError = 'No microphone was found on this device.';
+      } else if (name === 'NotReadableError') {
+        micError =
+          'The microphone is in use by another app. Close it and tap 🎤 again.';
+      } else {
+        micError = `Could not start the microphone: ${message}`;
+      }
+      setStatus('microphone unavailable');
+      notify();
     }
   };
 
