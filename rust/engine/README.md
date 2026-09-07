@@ -3215,14 +3215,33 @@ now raises for those two kinds, mirroring what its `delete` neighbour already
 did. (Ironhorse's `Object.getOwnPropertyDescriptor` was never at fault: it
 returns `undefined` for a missing property, exactly like XS.)
 
+Fixing the read raised a **latent test hazard** worth recording, because the
+silent `undefined` had been hiding it. `ironhorse-snapshot/tests/gc_machine.rs`
+ran its second crank's bytecode directly on a machine linked against the *first*
+crank's symbols. The two tables differ — crank 1 interns `caller` (from the
+function it builds) and crank 2 does not — so every id from that slot on is
+shifted by one and crank 2's `keep` actually read `dead`. The test passed only
+because reading a property off the resulting `undefined` answered `undefined`
+instead of throwing; it was comparing garbage against garbage. Both tests now
+`relink_crank` per machine, as the other multi-crank tests already do, and crank
+2 completes with its real value. Ten further `run(&compiled[1].0)` sites in that
+same file carry the same shape; they pass today because their crank pairs happen
+to intern the same names, but none of them is protected by anything.
+
 Two further gaps in that same match are left alone, each its own fix:
 
 - The symmetric half of the one above — a **write** through a `null`/`undefined`
   base (`undefined.x = 1`) is silently ignored where it must raise `TypeError`.
-  `XS_CODE_SET_PROPERTY` takes a non-reference base straight to the push.
+  `XS_CODE_SET_PROPERTY` and `property_at_set` take a non-reference base straight
+  to the push. (The read side is fixed on **both** paths: the static
+  `XS_CODE_GET_PROPERTY` arm and the computed `property_at_get`, so
+  `undefined[0]` and `null[Symbol.iterator]` raise too. Fixing only the static
+  form would have left the computed one silent.)
 - A **boolean** primitive does not box to `%Boolean.prototype%`, so
   `true.toString()` throws where XS and node answer `"true"`. String, number and
   bigint bases all box; boolean has no arm.
+- `Symbol.prototype.description` answers `undefined` rather than the symbol's
+  description string.
 
 **Differential-harness expectations (knowingly updated).** The runner executes
 the Script goal, so strict-variant runs of official cases with top-level `var`s
@@ -3234,14 +3253,14 @@ writable property of `this`:
 
 | Case (strict variant) | Before | After |
 | --- | --- | --- |
-| `language/statements/variable/S12.2_A9.js` | `skip:shared-test262-failure` | `skip:oracle-xs-strict-script-eval-framing` |
-| `language/statements/variable/S12.2_A11.js` | `skip:shared-test262-failure` | `skip:oracle-xs-strict-script-eval-framing` |
+| `language/statements/variable/S12.2_A9.js` | `skip:shared-test262-failure` | `skip:oracle-xs-script-decl-eval-framing` |
+| `language/statements/variable/S12.2_A11.js` | `skip:shared-test262-failure` | `skip:oracle-xs-script-decl-eval-framing` |
 
 Before, both engines failed the official assertion identically (the shared
 failure was the bug). After, Ironhorse's Script goal satisfies it and the
 eval-framed shim still does not, which the runner would score as
-"over-acceptance". The new `oracle-xs-strict-script-eval-framing` run-skip
-(`xst.rs`, `oracle_eval_frames_strict_script`) names that exact oracle framing
+"over-acceptance". The new `oracle-xs-script-decl-eval-framing` run-skip
+(`xst.rs`, `oracle_eval_frames_script_declarations`) names that exact oracle framing
 gap, and classifies as infrastructure like the other pinned-oracle defects. It
 **demonstrates** the attribution instead of pattern-matching the failure: on a
 source the compiler puts in the deviating class
