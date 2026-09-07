@@ -334,6 +334,26 @@ test('iterateWriter return waits for terminal ack', async t => {
   t.deepEqual(result, { done: true, value: 'final' });
 });
 
+test('a sink whose return() throws still terminates the acknowledge chain', async t => {
+  t.timeout(10_000);
+  let returns = 0;
+  const sink = harden({
+    async next() {
+      return harden({ value: undefined, done: false });
+    },
+    async return() {
+      returns += 1;
+      throw Error('cleanup failed');
+    },
+  });
+  const writer = iterateWriter(writerFromIterator(sink));
+  await writer.next('a');
+  // The cleanup error is what ends the stream. It reaches the initiator
+  // rather than stranding its wait for the terminal acknowledgement.
+  await t.throwsAsync(writer.return(undefined), { message: /cleanup failed/ });
+  t.is(returns, 1, 'return() is called once');
+});
+
 test('iterateWriter rejects undefined when writeReturnPattern disallows it', async t => {
   const fakeWriter = Far('FakeWriter', {
     async stream(_synHead) {
