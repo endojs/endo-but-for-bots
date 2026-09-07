@@ -2872,6 +2872,9 @@ const makeDaemonCore = async (
       }
       registerName(MESSAGE_DESCRIPTION_NAME, undefined, description);
       registerName(MESSAGE_PROMISE_NAME, promiseId, undefined);
+      // The result edge follows the durable promise through its formula ID
+      // to the answered value. Workflow recovery uses this edge while pending.
+      registerName('@result', promiseId, undefined);
       registerName(MESSAGE_RESOLVER_NAME, resolverId, undefined);
     } else if (messageType === 'package') {
       if (

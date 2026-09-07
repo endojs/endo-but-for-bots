@@ -95,3 +95,16 @@ test('the old string-only collection would have failed that gate', t => {
   t.throws(() => mustMatch('true', M.boolean(), 'approved'));
   t.throws(() => mustMatch('', M.boolean(), 'approved'));
 });
+
+test('bounded natural-number fields submit typed bigint budgets', t => {
+  const pattern = M.and(M.nat(), M.lte(0xffff_ffffn));
+  const fields = harden([{ name: 'remaining', pattern }]);
+  for (const text of ['0', '2', '4294967295']) {
+    const result = collectFormValues(fields, { remaining: text });
+    t.is(result.remaining, BigInt(text));
+    t.notThrows(() => mustMatch(result.remaining, pattern));
+  }
+  for (const text of ['', '-1', '1.5', '4294967296', 'Infinity', '0x2']) {
+    t.throws(() => collectFormValues(fields, { remaining: text }));
+  }
+});

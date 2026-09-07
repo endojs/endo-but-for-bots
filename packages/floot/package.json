@@ -2,7 +2,7 @@
   "name": "@endo/floot",
   "version": "0.1.0",
   "private": true,
-  "description": "Streaming LLM agent harness for Endo — a fae-like factory whose agents stream reply tokens to callers",
+  "description": "Streaming LLM agent harness for Endo \u2014 a fae-like factory whose agents stream reply tokens to callers",
   "keywords": [],
   "author": "Endo contributors",
   "license": "Apache-2.0",
@@ -19,7 +19,9 @@
     ".": "./agent.js",
     "./src/stream.js": "./src/stream.js",
     "./providers/index.js": "./providers/index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./dev-review.js": "./dev-review.js",
+    "./review-charts.js": "./review-charts.js"
   },
   "scripts": {
     "build": "exit 0",

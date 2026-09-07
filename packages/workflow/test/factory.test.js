@@ -229,3 +229,39 @@ test('factories persist across restarts, revocation included', async t => {
     message: /no workflow factory/,
   });
 });
+
+test('a keyed factory start survives retry and restart without duplicating work', async t => {
+  const { powers, controls } = makeFakeAgent();
+  const clock = makeFakeClock();
+  const h1 = await makeWorkflowService({ powers, clock });
+  t.teardown(h1.stop);
+  const chart = harden({
+    name: 'keyed',
+    version: 1,
+    initial: 'wait',
+    states: { wait: {} },
+  });
+  const { fid, factory } = await E(h1.service).makeFactory({ chart });
+  const options = harden({
+    requestId: 'design-1',
+    params: { design: 'Add search' },
+  });
+  const [first, second] = await Promise.all([
+    E(factory).start(options),
+    E(factory).start(options),
+  ]);
+  t.is(first.runId, second.runId);
+  t.is((await E(h1.service).list()).length, 1);
+  await t.throwsAsync(
+    E(factory).start(
+      harden({ requestId: 'design-1', params: { design: 'Different' } }),
+    ),
+    { message: /different params/ },
+  );
+  h1.stop();
+  const h2 = await makeWorkflowService({ powers: controls.restart(), clock });
+  t.teardown(h2.stop);
+  const recoveredFactory = await E(h2.service).factory(fid);
+  t.is((await E(recoveredFactory).start(options)).runId, first.runId);
+  t.is((await E(h2.service).list()).length, 1);
+});
