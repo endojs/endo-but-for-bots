@@ -1,5 +1,6 @@
 // @ts-check
 import harden from '@endo/harden';
+import { createHash } from 'node:crypto';
 
 /**
  * Explain the same conservative session graph used for vat collection.
@@ -154,13 +155,26 @@ export const inspectVatReachability = ({
       }
     }
   }
+  // Session keys can contain bearer resumption tokens. Fingerprint only at the
+  // reporting boundary; graph traversal and root classification use exact keys.
+  /** @param {string} session */
+  const displaySession = session =>
+    ids.has(session) || session === 'endpoint'
+      ? session
+      : `session:${createHash('sha256').update(session).digest('hex')}`;
   return harden({
     workers: ordered.map(node => ({
       ...node,
+      roots: node.roots.map((/** @type {any} */ reason) =>
+        reason.kind === 'remote-session'
+          ? { ...reason, session: displaySession(reason.session) }
+          : reason,
+      ),
       reachable: node.path !== undefined,
     })),
     references: references.map(edge => ({
       ...edge,
+      holder: displaySession(edge.holder),
       retaining:
         !ids.has(edge.holder) || nodes.get(edge.holder).path !== undefined,
     })),
