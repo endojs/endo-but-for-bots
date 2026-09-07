@@ -919,3 +919,48 @@ test('a tmpfs table it cannot read is unproved, not empty', t => {
     { message: /mount table/ },
   );
 });
+
+test('a security option the policy never asked for is refused', t => {
+  const policy = assertSlicePolicyRequest(makeRequest());
+  // `unmask=` re-exposes /proc paths the runtime masks. Neither
+  // kernel-proved control — a loaded seccomp filter, no-new-privileges
+  // — says anything about it, so nothing else would notice.
+  t.throws(
+    () =>
+      attestSlicePolicy(
+        policy,
+        makeState({
+          inspect: makeInspect(record => {
+            record.HostConfig.SecurityOpt = ['no-new-privileges', 'unmask=ALL'];
+          }),
+        }),
+      ),
+    { message: /security options/ },
+  );
+  t.throws(
+    () =>
+      attestSlicePolicy(
+        policy,
+        makeState({
+          inspect: makeInspect(record => {
+            record.HostConfig.SecurityOpt = ['label=disable'];
+          }),
+        }),
+      ),
+    { message: /security options/ },
+  );
+  // The two the policy does ask for are fine, in either spelling.
+  t.notThrows(() =>
+    attestSlicePolicy(
+      policy,
+      makeState({
+        inspect: makeInspect(record => {
+          record.HostConfig.SecurityOpt = [
+            'no-new-privileges:true',
+            'seccomp=/tmp/profile.json',
+          ];
+        }),
+      }),
+    ),
+  );
+});

@@ -19,6 +19,7 @@ import {
   assertSlicePolicyRequest,
   attestSlicePolicy,
   parseByteSize,
+  PINNED_IMAGE_REFERENCE_PATTERN,
   sliceConfigFingerprint,
 } from '../policy.js';
 import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
@@ -1646,6 +1647,14 @@ export const makePodmanDriver = ({
         // make it false outright.
         throw makeError(
           X`a slice policy requires the backend's default seccomp profile`,
+        );
+      }
+      // Before the reference is handed to podman as a positional: one
+      // beginning with `-` is parsed as a flag, and the flags it could
+      // add are not ones the attestation reads back.
+      if (!PINNED_IMAGE_REFERENCE_PATTERN.test(ref)) {
+        throw makeError(
+          X`a slice policy requires a digest-pinned image reference; got ${q(ref)}`,
         );
       }
       const effectiveDigest = await inspectImageDigest(cp, ref);
