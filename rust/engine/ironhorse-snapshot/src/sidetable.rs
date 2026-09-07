@@ -308,7 +308,7 @@ pub enum SideTable {
     /// generator state (suspended frame, request queue, lifecycle) and the
     /// mid-`step_async_generator` dispatch stack. The language-completion
     /// sweep's async-generator machinery; per-instance runtime state like
-    /// `Generators`/`AsyncInstances`, so honestly `Pending` with them.
+    /// the carried `Generators`/`AsyncInstances`, but still `Pending` itself.
     /// (The `async_gen_run_stack` HALF is quiescence-empty like the
     /// other run stacks; the variant stays `Pending` for the instance
     /// table it also names.)
@@ -571,12 +571,13 @@ impl SideTable {
             SideTable::Combinators => ("combinators", Serialized),
             SideTable::Generators => ("generators", Serialized),
             SideTable::GenRunStack => ("gen_run_stack", EmptyAtBoundary),
-            SideTable::AsyncInstances => ("async_instances", Pending),
+            SideTable::AsyncInstances => ("async_instances", Serialized),
             SideTable::AsyncRunStack => ("async_run_stack", EmptyAtBoundary),
             SideTable::RegExps => ("regexps", Serialized),
-            SideTable::TemporalRecords => {
-                ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Serialized)
-            }
+            SideTable::TemporalRecords => (
+                "temporal_instants/temporal_durations/temporal_plains/temporal_zoneds",
+                Serialized,
+            ),
             // Date-instance `[[DateValue]]` records travel as raw IEEE-754
             // bits in `DATE` (schema 14). `%Date.prototype%` has no Date
             // brand; restore drops its row when migrating a snapshot written
@@ -732,6 +733,9 @@ mod tests {
             "arguments_objects", "side_refs",
         ];
         const TRANSIENTS: &[&str] = &[
+            // Intrinsic linking is synchronous and restores this guard before
+            // control can reach a persistence boundary.
+            "installing_intrinsics",
             "args", "this_val", "this_captures", "cur_func", "cur_target", "target_func",
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
             "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
@@ -843,7 +847,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 3, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 2, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -902,7 +906,7 @@ mod tests {
         assert!(!pending.contains(&SideTable::PromiseFunctions));
         assert!(!pending.contains(&SideTable::PromiseGuards));
         assert!(!pending.contains(&SideTable::Combinators));
-        assert!(pending.contains(&SideTable::AsyncInstances));
+        assert!(!pending.contains(&SideTable::AsyncInstances));
         assert!(pending.contains(&SideTable::Modules));
         // The quiescence-gated run stacks, call chain, catch chain, and
         // microtask queue are EmptyAtBoundary, not pending: no atom is

@@ -485,7 +485,7 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
         .iter_mut()
         .find(|p| !p.reactions.is_empty())
         .expect("the fixture holds a pending reaction");
-    row.reactions[0].kind = 3; // AsyncAwait — a still-Pending frame
+    row.reactions[0].kind = 4; // AsyncGeneratorAwait is still refused
     expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
     let mut store = MemoryStore::new();
     store
