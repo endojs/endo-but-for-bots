@@ -36,6 +36,38 @@ fn assert_result_agrees(source: &str) {
     );
 }
 
+/// A member access performs `RequireObjectCoercible`, so reading a property
+/// through `undefined`/`null` is a `TypeError`, never `undefined`. This is
+/// what the test262 property helpers rely on —
+/// `verifyEnumerable` reads `Object.getOwnPropertyDescriptor(obj, name)
+/// .enumerable`, which must abort when the property is missing rather than
+/// carry on to a misleading assertion failure.
+#[test]
+fn reading_a_property_through_undefined_or_null_throws() {
+    for source in [
+        "var r='no'; try { undefined.enumerable } catch (e) { r = e.constructor.name } r",
+        "var r='no'; try { null.foo } catch (e) { r = e.constructor.name } r",
+        // The helper shape itself: a missing property's descriptor is
+        // `undefined`, so reading through it aborts.
+        "var r='no'; try { Object.getOwnPropertyDescriptor({a:1},'nope').enumerable } \
+         catch (e) { r = e.constructor.name } r",
+        "var r='no'; try { Object.getOwnPropertyDescriptor(globalThis,'absentXyz').enumerable } \
+         catch (e) { r = e.constructor.name } r",
+        // The primitives that box still box rather than throwing. (A boolean
+        // primitive does not box to `%Boolean.prototype%` on Ironhorse yet —
+        // a separate pre-existing gap in the same match, untouched here, so
+        // `true.toString()` is deliberately not asserted.)
+        "'abc'.length",
+        "(42).toString(2)",
+        "(1n).toString()",
+        // And an ordinary object read is untouched.
+        "var o = {a: 1}; o.a",
+        "var o = {a: 1}; typeof o.missing",
+    ] {
+        assert_result_agrees(source);
+    }
+}
+
 /// An eval-created global binding keeps `D = true`: configurable, deletable.
 /// Both eval forms, both strictness contexts for the *calling* program, and
 /// function declarations as well as `var`.
