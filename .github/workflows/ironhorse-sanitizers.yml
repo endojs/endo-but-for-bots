@@ -4,13 +4,6 @@ on:
   push:
     branches: [master, llm]
   pull_request:
-    paths:
-      - 'rust/engine/**'
-      - 'rust/endo/xsnap/xsnap-platform.*'
-      - 'c/moddable'
-      - '.gitmodules'
-      - 'rust-toolchain.toml'
-      - '.github/workflows/ironhorse-sanitizers.yml'
 
 permissions:
   contents: read
@@ -20,8 +13,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ironhorse-changes:
+    uses: $/.github/workflows/ironhorse-changes.yml
+
   oracle-sanitizers:
     name: ironhorse-oracle-sanitizers (advisory)
+    needs: ironhorse-changes
+    if: needs.ironhorse-changes.outputs.oracle == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # F034 calls for an advisory lane first. The pinned XS interpreter

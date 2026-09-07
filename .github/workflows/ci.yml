@@ -674,12 +674,14 @@ jobs:
         # green pass with no error (wave-3 finding).
         run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker
 
-  # Keep the complete engine workspace and the daemon-side SQLite
-  # heap-store backend on one pinned rustfmt version. On pull requests,
-  # retain the check name but skip the formatter unless the change is
-  # ironhorse-relevant. Pushes to master always run the full job.
+  ironhorse-changes:
+    uses: $/.github/workflows/ironhorse-changes.yml
+
+  # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
     name: format-ironhorse
+    needs: ironhorse-changes
+    if: needs.ironhorse-changes.outputs.engine == 'true'
 
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -689,64 +691,26 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Depth 2 so the pull_request merge commit's parents exist
-          # for the change probe below.
-          fetch-depth: 2
-
-      - name: Detect ironhorse-relevant changes
-        id: changes
-        if: github.event_name == 'pull_request'
-        run: |
-          # The pull_request checkout is a merge commit whose first
-          # parent is the base branch head, so this diff is exactly the
-          # PR's change set. Fail open (run rustfmt) if that shape ever
-          # doesn't hold.
-          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          # Consume the whole diff. `grep -q` can close the pipe early,
-          # making `git diff` exit on SIGPIPE and the runner's `pipefail`
-          # misclassify a relevant large PR as a miss.
-          elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^rust-toolchain\.toml$' >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "hit=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Verify shared IronHorse dependency resolutions
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         run: |
           python3 rust/engine/scripts/test-lockfile-agreement.py
           python3 rust/engine/scripts/check-lockfile-agreement.py
 
       - name: Install pinned rustfmt
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
 
       - name: Check ironhorse engine formatting
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
 
       - name: Check SQLite heap-store formatting
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
 
-  # The pure-Rust ironhorse crates: the engine's zero-C members
-  # (ironhorse-vm, ironhorse-snapshot — including the store seam's
-  # metamorphic determinism and checkpoint acceptance suites) plus the
-  # daemon-side SQLite heap-store backend in the root workspace. The
-  # compiler and regexp default targets also run here without C. Their
-  # parity-feature targets and the oracle-dependent harness crates run
-  # in test-ironhorse-oracle below with the pinned XS submodule.
-  #
-  # On pull requests the expensive steps self-skip unless the PR
-  # touches these crates or their inputs (the engine workspace, the
-  # SQLite crate, the root cargo manifests, or this workflow), so the
-  # check name stays present — and green — on unrelated PRs instead of
-  # needing a docs-only-style mirror workflow. Pushes to master always
-  # run the full job.
+  # Oracle-free suites share the same source/build-input change gate.
   test-ironhorse:
     name: ${{ matrix.check }}
+    needs: ironhorse-changes
+    if: needs.ironhorse-changes.outputs.engine == 'true'
 
     strategy:
       fail-fast: false
@@ -770,32 +734,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Depth 2 so the pull_request merge commit's parents exist
-          # for the change probe below.
-          fetch-depth: 2
-
-      - name: Detect ironhorse-relevant changes
-        id: changes
-        if: github.event_name == 'pull_request'
-        run: |
-          # The pull_request checkout is a merge commit whose first
-          # parent is the base branch head, so this diff is exactly the
-          # PR's change set. Fail open (run the tests) if that shape
-          # ever doesn't hold.
-          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          # Consume the whole diff. `grep -q` can close the pipe early,
-          # making `git diff` exit on SIGPIPE and the runner's `pipefail`
-          # misclassify a relevant large PR as a miss.
-          elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$|^rust-toolchain\.toml$' >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "hit=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Cache Cargo + targets
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -808,7 +748,6 @@ jobs:
             ${{ runner.os }}-ironhorse-${{ matrix.profile }}-
 
       - name: Test ironhorse engine crates (rust/engine workspace)
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
         env:
           RUST_MIN_STACK: '33554432'
@@ -819,7 +758,6 @@ jobs:
           cargo test --locked "${flags[@]}" -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
 
       - name: Test SQLite heap-store backend (root workspace)
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         env:
           PROFILE: ${{ matrix.profile }}
         run: |
@@ -827,19 +765,11 @@ jobs:
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
 
-  # The oracle-linked ironhorse crate suites (ironhorse-compile,
-  # ironhorse-regexp, ironhorse-262's bounded fixtures, and the fuzz
-  # lib's unit tests — including the hostile-suspend trophies). Their
-  # dev-dependencies compile the Moddable XS C sources, so this job
-  # provisions the c/moddable submodule that test-ironhorse
-  # deliberately avoids; until this job existed those suites ran only
-  # locally (the store-seam ledger's oracle-suites item). The suites
-  # themselves are seconds; the C oracle build is the cost, and the
-  # cargo cache carries it between runs. Same self-skip probe as the
-  # fuzz lane (oracle inputs included), so unrelated PRs stay green
-  # without paying the C build.
+  # Oracle tests additionally depend on the pinned XS and bridge inputs.
   test-ironhorse-oracle:
     name: test-ironhorse-oracle
+    needs: ironhorse-changes
+    if: needs.ironhorse-changes.outputs.oracle == 'true'
 
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -849,33 +779,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Depth 2 so the pull_request merge commit's parents exist
-          # for the change probe below.
-          fetch-depth: 2
-
-      - name: Detect ironhorse-relevant changes
-        id: changes
-        if: github.event_name == 'pull_request'
-        run: |
-          # The fuzz lane's probe: these suites link the XS oracle,
-          # so the moddable gitlink, .gitmodules, and the shared
-          # xsnap platform sources are all inputs. The merge commit's
-          # first parent is the base branch head, so this diff is
-          # exactly the PR's change set; fail open if that shape ever
-          # doesn't hold.
-          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          # No `grep -q`: under `pipefail`, its early close can turn a
-          # matching large diff into a false miss through SIGPIPE.
-          elif git diff --name-only HEAD^1 HEAD \
-            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^rust-toolchain\.toml$|^\.github/workflows/ci\.yml$|^c/moddable|^\.gitmodules$|^rust/endo/xsnap/xsnap-platform\.' >/dev/null; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "hit=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Fetch XS oracle submodule
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         # Anonymous shallow fetch can hit transient throttling on
         # shared runner egress; retry before failing, and fail LOUD
         # if all attempts leave the sources absent.
@@ -887,7 +792,6 @@ jobs:
           test -f c/moddable/xs/sources/xsAll.h
 
       - name: Cache Cargo + targets
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -899,23 +803,19 @@ jobs:
             ${{ runner.os }}-ironhorse-oracle-
 
       - name: Install pinned lint toolchain
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         run: rustup toolchain install 1.88.0 --profile minimal --component clippy
 
       - name: Check engine build warnings
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
         env:
           RUSTFLAGS: -D warnings
         run: cargo +1.88.0 build --locked --workspace
 
       - name: Check engine Clippy warnings
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
         run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
 
       - name: Test oracle-linked engine crates (rust/engine workspace)
-        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
         working-directory: rust/engine
         # The engine's native recursion is bounded by its own budget
         # (`NATIVE_DEPTH_LIMIT`), calibrated to the thread stack it
