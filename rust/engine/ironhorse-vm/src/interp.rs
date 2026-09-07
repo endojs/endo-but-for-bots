@@ -53389,19 +53389,28 @@ impl Interp {
                     if key.kind != Kind::String {
                         continue;
                     }
-                    let id = self.to_property_id(code, key)?;
-                    let desc = match self.mop_get_own_property(code, proxy, id)? {
+                    // Pure observation: this asks whether the descriptor is
+                    // enumerable and then reads the value, and the array it
+                    // builds is keyed by POSITION, not by name. Naming each
+                    // key to ask made `Object.keys(new Proxy(bigArray, {}))`
+                    // — the common spelling, where
+                    // `getOwnPropertyNames(proxy)` is the rare one — walk the
+                    // `u16` id space into the guard that poisons the machine.
+                    let read_key = self.to_read_key(code, key)?;
+                    match self.mop_get_own_property_read(code, proxy, read_key)? {
                         Some(d) if d.enumerable == Some(true) => d,
                         _ => continue,
                     };
-                    let _ = desc;
+                    // The descriptor trap is guest code and can have named
+                    // this index before the value read below.
+                    let read_key = self.refresh_read_key(read_key);
                     match m {
                         NativeMethod::ObjectKeys => out.push(key),
                         NativeMethod::ObjectValues => {
-                            out.push(self.mop_get(code, proxy, id, proxy_slot)?)
+                            out.push(self.mop_get_read(code, proxy, read_key, proxy_slot)?)
                         }
                         _ => {
-                            let value = self.mop_get(code, proxy, id, proxy_slot)?;
+                            let value = self.mop_get_read(code, proxy, read_key, proxy_slot)?;
                             let pair = self.array_from_slots(&[key, value]);
                             out.push(pair);
                         }
