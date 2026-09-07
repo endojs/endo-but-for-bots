@@ -2,6 +2,7 @@
 set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+image_platform=${1:-linux/amd64}
 first="localhost/endo-codex-repro-first:$$"
 second="localhost/endo-codex-repro-second:$$"
 first_layout=$(mktemp -d "${TMPDIR:-/tmp}/endo-codex-oci-first.XXXXXX")
@@ -17,8 +18,8 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-"$script_dir/build-reproducible.sh" "$first"
-"$script_dir/build-reproducible.sh" "$second"
+"$script_dir/build-reproducible.sh" "$first" "$image_platform"
+"$script_dir/build-reproducible.sh" "$second" "$image_platform"
 
 podman push --quiet --digestfile "$first_digest" "$first" \
   "oci:$first_layout:reproducible"

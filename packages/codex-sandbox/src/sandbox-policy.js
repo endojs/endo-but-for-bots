@@ -10,6 +10,8 @@ import {
   assertHostedAgentPolicyV1,
   makeCodexResourceProvisioner,
 } from './backend-factory.js';
+import { makeBrokerAppServerArgv } from './broker-launch.js';
+import { makeCodexRuntimeVerifier } from './runtime-verifier.js';
 
 const GiB = 1024n ** 3n;
 const MiB = 1024n ** 2n;
@@ -69,12 +71,13 @@ const assertExact = (actual, expected, label) => {
  * `makeSlice.retryCleanup()` to retry it; new admissions first retry all pending
  * cleanup and cannot proceed while that cleanup fails.
  *
- * @param {{sandbox: any, volumeProvider: any, runtimeVerifier: any,
+ * @param {{sandbox: any, volumeProvider: any, runtimeVerifier?: any,
  * imageRef: string, imageDigest: string, providerOrigin: string,
  * accountRef: string}} powers
  */
 export const makeAttestedCodexSliceFactory = powers => {
   const { imageDigest, imageRef } = powers;
+  const runtimeVerifier = powers.runtimeVerifier ?? makeCodexRuntimeVerifier();
   /^sha256:[0-9a-f]{64}$/.test(imageDigest) ||
     Fail`Image digest must be pinned`;
   (/^[a-z0-9][a-z0-9._-]*(?::\d{1,5})?(?:\/[a-z0-9][a-z0-9._-]*)*@sha256:[0-9a-f]{64}$/.test(
@@ -135,6 +138,7 @@ export const makeAttestedCodexSliceFactory = powers => {
       accountRef: powers.accountRef,
       ...(spec.model ? { model: spec.model } : {}),
     });
+    const launchArgv = makeBrokerAppServerArgv(lease.endpoint);
     const broker = await E(brokerLease).sandboxEvidence();
     const brokerSidecar = broker?.brokerSidecar;
     const selector = keys(brokerSidecar);
@@ -270,13 +274,16 @@ export const makeAttestedCodexSliceFactory = powers => {
         },
         'outer policy',
       );
-      const runtime = await E(powers.runtimeVerifier).attest(
+      const runtime = await E(runtimeVerifier).attest(
         harden({
           slice,
           sessionId,
           imageDigest,
           leaseId: lease.leaseId,
           networkNamespaceId: outer.networkNamespaceId,
+          launchArgv,
+          launchEnvironment: approvedEnvironment,
+          brokerEndpoint: lease.endpoint,
         }),
       );
       assertExact(
@@ -349,6 +356,7 @@ export const makeAttestedCodexSliceFactory = powers => {
             assertOpen();
             assertExact(options.env, approvedEnvironment, 'spawn environment');
             options.cwd === '/workspace' || Fail`Spawn cwd must be /workspace`;
+            assertExact(argv, launchArgv, 'spawn argv');
             return E(slice).spawn(argv, options);
           },
           dispose,
@@ -388,10 +396,14 @@ harden(makeAttestedCodexSliceFactory);
  */
 export const makeAttestedCodexResourceProvisioner = powers => {
   const makeSlice = makeAttestedCodexSliceFactory(powers);
-  const provision = makeCodexResourceProvisioner({ ...powers, makeSlice });
+  const provision = makeCodexResourceProvisioner({
+    ...powers,
+    makeSlice,
+    retrySliceCleanup: makeSlice.retryCleanup,
+  });
   return harden(
     Object.assign(spec => provision(spec), {
-      retryCleanup: makeSlice.retryCleanup,
+      retryCleanup: provision.retryCleanup,
     }),
   );
 };

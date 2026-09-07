@@ -61,6 +61,8 @@ const makeQueue = () => {
  *   turnStatus?: any,
  *   modelListResult?: any,
  *   accountReadResult?: any,
+ *   brokerEndpoint?: string,
+ *   configReadResult?: any,
  *   existingTurnIds?: string[],
  *   announceTurns?: boolean,
  * }} [options]
@@ -76,6 +78,8 @@ const makeFixture = ({
   turnStatus = 'inProgress',
   modelListResult,
   accountReadResult,
+  brokerEndpoint,
+  configReadResult,
   existingTurnIds = [],
   announceTurns = true,
 } = {}) => {
@@ -99,6 +103,9 @@ const makeFixture = ({
     switch (message.method) {
       case 'initialize':
         push({ id: message.id, result: INITIALIZE_RESULT });
+        break;
+      case 'config/read':
+        push({ id: message.id, result: configReadResult });
         break;
       case 'account/read':
         push({
@@ -211,6 +218,7 @@ const makeFixture = ({
     }
   };
   const transport = {
+    brokerEndpoint,
     messages: queue.messages,
     send,
     close: async () => {
@@ -2300,4 +2308,72 @@ test('a thread resumed from a write-ahead marker with no turn is still unmateria
     [],
   );
   t.deepEqual(events.at(-1), { type: 'end', checkpoint: 'turn-1' });
+});
+
+test('broker config admission precedes model discovery and rejects inherited bearer', async t => {
+  const fixture = makeFixture({
+    brokerEndpoint: 'http://127.0.0.1:23456',
+    configReadResult: {
+      config: {
+        model_provider: 'endo_broker',
+        sandbox_mode: 'workspace-write',
+        approval_policy: 'never',
+        sandbox_workspace_write: {
+          network_access: false,
+          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
+          exclude_slash_tmp: true,
+          exclude_tmpdir_env_var: true,
+        },
+        model_providers: {
+          endo_broker: {
+            name: 'Endo broker',
+            base_url: 'http://127.0.0.1:23456/v1',
+            wire_api: 'responses',
+            requires_openai_auth: false,
+            experimental_bearer_token: 'inherited',
+          },
+        },
+      },
+    },
+  });
+  await t.throwsAsync(() => fixture.client.models(), {
+    message: /additional configuration/,
+  });
+  t.false(fixture.sent.some(message => message.method === 'model/list'));
+  t.false(fixture.sent.some(message => message.method === 'thread/start'));
+  t.true(fixture.isClosed());
+});
+
+test('broker config admission permits a credential-free provider', async t => {
+  const fixture = makeFixture({
+    brokerEndpoint: 'http://127.0.0.1:23456',
+    accountReadResult: { account: null, requiresOpenaiAuth: false },
+    configReadResult: {
+      config: {
+        model_provider: 'endo_broker',
+        sandbox_mode: 'workspace-write',
+        approval_policy: 'never',
+        sandbox_workspace_write: {
+          network_access: false,
+          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
+          exclude_slash_tmp: true,
+          exclude_tmpdir_env_var: true,
+        },
+        model_providers: {
+          endo_broker: {
+            name: 'Endo broker',
+            base_url: 'http://127.0.0.1:23456/v1',
+            wire_api: 'responses',
+            requires_openai_auth: false,
+          },
+        },
+      },
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  await fixture.client.models();
+  t.true(
+    fixture.sent.findIndex(message => message.method === 'config/read') <
+      fixture.sent.findIndex(message => message.method === 'model/list'),
+  );
 });

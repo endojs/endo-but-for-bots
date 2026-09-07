@@ -6,6 +6,11 @@ import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
+import {
+  makeBrokerAppServerArgv,
+  assertBrokerEndpoint,
+} from './broker-launch.js';
+
 import { encodeJsonLine, parseJsonLines } from './codex-protocol.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
@@ -35,6 +40,7 @@ const withDeadline = async (operation, label, timeoutMs) => {
  *
  * @param {object} options
  * @param {SandboxHandle} options.slice
+ * @param {any} [options.brokerLease] broker admission capability
  * @param {string} [options.cwd]
  * @param {Record<string, string>} [options.env] reserved; custom entries denied
  * @param {string} [options.executable]
@@ -48,6 +54,7 @@ const withDeadline = async (operation, label, timeoutMs) => {
 export const startAppServerTransport = async ({
   slice,
   cwd = '/workspace',
+  brokerLease,
   env = {},
   executable = 'codex',
   maxLineBytes,
@@ -63,6 +70,10 @@ export const startAppServerTransport = async ({
       `Custom app-server environment denied: ${customNames.sort().join(', ')}`,
     );
   }
+  await null;
+  const brokerEndpoint = brokerLease
+    ? assertBrokerEndpoint((await E(brokerLease).attestation()).endpoint)
+    : undefined;
   const effectiveEnv = harden({
     CODEX_HOME: '/codex-home',
     HOME: '/home/node',
@@ -75,7 +86,9 @@ export const startAppServerTransport = async ({
   });
   const proc = /** @type {ProcessHandle} */ (
     await E(slice).spawn(
-      harden([executable, 'app-server', '--listen', 'stdio://']),
+      brokerEndpoint
+        ? makeBrokerAppServerArgv(brokerEndpoint, executable)
+        : harden([executable, 'app-server', '--listen', 'stdio://']),
       harden({
         cwd,
         env: effectiveEnv,
@@ -196,6 +209,7 @@ export const startAppServerTransport = async ({
     };
 
     return harden({
+      ...(brokerEndpoint ? { brokerEndpoint } : {}),
       messages,
       send,
       close,

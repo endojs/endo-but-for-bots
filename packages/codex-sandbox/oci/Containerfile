@@ -55,18 +55,21 @@ RUN sed -i \
     python3-pip \
     python3-venv \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/log/apt/* \
+  && rm -f /var/cache/ldconfig/aux-cache \
   && : > /var/log/dpkg.log \
   && : > /var/log/alternatives.log
 
 # Install exactly the lockfile-resolved Codex CLI and platform binary before
 # dropping privileges. npm verifies every downloaded artifact against the
 # checked-in integrity hashes.
+# Discard caches containing random paths, V8 code-cache bytes, or host inode
+# identities before committing the image layer.
 COPY package.json package-lock.json /opt/codex-install/
 RUN cd /opt/codex-install \
   && npm ci --ignore-scripts --omit=dev \
   && ln -s /opt/codex-install/node_modules/.bin/codex /usr/local/bin/codex \
   && test "$(codex --version)" = "codex-cli 0.152.0" \
-  && rm -rf /root/.npm
+  && rm -rf /root/.npm /root/.codex /tmp/node-compile-cache
 
 # CODEX_HOME is session-durable until teardown, not a credential boundary.
 # Commands launched by Codex run as this same node UID and may read it, while

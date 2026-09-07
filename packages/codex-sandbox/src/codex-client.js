@@ -8,6 +8,7 @@ import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
+import { assertBrokerRuntimeConfig } from './broker-launch.js';
 import { renderToolResult, toolFromItem } from './codex-protocol.js';
 
 const CodexClientInterface = M.interface('CodexClient', {
@@ -108,6 +109,7 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
 
 /**
  * @typedef {object} AppServerTransport
+ * @property {string} [brokerEndpoint]
  * @property {AsyncIterable<any>} messages
  * @property {(message: object) => Promise<void>} send
  * @property {() => Promise<void>} close
@@ -1241,6 +1243,13 @@ export const makeCodexClient = ({
           }
           await sendMessage({ method: 'initialized' });
           initialized = true;
+          if (transport?.brokerEndpoint) {
+            const observed = await request('config/read', { cwd });
+            assertBrokerRuntimeConfig(
+              observed?.config,
+              transport.brokerEndpoint,
+            );
+          }
           // A signed-out app-server accepts `initialize` and `thread/start`
           // alike and fails only when the first turn opens its model
           // connection: an opaque 401 in the middle of a turn Floot has
@@ -1261,9 +1270,17 @@ export const makeCodexClient = ({
             failSession(failure);
             throw failure;
           }
+          if (
+            transport?.brokerEndpoint &&
+            (account !== null || accountResult.requiresOpenaiAuth !== false)
+          ) {
+            throw makeError(
+              X`Codex broker runtime must not hold provider login state`,
+            );
+          }
           if (account === null && accountResult.requiresOpenaiAuth) {
             const failure = Error(
-              'Codex is not authenticated: the hosted runtime holds neither a ChatGPT login nor an API key. Provision credentials in the sandbox before starting a Codex session.',
+              'Codex is not authenticated: the hosted runtime holds neither a ChatGPT login nor an API key. Configure an attested credential-free provider broker before starting a Codex session.',
             );
             failSession(failure);
             throw failure;

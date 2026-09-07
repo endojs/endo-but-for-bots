@@ -5,6 +5,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import test from 'ava';
 
+import { makeBrokerAppServerArgv } from '../src/broker-launch.js';
 import {
   makeAttestedCodexSliceFactory,
   makeAttestedCodexResourceProvisioner,
@@ -100,6 +101,14 @@ const fixture = (changes = {}) => {
       attest: context => {
         events.push('verify');
         if (context.slice !== slice) throw Error('wrong slice');
+        if (
+          context.launchArgv.join('\n') !==
+          makeBrokerAppServerArgv('http://127.0.0.1:1234/').join('\n')
+        ) {
+          throw Error('wrong launch');
+        }
+        if (context.launchEnvironment.CODEX_HOME !== '/codex-home')
+          throw Error('wrong environment');
         return harden({
           version: 'CodexRuntimeEvidenceV1',
           ...identity,
@@ -207,6 +216,26 @@ test('bad broker or volume evidence prevents slice creation', async t => {
   }
 });
 
+test('default runtime verifier executes probes and refuses unavailable evidence', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const create = makeAttestedCodexSliceFactory({
+    ...f.powers,
+    runtimeVerifier: undefined,
+  });
+  await t.throwsAsync(
+    () =>
+      create({
+        spec: { sessionId: 's1', model: 'model1' },
+        workspaceMount: Far('workspace', {}),
+        brokerLease: f.brokerLease,
+      }),
+    { message: /Codex runtime verification failed/ },
+  );
+  t.true(f.events.includes('spawn'));
+  t.is(f.events.at(-1), 'dispose');
+});
+
 test('rollback failure retains both errors', async t => {
   const f = fixture({
     runtime: { toolBrokerAccess: 'allowed' },
@@ -284,6 +313,35 @@ test('spawn denies injected environment and changed cwd before reaching slice', 
     { message: /cwd must be/ },
   );
   t.false(f.events.includes('spawn'));
+});
+
+test('attested slice accepts only the broker launch and gives verifier the same launch', async t => {
+  const f = fixture();
+  const slice = await f.create();
+  t.teardown(() => E(slice).dispose());
+  const options = harden({
+    cwd: '/workspace',
+    env: {
+      CODEX_HOME: '/codex-home',
+      HOME: '/home/node',
+      LANG: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
+      TEMP: '/tmp',
+      TMP: '/tmp',
+      TMPDIR: '/tmp',
+      TZ: 'UTC',
+    },
+  });
+  await t.throwsAsync(
+    () => E(slice).spawn(harden(['sh', '-c', 'codex app-server']), options),
+    {
+      message: /spawn argv/,
+    },
+  );
+  t.false(f.events.includes('spawn'));
+  const lease = await E(f.brokerLease).attestation();
+  await E(slice).spawn(makeBrokerAppServerArgv(lease.endpoint), options);
+  t.true(f.events.includes('spawn'));
 });
 
 test('attested resource provisioner wires verification into lifecycle and teardown', async t => {
