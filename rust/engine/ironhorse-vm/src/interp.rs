@@ -1989,11 +1989,17 @@ struct ArrayIteratorProxyGetContext {
 /// on these paths either — `fxAt` takes its index branch, and `fxKeyAt` spells
 /// a Proxy trap's key from `value.at.index` without touching the key table.
 ///
-/// The name is materialized in exactly two places: a Proxy trap, which is
-/// handed the key as a string ([`Interp::read_key_slot`]), and a post-trap
-/// invariant check that must name the key back to the target
-/// ([`Interp::target_own_key_id`], which skips an ordinary target entirely).
-#[derive(Copy, Clone, Debug)]
+/// The name is materialized in exactly one place: a Proxy trap, which is
+/// handed the key as a string ([`Interp::read_key_slot`]) spelled from the
+/// index, the way `fxKeyAt` spells one.
+///
+/// Two `ReadKey`s compare equal iff they name the same property, but only
+/// once both have been through [`Interp::refresh_read_key`] — an
+/// `Index` whose name has since been interned denotes the same property as
+/// the `Id` it refreshes to. Guest code runs between a capture and its use
+/// (a Proxy trap can name an index mid-flight), so refresh at the point of
+/// comparison, not at the point of capture.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ReadKey {
     Id(u16),
     Index(u32),
@@ -48030,6 +48036,21 @@ impl Interp {
         }
     }
 
+    /// The name id for a [`ReadKey`] that is about to be used by an operation
+    /// which CREATES a property, minting one if the table has never held it.
+    ///
+    /// Unmetered: XS never interns an index name, so a `tick_slot_alloc` here
+    /// would be an overcharge rather than parity. Call this only where the
+    /// representation genuinely requires a name — an ordinary object's index
+    /// property is a named slot in this engine, where in XS it is a slot in an
+    /// internal array chunk.
+    fn read_key_intern(&mut self, key: ReadKey) -> u16 {
+        match key {
+            ReadKey::Id(id) => id,
+            ReadKey::Index(index) => self.intern_key_unmetered(&index.to_string()),
+        }
+    }
+
     /// Resolve a key slot for a READ-side operation, minting nothing for an
     /// index the key table has never held ([`ReadKey`]).
     ///
@@ -51120,14 +51141,28 @@ impl Interp {
             };
             let keys = self.mop_own_keys(code, source_inst)?;
             for key in keys {
-                let id = self.to_property_id(code, key)?;
-                let Some(descriptor) = self.mop_get_own_property(code, source_inst, id)? else {
+                // Reading the SOURCE creates nothing, so an index key is read
+                // by index. Every own key of a 70,000-element array reaches
+                // here; naming each one to ask whether it is enumerable spent
+                // the `u16` id space on properties this call may well skip.
+                let key = self.to_read_key(code, key)?;
+                let Some(descriptor) = self.mop_get_own_property_read(code, source_inst, key)?
+                else {
                     continue;
                 };
                 if descriptor.enumerable != Some(true) {
                     continue;
                 }
-                let value = self.mop_get(code, source_inst, id, from)?;
+                // The descriptor read can have run a trap that names the
+                // index; the value read below must use the same property.
+                let key = self.refresh_read_key(key);
+                let value = self.mop_get_read(code, source_inst, key, from)?;
+                // Writing the TARGET is a create. In this representation an
+                // index on an ordinary object IS a named property, so the
+                // name is minted here — the standing limit that `o[i] = v`
+                // in a loop runs into as well.
+                let key = self.refresh_read_key(key);
+                let id = self.read_key_intern(key);
                 if !self.mop_set(code, target_inst, id, value, to)? {
                     return Err(self.catchable_type_error());
                 }
@@ -52417,28 +52452,44 @@ impl Interp {
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let trap_result_array = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
         let trap_keys = self.proxy_key_list(code, trap_result_array)?;
+        // The invariant checks below only COMPARE key sets; they create
+        // nothing. Naming each key to compare it made
+        // `Object.getOwnPropertyNames(new Proxy(bigArray, {ownKeys}))` — and
+        // the object spread that reaches the same trap — spend one id per
+        // element of the target, which walks the `u16` space into the
+        // saturation guard that poisons the machine.
+        //
         // No duplicate keys allowed in the trap result.
-        let mut seen: Vec<u16> = Vec::with_capacity(trap_keys.len());
+        let mut seen: Vec<ReadKey> = Vec::with_capacity(trap_keys.len());
         for k in &trap_keys {
-            let kid = self.to_property_id(code, *k)?;
-            if seen.contains(&kid) {
+            let key = self.to_read_key(code, *k)?;
+            if seen.contains(&key) {
                 return Err(self.catchable_type_error());
             }
-            seen.push(kid);
+            seen.push(key);
         }
         let extensible = self.mop_is_extensible(code, target)?;
         let target_keys = self.mop_own_keys(code, target)?;
-        let mut target_configurable: Vec<u16> = Vec::new();
-        let mut target_nonconfigurable: Vec<u16> = Vec::new();
+        let mut target_configurable: Vec<ReadKey> = Vec::new();
+        let mut target_nonconfigurable: Vec<ReadKey> = Vec::new();
         for tk in &target_keys {
-            let tid = self.to_property_id(code, *tk)?;
-            match self.mop_get_own_property(code, target, tid)? {
-                Some(d) if d.configurable == Some(false) => target_nonconfigurable.push(tid),
-                _ => target_configurable.push(tid),
+            let key = self.to_read_key(code, *tk)?;
+            match self.mop_get_own_property_read(code, target, key)? {
+                Some(d) if d.configurable == Some(false) => target_nonconfigurable.push(key),
+                _ => target_configurable.push(key),
             }
         }
         if extensible && target_nonconfigurable.is_empty() {
             return Ok(trap_keys);
+        }
+        // Every descriptor read above could have run a trap that names an
+        // index, so an `Index` captured before one of them and an `Id` derived
+        // after it can be the same property spelled two ways. Canonicalize
+        // both sides HERE, at the point of comparison — after the last guest
+        // code that could have changed the answer, and before the first
+        // equality test that depends on it.
+        for key in seen.iter_mut().chain(&mut target_nonconfigurable).chain(&mut target_configurable) {
+            *key = self.refresh_read_key(*key);
         }
         let mut unchecked = seen.clone();
         for tid in &target_nonconfigurable {
