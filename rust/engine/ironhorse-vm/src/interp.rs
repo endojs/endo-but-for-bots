@@ -47614,16 +47614,12 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         index: u32,
     ) -> Result<Option<OrdinaryDescriptor>, Halt> {
-        let (_, handler) = self.proxy_target_handler(proxy)?;
-        if self.proxy_trap(code, handler, "getOwnPropertyDescriptor")?.is_none() {
-            let (target, _) = self.proxy_target_handler(proxy)?;
-            return self.uninterned_index_own_descriptor(code, target, index);
-        }
-        // A trap exists and will be handed the key, so the key must be named;
-        // delegate to the id-keyed path, which re-looks the trap up exactly
-        // once from here.
-        let id = self.intern_key_unmetered(&index.to_string());
-        self.proxy_get_own_property(code, proxy, id)
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
+            Some(trap) => trap,
+            None => return self.uninterned_index_own_descriptor(code, target, index),
+        };
+        self.proxy_get_own_property_trapped(code, target, handler, trap, ReadKey::Index(index))
     }
 
     /// The Proxy arm of [`Self::uninterned_index_delete`].
@@ -47634,11 +47630,11 @@ impl Interp {
         index: u32,
     ) -> Result<bool, Halt> {
         let (target, handler) = self.proxy_target_handler(proxy)?;
-        if self.proxy_trap(code, handler, "deleteProperty")?.is_none() {
-            return self.uninterned_index_delete(code, target, index);
-        }
-        let id = self.intern_key_unmetered(&index.to_string());
-        self.proxy_delete(code, proxy, id)
+        let trap = match self.proxy_trap(code, handler, "deleteProperty")? {
+            Some(trap) => trap,
+            None => return self.uninterned_index_delete(code, target, index),
+        };
+        self.proxy_delete_trapped(code, target, handler, trap, ReadKey::Index(index))
     }
 
     /// `[[Get]]` dispatched on a [`ReadKey`].
@@ -51049,14 +51045,33 @@ impl Interp {
             Some(t) => t,
             None => return self.mop_get_own_property(code, target, id),
         };
+        self.proxy_get_own_property_trapped(code, target, handler, trap, ReadKey::Id(id))
+    }
+
+    /// The `getOwnPropertyDescriptor` trap call and its invariant checks,
+    /// shared by the id-keyed path and by
+    /// [`Self::uninterned_index_proxy_own_descriptor`]. The trap is passed in
+    /// ALREADY RESOLVED: looking it up a second time would re-run a handler's
+    /// accessor and double-meter the lookup.
+    fn proxy_get_own_property_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        key_id: ReadKey,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let key = self.property_key_slot(id)?;
+        let key = self.read_key_slot(key_id)?;
         let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
         if trap_result.kind != Kind::Undefined && trap_result.kind != Kind::Reference {
             return Err(self.catchable_type_error());
         }
-        let target_desc = self.mop_get_own_property(code, target, id)?;
+        let target_desc = match self.target_own_key_id(key_id, target) {
+            Some(id) => self.mop_get_own_property(code, target, id)?,
+            None => None,
+        };
         if trap_result.kind == Kind::Undefined {
             match target_desc {
                 None => return Ok(None),
@@ -51361,14 +51376,33 @@ impl Interp {
             Some(t) => t,
             None => return self.mop_delete(code, target, id),
         };
+        self.proxy_delete_trapped(code, target, handler, trap, ReadKey::Id(id))
+    }
+
+    /// The `deleteProperty` trap call and its invariant checks, shared by the
+    /// id-keyed path and by [`Self::uninterned_index_proxy_delete`]. The trap
+    /// arrives ALREADY RESOLVED, for the same reason as
+    /// [`Self::proxy_get_own_property_trapped`].
+    fn proxy_delete_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        key_id: ReadKey,
+    ) -> Result<bool, Halt> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let key = self.property_key_slot(id)?;
+        let key = self.read_key_slot(key_id)?;
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
         if !self.truthy(&result) {
             return Ok(false);
         }
-        match self.mop_get_own_property(code, target, id)? {
+        let target_desc = match self.target_own_key_id(key_id, target) {
+            Some(id) => self.mop_get_own_property(code, target, id)?,
+            None => None,
+        };
+        match target_desc {
             None => Ok(true),
             Some(d) => {
                 if d.configurable == Some(false) {
