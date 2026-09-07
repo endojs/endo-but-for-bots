@@ -144,6 +144,13 @@ fn error_model_agrees_with_the_oracle() {
         "var r=0; try { true.x } catch(e){ r='threw' } r === 0 ? 'undef-ok' : r",
         "var r=0; try { (5).x } catch(e){ r='threw' } r === 0 ? 'undef-ok' : r",
         "var r=0; try { 'abc'.x } catch(e){ r='threw' } r === 0 ? 'undef-ok' : r",
+        // A non-nullish primitive base boxes to its wrapper prototype: the
+        // inherited method resolves, it is not an absent-method TypeError.
+        "true.toString()",
+        "false.toString()",
+        "true.valueOf()",
+        "true.constructor === Boolean",
+        "var r=0; try { true.x = 1; r='silent' } catch(e){ r='threw' } r",
         "var r=0; class A { m(){ return super.x } } try { new A().m(); r='ok' } catch(e){ r='threw' } r",
         "var r=0; try { null[0] = 1 } catch(e){ r=e.name+':'+e.message } r",
         // --- cross segment (F024) ---

@@ -4765,6 +4765,9 @@ pub struct Interp {
     /// The realm's `%Number.prototype%` (a boot object) — the box target for a
     /// primitive number's method access (`(42).toString(2)`, …).
     number_proto: crate::value::SlotIndex,
+    /// The realm's `%Boolean.prototype%` (a boot object) — the box target for a
+    /// primitive boolean's method access (`true.toString()`, …).
+    boolean_proto: crate::value::SlotIndex,
     /// `%Date.prototype%` and the `[[DateValue]]` side table. A Date instance
     /// remains an ordinary arena object for property/prototype behavior; its
     /// time value is the one non-property internal slot recorded here.
@@ -5931,6 +5934,7 @@ impl Interp {
             string_proto: crate::value::SlotIndex::NULL,
             string_iterator_method: crate::value::SlotIndex::NULL,
             number_proto: crate::value::SlotIndex::NULL,
+            boolean_proto: crate::value::SlotIndex::NULL,
             date_proto: crate::value::SlotIndex::NULL,
             date_to_primitive_method: crate::value::SlotIndex::NULL,
             dates: std::collections::HashMap::new(),
@@ -7219,6 +7223,8 @@ impl Interp {
                         self.string_proto = p;
                     } else if native == Native::Number {
                         self.number_proto = p;
+                    } else if native == Native::Boolean {
+                        self.boolean_proto = p;
                     }
                     let v = self.alloc_method(NativeMethod::WrapperValueOf);
                     self.proto_methods.push((p, "valueOf", v));
@@ -15430,6 +15436,11 @@ impl Interp {
                         // A primitive bigint boxes to `%BigInt.prototype%`.
                         Payload::BigInt(_) if !self.bigint_proto.is_null() => {
                             self.instance_get(self.bigint_proto, id)
+                        }
+                        // A primitive boolean boxes to `%Boolean.prototype%`
+                        // (`true.toString()`): resolve the inherited method.
+                        Payload::Boolean(_) if !self.boolean_proto.is_null() => {
+                            self.instance_get(self.boolean_proto, id)
                         }
                         // `null.f` / `undefined.f`: `mxToInstance(mxStack)` throws
                         // before the lookup (`fxToInstance`). Reading a property
@@ -57436,6 +57447,7 @@ impl Interp {
             self.regexp_string_iterator_proto,
             self.string_proto,
             self.number_proto,
+            self.boolean_proto,
             self.symbol_proto,
             self.symbol_to_primitive_method,
             self.bigint_proto,

@@ -59,6 +59,47 @@ fn writing_a_property_of_null_or_undefined_throws() {
 }
 
 #[test]
+fn a_non_nullish_primitive_base_boxes_to_its_wrapper_prototype() {
+    // The other half of the receiver match: only `null`/`undefined` fail
+    // `RequireObjectCoercible`; every other primitive boxes to its wrapper
+    // prototype and resolves the inherited method. `Kind::Boolean` had no
+    // arm and fell through to the `undefined` catch-all, so `true.toString()`
+    // was a TypeError on an absent method instead of XS's `"true"`.
+    for (source, expected) in [
+        ("true.toString()", "true"),
+        ("false.toString()", "false"),
+        ("true.valueOf()", "true"),
+        ("true.constructor === Boolean", "true"),
+        ("'abc'.length", "3"),
+        ("(42).toString(2)", "101010"),
+        ("(1n).toString()", "1"),
+    ] {
+        let out = run(source);
+        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert_eq!(out.result, expected, "{source}");
+    }
+    // A name absent from `%Boolean.prototype%` is still `undefined`, not a
+    // throw — the boxing resolves the chain, it does not gate the read.
+    let out = run("var r=0; try { true.nosuch } catch(e){ r='threw' } r === 0 ? 'undef-ok' : r");
+    assert!(out.completed, "halt: {:?}", out.halt);
+    assert_eq!(out.result, "undef-ok");
+}
+
+#[test]
+fn a_sloppy_write_through_a_non_nullish_primitive_base_stays_silent() {
+    // `RequireObjectCoercible` passes for a number/string/boolean base, so
+    // the store targets a throwaway wrapper: sloppy code sees the assignment
+    // evaluate to the RHS and nothing else happen.
+    for source in ["true.x = 1", "(5).x = 1", "'abc'.x = 1"] {
+        let out = run(&format!(
+            "var r='unset'; try {{ {source}; r='silent' }} catch(e){{ r='threw' }} r"
+        ));
+        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert_eq!(out.result, "silent", "{source}");
+    }
+}
+
+#[test]
 fn the_other_nullish_coercions_carry_the_same_message() {
     // `TO_INSTANCE` (destructuring), `DELETE_PROPERTY(_AT)` and `IN` raised
     // a messageless TypeError; XS's texts, per the oracle.
