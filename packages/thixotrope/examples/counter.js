@@ -1,6 +1,11 @@
 // @ts-check
-/* global Far */
 import { initialCount } from './initial-count.js';
+
+/** @import { Far as FarType } from '@endo/far' */
+// The guest realm supplies Far; the type import does not bundle its library.
+const { Far } = /** @type {typeof globalThis & { Far: typeof FarType }} */ (
+  globalThis
+);
 
 /** @param {{}} powers */
 export const make = powers => {
