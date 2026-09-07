@@ -111,24 +111,62 @@ jobs:
         # from `ci.guix.gnu.org` (the substitute server), so a
         # substitute outage does not block the install path.
         #
+        # The redirector is itself a single host, though. On
+        # 2026-09-06 and 2026-09-07 it answered `502 Bad Gateway` from
+        # its own front end, on and off for hours (no redirect was
+        # ever issued, and other GNU packages were affected too),
+        # while `ftp.gnu.org` and the mirrors behind it served this
+        # exact tarball normally; every one of the six retries against
+        # the redirector alone failed. So each attempt now walks a
+        # list of sources for the same bytes: the redirector first (it
+        # spreads load across the mirror network), then the origin
+        # `ftp.gnu.org`, then a well-known mirror. The trust anchor is
+        # `GUIX_TARBALL_SHA256`, not the source: a host is only ever an
+        # alternative way to obtain bytes, and whatever it serves is
+        # accepted only if it hashes to the pinned value.
+        #
         # The download writes to `.tmp` and only renames after the
         # sha256 verifies, so a truncated or replaced file cannot
-        # masquerade as a valid tarball; `rm -f` of any leftover
-        # `.tmp` before each attempt covers the same hazard for
-        # retries within a single wget invocation.
+        # masquerade as a valid tarball. `rm -f` of the `.tmp` before
+        # each source, and of both files before each retry attempt,
+        # means a partial download from one source can never be
+        # mistaken for the output of the next.
+        #
+        # `--timeout`/`--tries` bound how long a hung source can hold
+        # an attempt (wget's defaults are 900 seconds and 20 tries),
+        # so the fallback is reached well inside `timeout_minutes`.
+        # Each attempt already spans three hosts, so fewer outer
+        # attempts are needed than before: the worst case is
+        # 3 attempts x 6 minutes plus two 30-second waits, 19 minutes,
+        # inside the job's 45-minute budget.
         if: steps.guix-cache.outputs.cache-hit != 'true'
         uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
         with:
-          max_attempts: 6
+          max_attempts: 3
           retry_wait_seconds: 30
-          timeout_minutes: 5
+          timeout_minutes: 6
           command: |
             set -euo pipefail
             rm -f guix-binary.x86_64-linux.tar.xz.tmp guix-binary.x86_64-linux.tar.xz
-            wget -nv "https://ftpmirror.gnu.org/guix/guix-binary-${GUIX_VERSION}.x86_64-linux.tar.xz" -O guix-binary.x86_64-linux.tar.xz.tmp
-            file guix-binary.x86_64-linux.tar.xz.tmp | grep -q 'XZ compressed data'
-            echo "${GUIX_TARBALL_SHA256}  guix-binary.x86_64-linux.tar.xz.tmp" | sha256sum --check --strict
-            mv guix-binary.x86_64-linux.tar.xz.tmp guix-binary.x86_64-linux.tar.xz
+            TARBALL="guix-binary-${GUIX_VERSION}.x86_64-linux.tar.xz"
+            for url in \
+              "https://ftpmirror.gnu.org/guix/${TARBALL}" \
+              "https://ftp.gnu.org/gnu/guix/${TARBALL}" \
+              "https://mirrors.kernel.org/gnu/guix/${TARBALL}"
+            do
+              rm -f guix-binary.x86_64-linux.tar.xz.tmp
+              if wget -nv --timeout=30 --tries=1 "${url}" -O guix-binary.x86_64-linux.tar.xz.tmp \
+                && file guix-binary.x86_64-linux.tar.xz.tmp | grep -q 'XZ compressed data' \
+                && echo "${GUIX_TARBALL_SHA256}  guix-binary.x86_64-linux.tar.xz.tmp" | sha256sum --check --strict
+              then
+                mv guix-binary.x86_64-linux.tar.xz.tmp guix-binary.x86_64-linux.tar.xz
+                echo "Fetched and verified ${TARBALL} from ${url}"
+                exit 0
+              fi
+              echo "::warning::${url} did not yield ${TARBALL} matching GUIX_TARBALL_SHA256; trying the next source"
+            done
+            echo "::error::No source served ${TARBALL} matching GUIX_TARBALL_SHA256"
+            exit 1
       - name: Verify cached tarball checksum
         # Belt-and-suspenders: if a previous run cached a different
         # blob (for example because someone updated `GUIX_VERSION`
