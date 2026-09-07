@@ -172,6 +172,7 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   t.is(argv[2], 'do a thing');
   t.true(argv.includes('--output-format'));
   t.true(argv.includes('stream-json'));
+  t.true(argv.includes('--include-partial-messages'));
   t.is(opts.cwd, '/workspace');
   // First send has no conversation to resume.
   t.false(argv.includes('--continue'));

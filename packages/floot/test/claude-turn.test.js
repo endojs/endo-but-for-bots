@@ -104,6 +104,36 @@ test('translator maps stream-json events onto the reply wire', async t => {
   });
 });
 
+test('translator emits partial text without duplicating assistant text', async t => {
+  const { writer, log } = makeRecordingWriter();
+  const translator = makeClaudeEventTranslator(writer);
+
+  translator.handle({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: 'Hello ' },
+    },
+  });
+  translator.handle({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: 'world.' },
+    },
+  });
+  translator.handle({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'Hello world.' }] },
+  });
+
+  t.deepEqual(log, [
+    { kind: 'delta', payload: 'Hello ' },
+    { kind: 'delta', payload: 'world.' },
+  ]);
+  t.is(translator.finish().finalText, 'Hello world.');
+});
+
 test('translator falls back to streamed text without a result summary', async t => {
   const { writer } = makeRecordingWriter();
   const translator = makeClaudeEventTranslator(writer);
