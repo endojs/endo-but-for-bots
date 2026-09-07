@@ -40,6 +40,13 @@ rest of this README.
   rejection, `apk update`).
   Done — see § "Phase 2 status notes" below for what is
   intentionally deferred.
+- **Phase 2.5**: enforced
+  slice policy — a `broker-only` network profile, cgroup and rlimit
+  ceilings the podman driver actually applies, an exact declared mount
+  table, and a `SlicePolicyAttestationV1` derived from effective
+  container and kernel state rather than from the flags that were
+  requested.
+  Done — see § "Slice policy and attestation" below.
 
 ## Operational prerequisites (Linux + bwrap driver)
 
@@ -164,8 +171,8 @@ The factory never substitutes an unconfined host process.
 The capability surface:
 
 - `SandboxFactory` — root cap; `help`, `listBackends`, `make`.
-- `SandboxHandle` — one slice; `spawn`, `mount`, `scratch`, `open`,
-  `fork`, `reset`, `dispose`.
+- `SandboxHandle` — one slice; `spawn`, `policy`, `mount`, `scratch`,
+  `open`, `fork`, `reset`, `dispose`.
 - `ProcessHandle` — one process inside a slice; `pid`, `stdin`,
   `stdout`, `stderr`, `wait`, `kill`.
 - `MountHandle` — one bind into a slice; `innerPath`, `cap`, `mode`,
@@ -227,13 +234,23 @@ standing up a full daemon.
 
 ## Network profiles
 
-| Profile         | Status                                            |
-| --------------- | ------------------------------------------------- |
-| `none`          | implemented; bwrap unshares net, only `lo` inside |
-| `private`       | implemented; private netns, egress nft documented |
-| `host-loopback` | implemented; shares host netns (filtering = ops)  |
-| `host-lan`      | implemented; shares host netns (filtering = ops)  |
-| `host-net`      | implemented; shares host netns, no extra filter   |
+| Profile         | Status                                             |
+| --------------- | -------------------------------------------------- |
+| `none`          | implemented; bwrap unshares net, only `lo` inside  |
+| `broker-only`   | implemented; podman only, attested loopback-only   |
+| `private`       | implemented; private netns, egress nft documented  |
+| `host-loopback` | implemented; shares host netns (filtering = ops)   |
+| `host-lan`      | implemented; shares host netns (filtering = ops)   |
+| `host-net`      | implemented; shares host netns, no extra filter    |
+
+`private` gives the slice a NAT'd path outbound and asks the operator
+to filter it.
+`broker-only` is the profile for a deployment that cannot accept a
+NAT'd path at all: the slice joins a namespace the operator prepared,
+and the driver proves from `procfs` that the namespace holds loopback
+and no routable interface before the slice is usable.
+It is reachable only through a slice policy, which names the namespace
+to join — see § "Slice policy and attestation".
 
 The egress filter for `private` lives in
 [`src/net/private-egress.nft`](./src/net/private-egress.nft).
@@ -374,6 +391,149 @@ to spawn `printenv PATH` inside the container.
 The shared canonical default lives in `src/drivers/path.js` so the
 podman driver's fall-back and the bwrap driver's `minimal`-rootfs
 fall-back stay aligned.
+
+## Slice policy and attestation
+
+`SandboxFactory.make({ policy })` builds a slice under an enforced
+deployment policy and hands back a slice that can prove it.
+`SandboxHandle.policy()` then returns a `SlicePolicyAttestationV1`.
+
+This exists because the flags a driver passes are a statement of
+intent, not a fact about the running slice.
+A host can accept `--pids-limit` and apply nothing, a storage driver
+can refuse a quota, and a network namespace can hold a routable
+interface nobody asked for.
+An attestation derived from the request would restate the request.
+Everything below is instead derived from observation, and anything
+absent, unreadable, or in an unrecognized shape throws rather than
+attesting: for an attestation, "the runtime reported something we do
+not understand" and "this control is not proved" are the same answer,
+and it is the one that fails provisioning.
+
+The policy is applied and proved at `make()` time, so a slice that
+cannot prove its confinement never exists — rather than existing and
+then declining to describe itself.
+
+### Requesting one
+
+```js
+const slice = await E(sandbox).make({
+  rootfs: { kind: 'oci', ref: `registry.example/agent@${imageDigest}` },
+  network: 'broker-only',
+  cwd: '/workspace',
+  policy: {
+    profile: 'hosted-agent-v1',
+    imageDigest, // 'sha256:<64 hex>'; tags are rejected
+    uid: 1000,
+    gid: 1000,
+    // The namespace the operator prepared with the broker's listener.
+    brokerSidecar: { container: 'broker-sidecar-s1' },
+    resources: {
+      memoryBytes: 4n * 1024n ** 3n,
+      pids: 512,
+      cpuCores: 4,
+      openFiles: 4096,
+      coreBytes: 0n,
+      writableBytes: 16n * 1024n ** 3n,
+    },
+    // The whole mount table. `mounts` must be empty and there is no
+    // scratch layer: an undeclared writable path is what this excludes.
+    mounts: [
+      {
+        role: 'workspace',
+        kind: 'volume',
+        source: 'workspace-s1',
+        destination: '/workspace',
+        sizeBytes: 8n * 1024n ** 3n,
+      },
+      {
+        role: 'tmp',
+        kind: 'tmpfs',
+        destination: '/tmp',
+        sizeBytes: 2n * 1024n ** 3n,
+      },
+      // …
+    ],
+    // An argv from the pinned image that blocks until removed. It runs
+    // as the slice's policy anchor: the live container the attestation
+    // is read from.
+    attestationArgv: ['/bin/sleep', 'infinity'],
+  },
+});
+
+const attestation = await E(slice).policy();
+```
+
+Byte quantities are `bigint`.
+Linux expresses cgroup ceilings as unsigned 64-bit quantities, so a
+`number` would advertise JavaScript's 2\*\*53 limit as if it were the
+kernel's.
+Counts the kernel bounds well inside four bytes — uid, gid, pids, open
+files, cores — stay `number`.
+
+### What is proved, and how
+
+| Control                          | Proof                                          |
+| -------------------------------- | ---------------------------------------------- |
+| rootless engine                   | `podman info`, at probe time                   |
+| image digest                      | container's resolved `ImageDigest`             |
+| uid / gid inside the slice        | `/proc/<pid>/status` through `uid_map`         |
+| private user/pid/ipc/mount ns     | `/proc/<pid>/ns/*` differs from the daemon's   |
+| `broker-only` network             | `/proc/<pid>/net/dev` holds exactly `lo`       |
+| network namespace identity        | `/proc/<pid>/ns/net` inode                     |
+| read-only root, no-new-privs      | resolved `HostConfig`                          |
+| dropped capabilities              | the container's empty `EffectiveCaps`          |
+| no devices, no host binds         | resolved `Devices` and mount table             |
+| memory / swap / pids / cpu ceiling | resolved `HostConfig`, plus delegated cgroup v2 controllers |
+| open-file and core ceilings       | resolved `Ulimits`                             |
+| per-mount writable ceiling        | tmpfs `size=`; volume quota from the storage driver |
+| descendant reaping                | private pid namespace + exact-label reconciliation |
+
+The attestation is read from a **slice anchor**: an ordinary operation
+container created from the same frozen policy prefix every later spawn
+uses, running the caller's `attestationArgv`.
+Attesting a live container rather than a created-but-unstarted one is
+what makes the namespace, identity, and interface checks answers from
+the kernel instead of the runtime's echo of its own flags.
+Because the prefix is one frozen array shared by the anchor and every
+operation, no spawn can run at a weaker configuration than the one that
+was proved.
+
+### What it does not cover
+
+- **The slice environment.** `@endo/sandbox` layers a spawn's `env`
+  over the slice's own and the attestation says nothing about either,
+  so an operator's `make()` must place no credential or proxy setting
+  there.
+- **Anything inside the slice.** A pinned runtime's own inner sandbox,
+  its per-command policy, and what it does with its state are that
+  runtime's guarantees, not this one's; the outer slice bounds what a
+  compromise of it can reach.
+- **The broker.** The namespace this joins is prepared outside the
+  sandbox. The attestation proves it holds nothing routable; it does
+  not prove what the listener inside it will do, or that the listener
+  is reachable only to the processes that should reach it.
+- **Backends other than podman.** The bwrap driver has no
+  container-runtime inspect surface to read effective state back from,
+  so it declines a policy rather than attesting from the flags it
+  passed.
+
+### Operator prerequisites
+
+Beyond the podman prerequisites above, a policy slice needs:
+
+- cgroup v2 with the `memory`, `pids`, and `cpu` controllers delegated
+  to the daemon's user (`Delegate=` on the systemd user slice).
+  Without it the ceilings are unenforceable and the slice is refused.
+- A prepared network namespace holding the broker's loopback listener
+  and no routable interface, named by `brokerSidecar`.
+- Each declared volume created with a storage quota, since nothing can
+  impose one on a volume after the fact.
+- An image pinned and resolvable by digest in local storage.
+
+`yarn test:drivers` runs the live acceptance cases on a podman host;
+[`test/podman-policy.test.js`](./test/podman-policy.test.js) covers the
+same decisions against a stubbed engine everywhere else.
 
 ## Hardening layers
 

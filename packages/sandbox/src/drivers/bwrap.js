@@ -647,6 +647,16 @@ export const makeBwrapDriver = ({
     // filtering for `host-loopback` / `host-lan` is the operator's
     // responsibility (see README § "Host network profiles") because
     // the rootless slice does not hold CAP_NET_ADMIN.
+    if (spec.policy !== undefined || spec.network === 'broker-only') {
+      // The bwrap driver has no container-runtime inspect surface to
+      // read effective state back from, so it can apply a policy's
+      // flags but never prove them. Attesting from the flags it passed
+      // is the failure mode the whole attestation exists to exclude, so
+      // it declines instead.
+      throw makeError(
+        X`bwrap driver cannot enforce or attest a slice policy; use the podman backend`,
+      );
+    }
     if (
       spec.network !== 'none' &&
       spec.network !== 'private' &&

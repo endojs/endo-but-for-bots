@@ -51,6 +51,7 @@ driver tears down the underlying namespace.
 
 Methods:
   spawn(argv, opts)   Spawn a process in the slice.
+  policy()            Report the slice's policy attestation.
   mount(cap, …)       Bind a Mount capability into the slice.
   scratch(innerPath)  Mint an ephemeral scratch mount.
   open(innerPath)     Open a single file inside the slice.
@@ -528,7 +529,17 @@ export const makeSandboxFactory = (
       env: harden({ ...(opts.env ?? {}) }),
       cwd: opts.cwd,
       limits,
+      // Passed through as the caller wrote it: validating a policy
+      // means saying which controls the backend can enforce and read
+      // back, and only the driver knows that.
+      ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
     });
+
+    if (opts.policy !== undefined && driver.policy === undefined) {
+      throw makeError(
+        X`backend ${q(driver.name)} cannot enforce or attest a slice policy`,
+      );
+    }
 
     const driverSlice = await driver.prepareSlice(sliceSpec);
     // Drivers may attach a `runtimeDetails` summary to the slice
@@ -1011,6 +1022,25 @@ export const makeSandboxFactory = (
       throw makeError(X`fork not implemented before Phase 3`);
     };
 
+    /**
+     * Report the slice's policy attestation.
+     *
+     * `assertRunning` first: an attestation is a statement about a
+     * slice that is still confined by what it describes, and a disposed
+     * slice is not confined by anything.
+     *
+     * @returns {Promise<import('./types.js').SlicePolicyAttestation>}
+     */
+    const attestPolicy = async () => {
+      assertRunning();
+      if (driver.policy === undefined) {
+        throw makeError(
+          X`backend ${q(driver.name)} cannot attest a slice policy`,
+        );
+      }
+      return driver.policy(driverSlice);
+    };
+
     const resetSlice = async () => {
       const reason = makeError(X`sandbox handle reset`);
       await Promise.all(
@@ -1081,6 +1111,7 @@ export const makeSandboxFactory = (
         makeExo('SandboxHandle', SandboxHandleInterface, {
           help: () => `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
           spawn: spawnProc,
+          policy: attestPolicy,
           mount: mountInSlice,
           scratch: scratchInSlice,
           open: openInSlice,

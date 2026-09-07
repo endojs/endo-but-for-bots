@@ -1590,3 +1590,245 @@ test('a failed orphan sweep is retried by the next probe', async t => {
   t.true(recovered.available, recovered.reason);
   t.is(calls.filter(call => call.args[0] === 'ps').length, 2);
 });
+
+// ---------------------------------------------------------------------------
+// Policy enforcement against a live engine
+// ---------------------------------------------------------------------------
+
+/**
+ * The attestation is only worth what a real engine and a real kernel
+ * say, so these run against podman when one is present and skip
+ * gracefully when it is not.  `test/podman-policy.test.js` covers the
+ * same decisions against a stubbed engine on every host.
+ *
+ * The fixture's mount table is tmpfs-only.  A volume's writable ceiling
+ * has to have been recorded by whoever created the volume, which needs
+ * project quota on the backing filesystem — a host property, not
+ * something a test can arrange.  Every other control in the profile is
+ * exercised here; the volume case is the stub suite's.
+ */
+
+const POLICY_TEST_OWNER = 'sandbox-policy-test-suite';
+
+/**
+ * Create a network namespace holding loopback and nothing else, the way
+ * an operator stands one up for the broker's listener.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} name
+ * @param {string} network `none` for the contract's shape; anything
+ *   else to build the namespace the contract must reject.
+ * @returns {Promise<void>}
+ */
+const startSidecar = async (t, name, network) => {
+  await podmanRun(['rm', '-f', name]);
+  const created = await podmanRun([
+    'run',
+    '--detach',
+    '--name',
+    name,
+    '--network',
+    network,
+    ALPINE_REF,
+    '/bin/sleep',
+    '600',
+  ]);
+  t.is(created.code, 0, created.stderr || created.stdout);
+  t.teardown(async () => {
+    await podmanRun(['rm', '-f', name]);
+  });
+};
+
+/**
+ * Build a policy request pinned to the digest podman actually stored
+ * for the test image.
+ *
+ * @param {string} sidecarName
+ * @returns {Promise<any>}
+ */
+const makeLivePolicy = async sidecarName => {
+  const digest = await podmanRun([
+    'image',
+    'inspect',
+    '--format',
+    '{{.Digest}}',
+    ALPINE_REF,
+  ]);
+  const mib = 1024n * 1024n;
+  return harden({
+    profile: 'hosted-agent-v1',
+    imageDigest: digest.stdout.trim(),
+    uid: 1000,
+    gid: 1000,
+    brokerSidecar: harden({ container: sidecarName }),
+    resources: harden({
+      memoryBytes: 512n * mib,
+      pids: 64,
+      cpuCores: 1,
+      openFiles: 1024,
+      coreBytes: 0n,
+      writableBytes: 96n * mib,
+    }),
+    mounts: harden([
+      harden({
+        role: 'tmp',
+        kind: 'tmpfs',
+        destination: '/tmp',
+        sizeBytes: 64n * mib,
+      }),
+      harden({
+        role: 'run',
+        kind: 'tmpfs',
+        destination: '/run',
+        sizeBytes: 16n * mib,
+      }),
+      harden({
+        role: 'scratch',
+        kind: 'tmpfs',
+        destination: '/scratch',
+        sizeBytes: 16n * mib,
+      }),
+    ]),
+    attestationArgv: harden(['/bin/sleep', '600']),
+  });
+};
+
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @returns {boolean} whether the suite can exercise the live path
+ */
+const skipUnlessPolicyHost = t => {
+  if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
+    t.pass(
+      `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
+    );
+    return true;
+  }
+  return false;
+};
+
+test.serial(
+  'a live slice attests broker-only isolation from kernel state',
+  async t => {
+    if (skipUnlessPolicyHost(t)) return;
+    const sidecarName = `${ENDO_SANDBOX_PREFIX}broker-ok`;
+    await startSidecar(t, sidecarName, 'none');
+
+    const driver = makePodmanDriver({ env: {}, ownerId: POLICY_TEST_OWNER });
+    const probe = await driver.probe();
+    if (!probe.available) {
+      t.pass(`podman driver unavailable: ${probe.reason}`);
+      return;
+    }
+    if (!(probe.details?.cgroup2?.available ?? false)) {
+      // A host that cannot delegate memory/pids/cpu cannot apply the
+      // ceilings, and the attestation is right to refuse. Exercising the
+      // refusal is the stub suite's job; here it would only prove that
+      // this CI host has no `Delegate=`.
+      t.pass(
+        `cgroup v2 controllers are not delegated: ${probe.details?.cgroup2?.reason}`,
+      );
+      return;
+    }
+
+    const policy = await makeLivePolicy(sidecarName);
+    /** @type {any} */
+    let slice;
+    try {
+      slice = await driver.prepareSlice(
+        /** @type {any} */ ({
+          rootfs: { kind: 'oci', ref: ALPINE_REF },
+          mounts: [],
+          scratchHostPath: '',
+          network: 'broker-only',
+          seccomp: 'default',
+          env: {},
+          cwd: '/scratch',
+          policy,
+        }),
+      );
+    } catch (e) {
+      t.fail(`policy slice was refused: ${/** @type {Error} */ (e).message}`);
+      return;
+    }
+    t.teardown(() => driver.teardown(slice));
+
+    const attestation = await /** @type {any} */ (driver).policy(slice);
+    t.is(attestation.version, 'SlicePolicyAttestationV1');
+    t.is(attestation.network, 'broker-only');
+    t.is(attestation.uid, 1000);
+    t.is(attestation.gid, 1000);
+    t.true(attestation.readOnlyRoot);
+    t.true(attestation.dropAllCapabilities);
+    t.is(attestation.devices, 'none');
+    t.is(attestation.hostHome, 'none');
+    t.deepEqual(
+      { ...attestation.namespaces },
+      { user: 'private', pid: 'private', ipc: 'private', mount: 'private' },
+    );
+    t.deepEqual(
+      attestation.mounts.map((/** @type {any} */ m) => m.destination),
+      ['/tmp', '/run', '/scratch'],
+    );
+    t.regex(attestation.networkNamespaceId, /^net-\d+$/);
+
+    // The slice really is confined to that namespace: an operation in it
+    // sees loopback and nothing else.
+    const proc = await driver.spawn(slice, ['/bin/cat', '/proc/net/dev'], {});
+    /** @type {Uint8Array[]} */
+    const chunks = [];
+    for await (const chunk of proc.stdout ?? []) chunks.push(chunk);
+    await proc.wait();
+    const interfaces = Buffer.concat(chunks)
+      .toString('utf8')
+      .split('\n')
+      .slice(2)
+      .map(line => line.split(':')[0].trim())
+      .filter(name => name !== '');
+    t.deepEqual(interfaces, ['lo']);
+  },
+);
+
+test.serial(
+  'a live slice refuses a namespace that kept a routable interface',
+  async t => {
+    if (skipUnlessPolicyHost(t)) return;
+    const backend = await podmanRun([
+      'info',
+      '--format',
+      '{{.Host.NetworkBackend}}',
+    ]);
+    const routed =
+      backend.stdout.trim() === 'netavark' ? 'bridge' : 'slirp4netns';
+    const sidecarName = `${ENDO_SANDBOX_PREFIX}broker-routed`;
+    await startSidecar(t, sidecarName, routed);
+
+    const driver = makePodmanDriver({ env: {}, ownerId: POLICY_TEST_OWNER });
+    const probe = await driver.probe();
+    if (!probe.available) {
+      t.pass(`podman driver unavailable: ${probe.reason}`);
+      return;
+    }
+
+    const policy = await makeLivePolicy(sidecarName);
+    // This is the failure the contract calls out by name: a namespace
+    // that NATs outbound looks identical from the `--network` flag and
+    // different only from the interface inventory.
+    await t.throwsAsync(
+      driver.prepareSlice(
+        /** @type {any} */ ({
+          rootfs: { kind: 'oci', ref: ALPINE_REF },
+          mounts: [],
+          scratchHostPath: '',
+          network: 'broker-only',
+          seccomp: 'default',
+          env: {},
+          cwd: '/scratch',
+          policy,
+        }),
+      ),
+      { message: /broker-only network/ },
+    );
+    await waitForNoOwnedContainers(POLICY_TEST_OWNER);
+  },
+);
