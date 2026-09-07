@@ -22058,6 +22058,10 @@ impl Interp {
                         // the resolved methods across the chain: an inherited
                         // override is just as observable as an own property.
                         if source_ta.is_none() {
+                            // Runtime keys (for example from JSON.parse) can
+                            // precede their lazy intrinsic bindings. Complete
+                            // that installation before inspecting next.
+                            self.install_pending_intrinsics();
                             let iterator_id = self
                                 .well_known_symbol_property_id("iterator")
                                 .expect("well-known iterator symbol");

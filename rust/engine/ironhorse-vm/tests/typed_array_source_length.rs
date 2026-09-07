@@ -144,3 +144,16 @@ fn inherited_iterator_overrides_do_not_take_the_snapshot_path() {
         );
     }
 }
+
+#[test]
+fn runtime_next_key_does_not_hide_the_intrinsic_iterator() {
+    completes_with(
+        "JSON.parse('{\"ne'+'xt\":1}'); new Uint8Array([1,2])[1]",
+        "2",
+    );
+    assert_eq!(
+        run("var p=Object.getPrototypeOf([][Symbol.iterator]()); delete p.next; new Uint8Array([1,2])").halt,
+        Halt::Unsupported("native-call:TypedArray:from-array-like"),
+        "pending installation must not restore an explicitly deleted next",
+    );
+}

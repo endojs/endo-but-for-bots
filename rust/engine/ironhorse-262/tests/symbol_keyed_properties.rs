@@ -138,6 +138,10 @@ fn get_own_property_descriptor_on_a_symbol_receiver_is_undefined() {
     // probe THAT — a latent divergence this locks against. (`String(...)`
     // renders the `undefined` result so the dual-run compares a primitive.)
     assert_result_agrees("String(Object.getOwnPropertyDescriptor(Symbol('a'), 'x'))");
-    assert_result_agrees("var s=Symbol('a'); typeof Object.getOwnPropertyDescriptor(s, 'description')");
-    assert_result_agrees("Object.getOwnPropertyDescriptor(Symbol.iterator, 'toString') === undefined");
+    assert_result_agrees(
+        "var s=Symbol('a'); typeof Object.getOwnPropertyDescriptor(s, 'description')",
+    );
+    assert_result_agrees(
+        "Object.getOwnPropertyDescriptor(Symbol.iterator, 'toString') === undefined",
+    );
 }
