@@ -1928,6 +1928,22 @@ struct ArrayIteratorProxyGetContext {
     meter_terminal_wrapper: bool,
 }
 
+/// The key a Proxy `[[Get]]` trap was handed, as its post-trap
+/// invariant check needs to name it back to the target.
+///
+/// An index key whose canonical name the key table has never held has no id
+/// yet — the trap is handed a freshly built string, exactly as XS's `fxKeyAt`
+/// builds one from `value.at.index` when `value.at.id` is `XS_NO_ID`. Naming
+/// it back to the target is deferred to [`Interp::proxy_get_trapped`], which
+/// skips it entirely for an ordinary target (no ordinary own property can
+/// exist under a name that was never interned) and so mints nothing for the
+/// common `new Proxy({}, { get() {} })[i]`.
+#[derive(Copy, Clone, Debug)]
+enum TrapKeyId {
+    Id(u16),
+    Index(u32),
+}
+
 #[derive(Clone, Debug)]
 struct FuncInfo {
     /// Start offset of the function body in the program code buffer (the
@@ -46563,7 +46579,13 @@ impl Interp {
         // property read just as it does for the static `GET_PROPERTY` path.
         if obj.kind == Kind::BigInt && !self.bigint_proto.is_null() {
             let id = if id == crate::value::XS_NO_ID {
-                self.intern_key(&index.to_string())
+                // A read mints nothing ([`Self::index_read_key_id`]).
+                // `instance_get` walks the ordinary slot chain, and no slot
+                // there can be keyed by a name the table never held.
+                match self.index_read_key_id(index) {
+                    Some(id) => id,
+                    None => return Ok(Slot::undefined()),
+                }
             } else {
                 id
             };
@@ -46581,7 +46603,15 @@ impl Interp {
             // `p[k]` routes through the `get` trap; an integer index key is a
             // canonical numeric string for the proxy.
             let key_id = if id == crate::value::XS_NO_ID {
-                self.intern_key(&index.to_string())
+                match self.index_read_key_id(index) {
+                    Some(id) => id,
+                    // The trap still has to be CALLED for an index the table
+                    // has no key for — but minting the key here, before the
+                    // trap lookup, is what let `p[i]` over novel indices walk
+                    // the id space into its saturation guard even for a proxy
+                    // that traps nothing.
+                    None => return self.uninterned_index_get(code, inst, index, obj),
+                }
             } else {
                 id
             };
@@ -46598,7 +46628,14 @@ impl Interp {
                 return Ok(self.ta_indexed_element_get(ta, n));
             }
             let id = if id == crate::value::XS_NO_ID {
-                self.intern_key(&index.to_string())
+                // Unreachable: `ta_numeric_index_at` answers every `XS_NO_ID`
+                // key as a canonical index above. A lookup rather than a mint
+                // even so, so this arm can never become the id-space leak the
+                // other index reads were.
+                match self.index_read_key_id(index) {
+                    Some(id) => id,
+                    None => return Ok(Slot::undefined()),
+                }
             } else {
                 id
             };
@@ -46620,16 +46657,16 @@ impl Interp {
         if id == crate::value::XS_NO_ID {
             // An index key. (A TypedArray receiver is handled by the
             // integer-indexed exotic `[[Get]]` above and never reaches here.)
-            if self.arrays.contains_key(&inst) {
-                if let Some(s) = self.arrays[&inst].items().get(&index).copied() {
-                    Ok(self.array_item_value(inst, s))
-                } else {
-                    let id = self.intern_key(&index.to_string());
-                    self.ordinary_get(code, inst, id, obj)
-                }
-            } else {
-                let id = self.intern_key(&index.to_string());
-                self.ordinary_get(code, inst, id, obj)
+            if let Some(item) = self
+                .arrays
+                .get(&inst)
+                .and_then(|a| a.items().get(&index).copied())
+            {
+                return Ok(self.array_item_value(inst, item));
+            }
+            match self.index_read_key_id(index) {
+                Some(id) => self.ordinary_get(code, inst, id, obj),
+                None => self.uninterned_index_get(code, inst, index, obj),
             }
         } else if Some(id) == self.length_id
             && self.arrays.contains_key(&inst)
@@ -46642,6 +46679,110 @@ impl Interp {
         } else {
             self.ordinary_get(code, inst, id, obj)
         }
+    }
+
+    /// The id an index key is **already** interned under, if any.
+    ///
+    /// A read creates nothing, so an index-keyed read must LOOK ITS NAME UP
+    /// rather than mint it: [`Self::intern_key`] hands out a fresh `u16` (and
+    /// meters a slot allocation) per novel name, so `for (var i = 0; i < 70000;
+    /// i++) o[i]` would otherwise carry the name table into the meet with the
+    /// symbol-key floor documented on [`Self::next_symbol_key_id`] — a refusal
+    /// that poisons the machine rather than throwing something the guest can
+    /// catch, i.e. a denial of service on the whole engine from an ordinary
+    /// loop. XS mints nothing either: `XS_CODE_GET_PROPERTY_AT` passes
+    /// `(XS_NO_ID, index)` straight to `mxBehaviorGetProperty`, so the dropped
+    /// `tick_slot_alloc` is also the metering-faithful answer.
+    fn index_read_key_id(&self, index: u32) -> Option<u16> {
+        self.symbol_ids.get(&index.to_string()).copied()
+    }
+
+    /// `[[Get]]` of an index key whose canonical name the key table has never
+    /// held, with `receiver` as the `[[Get]]` receiver.
+    ///
+    /// An ordinary own property exists only under a name that was interned to
+    /// define it, so no ordinary slot anywhere on the chain can answer to an
+    /// uninterned name. Only the receivers that resolve an index WITHOUT
+    /// consulting the name table can: a TypedArray element, an array item, a
+    /// String-wrapper unit, and a Proxy's `get` trap — which is handed the key
+    /// as a string, and so is the one place the key is worth building at all.
+    /// Every other object on the chain falls through to its prototype, and the
+    /// end of the chain is `undefined`, minting nothing.
+    fn uninterned_index_get(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        let mut cur = inst;
+        while !cur.is_null() {
+            if self.proxies.contains_key(&cur) {
+                return self.uninterned_index_proxy_get(code, cur, index, receiver);
+            }
+            if let Some(&ta) = self.typed_arrays.get(&cur) {
+                // The integer-indexed exotic `[[Get]]` answers for the whole
+                // read, at the receiver or through a prototype, and never
+                // continues up the chain (ECMA-262 10.4.5.4).
+                return Ok(self.ta_indexed_element_get(ta, f64::from(index)));
+            }
+            if let Some(item) = self
+                .arrays
+                .get(&cur)
+                .and_then(|a| a.items().get(&index).copied())
+            {
+                return Ok(self.array_item_value(cur, item));
+            }
+            if let Some(Slot {
+                kind: Kind::String,
+                value: Payload::String(off),
+                ..
+            }) = self.wrapper_data.get(&cur).copied()
+            {
+                let unit = self.string_index_get(off, index);
+                if unit.kind != Kind::Undefined {
+                    return Ok(unit);
+                }
+            }
+            cur = self.instance_prototype(cur);
+        }
+        Ok(Slot::undefined())
+    }
+
+    /// The Proxy arm of [`Self::uninterned_index_get`]: `[[Get]]` (ECMA-262
+    /// 10.5.8) of an index key the name table has no id for.
+    ///
+    /// The trap must still be CALLED, and it is handed the key as a string —
+    /// built here from the index, exactly as XS's `fxKeyAt` builds one for
+    /// `XS_NO_ID`, so the trap sees the canonical numeric string without the
+    /// engine minting a key id for it. A proxy that traps nothing forwards to
+    /// its target with the key still unbuilt.
+    fn uninterned_index_proxy_get(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        index: u32,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        let (target, handler) = self.proxy_target_handler(proxy)?;
+        let trap = match self.proxy_trap(code, handler, "get")? {
+            Some(trap) => trap,
+            None => return self.uninterned_index_get(code, target, index, receiver),
+        };
+        let offset = self.alloc_str_text(index.to_string().as_bytes());
+        let key = Slot::of(Kind::String, Payload::String(offset));
+        self.proxy_get_trapped(
+            code,
+            target,
+            handler,
+            trap,
+            key,
+            TrapKeyId::Index(index),
+            receiver,
+            0,
+            false,
+            false,
+        )
     }
 
     /// Write a computed (`AT`-key) property. `define` distinguishes
@@ -49953,6 +50094,38 @@ impl Interp {
                 )
             }
         };
+        let key = self.property_key_slot(id)?;
+        self.proxy_get_trapped(
+            code,
+            target,
+            handler,
+            trap,
+            key,
+            TrapKeyId::Id(id),
+            receiver,
+            proxy_trap_metering,
+            meter_forwarded_target,
+            meter_terminal_wrapper,
+        )
+    }
+
+    /// The `get` trap call of `[[Get]]` (ECMA-262 10.5.8 steps 7-10) and its
+    /// non-configurable-target invariant checks, shared by the id-keyed read
+    /// and by [`Self::uninterned_index_proxy_get`], whose key has no id.
+    #[allow(clippy::too_many_arguments)]
+    fn proxy_get_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        key: Slot,
+        key_id: TrapKeyId,
+        receiver: Slot,
+        proxy_trap_metering: u64,
+        meter_forwarded_target: bool,
+        meter_terminal_wrapper: bool,
+    ) -> Result<Slot, Halt> {
         if meter_forwarded_target {
             self.meter.tick_raw(
                 if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING {
@@ -49965,19 +50138,37 @@ impl Interp {
         self.meter.tick_raw(proxy_trap_metering);
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let key = self.property_key_slot(id)?;
         let saved_context = self.array_iterator_proxy_get_context;
-        if proxy_trap_metering != 0 && self.proxies.contains_key(&target) {
-            self.array_iterator_proxy_get_context = Some(ArrayIteratorProxyGetContext {
-                target,
-                id,
-                trap_metering: proxy_trap_metering,
-                meter_terminal_wrapper,
-            });
+        if let TrapKeyId::Id(id) = key_id {
+            // The Array Iterator metering context is installed only by the
+            // id-keyed read; the uninterned-index arm always meters zero.
+            if proxy_trap_metering != 0 && self.proxies.contains_key(&target) {
+                self.array_iterator_proxy_get_context = Some(ArrayIteratorProxyGetContext {
+                    target,
+                    id,
+                    trap_metering: proxy_trap_metering,
+                    meter_terminal_wrapper,
+                });
+            }
         }
         let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver]);
         self.array_iterator_proxy_get_context = saved_context;
         let trap_result = trap_result?;
+        let id = match key_id {
+            TrapKeyId::Id(id) => id,
+            // Naming the key back to the target, deferred past the trap (which
+            // may itself have interned it). An ORDINARY target cannot carry an
+            // own property under a name the table never held, so the check is
+            // vacuous there and the key is never minted; only a target whose
+            // own index properties live in a side table — or another proxy —
+            // has to be asked, and only there is the key built, unmetered
+            // (XS reaches the same property without minting one).
+            TrapKeyId::Index(index) => match self.index_read_key_id(index) {
+                Some(id) => id,
+                None if self.is_ordinary_object(target) => return Ok(trap_result),
+                None => self.intern_key_unmetered(&index.to_string()),
+            },
+        };
         if let Some(d) = self.mop_get_own_property(code, target, id)? {
             if d.configurable == Some(false) {
                 if d.is_data()
