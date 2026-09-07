@@ -13,16 +13,21 @@
 //! over a self-containing array), `JSON.parse` and `JSON.stringify` over
 //! nested data, the host-boundary renderer over a nested or cyclic completion
 //! or thrown value, `Array.prototype.flat`, an ordinary prototype chain read
-//! or written through the MOP, and the async-generator request drain. Four
-//! lines of ordinary JavaScript killed the worker at a depth that depended on
-//! the host stack size and the build profile.
+//! or written through the MOP, the async-generator request drain, and the
+//! bound-function / `call` / `apply` redispatch chain. Four lines of ordinary
+//! JavaScript killed the worker at a depth that depended on the host stack
+//! size and the build profile.
 //!
 //! One test per family. Each runs on a thread of exactly
 //! [`NATIVE_STACK_BYTES`], the size the budget is calibrated for per build
 //! profile: the family halting cleanly there is the contract; a regression to
 //! a native overflow takes the whole test binary down, which is the point.
 //! The within-budget twin of each family pins that the ceiling is above what
-//! real programs do, so the bound is a bound and not a new refusal.
+//! real programs do, so the bound is a bound and not a new refusal. Two
+//! families are bounded without a refusal at all — a walk that loops (the
+//! redispatch chain, the exotic prototype chains) completes at any length,
+//! and the throw-site render, a diagnostic, falls back to a stub rather than
+//! halt a crank a native driver may still catch.
 
 use ironhorse_vm::{Halt, Interp, RunOutcome, NATIVE_DEPTH_LIMIT, NATIVE_STACK_BYTES};
 
@@ -42,6 +47,27 @@ fn on_contract_stack(source: String) -> RunOutcome {
             let mut machine = Interp::new();
             machine.link_intrinsics(&names);
             machine.run(&bytecode)
+        })
+        .expect("spawn the contract-stack thread")
+        .join()
+        .expect("the engine must halt, never panic or abort")
+}
+
+/// As [`on_contract_stack`], also reading the top-level binding `global`
+/// after the run — the observation a promise reaction records.
+fn on_contract_stack_with_global(
+    source: String,
+    global: &'static str,
+) -> (RunOutcome, Option<String>) {
+    std::thread::Builder::new()
+        .stack_size(NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let (bytecode, names) = compile(&source);
+            let mut machine = Interp::new();
+            machine.link_intrinsics(&names);
+            let out = machine.run(&bytecode);
+            let observed = machine.global_string(global);
+            (out, observed)
         })
         .expect("spawn the contract-stack thread")
         .join()
@@ -87,6 +113,87 @@ fn a_proxy_prototype_cycle_halts_instead_of_overflowing_the_host_stack() {
         "var t = {}; var p = new Proxy(t, {}); Object.setPrototypeOf(t, p); t.zzz".into(),
     );
     assert_stack_overflow(&out, "a proxy prototype cycle");
+}
+
+#[test]
+fn a_proxy_prototype_cycle_bounds_the_iterative_chain_walks() {
+    // `instanceof` and `isPrototypeOf` step through `[[GetPrototypeOf]]` in
+    // a loop rather than recursing, so the cycle used to spin forever — a
+    // stuck worker rather than a crashed one. Each Proxy step now counts
+    // against the same budget the recursive shape would have consumed.
+    let cycle = "var t = {}; var p = new Proxy(t, {}); Object.setPrototypeOf(t, p); ";
+    for tail in ["t instanceof Object", "Object.prototype.isPrototypeOf(t)"] {
+        assert_stack_overflow(
+            &on_contract_stack(format!("{cycle}{tail}")),
+            &format!("a proxy prototype cycle under {tail}"),
+        );
+    }
+    // A finite Proxy chain in the prototype walk still answers.
+    assert_completes(
+        &on_contract_stack(
+            "function F() {} var o = new F(); var p = o; \
+             for (var i = 0; i < 64; i++) p = new Proxy(p, {}); \
+             [p instanceof F, F.prototype.isPrototypeOf(p)].join()"
+                .into(),
+        ),
+        "true,true",
+        "a 64-layer proxy chain under instanceof and isPrototypeOf",
+    );
+}
+
+#[test]
+fn exotic_prototype_chains_are_walked_in_place() {
+    // Arrays, functions, wrappers and TypedArrays as prototypes carry an
+    // exotic own surface, which `[[Get]]` consults per level in place rather
+    // than by recursing into the parent's `mop_get` — `class extends` chains
+    // are function-prototype chains, so a static lookup walks one.
+    let chains = [
+        (
+            "arrays",
+            "var o = []; for (var i = 0; i < 20000; i++) { var a = []; Object.setPrototypeOf(a, o); o = a; } ",
+        ),
+        (
+            "functions",
+            "var o = function () {}; for (var i = 0; i < 20000; i++) { var f = function () {}; Object.setPrototypeOf(f, o); o = f; } ",
+        ),
+        (
+            "Number wrappers",
+            "var o = new Number(1); for (var i = 0; i < 20000; i++) { var w = new Number(2); Object.setPrototypeOf(w, o); o = w; } ",
+        ),
+        (
+            "String wrappers",
+            "var o = new String('ab'); for (var i = 0; i < 20000; i++) { var w = new String('cd'); Object.setPrototypeOf(w, o); o = w; } ",
+        ),
+        (
+            "TypedArrays",
+            "var o = new Int8Array(1); for (var i = 0; i < 20000; i++) { var w = new Int8Array(1); Object.setPrototypeOf(w, o); o = w; } ",
+        ),
+    ];
+    for (name, chain) in chains {
+        assert_completes(
+            &on_contract_stack(format!("{chain} o.zzz === undefined")),
+            "true",
+            &format!("a 20,000-deep chain of {name}: a missing property"),
+        );
+        assert_completes(
+            &on_contract_stack(format!("{chain} o.zzz = 1; o.zzz")),
+            "1",
+            &format!("a 20,000-deep chain of {name}: a missing property set"),
+        );
+    }
+    // The exotic own surface is still honored at every level.
+    assert_completes(
+        &on_contract_stack(
+            "var o = function named() {}; \
+             for (var i = 0; i < 2000; i++) { var f = function () {}; Object.setPrototypeOf(f, o); o = f; } \
+             var s = new String('xy'); for (var i = 0; i < 2000; i++) { var w = {}; Object.setPrototypeOf(w, s); s = w; } \
+             var t = new Int8Array([7]); for (var i = 0; i < 2000; i++) { var u = {}; Object.setPrototypeOf(u, t); t = u; } \
+             [o.name, s[1], s.length, t[0]].join()"
+                .into(),
+        ),
+        "f,y,2,7",
+        "exotic own properties through long chains",
+    );
 }
 
 #[test]
@@ -182,13 +289,97 @@ fn a_self_containing_completion_value_is_refused_at_the_render_boundary() {
 }
 
 #[test]
-fn a_thrown_self_containing_array_is_refused_at_the_render_boundary() {
-    // `render_uncaught` first tries the guest `toString` (bounded as a
-    // built-in re-entry) and then the static renderer (bounded by depth).
-    assert_stack_overflow(
-        &on_contract_stack("var a = []; a[0] = a; throw a".into()),
-        "rendering a thrown self-containing array",
+fn a_thrown_value_the_renderer_refuses_is_reported_with_the_stub_text() {
+    // The throw-site render is a diagnostic. `render_uncaught` tries the
+    // guest `toString` (bounded as a built-in re-entry), then the static
+    // renderer (bounded by depth), and when both refuse a self-containing
+    // array it reports the throw with the reference stub. It must never halt
+    // the crank: the same render runs before a native driver catches the
+    // `Halt::Throw`, as the driver-caught forms below pin.
+    let out = on_contract_stack("var a = []; a[0] = a; throw a".into());
+    assert!(
+        matches!(&out.halt, Halt::Throw { rendered, .. } if rendered == "[object Object]"),
+        "a thrown self-containing array is an ordinary throw with the stub text; halt: {:?}",
+        out.halt
     );
+    assert!(!out.completed, "an uncaught throw never completes");
+    // The same refusal one guest frame higher, inside the thrown value's own
+    // `toString`, is the same ordinary throw.
+    let out = on_contract_stack(
+        "var a = []; a[0] = a; throw { toString: function() { return a.join(); } }".into(),
+    );
+    assert!(
+        matches!(&out.halt, Halt::Throw { rendered, .. } if rendered == "[object Object]"),
+        "a thrown object whose toString runs past the budget; halt: {:?}",
+        out.halt
+    );
+    // Driver-caught: an async body's throw becomes its promise's rejection,
+    // which the guest handles.
+    let (out, observed) = on_contract_stack_with_global(
+        "var a = []; a[0] = a; var out = 'pending'; \
+         async function f() { throw a; } \
+         f().catch(function(e) { out = e === a ? 'caught' : 'other'; }); 1"
+            .into(),
+        "out",
+    );
+    assert_completes(
+        &out,
+        "1",
+        "an async function throwing a self-containing array",
+    );
+    assert_eq!(
+        observed.as_deref(),
+        Some("caught"),
+        "the rejection reason is the value"
+    );
+    // A promise reaction's throw becomes the derived promise's rejection.
+    let (out, observed) = on_contract_stack_with_global(
+        "var a = []; a[0] = a; var out = 'pending'; \
+         Promise.resolve(1).then(function() { throw a; }) \
+             .catch(function(e) { out = e === a ? 'caught' : 'other'; }); 1"
+            .into(),
+        "out",
+    );
+    assert_completes(&out, "1", "a reaction throwing a self-containing array");
+    assert_eq!(
+        observed.as_deref(),
+        Some("caught"),
+        "the rejection reason is the value"
+    );
+    // A callback's throw unwinds to the guest handler in the outer frame
+    // before it escapes anything, so nothing is rendered at all.
+    let out = on_contract_stack(
+        "var a = []; a[0] = a; var r = 'no'; \
+         try { [1].forEach(function() { throw a; }); } \
+         catch (e) { r = e === a ? 'caught' : 'other'; } r"
+            .into(),
+    );
+    assert_completes(
+        &out,
+        "caught",
+        "a callback throwing a self-containing array",
+    );
+}
+
+#[test]
+fn bound_call_and_apply_trampolines_are_folded_in_place() {
+    // `c = c.call.bind(c)` alternates a bound wrapper (folded to its target,
+    // `Function.prototype.call`, with the previous link as receiver) and the
+    // `call` trampoline (redispatching that receiver): two redispatches per
+    // link that enter no charged frame, so `invoke_value` loops rather than
+    // recurses. 10,000 links overflowed a 32 MiB thread; XS completes them.
+    let out = on_contract_stack(
+        "function f() { return 7; } var c = f; \
+         for (var i = 0; i < 10000; i++) c = c.call.bind(c); c()"
+            .into(),
+    );
+    assert_completes(&out, "7", "a 10,000-link call.bind chain");
+    let out = on_contract_stack(
+        "function f() { return 8; } var c = f; \
+         for (var i = 0; i < 10000; i++) c = c.apply.bind(c); c()"
+            .into(),
+    );
+    assert_completes(&out, "8", "a 10,000-link apply.bind chain");
 }
 
 #[test]
@@ -213,6 +404,29 @@ fn json_parse_nesting_is_bounded() {
         &on_contract_stack("JSON.parse('['.repeat(256) + ']'.repeat(256)); 1".into()),
         "1",
         "JSON.parse of 256 nested arrays",
+    );
+}
+
+#[test]
+fn a_json_reviver_that_deepens_its_holder_is_bounded() {
+    // `InternalizeJSONProperty` reads each property at visit time, so a
+    // reviver called for one element can install an arbitrarily deep value
+    // as the next one and the walk recurses into it; that walk is one light
+    // frame per level of the same budget (it used to carry a private cap).
+    let deepen = |depth: usize| {
+        format!(
+            "{} JSON.parse('[1,2]', function (k, v) {{ if (k === '0') this[1] = a; return v; }}); 1",
+            nested_arrays(depth)
+        )
+    };
+    assert_stack_overflow(
+        &on_contract_stack(deepen(10_000)),
+        "a reviver installing a 10,000-deep sibling",
+    );
+    assert_completes(
+        &on_contract_stack(deepen(200)),
+        "1",
+        "a reviver installing a 200-deep sibling",
     );
 }
 
