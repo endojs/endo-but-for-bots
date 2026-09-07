@@ -1808,6 +1808,7 @@ __metadata:
     "@endo/sandbox": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
+    typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
 
