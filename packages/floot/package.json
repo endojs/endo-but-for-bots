@@ -17,6 +17,7 @@
   "type": "module",
   "exports": {
     ".": "./agent.js",
+    "./src/container-mounts.js": "./src/container-mounts.js",
     "./src/stream.js": "./src/stream.js",
     "./providers/index.js": "./providers/index.js",
     "./package.json": "./package.json",
@@ -47,6 +48,7 @@
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",
+    "@endo/claude-sandbox": "workspace:^",
     "@endo/cli": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@endo/workflow": "workspace:^",
