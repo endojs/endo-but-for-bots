@@ -390,6 +390,27 @@ test('retirement tombstones exports, breaks pending listens, and frees the key',
   );
 });
 
+test('retirement breaks a forwarded call before its target can reply', async t => {
+  const hub = makeOcapnHub({ codec: syrupCodec });
+  const workerId = 'a'.repeat(32);
+  const attached = await attachWorker(hub, workerId, 'callee');
+  const caller = await attachClient(hub, 'c'.repeat(32), 'caller');
+  t.teardown(() => attached.worker.shutdown());
+  t.teardown(() => caller.client.shutdown());
+  hub.publish('worker', { session: workerId, position: 0n });
+  const bootstrap = caller.session.getBootstrap();
+  const shell = await E(E(bootstrap).fetch(bytesOf('worker'))).fetch(
+    SHELL_SWISSNUM,
+  );
+  const counter = await E(shell).evaluate(COUNTER_SOURCE);
+  attached.detach();
+  const pending = E(counter).incr();
+  // An ordered round trip to the hub proves the call entered its queue.
+  await E(bootstrap).fetch(bytesOf('worker'));
+  hub.retireSession(workerId);
+  await t.throwsAsync(() => pending, { message: /retired/ });
+});
+
 test('frames toward a detached durable worker queue across a hub restart', async t => {
   /** @type {any} */
   let persisted;

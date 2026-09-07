@@ -706,6 +706,40 @@ jobs:
       - name: Check SQLite heap-store formatting
         run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
 
+  test-thixotrope-ironhorse:
+    name: test-thixotrope-ironhorse
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: corepack enable
+      - name: Use Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+      - name: Cache Cargo and release worker
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-thixotrope-ironhorse-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-thixotrope-ironhorse-
+      - name: Build real SQLite worker
+        run: cargo build --locked --release -p thixotrope-ironhorse-worker
+      - name: Bundle SES and OCapN peer
+        run: corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
+      - name: Test two demos and twelve adversarial persistence scenarios
+        run: corepack yarn workspace @endo/thixotrope test:ironhorse
+
   # Oracle-free suites share the same source/build-input change gate.
   test-ironhorse:
     name: ${{ matrix.check }}

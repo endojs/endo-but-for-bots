@@ -17,3 +17,6 @@ test262
 *.json
 !typedoc.json
 *.md
+
+/packages/thixotrope/dist-ironhorse/
+/packages/thixotrope/dist-xs/

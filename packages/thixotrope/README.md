@@ -3,7 +3,8 @@
 A prototype distributed ocap machine with purely orthogonal persistence.
 
 A thixotrope daemon is a simpler cousin of the Endo daemon: it spins up
-workers whose guest state is preserved by XS heap snapshots rather
+workers whose guest state is preserved by XS heap snapshots or the
+Ironhorse SQLite heap store rather
 than by explicit formula-based persistence.
 Guests never observe their own suspension, restoration, or the
 daemon's restarts — persistence is orthogonal to the guest programming
@@ -36,6 +37,117 @@ embedder's admin route to an existing worker.
 evaluation implies a fresh worker, and the result is the only handle
 returned (the worker persists like any other and shows up in
 `listWorkerIds()`).
+
+## Ironhorse demos and CI tests
+
+Each demo runs two guest vats in separate Ironhorse processes, connected only
+through the daemon's non-reifying OCapN comms hub.
+The Node endpoint wires their initial capabilities and invokes the second vat.
+The examples use ordinary `const` and `let` variables.
+A Map could provide a useful user inventory of named capabilities, but neither
+example needs an inventory or gives one a special GC role.
+
+**Counter:** the first vat owns a counter closure; the second simply forwards
+`incr()` and `read()` using `E(counter)`.
+There is no application-level promise-listener machinery in this example.
+The count is a `bigint` because it models an unbounded natural number.
+
+**Promise listener:** the producer creates a pending promise and retains its
+resolver; the listener vat registers a `.then()` callback.
+After restart, the producer resolves the promise and the persisted listener runs.
+This example contains no counter.
+
+From the repository root, after `corepack yarn install --immutable`:
+
+```sh
+cargo build --locked --release -p thixotrope-ironhorse-worker
+yarn workspace @endo/thixotrope build:ironhorse-bundles
+
+# Demo 1: cross-vat counter (default state: packages/thixotrope/tmp/ironhorse-counter)
+yarn workspace @endo/thixotrope demo:ironhorse:counter init
+yarn workspace @endo/thixotrope demo:ironhorse:counter incr
+yarn workspace @endo/thixotrope demo:ironhorse:counter check
+
+# Demo 2: persisted listener (default state: packages/thixotrope/tmp/ironhorse-promise)
+yarn workspace @endo/thixotrope demo:ironhorse:promise init
+yarn workspace @endo/thixotrope demo:ironhorse:promise listen
+yarn workspace @endo/thixotrope demo:ironhorse:promise resolve ./tmp/ironhorse-promise hello
+yarn workspace @endo/thixotrope demo:ironhorse:promise check
+
+# The same real-worker scenarios exercised by CI
+yarn workspace @endo/thixotrope test:ironhorse
+```
+
+Both demos accept a state-directory argument after the command and support
+`status`; `demo:ironhorse` is an alias for the counter demo.
+Each invocation starts the daemon, calls the published guest, then parks the vats
+and exits.
+Existing heaps keep their original guest code; use fresh directories for these
+split examples.
+The metadata identifies which demo owns a directory and rejects a mismatch.
+
+CI's `test-thixotrope-ironhorse` job builds the release worker and SES/OCapN
+bundles, then runs fourteen serial AVA scenarios:
+
+1. A basic cross-vat counter call.
+2. A persisted promise listener that settles after restart.
+3. Transparent counter wake after explicit sleep.
+4. Acknowledged mutations recovered after crash without duplication.
+5. A pending reply recovered after failure before delivery.
+6. A pending reply recovered after heap commit but before outbound release.
+7. Ordered concurrent counter calls.
+8. A guest-acquired capability retained across restart.
+9. A persisted rejection listener.
+10. Two listeners retaining their registration order.
+11. Async locals and `finally` across two separate await checkpoints.
+12. SES confinement after restore.
+13. Metered failure quarantine with a healthy sibling.
+14. Corrupt-image refusal and incarnation cleanup.
+
+The suite is selected by `ava.ironhorse.config.mjs` and lives in
+`test/ironhorse/scenarios.js`.
+It requires the real binary and bundles: missing artifacts fail the lane instead
+of skipping tests.
+Each scenario owns an independent directory and tears down its daemon and workers.
+Fault injection targets the counter delivery before execution and after its heap commit.
+The daemon crash helper drains queued transport work before stopping workers; these
+scenarios do not simulate arbitrary daemon SIGKILL or machine power loss.
+`THIXOTROPE_IRONHORSE_WORKER` can select a different binary.
+
+`makeIronhorseEngine({ workerBinary, bootPaths, storePath, crankBudget,
+requestTimeoutMs })` implements the existing WorkerEngine interface. The
+bootstrap uses the real SES shim and compartments. Native `async` functions,
+ordinary promises, closures, and retained capabilities persist in SQLite without guest-side
+serialization. Suspended async activations use the new `ASYN` snapshot atom
+and store schema 24; their saved frames and promise references are validated
+on restoration.
+
+Every completed crank commits an incremental SQLite checkpoint before a reply
+leaves the process. Snapshot references identify immutable, content-addressed
+SQLite files. A running incarnation uses a private writable copy. Sleep folds
+the WAL, saves and syncs an image, then pairs its reference with the transport's
+journal cut and outbound sequence base. Recovery copies **that exact image**
+and replays the journal suffix; it never adopts an abandoned incarnation's
+newer database. Hub watermarks suppress already-accepted output. This MVP pays
+for a whole database copy on sleep/wake, while ordinary cranks write dirty
+state incrementally. Daemon journal/metadata writes are also synced.
+
+The guest crank budget defaults to 10 million computrons; trusted peer
+initialization has a separate one-billion-computron allowance, and the process
+watchdog defaults to 60 seconds. A deterministic VM halt, including budget
+exhaustion, preserves the last image and journal for inspection, records a
+failure in worker metadata, and retires the logical comms session so pending
+calls reject. Other vats continue to run. Failed vats do not replay the same
+poison input after a restart; there is no repair/upgrade command yet.
+
+This remains an experimental, local, single-supervisor MVP. Do not run two
+commands against the same state directory concurrently. Use a matching engine
+build and bootstrap for its stored images; upgrade migration of live guest code
+is outside this demo. Async generators and `Array.fromAsync` suspensions remain
+refused by the engine's persistence gate. The bootstrap omits the unfinished
+optional Iterator-helper profile. The loopback netlayer is a testing transport;
+a fixed public listener, service installation, and remote authentication UX are
+not part of this CLI.
 
 ## Example
 

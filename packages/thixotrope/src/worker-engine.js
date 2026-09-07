@@ -36,4 +36,5 @@
  *   guest heap is recoverable only from a snapshot plus the journal
  */
 
-export {};
+/** A deterministic guest halt. Retrying the same journal would halt again. */
+export class WorkerHaltError extends Error {}

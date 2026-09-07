@@ -333,6 +333,7 @@ export default defineConfig(
       'packages/daemon/scripts/*.mjs',
       'packages/exo-git/scripts/*.mjs',
       'packages/thixotrope/dist-xs/',
+      'packages/thixotrope/dist-ironhorse/',
       'packages/thixotrope/scripts/*.mjs',
       'packages/familiar/preload.mjs',
       'packages/git/src/git-askpass-helper.cjs',

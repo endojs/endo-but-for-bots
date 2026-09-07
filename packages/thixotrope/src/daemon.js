@@ -164,6 +164,7 @@ export const makeThixotropeDaemon = async ({
         engine,
         idleSleepMs,
         debugLabel: workerStore.getMeta().debugLabel,
+        onFatal: () => hub.retireSession(workerId),
         onFrame: (
           /** @type {Uint8Array} */ bytes,
           /** @type {number} */ sequenceNumber,
@@ -176,6 +177,8 @@ export const makeThixotropeDaemon = async ({
         // queue, never break.
         durable: true,
       });
+      if (workerStore.getMeta().failure !== undefined)
+        hub.retireSession(workerId);
       entry = { transport, sink: holder.sink };
       workers.set(workerId, entry);
     }
@@ -880,6 +883,13 @@ export const makeThixotropeDaemon = async ({
       }
       for (const entry of workers.values()) {
         entry.transport.end();
+      }
+      // A later vat can send to one already parked above. Stop intake,
+      // then terminate any such reopened incarnation. Its journal retains
+      // the suffix after the sleep image for the next daemon to replay.
+      for (const entry of workers.values()) {
+        // eslint-disable-next-line no-await-in-loop
+        await entry.transport.crash();
       }
       endpointClient.shutdown();
       netlayerRef.netlayer.shutdown();

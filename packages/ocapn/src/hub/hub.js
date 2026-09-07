@@ -1560,6 +1560,24 @@ export const makeOcapnHub = ({
                 destination,
               );
             }
+            // A direct call's resolver is an outstanding obligation just
+            // like op:listen. If the target dies before replying, break it.
+            if (
+              message.resolveMeDesc !== false &&
+              message.resolveMeDesc !== undefined
+            ) {
+              const resolverInfo = infoOf(message.resolveMeDesc);
+              if (!row.listeners.includes(resolverInfo.refId)) {
+                row.listeners.push(resolverInfo.refId);
+                noteUndo(() =>
+                  row.listeners.splice(
+                    row.listeners.indexOf(resolverInfo.refId),
+                    1,
+                  ),
+                );
+                dirty = true;
+              }
+            }
             const { writeOcapnMessage } = provideCodecKit(destination);
             return writeOcapnMessage({
               ...message,
