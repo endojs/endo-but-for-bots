@@ -1,6 +1,6 @@
 //! Cryptographic host functions.
 //!
-//! Stateless operations — no persistent state needed.
+//! Stateless operations and worker-local incremental SHA-256 hashers.
 //!
 //! JS calling convention:
 //!   sha256(data) -> string (hex)
@@ -11,31 +11,21 @@
 //!   ed25519Sign(privateKeyHex, messageHex) -> string (signature hex)
 
 use crate::ffi::*;
-use crate::worker_io::{arg_str, set_result_string};
+use crate::worker_io::{abort_if_ffi_panicked, arg_str, set_result_string};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
 
-/// Global handle map for incremental SHA256 hashers.
-///
-/// **Process-wide**, shared by every in-process worker. Now that the FFI panic
-/// guard lets the process survive a worker death (`worker_io::guard_ffi`), a
-/// dying worker's in-progress hasher state here is never swept and a poison
-/// recovered via `into_inner()` can expose a torn mutation to a sibling.
-/// Per-worker scoping / sweep is tracked follow-on work: see
-/// `designs/ironhorse-panic.md` § Scope, "Shared power-table caveat".
+// Handle tables belong to the dedicated worker thread. A caught callback panic
+// cannot expose a torn mutation to a sibling worker, and thread exit drops all
+// remaining native resources. Global IDs prevent a sibling's handle from aliasing
+// an entry in this worker's table.
 static NEXT_HASHER_HANDLE: AtomicU32 = AtomicU32::new(1);
-static HASHER_MAP: Mutex<Option<HashMap<u32, Sha256>>> = Mutex::new(None);
-
-fn get_hasher_map() -> std::sync::MutexGuard<'static, Option<HashMap<u32, Sha256>>> {
-    let mut guard = HASHER_MAP.lock().unwrap_or_else(|e| e.into_inner());
-    if guard.is_none() {
-        *guard = Some(HashMap::new());
-    }
-    guard
+thread_local! {
+    static HASHER_MAP: RefCell<HashMap<u32, Sha256>> = RefCell::new(HashMap::new());
 }
 
 /// `sha256(data) -> string`
@@ -161,11 +151,13 @@ pub unsafe extern "C" fn host_ed25519_sign(the: *mut XsMachine) {
 /// Creates a new incremental SHA-256 hasher and returns its handle.
 pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let handle = NEXT_HASHER_HANDLE.fetch_add(1, Ordering::SeqCst);
-        let mut map = get_hasher_map();
-        map.as_mut().unwrap().insert(handle, Sha256::new());
-        fxInteger(the, &mut (*the).scratch, handle as i32);
-        *(*the).frame.add(1) = (*the).scratch;
+        HASHER_MAP.with(|hasher_map| {
+            let handle = NEXT_HASHER_HANDLE.fetch_add(1, Ordering::SeqCst);
+            let mut map = hasher_map.borrow_mut();
+            map.insert(handle, Sha256::new());
+            fxInteger(the, &mut (*the).scratch, handle as i32);
+            *(*the).frame.add(1) = (*the).scratch;
+        });
     });
 }
 
@@ -174,14 +166,17 @@ pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
 /// Feeds data into an incremental SHA-256 hasher.
 pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let handle_slot = (*the).frame.sub(1);
-        let handle = fxToInteger(the, handle_slot) as u32;
-        let data = arg_str(the, 1);
+        HASHER_MAP.with(|hasher_map| {
+            let handle_slot = (*the).frame.sub(1);
+            let handle = fxToInteger(the, handle_slot) as u32;
+            abort_if_ffi_panicked();
+            let data = arg_str(the, 1);
 
-        let mut map = get_hasher_map();
-        if let Some(hasher) = map.as_mut().unwrap().get_mut(&handle) {
-            hasher.update(data.as_bytes());
-        }
+            let mut map = hasher_map.borrow_mut();
+            if let Some(hasher) = map.get_mut(&handle) {
+                hasher.update(data.as_bytes());
+            }
+        });
     });
 }
 
@@ -191,15 +186,18 @@ pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
 /// This bypasses the slow TextDecoder path used by `sha256Update`.
 pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let handle_slot = (*the).frame.sub(1);
-        let handle = fxToInteger(the, handle_slot) as u32;
-        let data_slot = (*the).frame.sub(2);
-        if let Some(buf) = crate::worker_io::read_typed_array_bytes(the, data_slot) {
-            let mut map = get_hasher_map();
-            if let Some(hasher) = map.as_mut().unwrap().get_mut(&handle) {
-                hasher.update(&buf);
+        HASHER_MAP.with(|hasher_map| {
+            let handle_slot = (*the).frame.sub(1);
+            let handle = fxToInteger(the, handle_slot) as u32;
+            abort_if_ffi_panicked();
+            let data_slot = (*the).frame.sub(2);
+            if let Some(buf) = crate::worker_io::read_typed_array_bytes(the, data_slot) {
+                let mut map = hasher_map.borrow_mut();
+                if let Some(hasher) = map.get_mut(&handle) {
+                    hasher.update(&buf);
+                }
             }
-        }
+        });
     });
 }
 
@@ -209,20 +207,28 @@ pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
 /// The handle is consumed and cannot be reused.
 pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let handle_slot = (*the).frame.sub(1);
-        let handle = fxToInteger(the, handle_slot) as u32;
+        HASHER_MAP.with(|hasher_map| {
+            let handle_slot = (*the).frame.sub(1);
+            let handle = fxToInteger(the, handle_slot) as u32;
+            abort_if_ffi_panicked();
 
-        let mut map = get_hasher_map();
-        match map.as_mut().unwrap().remove(&handle) {
-            Some(hasher) => {
-                let hash = hasher.finalize();
-                set_result_string(the, &hex::encode(hash));
+            let mut map = hasher_map.borrow_mut();
+            match map.remove(&handle) {
+                Some(hasher) => {
+                    let hash = hasher.finalize();
+                    set_result_string(the, &hex::encode(hash));
+                }
+                None => {
+                    set_result_string(the, "Error: invalid hasher handle");
+                }
             }
-            None => {
-                set_result_string(the, "Error: invalid hasher handle");
-            }
-        }
+        });
     });
+}
+
+/// Native handles cannot be serialized with the XS heap.
+pub(crate) fn has_open_handles() -> bool {
+    HASHER_MAP.with(|map| !map.borrow().is_empty())
 }
 
 /// All host callbacks in registration order for snapshot tables.
@@ -252,4 +258,40 @@ pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("sha256UpdateBytes", host_sha256_update_bytes, 2);
     machine.define_function("sha256Finish", host_sha256_finish, 1);
     machine.define_function("sha256Bytes", host_sha256_bytes, 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_panic_does_not_expose_hasher_state_to_siblings() {
+        std::thread::spawn(|| {
+            crate::worker_io::guard_ffi(|| {
+                HASHER_MAP.with(|hashers| {
+                    let mut hashers = hashers.borrow_mut();
+                    hashers.insert(42, Sha256::new());
+                    std::thread::spawn(|| {
+                        HASHER_MAP.with(|hashers| {
+                            assert!(!hashers.borrow().contains_key(&42));
+                            let mut hashers = hashers.borrow_mut();
+                            hashers.insert(42, Sha256::new());
+                            hashers.get_mut(&42).unwrap().update(b"sibling");
+                            assert_eq!(
+                                hashers.remove(&42).unwrap().finalize(),
+                                Sha256::digest(b"sibling")
+                            );
+                        });
+                    })
+                    .join()
+                    .unwrap();
+                    panic!("hasher mutation panic");
+                });
+            });
+            assert!(crate::worker_io::ffi_panicked());
+        })
+        .join()
+        .unwrap();
+        HASHER_MAP.with(|hashers| assert!(!hashers.borrow().contains_key(&42)));
+    }
 }

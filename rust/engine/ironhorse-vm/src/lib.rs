@@ -250,6 +250,7 @@ mod tests {
         // Settled core:
         assert!(Halt::StackOverflow(3).is_panic());
         assert!(Halt::MeterAbort.is_panic());
+        assert!(Halt::EngineInvariant("test invariant").is_panic());
         assert!(Halt::Panic(PanicKind::EngineFault {
             message: "arena kind check".to_string(),
             location: None,
@@ -260,7 +261,7 @@ mod tests {
         assert!(Halt::Decode("truncated".to_string()).is_panic());
         assert!(Halt::StepLimit(9).is_panic());
         // Not panics: an ordinary (uncaught) throw and normal completion.
-        assert!(!Halt::Throw("catchable".to_string()).is_panic());
+        assert!(!Halt::synthetic_throw("catchable".to_string()).is_panic());
         assert!(!Halt::Return.is_panic());
     }
 }

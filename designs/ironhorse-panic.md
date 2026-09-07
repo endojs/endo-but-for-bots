@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
-| **Updated** | 2026-09-05 |
+| **Updated** | 2026-09-07 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -189,31 +189,26 @@ body, and the machine-thread run entry, converting the process abort into a
 lands, the "not a compromised daemon" guarantee holds only for the prospective
 Ironhorse `Machine` seam, not for the C-XS worker on today's delivery path.
 
-**Shared power-table caveat (a gap the guard opens, not closes).** Converting the
-FFI abort into a survivable worker-death has a second-order cost that the guard
-does **not** address and that must not be mistaken as solved. Several `host_*`
-callbacks read/write **process-wide** `static Mutex<..>` handle tables shared by
-every in-process worker — `FILE_MAP`/`DIR_MAP` (`rust/endo/xsnap/src/powers/fs.rs`),
-`DB_MAP`/`STMT_MAP` (`.../powers/sqlite.rs`), and `HASHER_MAP`
-(`.../powers/crypto.rs`) — each keyed off a global monotonic counter with no
-worker-identity tag. Under the old "abort on panic" behavior a panic while such a
-lock was held reclaimed everything at process exit, so a poisoned or torn table
-was never observed by a live sibling. With the process now surviving, two hazards
-become live: (1) those accessors recover a poisoned lock unconditionally
-(`.lock().unwrap_or_else(|e| e.into_inner())`), so a panic mid-mutation exposes a
-half-completed logical operation to the next worker that takes the lock; and
-(2) the dying worker's still-open native handles (fds, `cap_std::fs::Dir`,
-`rusqlite::Connection`, hasher state) are never released — `Supervisor::unregister`
-sweeps only routing bookkeeping (`inboxes`/`workers`/`parents`/`meters`), never
-these maps — so a daemon meant to absorb many worker panics over a long life
-slowly leaks fds/connections until it starves every co-resident vat. Closing this
-requires either scoping these tables per worker (thread-local, matching the
-poison-marker pattern) or a per-worker sweep of them at the teardown point, tagged
-by worker identity the tables do not carry today. That is **deliberate follow-on
-work**, tracked here so the thread-local poison confinement is not read as
-isolation of shared handle-table state; it is orthogonal to the
-restart-correctness work in § Slot Machine Termination and Retry (which addresses
-handle *reconstruction after a restart*, not native-resource *release on death*).
+**Worker-owned power tables.** Catching a panic must not expose torn shared
+state or leave the dead worker's native handles alive for the daemon's lifetime.
+The filesystem, directory, SQLite connection/statement, and incremental hasher
+tables therefore belong to the dedicated worker thread. Thread exit drops these
+resources. Handle identifiers remain globally allocated, and a lookup resolves
+only against the calling thread's table. This also closes the pre-existing
+cross-worker handle lookup gap: the former process-wide tables did not check
+ownership even in runs without a panic. Reconstruction after restart remains
+separate work in § Slot Machine Termination and Retry. Until those handles can
+be reconstructed, a supervised suspend request with open native handles returns
+`suspend-error` and leaves the worker running. The caller must close its file,
+directory, SQLite, and hasher handles before retrying suspension.
+
+**Limits of the unwind boundary.** `catch_unwind` catches unwinding Rust panics.
+It cannot contain native stack overflow, explicit process abort, allocation
+abort, or a second panic from a destructor during unwinding. Native recursion
+on guest-controlled inputs still needs its own bound; this differs from the
+interpreter's emulated `Halt::StackOverflow` limit. The build rejects
+`panic = "abort"`. No transactional rollback of host effects already performed
+before the fault is provided by this slice.
 
 **Conclusion of the scope step:** Ironhorse's mechanism exists for two of three
 natural cases and needs *naming and generalizing*, not building. Its genuinely
@@ -236,7 +231,7 @@ and adds classification, rather than collapsing them:
    diagnostics the supervisor and debugger need.
 2. **Add a grouping predicate** on `Halt`:
    `fn is_panic(&self) -> bool`, true for `StackOverflow | MeterAbort |
-   Panic(_)` (the settled core of the set) and **provisionally** also for
+   EngineInvariant(_) | Panic(_)` (the settled core of the set) and **provisionally** also for
    `Decode | StepLimit`, whose inclusion is the one element of this predicate left
    open (see Open Questions: they terminate-without-commit like a panic, but their
    provenance is supervisor/harness rather than guest behavior). The `Decode |
@@ -299,8 +294,11 @@ and adds classification, rather than collapsing them:
    decision reads only this three-way value; the `reason` carries the underlying
    `Halt` for reporting. **The `Panicked` arm is defined *by delegation*, not by a
    second enumeration:** `ExecutionOutcome::classify(halt)` computes `Panicked(halt)`
-   exactly when `halt.is_panic()` (item 2) is true, never by re-listing the panic
-   variant shapes at the `Machine` seam. This is a binding implementation
+   whenever `halt.is_panic()` (item 2) is true, never by re-listing the panic
+   variant shapes at the `Machine` seam. The seam also fails closed for
+   `Unsupported` and unexpected control-state halts: these classify as
+   `Panicked` for discard policy even though they are not members of the panic
+   category. Thus the outcome is a strict superset of the predicate. This is a binding implementation
    constraint, so the "one place the set is defined" claim in item 2 survives its
    own architecture: adding a new `Halt`/`PanicKind` variant updates `is_panic()`
    alone, and the classifier follows for free instead of drifting as a
