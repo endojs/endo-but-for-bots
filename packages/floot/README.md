@@ -9,6 +9,10 @@ that make it a hands-free voice assistant.
   (`src/stream.js`).
   The turn belongs to the daemon (`src/session-turn.js`): watching is how a
   client sees it; `cancel()` requests a stop and `whenFinished()` waits for teardown.
+  `speak(ttsServer, options?)` opens a spoken view of the same turn
+  (`src/turn-speech.js`): the daemon feeds the reply text to the TTS caplet and
+  hands back its audio stream, so a spoken reply never depends on the browser
+  relaying text; calling it again restarts speech with other options.
   `getCurrentTurn()` on the session returns `{ input, turn, history }` or `null`, allowing
   a reloaded browser to recover the active turn.
   Its history promise resolves before execution, after earlier queued mail, so recovery

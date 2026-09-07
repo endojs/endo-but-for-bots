@@ -11,6 +11,10 @@
 // reply channel handed straight to the browser reads that as the consumer
 // hanging up.
 //
+// `speak()` is a view too: a TTS branch that opens its own snapshot-first view
+// beside the turn and feeds the assistant text to a TtsServer (turn-speech.js),
+// so a spoken reply never depends on the browser relaying text back.
+//
 // See designs/floot-daemon-owned-turns.md and designs/ui-view-not-driver.md.
 
 import { makeExo } from '@endo/exo';
@@ -19,6 +23,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { M } from '@endo/patterns';
 
 import { makeReplyChannel } from './stream.js';
+import { speakTurn } from './turn-speech.js';
 
 /** @import { BufferedReaderKit } from '@endo/exo-stream' */
 /** @import { ReplyEvent } from './stream.js' */
@@ -63,6 +68,11 @@ import { makeReplyChannel } from './stream.js';
 const FlootTurnInterface = M.interface('FlootTurn', {
   getStatus: M.callWhen().returns(M.record()),
   watch: M.call().returns(M.remotable()),
+  // The TtsServer arrives as a promise for a presence when a browser hands over
+  // the capability it resolved itself; settle it before synthesis starts.
+  speak: M.callWhen(M.await(M.any()))
+    .optional(M.record())
+    .returns(M.remotable()),
   cancel: M.callWhen().returns(M.undefined()),
   whenFinished: M.callWhen().returns(M.undefined()),
 });
@@ -252,6 +262,29 @@ export const makeSessionTurn = ({ run }) => {
     }
   })();
 
+  /**
+   * Open a view of the turn: a snapshot of where it has got to, then the
+   * events that follow. Disposable: closing the returned reader detaches this
+   * viewer. Others keep their streams and the turn keeps running.
+   *
+   * @returns {object} a Far StreamReader of TurnViewEvent
+   */
+  const openView = () => {
+    const view = makeBufferedReader();
+    view.push(harden({ type: 'snapshot', status: snapshotOf(status) }));
+    if (status.done) {
+      // Nothing more is coming: end the stream so a late viewer repaints from
+      // the snapshot instead of parking on a channel that will never speak.
+      view.push(syntheticTerminal());
+      return view.reader;
+    }
+    views.add(view);
+    view.setOnClose(() => {
+      views.delete(view);
+    });
+    return view.reader;
+  };
+
   return makeExo('FlootTurn', FlootTurnInterface, {
     /**
      * The turn's state right now, for a caller that wants to poll rather than
@@ -261,29 +294,28 @@ export const makeSessionTurn = ({ run }) => {
       return snapshotOf(status);
     },
     /**
-     * A view of the turn: a snapshot of where it has got to, then the events
-     * that follow. Opening one costs a round trip, and the snapshot is what
-     * closes the gap — a view that started from the live events alone would
-     * miss everything emitted while `watch()` was in flight. It is also what
-     * lets a reloaded tab reattach to a turn already in progress.
-     *
-     * Disposable: closing the returned reader detaches this viewer. Others keep
-     * their streams and the turn keeps running.
+     * A view of the turn. Opening one costs a round trip, and the snapshot is
+     * what closes the gap — a view that started from the live events alone
+     * would miss everything emitted while `watch()` was in flight. It is also
+     * what lets a reloaded tab reattach to a turn already in progress.
      */
     watch() {
-      const view = makeBufferedReader();
-      view.push(harden({ type: 'snapshot', status: snapshotOf(status) }));
-      if (status.done) {
-        // Nothing more is coming: end the stream so a late viewer repaints from
-        // the snapshot instead of parking on a channel that will never speak.
-        view.push(syntheticTerminal());
-        return view.reader;
-      }
-      views.add(view);
-      view.setOnClose(() => {
-        views.delete(view);
-      });
-      return view.reader;
+      return openView();
+    },
+    /**
+     * Speak the turn: a spoken view of it. Opens a fresh view — so speech
+     * starts from everything the turn has said so far — feeds its assistant
+     * text to `ttsServer`, and resolves with the audio stream `synthesize`
+     * returns. Call it again to restart speech with other options: the caller
+     * drops the earlier audio stream, and the branch feeding it closes with
+     * it. Speech never keeps the turn alive or stops it.
+     *
+     * @param {any} ttsServer a TtsServer capability (voice/tts-server-caplet.js)
+     * @param {Record<string, unknown>} [ttsOptions] passed to `synthesize`
+     * @returns {Promise<object>} the audio reader
+     */
+    async speak(ttsServer, ttsOptions = {}) {
+      return speakTurn({ watch: openView, ttsServer, ttsOptions });
     },
     /**
      * Stop the turn. The only thing that does.
