@@ -762,7 +762,7 @@ export const flootComponent = (
   let submitChain = Promise.resolve();
   /** @type {Promise<void> | null} */
   let turnPromise = null;
-  let opening = 0;
+  let opening = harden({});
   let viewReady = Promise.resolve();
 
   // The text feed driving live spoken replies for the current turn (null when
@@ -978,8 +978,8 @@ export const flootComponent = (
 
   // ── Session actions (controller callbacks) ──────────────────────────────────
   const openActiveHistory = () => {
-    opening += 1;
-    const generation = opening;
+    const generation = harden({});
+    opening = generation;
     // Opening a session starts at the latest message.
     stick = true;
     const session = getActiveSession();
@@ -1050,7 +1050,6 @@ export const flootComponent = (
       // its attachment or submission queue. Late events cannot affect a new view.
       if (detachActiveTurnView) detachActiveTurnView();
       activeSessionId = sessions.length ? sessions[0].id : null;
-      opening += 1;
       turnPromise = null;
     }
     E(factory)
