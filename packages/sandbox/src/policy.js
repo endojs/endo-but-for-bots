@@ -74,6 +74,15 @@ const ATTESTED_MOUNT_OPTIONS = harden(['nodev', 'noexec', 'nosuid']);
 const REQUIRED_MOUNT_OPTIONS = harden(['nodev', 'nosuid']);
 
 /**
+ * The cgroup v2 controllers the attested ceilings are applied through.
+ * Exported because the driver re-asks the same question when it admits
+ * an operation, and the two must agree about which controllers matter:
+ * refusing an operation because `io` was undelegated would refuse it
+ * over a controller no attested ceiling depends on.
+ */
+export const REQUIRED_CGROUP_CONTROLLERS = harden(['memory', 'pids', 'cpu']);
+
+/**
  * Interfaces a `broker-only` network namespace may contain. The broker's
  * in-namespace listener is reachable over loopback; anything else is a
  * routable path the contract does not permit.
@@ -656,12 +665,14 @@ const tmpfsTable = inspect => {
  * binds, and a destination-keyed tmpfs map.
  *
  * @param {any} inspect
+ * @param {Record<string, string>} tmpfs Already-validated tmpfs table,
+ *   passed rather than rebuilt so the two readings of it cannot drift.
  * @param {SlicePolicyMount} mount
  * @returns {{ source: string, options: string[], readOnly: boolean, sizeBytes: bigint | null } | null}
  */
-const findEffectiveMount = (inspect, mount) => {
+const findEffectiveMount = (inspect, tmpfs, mount) => {
   if (mount.kind === 'tmpfs') {
-    const entry = tmpfsTable(inspect)[mount.destination];
+    const entry = tmpfs[mount.destination];
     if (entry !== undefined) {
       const size = entry
         .split(',')
@@ -766,7 +777,11 @@ const attestMounts = (policy, state) => {
 
   return harden(
     policy.mounts.map(mount => {
-      const effective = findEffectiveMount(state.inspect, mount);
+      const effective = findEffectiveMount(
+        state.inspect,
+        effectiveTmpfs,
+        mount,
+      );
       if (effective === null) {
         return unproved(`mount ${mount.role}`, 'not attached');
       }
@@ -1034,7 +1049,7 @@ export const attestSlicePolicy = (policy, state) => {
 
   // A cgroup ceiling the host cannot delegate is a ceiling nothing
   // applies, whatever the runtime echoed back.
-  const missingControllers = ['memory', 'pids', 'cpu'].filter(
+  const missingControllers = [...REQUIRED_CGROUP_CONTROLLERS].filter(
     controller => !hostResources.cgroupControllers.includes(controller),
   );
   if (missingControllers.length > 0) {
@@ -1127,6 +1142,7 @@ export const sliceConfigFingerprint = inspect => {
     'HostConfig.NanoCpus',
     'HostConfig.Ulimits',
     'HostConfig.Tmpfs',
+    'HostConfig.ReadonlyTmpfs',
     'HostConfig.NetworkMode',
     'HostConfig.UsernsMode',
     'HostConfig.PidMode',

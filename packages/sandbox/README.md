@@ -569,6 +569,11 @@ trusting argv, and not the same as proving it again.
 - **`/dev/shm` mount options.** Its ceiling is read back; its
   `nosuid` is not. `no-new-privileges` — which is proved — makes a
   setuid binary written there grant nothing on exec.
+- **The runtime's own `/dev` tmpfs.** An OCI runtime always mounts a
+  small writable tmpfs at `/dev` (typically 64 MiB), reported through
+  neither the mount table nor a size flag, so no policy field can bound
+  it and `writableBytes` does not count it. It is a fixed per-container
+  allowance on top of the aggregate, not a caller-influenced one.
 - **Anything inside the slice.** A pinned runtime's own inner sandbox,
   its per-command policy, and what it does with its state are that
   runtime's guarantees, not this one's; the outer slice bounds what a
