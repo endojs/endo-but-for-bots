@@ -202,14 +202,26 @@ test('process identity is reported inside the slice user namespace', async t => 
   const proc = makeFixtureProc(
     {
       '/proc/77/status':
-        'Name:\tsleep\nUid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nSeccomp:\t2\n',
+        'Name:\tsleep\nUid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nNoNewPrivs:\t1\nSeccomp:\t2\nSeccomp_filters:\t1\nCapEff:\t0000000000000000\n',
       '/proc/77/uid_map': '         0     100000      65536\n',
       '/proc/77/gid_map': '         0     100000      65536\n',
     },
     {},
   );
   const identity = await readProcessStatus(proc, 77);
-  t.deepEqual({ ...identity }, { uid: 999, gid: 999, seccompMode: 2 });
+  t.deepEqual(
+    { ...identity },
+    {
+      uid: 999,
+      gid: 999,
+      seccompMode: 2,
+      noNewPrivs: true,
+      effectiveCapabilities: 0n,
+    },
+  );
+  // `Seccomp_filters:` starts with the same word as `Seccomp:`; the
+  // mode must come from the field that ends at the colon.
+  t.is(identity.seccompMode, 2);
 });
 
 test('an identity outside the slice map is an error, not a guess', async t => {
@@ -238,4 +250,23 @@ test('a kernel that reports no seccomp mode does not claim one', async t => {
   );
   const identity = await readProcessStatus(proc, 77);
   t.is(identity.seccompMode, null);
+  t.is(identity.noNewPrivs, null);
+  t.is(identity.effectiveCapabilities, null);
+});
+
+test('a capability mask the process kept is read as a bit set', async t => {
+  const proc = makeFixtureProc(
+    {
+      '/proc/77/status':
+        'Uid:\t100999\t100999\t100999\t100999\nGid:\t100999\t100999\t100999\t100999\nNoNewPrivs:\t0\nCapEff:\t0000003fffffffff\n',
+      '/proc/77/uid_map': '         0     100000      65536\n',
+      '/proc/77/gid_map': '         0     100000      65536\n',
+    },
+    {},
+  );
+  const identity = await readProcessStatus(proc, 77);
+  t.is(identity.noNewPrivs, false);
+  // Wider than a double can hold exactly, so it is read as a bigint
+  // rather than narrowed to whatever fits.
+  t.is(identity.effectiveCapabilities, 0x3f_ffff_ffffn);
 });

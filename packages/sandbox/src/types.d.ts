@@ -317,11 +317,19 @@ export type ObservedSliceState = {
     routableRoutes: number;
   };
   /**
-   * The anchor's uid/gid inside its own user namespace, and the seccomp
-   * mode the kernel reports for it. `seccompMode` is `null` when the
-   * kernel reports none, which is read as "no filter proved".
+   * The anchor's per-process posture as the kernel reports it: its
+   * uid/gid inside its own user namespace, its seccomp mode, whether it
+   * can regain privileges, and its effective capability mask. A field
+   * this kernel does not report is `null`, which is read as "not
+   * proved" rather than as an answer either way.
    */
-  processIdentity: { uid: number; gid: number; seccompMode: number | null };
+  processIdentity: {
+    uid: number;
+    gid: number;
+    seccompMode: number | null;
+    noNewPrivs: boolean | null;
+    effectiveCapabilities: bigint | null;
+  };
   /** Recorded storage ceiling per declared volume; `null` when none is. */
   volumeQuotas: ReadonlyMap<string, bigint | null>;
   /** Host controls the ceilings depend on. */

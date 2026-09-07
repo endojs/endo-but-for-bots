@@ -129,6 +129,21 @@ const makeInspect = mutate => {
 };
 
 /**
+ * Per-process posture the kernel reports for a compliant anchor.
+ *
+ * @param {Record<string, unknown>} [overrides]
+ */
+const makeIdentity = (overrides = {}) =>
+  harden({
+    uid: 1000,
+    gid: 1000,
+    seccompMode: 2,
+    noNewPrivs: true,
+    effectiveCapabilities: 0n,
+    ...overrides,
+  });
+
+/**
  * Observed kernel state for a slice that actually got isolated.
  *
  * @param {Record<string, unknown>} [overrides]
@@ -148,7 +163,7 @@ const makeState = (overrides = {}) =>
       interfaces: harden(['lo']),
       routableRoutes: 0,
     }),
-    processIdentity: harden({ uid: 1000, gid: 1000, seccompMode: 2 }),
+    processIdentity: makeIdentity(),
     volumeQuotas: new Map([
       ['workspace-s1', 8n * GIB],
       ['codex-state-s1', 4n * GIB],
@@ -455,7 +470,9 @@ const unprovedStates = [
   ],
   [
     'a process running as a different identity',
-    { processIdentity: harden({ uid: 0, gid: 0, seccompMode: 2 }) },
+    {
+      processIdentity: makeIdentity({ uid: 0, gid: 0 }),
+    },
     /uid/,
   ],
   [
@@ -479,28 +496,42 @@ const unprovedStates = [
   [
     'privileges that can be regained',
     {
-      inspect: makeInspect(record => {
-        record.HostConfig.SecurityOpt = [];
-      }),
+      processIdentity: makeIdentity({ noNewPrivs: false }),
+    },
+    /no-new-privileges/,
+  ],
+  [
+    'a kernel that reports no no-new-privileges flag',
+    {
+      processIdentity: makeIdentity({ noNewPrivs: null }),
     },
     /no-new-privileges/,
   ],
   [
     'a process with no seccomp filter loaded',
-    { processIdentity: harden({ uid: 1000, gid: 1000, seccompMode: 0 }) },
+    {
+      processIdentity: makeIdentity({ seccompMode: 0 }),
+    },
     /seccomp/,
   ],
   [
     'a kernel that reports no seccomp mode at all',
-    { processIdentity: harden({ uid: 1000, gid: 1000, seccompMode: null }) },
+    {
+      processIdentity: makeIdentity({ seccompMode: null }),
+    },
     /seccomp/,
   ],
   [
     'a capability the container kept',
     {
-      inspect: makeInspect(record => {
-        record.EffectiveCaps = ['CAP_NET_RAW'];
-      }),
+      processIdentity: makeIdentity({ effectiveCapabilities: 0x2000n }),
+    },
+    /dropped capabilities/,
+  ],
+  [
+    'a kernel that reports no capability mask',
+    {
+      processIdentity: makeIdentity({ effectiveCapabilities: null }),
     },
     /dropped capabilities/,
   ],
