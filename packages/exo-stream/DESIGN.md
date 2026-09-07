@@ -163,6 +163,17 @@ acknowledgement chain carries `TRead` (data):
 - **Initiator** (`iterateReader`): sends `undefined` syn nodes to request values,
   receives data on the ack chain.
 
+The responder pump walks the synchronization chain independently of its
+pulls. A walker turns each resolved node into credit, one node per turn, and
+notices a return node as soon as it reaches it, even behind credit the
+initiator prefetched with `buffer > 0`. Once the walker has observed the close
+the pump issues no further pull and discards the unspent credit. So a producer
+that blocks on its next value is released as soon as that value arrives, not
+`buffer` values later; a producer that answers as fast as the walker walks
+still pays the credit granted before the close, as it did when the chain was
+walked in lockstep. Within one stream, `iterator.return()` is called at most
+once, and only between pulls, never over a pending `next()`.
+
 ### Writer Flow
 
 For a Writer, the synchronization chain carries `TWrite` (data). When the
