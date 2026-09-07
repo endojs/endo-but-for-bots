@@ -195,3 +195,25 @@ fn frozen_global_is_not_extended_by_computed_intrinsic_names() {
         })()
     "#), "function:true:true");
 }
+
+#[test]
+fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
+    assert_eq!(result(r#"
+        const buffer = new ArrayBuffer(12), view = new DataView(buffer, 3, 5);
+        const cases = [[buffer, ArrayBuffer.prototype, 'byteLength'],
+            [view, DataView.prototype, 'byteLength'],
+            [view, DataView.prototype, 'byteOffset'],
+            [view, DataView.prototype, 'buffer']];
+        const direct = [(x) => x.byteLength, (x) => x.byteLength,
+            (x) => x.byteOffset, (x) => x.buffer];
+        cases.map(([instance, prototype, key], i) => {
+            const read = direct[i];
+            Object.defineProperty(prototype, key, {get() { return 99; }});
+            const replaced = read(instance) === 99 && Reflect.get(instance, key) === 99;
+            delete prototype[key];
+            const deleted = read(instance) === undefined && Reflect.get(instance, key) === undefined;
+            Object.defineProperty(instance, key, {value: 42});
+            return replaced && deleted && read(instance) === 42 && Reflect.get(instance, key) === 42;
+        }).join(':')
+    "#), "true:true:true:true");
+}

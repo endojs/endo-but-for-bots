@@ -16077,21 +16077,14 @@ impl Interp {
                             Slot::integer(self.collections[&inst].live_len() as i32)
                         }
                         Payload::Reference(inst)
-                            if Some(id) == self.byte_length_id
-                                && self.array_buffers.contains_key(&inst) =>
+                            if (self.array_buffers.contains_key(&inst)
+                                && !self.shared_buffers.contains(&inst))
+                                || self.typed_arrays.contains_key(&inst)
+                                || self.data_views.contains_key(&inst) =>
                         {
-                            // `buffer.byteLength`: the ArrayBuffer byte-length
-                            // accessor getter
-                            // (`fx_ArrayBuffer_prototype_get_byteLength`).
-                            self.meter.tick_raw(ARRAY_BUFFER_BYTE_LENGTH_GET_METERING);
-                            Slot::integer(self.array_buffers[&inst].length as i32)
-                        }
-                        Payload::Reference(inst) if self.typed_arrays.contains_key(&inst) => {
-                            // These are real accessors on the shared abstract
-                            // prototype. Route every named read through the
-                            // ordinary getter machinery so reflection,
-                            // deletion, replacement, and Symbol.toStringTag
-                            // remain observable.
+                            // These are real accessors on the intrinsic
+                            // prototypes. Ordinary lookup preserves guest
+                            // deletion, replacement, and own-property shadows.
                             dispatch_result!(
                                 self.ordinary_get(code, inst, id, obj),
                                 pc,
@@ -16099,37 +16092,12 @@ impl Interp {
                                 return_depth
                             )
                         }
-                        Payload::Reference(inst) if self.data_views.contains_key(&inst) => {
-                            // The DataView view accessors
-                            // (`fx_DataView_prototype_*_get`): `byteLength`,
-                            // `byteOffset`, and `buffer`. A non-accessor name
-                            // resolves up the prototype chain (the get*/set*
-                            // methods).
-                            let dv = self.data_views[&inst];
-                            if Some(id) == self.byte_length_id {
-                                // `get byteLength`/`get byteOffset` throw a
-                                // TypeError on a detached backing buffer
-                                // (`GetViewByteLength` → out of bounds). `buffer`
-                                // returns the (detached) reference unconditionally.
-                                if self.detached_buffers.contains(&dv.buffer) {
-                                    dispatch_halt!(self.catchable_type_error(), pc, self, return_depth)
-                                } else {
-                                    self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                    Slot::integer(dv.size as i32)
-                                }
-                            } else if Some(id) == self.byte_offset_id {
-                                if self.detached_buffers.contains(&dv.buffer) {
-                                    dispatch_halt!(self.catchable_type_error(), pc, self, return_depth)
-                                } else {
-                                    self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                    Slot::integer(dv.offset as i32)
-                                }
-                            } else if Some(id) == self.buffer_id {
-                                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                Slot::of(Kind::Reference, Payload::Reference(dv.buffer))
-                            } else {
-                                self.instance_get(inst, id)
-                            }
+                        Payload::Reference(inst)
+                            if Some(id) == self.byte_length_id
+                                && self.shared_buffers.contains(&inst) =>
+                        {
+                            self.meter.tick_raw(ARRAY_BUFFER_BYTE_LENGTH_GET_METERING);
+                            Slot::integer(self.array_buffers[&inst].length as i32)
                         }
                         Payload::Reference(inst) if self.regexps.contains_key(&inst) => {
                             // The RegExp accessor getters (`fx_RegExp_prototype_
