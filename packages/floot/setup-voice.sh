@@ -1,5 +1,5 @@
 #!/bin/bash
-# Provision the two Floot voice caplets (floot-stt + floot-tts).
+# Provision the Floot voice caplets under floot/stt and floot/tts.
 #
 # Usage:
 #   FLOOT_TTS_MODEL=/abs/voice.onnx ./setup-voice.sh   # ambient env
@@ -26,9 +26,10 @@ if [ -z "${FLOOT_TTS_MODEL:-}" ]; then
 fi
 
 endo run --UNCONFINED voice-setup.js --powers @agent \
-  -E STT_PETNAME="${STT_PETNAME:-floot-stt}" \
-  -E TTS_PETNAME="${TTS_PETNAME:-floot-tts}" \
+  -E FLOOT_DIR="${FLOOT_DIR:-floot}" \
   -E FLOOT_TTS_BINARY="${FLOOT_TTS_BINARY:-piper}" \
-  -E FLOOT_TTS_MODEL="${FLOOT_TTS_MODEL:-}" \
+  -E FLOOT_TTS_MODEL="${FLOOT_TTS_MODEL}" \
   -E FLOOT_TTS_SPEED="${FLOOT_TTS_SPEED:-1.0}" \
+  -E FLOOT_STT_ENABLE="${FLOOT_STT_ENABLE:-1}" \
+  -E FLOOT_STT_UV="${FLOOT_STT_UV:-uv}" \
   -E FLOOT_STT_LANG="${FLOOT_STT_LANG:-en}"
