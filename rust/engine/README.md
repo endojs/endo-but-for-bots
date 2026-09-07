@@ -3254,13 +3254,16 @@ same way; the merge keeps the mainline's factored `run_crank` helper. Ten furthe
 `run(&compiled[1].0)` sites in that file carry the same shape and pass only
 because their crank pairs happen to intern the same names.
 
-Two gaps in that same match remain, each its own fix:
+One gap in that same match remains: `Symbol.prototype.description` answers
+`undefined` rather than the symbol's description string — the accessor is simply
+absent from `%Symbol.prototype%` (symbol boxing itself works). Note that
+`Symbol().description` *agrees* with the oracle at `undefined` by coincidence,
+because a missing accessor and a genuinely absent description look identical, so
+a test must use a symbol that has a description.
 
-- A **boolean** primitive does not box to `%Boolean.prototype%`, so
-  `true.toString()` throws where XS and node answer `"true"`. String, number and
-  bigint bases all box; boolean has no arm.
-- `Symbol.prototype.description` answers `undefined` rather than the symbol's
-  description string.
+Boolean boxing was listed here too and is now fixed on the mainline
+(`fix(ironhorse-vm): box a boolean primitive to %Boolean.prototype%`), on both
+the static and computed read paths.
 
 **Differential-harness expectations (knowingly updated).** The runner executes
 the Script goal, so strict-variant runs of official cases with top-level `var`s
