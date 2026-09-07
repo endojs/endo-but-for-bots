@@ -906,32 +906,11 @@ impl<'a> Coder<'a> {
     }
 }
 
-/// Which ECMAScript goal a program source is compiled as. Both goals ride
-/// XS's eval-program frame shape (`mxProgramFlag | mxEvalFlag`: an `Eval`
-/// top scope whose lexicals are plain locals, the `EVAL_ENVIRONMENT`
-/// header); they differ in exactly one place, a **strict** program's
-/// top-level `var`/function declarations:
-///
-/// * [`Goal::Script`] — a top-level program. ECMA-262
-///   GlobalDeclarationInstantiation creates a global-object property for
-///   every top-level `var`/function declaration, strict or not (`xst`
-///   parses a script with `mxProgramFlag` alone and reaches the same
-///   result through `PROGRAM_ENVIRONMENT`), so a strict Script hoists them
-///   through `EVAL_ENVIRONMENT` exactly as a sloppy one does. A frozen
-///   `globalThis` then protects them: a strict `g = 2` is a `TypeError`.
-/// * [`Goal::Eval`] — the `eval` builtin's program (XS's own flags for it,
-///   `xsGlobal.c` `fx_eval`; also what the oracle shim runs every source
-///   as). A strict eval owns a fresh variable environment, so its `var`s
-///   are frame locals — the shape XS emits, byte for byte.
-///
-/// A sloppy program compiles identically under both goals.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Goal {
-    /// A top-level Script (the default program entry, [`compile`]).
-    Script,
-    /// An `eval` program (the runtime source bridge, [`compile_with`]).
-    Eval,
-}
+/// The compilation goal — re-exported from [`crate::scoper`], where it lives
+/// because the scoper is the lower layer and consumes it first. `Script`,
+/// `Module` and `Eval` are all distinguished there; the coder reads it to pick
+/// a program's header shape.
+pub use crate::scoper::Goal;
 
 /// Whether `source` declares a top-level `var` or function — the programs
 /// whose observable behavior can differ between [`Goal::Script`] and
@@ -1026,15 +1005,27 @@ pub fn compile_atoms_with(
     compile_atoms_goal(source, Goal::Eval, strict)
 }
 
-/// The goal-explicit program compile behind [`compile_atoms`] (Script) and
-/// [`compile_atoms_with`] (eval): parse `source` with the caller
-/// strictness `strict`, scope it for `goal`, and code it, returning
-/// `(bytecode, symbols)`.
+/// The goal-explicit compile behind [`compile_atoms`] (Script),
+/// [`compile_atoms_with`] (eval) and [`compile_module_atoms`] (Module):
+/// compile `source` for `goal`, returning `(bytecode, symbols)`.
+///
+/// `strict` is the caller's strictness for the two *program* goals (a
+/// `"use strict"` prologue makes the program strict either way). It is ignored
+/// for [`Goal::Module`], which is always strict.
+///
+/// A Module is not a program: it has its own grammar (`export`/`import`), its
+/// own parser flags, and its own coder entry, so this delegates rather than
+/// scoping program-parsed source under a module goal — which would reject real
+/// module source outright and, worse, silently emit *different bytes* for
+/// source that happens to parse both ways.
 pub fn compile_atoms_goal(
     source: &str,
     goal: Goal,
     strict: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    if goal == Goal::Module {
+        return compile_module_atoms(source);
+    }
     let mut parser = crate::parser::Parser::new(source, strict, false)?;
     let mut root = parser.parse_program(strict)?;
     // The oracle shim compiles the Script goal with `mxProgramFlag |
@@ -1048,7 +1039,7 @@ pub fn compile_atoms_goal(
     if let Item::Node(n) = &mut root {
         n.flags |= crate::ast::flags::EVAL;
     }
-    let tree = crate::scoper::run_goal(&root, goal == Goal::Script)?;
+    let tree = crate::scoper::run_goal(&root, goal)?;
     let mut coder = Coder::new(&tree);
     // Intern the program's symbols in lex order before coding so the atom
     // table's bucket lists match XS's.
@@ -1092,7 +1083,7 @@ pub fn compile_module_atoms(
     // (`mxStrictFlag | mxAsyncFlag`).
     let mut parser = crate::parser::Parser::new(source, true, true)?;
     let root = parser.parse_module()?;
-    let tree = crate::scoper::run(&root)?;
+    let tree = crate::scoper::run_goal(&root, Goal::Module)?;
     let mut coder = Coder::new(&tree);
     coder.intern_tree(&root);
     coder.code_module(node_of(&root));
@@ -1314,7 +1305,7 @@ impl Coder<'_> {
     ///
     /// XS takes the first branch for every strict program because the shape
     /// it codes here is the `eval` builtin's. A strict top-level **Script**
-    /// (`ScopeTree::script_goal`) that declares a top-level `var`/function
+    /// (`ScopeTree::goal`) that declares a top-level `var`/function
     /// takes the hoist branch instead: ECMA-262
     /// GlobalDeclarationInstantiation makes those declarations
     /// global-object properties, which is what `xst`'s `mxProgramFlag`-only
@@ -1332,7 +1323,8 @@ impl Coder<'_> {
         let declares = self.declares_of(scope);
         let hoists_declarations =
             declares.iter().any(|(_, t, _, _)| matches!(t, Token::Var | Token::Define));
-        let strict_eval = strict && !(self.tree.script_goal && hoists_declarations);
+        let strict_eval =
+            strict && !(self.tree.goal == Goal::Script && hoists_declarations);
         if strict_eval {
             if scope_count != 0 {
                 self.add_index(0, XS_CODE_RESERVE_1, scope_count);

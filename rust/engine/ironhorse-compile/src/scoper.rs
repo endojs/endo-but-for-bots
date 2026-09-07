@@ -276,12 +276,11 @@ pub struct AccessRecord {
 /// root scope index.
 #[derive(Clone, Debug)]
 pub struct ScopeTree {
-    /// Whether the program root was scoped as a top-level **Script** (see
-    /// [`run_goal`]). The coder reads it to pick the program header shape:
-    /// a strict Script hoists its `var`/function declarations through
-    /// `EVAL_ENVIRONMENT` like a sloppy program; a strict eval program
-    /// keeps them as frame locals.
-    pub script_goal: bool,
+    /// The [`Goal`] this tree was scoped for. The coder reads it to pick the
+    /// program header shape: a strict Script hoists its `var`/function
+    /// declarations through `EVAL_ENVIRONMENT` like a sloppy program, where a
+    /// strict eval program keeps them as frame locals.
+    pub goal: Goal,
     pub scopes: Vec<Scope>,
     pub root: usize,
     pub accesses: Vec<AccessRecord>,
@@ -370,8 +369,15 @@ pub fn node_key(n: &Node) -> usize {
 
 // ============================ entry points ============================
 
-/// Parse `source` as a Script and run the scoper, returning the scope
-/// tree or the first parser/scoper early error.
+/// Parse `source` with the program grammar and run the scoper under the
+/// **eval** goal ([`Goal::Eval`]), returning the scope tree or the first
+/// parser/scoper early error. `strict` is the caller's strictness.
+///
+/// The goal matters only for a strict program's top-level `var`/function
+/// declarations (see [`Goal`]). Callers that ask goal-independent questions of
+/// the tree — which names a program declares, whether it is strict — get the
+/// same answer either way; a caller that needs the Script placement should
+/// scope with [`run_goal`] instead.
 pub fn scope_program(source: &str, strict: bool) -> Result<ScopeTree, ParseError> {
     let mut parser = Parser::new(source, strict, false)?;
     let root = parser.parse_program(strict)?;
@@ -382,43 +388,71 @@ pub fn scope_program(source: &str, strict: bool) -> Result<ScopeTree, ParseError
 pub fn scope_module(source: &str) -> Result<ScopeTree, ParseError> {
     let mut parser = Parser::new(source, true, true)?;
     let root = parser.parse_module()?;
-    run(&root)
+    run_goal(&root, Goal::Module)
 }
 
-/// Run the two scoper passes over an already-parsed root node, scoping a
-/// program root as XS's **eval goal** does (`fxParseScript(...,
-/// mxProgramFlag | mxEvalFlag)`, the `eval` builtin's flags): a strict
-/// program's top-level `var`/function declarations are frame locals. This
-/// is the shape the runtime `eval` bridge needs and the shape the oracle
-/// shim emits. For a top-level **Script**, use [`run_goal`] with
-/// `script_goal = true`.
+/// What is being compiled — the thing whose declarations the scoper and coder
+/// have to place. There are exactly three, and they are not interchangeable:
+///
+/// * [`Goal::Script`] — a top-level Script (`xst`'s `fxParseScript(...,
+///   mxProgramFlag)`). ECMA-262 GlobalDeclarationInstantiation makes every
+///   top-level `var`/function declaration a global-object property, strict or
+///   not, so the scoper leaves them unresolved (the symbol path) exactly as it
+///   does for a sloppy program and the coder hoists them through
+///   `EVAL_ENVIRONMENT`.
+/// * [`Goal::Module`] — the Module goal. Always strict, and its declarations
+///   are module-scope bindings rather than global properties, so neither of the
+///   program-goal rules applies to it.
+/// * [`Goal::Eval`] — the `eval` builtin's program (`fxParseScript(...,
+///   mxProgramFlag | mxEvalFlag)`, which is also what the `xs-oracle` shim
+///   compiles every source as). A strict eval owns a fresh variable
+///   environment, so its top-level `var`s stay frame locals.
+///
+/// `let`/`const`/`class` are lexical under all three. Only a **strict**
+/// program's `var`/function declarations distinguish `Script` from `Eval`; a
+/// sloppy program scopes identically under both.
+///
+/// This lives in the scoper rather than the coder because the scoper is the
+/// lower layer and is where the distinction is first consumed
+/// ([`Scoper::eval_scope_hoists_vars`]); `coder` re-exports it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Goal {
+    /// A top-level Script (the default program entry, `coder::compile`).
+    Script,
+    /// A Module (`coder::compile_module`).
+    Module,
+    /// An `eval` program (the runtime source bridge, `coder::compile_with`).
+    ///
+    /// It is the `Default` only so the `#[derive(Default)]` on [`Scoper`]
+    /// compiles; [`run_goal`] is the sole constructor and always sets the goal
+    /// explicitly, so nothing ever runs on a defaulted value.
+    #[default]
+    Eval,
+}
+
+/// Run the two scoper passes over an already-parsed root node under the
+/// **eval goal** — the shape the runtime `eval` bridge needs and the one the
+/// oracle shim emits. For any other goal use [`run_goal`].
 pub fn run(root: &Item) -> Result<ScopeTree, ParseError> {
-    run_goal(root, false)
+    run_goal(root, Goal::Eval)
 }
 
-/// [`run`], choosing how a strict program root scopes its `var`/function
-/// declarations. With `script_goal` set, the root is a **Script**
-/// (`xst`'s `fxParseScript(..., mxProgramFlag)`; ECMA-262
-/// GlobalDeclarationInstantiation): every top-level `var`/function
-/// declaration is a global-object property whether or not the program is
-/// strict, so the scoper leaves them unresolved (the symbol path) exactly
-/// as it does for a sloppy program, and the coder hoists them through
-/// `EVAL_ENVIRONMENT`. `let`/`const`/`class` stay lexical either way. Only
-/// the strict-program `var`/function case differs between the two goals;
-/// a sloppy program scopes identically under both.
-pub fn run_goal(root: &Item, script_goal: bool) -> Result<ScopeTree, ParseError> {
+/// [`run`], stating which [`Goal`] the root is being scoped for. The goal
+/// decides where a program's top-level `var`/function declarations live; see
+/// [`Goal`] for the three answers.
+pub fn run_goal(root: &Item, goal: Goal) -> Result<ScopeTree, ParseError> {
     let root_node = match root {
         Item::Node(n) => n.as_ref(),
         _ => return Err(err(1, "invalid root")),
     };
-    let mut s = Scoper { script_goal, ..Scoper::default() };
+    let mut s = Scoper { goal, ..Scoper::default() };
     // fxParserHoist
     s.hoist_dispatch(root_node)?;
     // fxParserBind
     s.bind_dispatch(root_node)?;
     let root_scope = *s.node_scope.get(&node_ptr(root_node)).ok_or_else(|| err(root_node.line, "no root scope"))?;
     Ok(ScopeTree {
-        script_goal: s.script_goal,
+        goal: s.goal,
         scopes: s.scopes,
         root: root_scope.0,
         accesses: s.accesses,
@@ -445,10 +479,8 @@ struct Scoper {
     /// Tree levels currently on the native stack (see [`TREE_DEPTH_LIMIT`]
     /// and [`Self::descend`]).
     depth: u32,
-    /// The program root is a top-level Script (see [`run_goal`]): its
-    /// `var`/function declarations hoist to the global object even when
-    /// the program is strict.
-    script_goal: bool,
+    /// The [`Goal`] this run is scoping for (see [`run_goal`]).
+    goal: Goal,
     scopes: Vec<Scope>,
     /// `hoister->scope` / `binder->scope` — the current scope.
     scope: Option<usize>,
@@ -779,8 +811,21 @@ impl Scoper {
     /// **Script** hoists regardless of strictness (ECMA-262
     /// GlobalDeclarationInstantiation; `xst`'s `mxProgramFlag`-only parse),
     /// so the Script goal takes the hoist path for strict programs too.
+    /// [`Goal::Module`] never reaches here — a module's body scope is
+    /// `Token::Module`, and both callers gate on `Token::Eval` — so the
+    /// comparison below deliberately asks whether the goal *is* `Script`
+    /// rather than whether it is not `Eval`. The assertion keeps that an
+    /// enforced invariant instead of a comment: were a module scope ever
+    /// routed through the eval token, this fires rather than silently
+    /// choosing the eval answer for it.
     fn eval_scope_hoists_vars(&self, si: usize) -> bool {
-        self.scopes[si].flags & SCOPE_STRICT == 0 || self.script_goal
+        debug_assert_eq!(
+            self.scopes[si].token,
+            Token::Eval,
+            "the hoist decision is only defined for an eval-token program scope",
+        );
+        debug_assert_ne!(self.goal, Goal::Module, "a module never scopes an eval-token program");
+        self.scopes[si].flags & SCOPE_STRICT == 0 || self.goal == Goal::Script
     }
 
     /// `fxScopeEval` — poison a scope and every ancestor with `mxEvalFlag`.
