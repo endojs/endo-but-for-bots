@@ -115,7 +115,9 @@ pub mod engine {
             }
             Halt::Decode(e) => format!("bytecode decode error: {e}"),
             Halt::Throw { rendered, .. } => format!("uncaught throw: {rendered}"),
-            Halt::StackOverflow(n) => format!("stack overflow ({n} slots over the limit)"),
+            Halt::StackOverflow(n) => {
+                format!("stack overflow (value stack or native-recursion budget; {n} slots in use)")
+            }
             other => format!("halted: {other:?}"),
         }
     }
