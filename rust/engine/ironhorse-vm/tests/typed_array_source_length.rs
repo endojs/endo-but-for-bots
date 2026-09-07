@@ -35,7 +35,11 @@ fn run(source: &str) -> RunOutcome {
 
 fn completes_with(source: &str, expected: &str) {
     let out = run(source);
-    assert!(out.completed, "`{source}` must complete (halt: {:?})", out.halt);
+    assert!(
+        out.completed,
+        "`{source}` must complete (halt: {:?})",
+        out.halt
+    );
     assert_eq!(out.result, expected, "`{source}`");
 }
 
@@ -78,10 +82,16 @@ fn a_sparse_source_within_bounds_reads_its_holes_as_undefined() {
     // item reads `undefined`, which is 0 in an integer view and NaN in a
     // floating-point one. The declared length — not the item count — is
     // what the destination gets.
-    completes_with("var a = new Array(4); a[1] = 5; new Uint8Array(a).length", "4");
+    completes_with(
+        "var a = new Array(4); a[1] = 5; new Uint8Array(a).length",
+        "4",
+    );
     completes_with("var a = new Array(4); a[1] = 5; new Uint8Array(a)[0]", "0");
     completes_with("var a = new Array(4); a[1] = 5; new Uint8Array(a)[1]", "5");
-    completes_with("var a = new Array(4); a[1] = 5; new Float64Array(a)[0]", "NaN");
+    completes_with(
+        "var a = new Array(4); a[1] = 5; new Float64Array(a)[0]",
+        "NaN",
+    );
 }
 
 #[test]
@@ -113,6 +123,24 @@ fn a_dense_array_and_a_source_view_still_copy() {
     // The restructuring rewrote both source arms; keep each one covered
     // here so a regression names itself without the oracle.
     completes_with("new Uint8Array([1, 2, 3])[2]", "3");
-    completes_with("var a = new Uint8Array([5, 6, 7]); new Int32Array(a)[1]", "6");
+    completes_with(
+        "var a = new Uint8Array([5, 6, 7]); new Int32Array(a)[1]",
+        "6",
+    );
     completes_with("new Uint8Array([]).length", "0");
+}
+
+#[test]
+fn inherited_iterator_overrides_do_not_take_the_snapshot_path() {
+    for source in [
+        "var a=[{valueOf:function(){a[1]=99;return 1;}},2]; Array.prototype[Symbol.iterator]=undefined; new Uint8Array(a)[1]",
+        "var a=[1,2]; var p=Object.create(Array.prototype); p[Symbol.iterator]=function(){return {next:function(){return {done:true};}};}; Object.setPrototypeOf(a,p); new Uint8Array(a).length",
+        "var p=Object.getPrototypeOf([][Symbol.iterator]()); p.next=function(){return {done:true};}; new Uint8Array([1,2]).length",
+    ] {
+        assert_eq!(
+            run(source).halt,
+            Halt::Unsupported("native-call:TypedArray:from-array-like"),
+            "{source}",
+        );
+    }
 }

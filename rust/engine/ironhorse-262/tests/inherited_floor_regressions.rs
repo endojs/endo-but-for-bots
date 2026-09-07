@@ -54,9 +54,7 @@ fn descriptor_zero_writable_is_falsy() {
 #[test]
 fn sparse_million_length_walk_does_not_exhaust_ids() {
     assert_result_agrees("var a=[0,1]; a[999999]=-6.6; a.every(function(){return true;});");
-    assert_result_agrees(
-        "var a=[0,1]; a[999999]=-6.6; var n=0; a.forEach(function(){n++;}); n;",
-    );
+    assert_result_agrees("var a=[0,1]; a[999999]=-6.6; var n=0; a.forEach(function(){n++;}); n;");
     assert_result_agrees(
         "var a=[0]; a[999999]=7; var last=-1; a.some(function(v,i){last=i; return v===7;}); last;",
     );
@@ -83,12 +81,8 @@ fn sparse_get_only_walk_does_not_exhaust_ids() {
     // a 1e6-length sparse receiver must not intern every absent index and trip
     // `id_space_exhausted`. These lock the shared non-interning probe on the
     // `get` edge, beside the `every`/`forEach`/`some` (`has`-edge) lock above.
-    assert_result_agrees(
-        "var a=[0,1]; a[999999]=7; var r=a.find(function(v){return v===7;}); r;",
-    );
-    assert_result_agrees(
-        "var a=[0,1]; a[999999]=7; a.findIndex(function(v){return v===7;});",
-    );
+    assert_result_agrees("var a=[0,1]; a[999999]=7; var r=a.find(function(v){return v===7;}); r;");
+    assert_result_agrees("var a=[0,1]; a[999999]=7; a.findIndex(function(v){return v===7;});");
     assert_result_agrees("var a=[0,1]; a[999999]=7; a.includes(7);");
     assert_result_agrees("var a=[0,1]; a[999999]=7; a.at(999999);");
 }
@@ -140,5 +134,31 @@ fn typed_array_from_array_with_overridden_iterator_is_an_honest_skip() {
         matches!(&dr.ironhorse_halt, Halt::Unsupported(op) if op.contains("from-array-like")),
         "expected the from-array-like honest skip, got {:?}",
         dr.ironhorse_halt,
+    );
+}
+
+#[test]
+fn sparse_walk_with_exotic_prototypes_does_not_exhaust_ids() {
+    for prototype in ["new Uint8Array([3])", "new String('x')", "new Number(1)"] {
+        assert_result_agrees(&format!(
+            "var a=[]; a[69999]=7; Object.setPrototypeOf(a,{prototype}); \
+             var n=0; Array.prototype.forEach.call(a,function(){{n++;}}); n;"
+        ));
+        assert_result_agrees(&format!(
+            "var a=[]; a[69999]=7; Object.setPrototypeOf(a,{prototype}); \
+             Array.prototype.findIndex.call(a,function(v){{return v===7;}});"
+        ));
+    }
+}
+
+#[test]
+fn sparse_walk_with_proxy_prototype_preserves_traps() {
+    assert_result_agrees(
+        "var has=0,get=0; var p=new Proxy({}, { \
+         has:function(t,k){has++;return k==='1';}, \
+         get:function(t,k){get++;return 9;} }); \
+         var a=[]; a.length=3; Object.setPrototypeOf(a,p); \
+         var sum=0; Array.prototype.forEach.call(a,function(v){sum+=v;}); \
+         ''+has+','+get+','+sum;",
     );
 }
