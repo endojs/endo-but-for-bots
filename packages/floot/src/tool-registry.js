@@ -18,6 +18,7 @@ import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
 import { HostedToolSetInterface } from '@endo/hosted-agent';
 
 import { makeAccountStatusTool } from './account-tool.js';
+import { makeWorkflowTools } from './workflow-tools.js';
 
 const TOOL_POLICY_VERSION = 'floot-endo-tools-v1';
 const MAX_SCHEMA_DEPTH = 32;
@@ -207,10 +208,18 @@ harden(makeEndoToolSet);
  * @param {any} [options.accountOracle] - A read-only `HostedAccount`.
  * @param {() => Promise<{ inputTokens: number, outputTokens: number }>} [options.getUsage]
  * @param {() => string} [options.getModelId]
+ * @param {Set<string>} [options.settledMail]
  */
 export const makeFlootToolRegistry = (
   powers,
-  { spawner, delegations, accountOracle, getUsage, getModelId } = {},
+  {
+    spawner,
+    delegations,
+    accountOracle,
+    getUsage,
+    getModelId,
+    settledMail,
+  } = {},
 ) => {
   /** @type {Map<string, any>} */
   const builtins = new Map();
@@ -253,6 +262,10 @@ export const makeFlootToolRegistry = (
   builtins.set('adopt', makeAdoptTool(powers));
   builtins.set('send', makeSendTool(powers));
   builtins.set('reply', makeReplyTool(powers));
+  for (const [name, tool] of makeWorkflowTools(powers, {
+    settled: settledMail,
+  }))
+    builtins.set(name, tool);
   if (spawner && delegations) {
     for (const [name, tool] of makeSubagentTools({
       powers,

@@ -562,3 +562,13 @@ test('the gated nixos chart requires staged files before the panel sees them', t
   t.is(spawned.effect.chart.name, 'nixos-config-change');
   t.deepEqual(spawned.effect.params.files, files);
 });
+
+test('the NixOS submission prompt and correction name the required files', t => {
+  const sim = makeSimulator(reviewedNixosChangeChart, { params });
+  const first = pendingOf(sim, 'ask', { to: 'developer' });
+  t.true(first.effect.what.description.includes('files: [{ path, text }]'));
+  submitHead(sim);
+  const retry = pendingOf(sim, 'ask', { to: 'developer' });
+  t.true(retry.effect.what.description.includes('files:'));
+  t.false(retry.effect.what.description.includes('no head ref'));
+});

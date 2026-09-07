@@ -156,3 +156,82 @@ Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile when running
 setup; without one, `getAccount()` reports that no oracle is available and the
 tool is absent.
 See [@endo/hosted-agent's ACCOUNT-ORACLE.md](../hosted-agent/ACCOUNT-ORACLE.md).
+
+## Design → implementation → review
+
+A Floot conversation can prepare a design and acceptance criteria, then hand
+that agreed text to a configured development/review workflow. The built-in
+`handoffDesign` tool starts it; `reviewStatus` observes it. Merely discussing a
+design does not start implementation. Ask Floot to hand it off when ready.
+
+The workflow resolves the base and every submitted candidate to commit OIDs,
+asks a developer to implement the design, and waits for every reviewer. Dissent
+returns the combined report to the developer within the review budget. Once
+review passes, a durable request delivers the candidate OID back to the
+originating Floot conversation. The conversation records the notification in
+its history before the model can acknowledge delivery, so a provider failure
+cannot erase an acknowledged notice. Nothing merges or deploys automatically.
+Budget exhaustion asks the human operator for a typed extension or abandonment;
+abandonment also notifies the originating conversation.
+
+Provision the workflow service using `@endo/workflow`'s README and pin that
+service for restart recovery. Then use `provisionDevReview` from
+`@endo/floot/dev-review.js` in trusted host setup code:
+
+```js
+import { provisionDevReview } from '@endo/floot/dev-review.js';
+
+const { fid, factory } = await provisionDevReview({
+  host,          // provisioning EndoHost
+  service,       // pinned WorkflowService
+  project,       // Git for the implementation worktree
+  projectName: 'search-project', // participant-local petname
+  developer,     // dedicated developer Floot guest powers
+  reviewers: [reviewerA, reviewerB], // distinct reviewer Floot guest powers
+  initiator,     // guest powers of the Floot conversation preparing the design
+  operator,      // human operator's mail handle
+});
+```
+
+The participants here are guest **controls** used only during setup. A Floot
+factory host holds them under `session-agent-<session-id>`; the public session
+facet returned by `createSession` is not a guest control. Create dedicated
+implementation/reviewer sessions, obtain their guest controls through the
+provisioning host, and pass those to setup. Use a dedicated implementation
+worktree. This helper does not allocate a new worktree or new agents per run.
+If running multiple projects concurrently, give each a separate worktree and
+participant sessions rather than changing the same project grant mid-run.
+
+Setup installs the writer Git grant in the developer and read-only grants in
+the reviewers. It creates a durable, read-only revision adapter for the
+workflow's keyed invocation protocol. The factory binds the project, roster,
+operator, and originating inbox, then installs a formula-backed connection as `dev-review`
+in the initiating guest. That connection reacquires factory/run facets after
+restart and restricts status, budget changes, and cancellation to this factory. The guest never receives `WorkflowService` or
+`WorkflowControl`. Keep `fid` for administrative recovery or revocation through
+`E(service).factory(fid)`.
+
+For example, Floot can call:
+
+```js
+handoffDesign({
+  name: 'keyboard-search',
+  title: 'Keyboard-accessible search',
+  design: 'The complete agreed design, including acceptance criteria…',
+  base: 'main',
+  rounds: '3',
+});
+```
+
+`name` is an idempotency key within the configured factory. Replaying the handoff
+returns the same run, including after service restart. Choose a new name for a
+new design. A data receipt is stored as `review-keyboard-search`; `reviewStatus` resolves
+it through the durable connection. `setReviewBudget` and `cancelReview` allow
+the initiating conversation to manage its own handoffs when the user asks.
+
+Floot's inbox understands request descriptions and exposes `resolveRequest`,
+`rejectRequest`, and `submitForm`. Developer submissions and reviewer verdicts
+must be typed values, not prose replies. Natural-number form fields accept
+decimal strings through `submitForm` and are converted to bigint before the
+daemon checks the field patterns. The Chat form UI likewise supports bounded
+bigint review budgets.

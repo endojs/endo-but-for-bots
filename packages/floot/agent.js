@@ -197,6 +197,14 @@ When a tool result is itself a capability it shows as
 store it) and call one of those methods via exec. Plain data (strings, numbers,
 JSON) shows as its value.
 
+Design and review:
+- Discuss the design and acceptance criteria with the user before handoff.
+- When the user asks to implement it, use handoffDesign with the complete agreed
+  design, base revision, and review budget. The installed dev-review capability
+  binds the developer, reviewers, project, and originating notification inbox.
+- Use reviewStatus to inspect progress. A ready notification is a reviewed
+  candidate; it is not permission to merge or deploy.
+
 Petstore tools:
 - list — see the petnames currently in your petstore.
 - lookup — get a stored object by its petname so you can use it.
@@ -642,7 +650,9 @@ export const makeStreamingAgent = async (
   const delegations = makeSubagentDelegations(
     harden({ powers, ...(timers ? { timers } : {}) }),
   );
+  const settledMail = new Set();
   const toolRegistry = makeFlootToolRegistry(powers, {
+    settledMail,
     ...(spawner ? { spawner, delegations } : {}),
     ...(accountOracle
       ? {
@@ -725,12 +735,37 @@ export const makeStreamingAgent = async (
 
   const runTurn = async (input, writer, meta, signal) => {
     const text = await resolveUserText(input);
-    const baseLeafId = await getOrCreateLeaf();
+    let baseLeafId = await getOrCreateLeaf();
     const baseNode = await tree.getNode(baseLeafId);
     const acknowledgedCheckpoint =
       typeof baseNode?.metadata?.backendCheckpoint === 'string'
         ? baseNode.metadata.backendCheckpoint
         : undefined;
+    const receivedMail = meta?.mail?.messageNumber !== undefined;
+    const inputMessages = [
+      { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
+    ];
+    if (receivedMail) {
+      // Receiving typed mail is durable independently of the model's answer.
+      // In particular, a readiness acknowledgement tool must never run before
+      // the notice is visible in history. Deduplicate a replay after a failed
+      // provider call or a crash before the mailbox dismissal.
+      const path = await tree.getPath(baseLeafId);
+      if (
+        !path.some(
+          message =>
+            message.meta?.mail?.messageNumber === meta.mail.messageNumber,
+        )
+      ) {
+        const received = await tree.addNode(baseLeafId, inputMessages, {
+          ...(acknowledgedCheckpoint
+            ? { backendCheckpoint: acknowledgedCheckpoint }
+            : {}),
+        });
+        baseLeafId = received.id;
+        cachedLeaf = received.id;
+      }
+    }
 
     const commitExternalTurn = async (
       replyText,
@@ -744,9 +779,7 @@ export const makeStreamingAgent = async (
         outputTokens: current.outputTokens + (turnUsage?.outputTokens || 0),
         turns: current.turns + 1,
       };
-      const messages = [
-        { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
-      ];
+      const messages = receivedMail ? [] : [...inputMessages];
       if (toolCalls.length > 0) {
         messages.push({
           role: 'assistant',
@@ -766,9 +799,9 @@ export const makeStreamingAgent = async (
         );
       }
       messages.push({ role: 'assistant', content: replyText });
-      // One addNode commits the external turn as a unit. A failed/cancelled
-      // runtime call therefore cannot leave a deeper orphaned user branch that
-      // recovery mistakes for committed history.
+      // Commit the external answer and accounting as a unit. Typed incoming
+      // mail was recorded separately; ordinary input remains atomic with its
+      // answer, so a failed runtime call cannot leave an orphaned UI turn.
       const finalNode = await tree.addNode(baseLeafId, messages, {
         usageTotals: harden({ ...nextUsage }),
         ...(backendCheckpoint ? { backendCheckpoint } : {}),
@@ -832,9 +865,7 @@ export const makeStreamingAgent = async (
     // `meta` rides along on the user node (the provider ignores unknown fields)
     // so getHistory can mark, e.g., turns that arrived via mail rather than the
     // local UI.
-    const stagedMessages = [
-      { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
-    ];
+    const stagedMessages = receivedMail ? [] : [...inputMessages];
 
     // Agentic loop: stream a reply; if it calls tools, run them, persist the
     // assistant turn plus tool results, and loop again until the model returns a
@@ -985,8 +1016,8 @@ export const makeStreamingAgent = async (
       outputTokens: current.outputTokens + turnOutput,
       turns: current.turns + 1,
     });
-    // Persist the complete logical turn and its accounting in one node. A
-    // provider failure therefore leaves no deeper branch for revival to adopt.
+    // Persist the complete answer and accounting in one node. A provider
+    // failure leaves no partially answered branch for revival to adopt.
     const committedNode = await tree.addNode(baseLeafId, stagedMessages, {
       usageTotals: totals,
     });
@@ -1010,13 +1041,11 @@ export const makeStreamingAgent = async (
    * iterator it closes is bound later, which is why this is a function.
    */
   const stopInbox = () => {
-    // eslint-disable-next-line no-use-before-define
     signalInboxStopped();
-    // eslint-disable-next-line no-use-before-define
+
     wakeMailWorker();
-    // eslint-disable-next-line no-use-before-define
+
     if (inboxIterator) {
-      // eslint-disable-next-line no-use-before-define
       void Promise.resolve(inboxIterator.return()).catch(() => undefined);
     }
   };
@@ -1167,14 +1196,14 @@ export const makeStreamingAgent = async (
         for (;;) {
           if (pendingMail.length === 0) {
             if (pumpEnded || stopped) return;
-            // eslint-disable-next-line no-await-in-loop
+
             await new Promise(resolve => {
               parkedWorker = resolve;
             });
             // eslint-disable-next-line no-continue
             continue;
           }
-          const { number, text, fromName } = /** @type {any} */ (
+          const { number, text, fromName, type } = /** @type {any} */ (
             pendingMail.shift()
           );
           try {
@@ -1188,7 +1217,12 @@ export const makeStreamingAgent = async (
             // that rejects before reaching the writer becomes an unhandled
             // rejection in the daemon worker.
             const turnP = converse(text, writer, {
-              mail: { from: fromName },
+              mail: {
+                from: fromName,
+                ...(type === 'request' || type === 'form'
+                  ? { messageNumber: String(number) }
+                  : {}),
+              },
             }).then(
               () => undefined,
               error =>
@@ -1202,7 +1236,7 @@ export const makeStreamingAgent = async (
             // value rather than a hand-off back to `turnDone`. On every normal
             // path `writer.end()` runs before the turn resolves, so `turnDone`
             // wins and this never fires.
-            // eslint-disable-next-line no-await-in-loop
+
             const result = await Promise.race([
               turnDone,
               turnP.then(
@@ -1217,20 +1251,37 @@ export const makeStreamingAgent = async (
             // A turn that finished is answered and dismissed whatever else is
             // happening: its history is committed and the model was paid for.
             // Only a turn shutdown aborted is left in the inbox, for the next
-            // incarnation — an aborted turn commits nothing, so replaying it
-            // cannot duplicate anything.
+            // incarnation. Typed incoming mail is already recorded, and its
+            // message number deduplicates the receipt on replay.
             if (!result.ok && stopped) return;
             const replyText = result.ok
               ? result.text || ''
               : `Error: ${result.error}`;
-            // eslint-disable-next-line no-await-in-loop
-            await E(powers).reply(number, [replyText], [], []);
+
+            if (type === 'request' || type === 'form') {
+              if (
+                !settledMail.delete(String(number)) &&
+                !(await E(powers).has(`workflow-settled-${number}`))
+              ) {
+                // A provider failure is not a typed rejection. Preserve the
+                // request for recovery; its incoming text is already durable.
+                // Preserve unanswered forms for recovery or the operator too.
+                // eslint-disable-next-line no-continue
+                if (!result.ok || type === 'form') continue;
+                await E(powers).reject(
+                  number,
+                  'Agent ended the turn without a typed answer',
+                );
+              }
+            } else {
+              await E(powers).reply(number, [replyText], [], []);
+            }
             // Dismiss after handling so the message leaves the inbox and is not
             // reprocessed when followMessages replays on the next daemon
             // restart. Bookkeeping, like the pump's: a failure here must not
             // be reported as "could not complete mail turn", which the turn
             // plainly did.
-            // eslint-disable-next-line no-await-in-loop
+
             await dismissQuietly(number);
           } catch (error) {
             console.error(
@@ -1322,6 +1373,12 @@ export const makeStreamingAgent = async (
               const edges = namesArray.map(n => `"${n}"`).join(', ');
               text += `\n\n(System: message #${number} attaches object(s) with edge name(s) ${edges}. To keep any of them, call the adopt tool with message number ${number} and the edge name during this turn — the message is dismissed afterward.)`;
             }
+          } else if (type === 'request' || type === 'form') {
+            text = `[Inbox ${type} #${number}] ${message.description}\n\n${
+              type === 'request'
+                ? `Answer with resolveRequest(messageNumber: "${number}", value: ...), or rejectRequest. A prose reply does not answer this request.`
+                : `Answer with submitForm(messageNumber: "${number}", values: ...). Fields: ${message.fields.map(field => field.name).join(', ')}.`
+            }`;
           } else {
             text = `(${type || 'unknown'} message)`;
           }
@@ -1341,7 +1398,7 @@ export const makeStreamingAgent = async (
           }
 
           if (stopped || quarantineError) break;
-          pendingMail.push({ number, text, fromName });
+          pendingMail.push({ number, text, fromName, type });
           wakeMail();
         }
       } finally {
@@ -1614,11 +1671,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
       hostedBackendsP = (async () => {
         const backends = new Map();
         for (const name of [...new Set(configuredBackendNames)]) {
-          // eslint-disable-next-line no-await-in-loop, @jessie.js/safe-await-separator
+          // eslint-disable-next-line @jessie.js/safe-await-separator
           if (await E(powers).has(name)) {
-            // eslint-disable-next-line no-await-in-loop
             const factory = await E(powers).lookup(name);
-            // eslint-disable-next-line no-await-in-loop
+
             const descriptor = assertHostedBackendDescriptor(
               await E(factory).describe(),
             );
@@ -2176,9 +2232,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     const host = getHost();
     for (const name of [`session-${id}`, `session-agent-${id}`]) {
       try {
-        // eslint-disable-next-line no-await-in-loop
         if (await E(host).has(name)) {
-          // eslint-disable-next-line no-await-in-loop
           await E(host).remove(name);
         }
       } catch (error) {
@@ -2741,7 +2795,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
       const hostedModels = [];
       for (const [id, backend] of hosted.entries()) {
         try {
-          // eslint-disable-next-line no-await-in-loop
           const models = await E(backend.factory).listModels();
           hostedModels.push(
             ...models.map(candidate => {

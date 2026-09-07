@@ -43,6 +43,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   const sent = [];
   /** @type {bigint[]} */
   const dismissed = [];
+  const received = [];
+  const resolved = [];
 
   const push = message => {
     if (closed) return;
@@ -92,17 +94,28 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   /**
    * @param {object} options
    * @param {string} options.from
-   * @param {string[]} options.strings
+   * @param {string[]} [options.strings]
+   * @param {string} [options.type]
+   * @param {string} [options.description]
    * @param {string} [options.replyTo]
    * @param {boolean} [options.done]
    * @param {bigint} [options.number]
    */
-  const deliver = ({ from, strings, replyTo, done = true, number }) => {
+  const deliver = ({
+    from,
+    strings = [],
+    replyTo,
+    done = true,
+    number,
+    type = 'package',
+    description = '',
+  }) => {
     nextId += 1;
     const messageNumber = number === undefined ? nextNumber : number;
     if (number === undefined) nextNumber += 1n;
     const message = harden({
-      type: 'package',
+      type,
+      description,
       from,
       to: locatorFor(SELF),
       strings: harden([...strings]),
@@ -113,6 +126,7 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
       done,
       ...(replyTo ? { replyTo } : {}),
     });
+    received.push(message);
     push(message);
     return message;
   };
@@ -138,6 +152,13 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   };
 
   const powers = Far('Powers', {
+    listMessages: async () => harden([...received]),
+    resolve: async (number, name) => {
+      resolved.push({ number, value: store.get(name) });
+    },
+    reject: async (number, reason) => {
+      resolved.push({ number, reason });
+    },
     async storeValue(value, petName) {
       store.set(nameOf(petName), value);
     },
@@ -194,7 +215,13 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     },
   });
 
-  return { ...mailbox, deliver, powers };
+  const replay = () => {
+    closed = false;
+    for (const message of received) {
+      if (!dismissed.includes(message.number)) push(message);
+    }
+  };
+  return { ...mailbox, deliver, powers, resolved, replay };
 };
 
 /** Timers that never fire, so a test asserts on the answer, not the deadline. */
@@ -477,3 +504,154 @@ test('a session with a quiet inbox shuts down without waiting for it', async t =
   await agent.shutdown();
   t.pass();
 });
+
+test('workflow requests reach Floot as tasks and settle with typed verdicts', async t => {
+  t.timeout(20_000);
+  const mailbox = makeLiveMailbox();
+  const provider = makeScriptedProvider([
+    context => {
+      t.true(
+        context.some(entry => entry.content?.includes('Review candidate abc')),
+      );
+      return harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'verdict',
+              type: 'function',
+              function: {
+                name: 'resolveRequest',
+                arguments: JSON.stringify({
+                  messageNumber: '1',
+                  value: { approve: true, feedback: 'Tests pass.' },
+                }),
+              },
+            },
+          ],
+        },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+    },
+    () =>
+      harden({
+        message: { role: 'assistant', content: 'Review complete.' },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+  ]);
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { provider },
+    'Reviewer',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  mailbox.deliver({
+    from: locatorFor(HOST),
+    type: 'request',
+    description: 'Review candidate abc',
+  });
+  t.true(await until(() => mailbox.dismissed.includes(1n)));
+  t.deepEqual(mailbox.resolved, [
+    { number: 1n, value: { approve: true, feedback: 'Tests pass.' } },
+  ]);
+  t.is(
+    mailbox.sent.length,
+    0,
+    'no prose package is substituted for the verdict',
+  );
+});
+
+for (const acknowledge of [false, true]) {
+  test(`typed mail survives provider failure ${acknowledge ? 'after' : 'before'} acknowledgement`, async t => {
+    t.timeout(20_000);
+    const mailbox = makeLiveMailbox();
+    let failed = false;
+    const answer = () =>
+      harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'ack',
+              type: 'function',
+              function: {
+                name: 'resolveRequest',
+                arguments: JSON.stringify({
+                  messageNumber: '1',
+                  value: { acknowledged: true },
+                }),
+              },
+            },
+          ],
+        },
+      });
+    const fail = () => {
+      failed = true;
+      throw Error('temporary provider outage');
+    };
+    const agent = await makeStreamingAgent(
+      mailbox.powers,
+      undefined,
+      { provider: makeScriptedProvider(acknowledge ? [answer, fail] : [fail]) },
+      'Originating conversation',
+      harden({ timers: inertTimers }),
+    );
+    t.teardown(async () => {
+      mailbox.close();
+      await agent.shutdown();
+    });
+    agent.startInbox();
+    mailbox.deliver({
+      from: locatorFor(HOST),
+      type: 'request',
+      description: 'Your design is ready. Candidate abc.',
+    });
+    t.true(await until(() => failed));
+    // Let the failed turn release and the mailbox settlement jobs drain.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await agent.shutdown();
+    const notices = history =>
+      history.filter(message => message.content?.includes('Candidate abc'));
+    t.is(notices(await agent.getHistory()).length, 1);
+    t.deepEqual(
+      mailbox.resolved,
+      acknowledge ? [{ number: 1n, value: { acknowledged: true } }] : [],
+    );
+    t.is(mailbox.dismissed.includes(1n), acknowledge);
+
+    if (!acknowledge) {
+      mailbox.close();
+      mailbox.replay();
+      const recovered = await makeStreamingAgent(
+        mailbox.powers,
+        undefined,
+        {
+          provider: makeScriptedProvider([
+            answer,
+            () => harden({ message: { role: 'assistant', content: 'Ready.' } }),
+          ]),
+        },
+        'Originating conversation',
+        harden({ timers: inertTimers }),
+      );
+      t.teardown(async () => {
+        mailbox.close();
+        await recovered.shutdown();
+      });
+      recovered.startInbox();
+      t.true(await until(() => mailbox.dismissed.includes(1n)));
+      t.is(notices(await recovered.getHistory()).length, 1);
+      t.deepEqual(mailbox.resolved, [
+        { number: 1n, value: { acknowledged: true } },
+      ]);
+    }
+  });
+}

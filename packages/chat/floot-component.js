@@ -609,6 +609,7 @@ export const flootComponent = (
   const loadHistory = async (
     /** @type {FlootSession} */ session,
     historyP = E(facetFor(session)).getHistory(),
+    accept = () => true,
   ) => {
     const previousMessages = session.messages;
     const previousLength = previousMessages.length;
@@ -616,6 +617,7 @@ export const flootComponent = (
       const history = await historyP;
       // A new submission or refresh takes precedence over stale history I/O.
       if (
+        !accept() ||
         session.messages !== previousMessages ||
         session.messages.length !== previousLength
       )
@@ -1805,8 +1807,34 @@ export const flootComponent = (
   };
   void loadInitialSessions();
 
+  // Mail-driven workflow completions do not have a UI reply stream. Refresh
+  // idle history so the readiness message appears while this space is open.
+  // Never overwrite an optimistic/in-flight user turn with an older snapshot.
+  let historyTimer;
+  const refreshMailHistory = async () => {
+    const session = getActiveSession();
+    if (session && !busy && !liveTurnFor(session.id)) {
+      const previousCount = session.messages.length;
+      await loadHistory(
+        session,
+        undefined,
+        () => !cancelled && !busy && !liveTurnFor(session.id),
+      );
+      if (
+        !cancelled &&
+        activeSessionId === session.id &&
+        session.messages.length > previousCount
+      ) {
+        notify();
+      }
+    }
+    if (!cancelled) historyTimer = setTimeout(refreshMailHistory, 3000);
+  };
+  historyTimer = setTimeout(refreshMailHistory, 3000);
+
   return () => {
     cancelled = true;
+    clearTimeout(historyTimer);
     if (recoveryRefreshTimer !== undefined) {
       clearTimeout(recoveryRefreshTimer);
     }

@@ -290,3 +290,17 @@ appends, so a recovered run and a live run cannot disagree.
   uses: `current()`, `stateAt(seq)` time travel, and client-side
   `verify()` of the hash chain. The `@endo/space-workflow` Chat space
   renders runs through it.
+
+### Retrying a factory handoff
+
+`factory.start({ requestId, params })` optionally names an idempotent handoff.
+The key is scoped to that factory; concurrent calls and retries after restart
+return the same run. Reusing the key with different params rejects. Keyed starts
+require capability-free params and pre-bound endowments; they cannot add new
+endowments. This closes the gap between starting a run and saving its observer
+in a conversational agent's pet store.
+
+Mail correlation authenticates both the service's sent-mail counterpart and
+the answering participant by formula identity, ignoring transport hints. A
+matching marker or `replyTo` alone is not an approval. Recovery applies the same
+provenance checks as live delivery.
