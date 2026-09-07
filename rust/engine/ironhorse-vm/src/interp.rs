@@ -28450,9 +28450,12 @@ impl Interp {
                     return self.from_async_reject(id, e);
                 }
             };
-            let key = self.intern_key(&k.to_string());
+            // The same non-minting read as the synchronous twin
+            // (`arraylike_index`): `Array.fromAsync({length: 70000})` interned
+            // one name per element and poisoned the machine.
+            let key = self.array_index_read_key(k);
             let kvalue = {
-                let g = self.mop_get(code, inst, key, array_like);
+                let g = self.mop_get_read(code, inst, key, array_like);
                 match self.from_async_try(g, sb, cd, jd)? {
                     Ok(v) => v,
                     Err(e) => return self.from_async_reject(id, e),
@@ -28590,7 +28593,7 @@ impl Interp {
         if self.from_async[id].target_is_array {
             self.array_set_dense(target, k as u32, v);
         } else {
-            let key = self.intern_key(&k.to_string());
+            let key = self.array_index_read_key(k);
             let desc = OrdinaryDescriptor {
                 value: Some(v),
                 writable: Some(true),
@@ -28598,7 +28601,7 @@ impl Interp {
                 configurable: Some(true),
                 ..OrdinaryDescriptor::default()
             };
-            let r = self.mop_define_own_property(code, target, key, desc);
+            let r = self.mop_define_own_property_read(code, target, key, desc);
             let ok = match self.from_async_try(r, sb, cd, jd)? {
                 Ok(b) => b,
                 Err(e) => return self.from_async_close_and_reject(code, id, e),
@@ -42097,7 +42100,7 @@ impl Interp {
         let raw = self.mop_get_with_proxy_metering(
             code,
             o,
-            length_id,
+            ReadKey::Id(length_id),
             recv,
             ARRAY_ITERATOR_PROXY_KEYS_METERING,
             true,
@@ -42139,42 +42142,22 @@ impl Interp {
             .max(self.internal_indexed_limit(o))
     }
 
-    /// `? HasProperty(O, ToString(k))`.
-    /// The interned property **id** for integer element index `k` on generic
-    /// receiver `o`, but ONLY when resolving `k` genuinely requires the
-    /// interning MOP walk: the index's name is already interned, some chain
-    /// level answers membership/elements dynamically (a proxy trap, a typed
-    /// array's elements, a wrapper's string indices), or some chain level's
-    /// `items()` map holds `k`. Returns `None` when `k` is provably absent
-    /// everywhere on the chain — no name-keyed property can exist under a
-    /// never-interned index and no items map holds it — so `HasProperty`
-    /// (`false`) and `Get` (`undefined`) are both answered WITHOUT interning.
+    /// The [`ReadKey`] for integer element index `k` on generic receiver `o`,
+    /// or `None` when `k` is provably absent everywhere on the chain — so
+    /// `HasProperty` (`false`) and `Get` (`undefined`) are both answered
+    /// without resolving a name at all.
     ///
     /// Both the `has` and the `get` edge MUST route through this one probe:
     /// probing every absent index of a 1e6-length sparse array otherwise
-    /// permanently exhausts the 16-bit id space, and a `get`-only caller
-    /// (`find`/`findIndex`/`findLast`/`includes`/`at` reach `get` with no
-    /// preceding `has`) would silently re-arm that exhaustion if only the `has`
-    /// edge were index-safe.
-    fn array_generic_interned_index_id(
-        &mut self,
-        o: crate::value::SlotIndex,
-        k: u64,
-    ) -> Option<u16> {
-        self.array_generic_index_answerable(o, k)
-            .then(|| self.array_generic_index_id(k))
-    }
-
-    /// [`Self::array_generic_interned_index_id`] as a [`ReadKey`]: same
-    /// decision, but a name is only LOOKED UP, never minted.
+    /// walks the `u16` id space into the saturation guard, and a `get`-only
+    /// caller (`find`/`findIndex`/`findLast`/`includes`/`at` reach `get` with
+    /// no preceding `has`) would re-arm that on its own.
     ///
-    /// The id-returning form still mints for a receiver chain that carries a
-    /// Proxy, because an absent index can invoke an observable trap and the
-    /// trap has to be handed a key. That key does not need to be a minted
-    /// name — `read_key_slot` spells one from the index, as `fxKeyAt` does —
-    /// so every generic Array READ takes this form instead, and
-    /// `Array.prototype.map.call(new Proxy(bigArray, {}), f)` no longer walks
-    /// the `u16` id space into the guard that poisons the machine.
+    /// A name is only ever LOOKED UP here, never minted. That matters most
+    /// for a chain carrying a Proxy, where every index is "answerable"
+    /// because an absent one can still invoke an observable trap: the trap
+    /// does have to be called, but `read_key_slot` spells its key from the
+    /// index the way `fxKeyAt` does, so calling it costs no id.
     fn array_generic_index_read_key(
         &mut self,
         o: crate::value::SlotIndex,
@@ -42269,19 +42252,20 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<Slot, Halt> {
-        // The metered Proxy path needs a real id, so this form keeps the
-        // minting probe — but only reaches it when some chain level can
-        // actually answer `k`. An index nothing answers reads `undefined`
-        // with no name and no trap, which is what lets `Array.from` and
-        // spread walk a 70,000-hole sparse array.
-        let Some(id) = self.array_generic_interned_index_id(o, k) else {
+        // An index nothing on the chain can answer reads `undefined` with no
+        // name and no trap, which is what lets `Array.from` and spread walk a
+        // 70,000-hole sparse array. An index something CAN answer is resolved
+        // by lookup, never minted: a Proxy anywhere on the chain makes every
+        // index answerable, so minting here meant `Array.from(new Proxy(a,
+        // {}))` spent one id per element and poisoned the machine.
+        let Some(key) = self.array_generic_index_read_key(o, k) else {
             return Ok(Slot::undefined());
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         self.mop_get_with_proxy_metering(
             code,
             o,
-            id,
+            key,
             recv,
             ARRAY_ITERATOR_PROXY_VALUE_METERING,
             false,
@@ -50586,8 +50570,8 @@ impl Interp {
         i: u64,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        match self.array_generic_interned_index_id(inst, i) {
-            Some(id) => self.mop_get(code, inst, id, receiver),
+        match self.array_generic_index_read_key(inst, i) {
+            Some(key) => self.mop_get_read(code, inst, key, receiver),
             None => Ok(Slot::undefined()),
         }
     }
@@ -51390,7 +51374,7 @@ impl Interp {
             return self.mop_get_with_proxy_metering(
                 code,
                 inst,
-                id,
+                ReadKey::Id(id),
                 receiver,
                 context.trap_metering,
                 context.meter_terminal_wrapper,
@@ -51398,7 +51382,7 @@ impl Interp {
                 true,
             );
         }
-        self.mop_get_with_proxy_metering(code, inst, id, receiver, 0, false, false, false)
+        self.mop_get_with_proxy_metering(code, inst, ReadKey::Id(id), receiver, 0, false, false, false)
     }
 
     /// `O.[[Get]](P, Receiver)` with a caller-owned residual for each Proxy
@@ -51409,7 +51393,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-        id: u16,
+        key: ReadKey,
         receiver: Slot,
         proxy_trap_metering: u64,
         meter_terminal_wrapper: bool,
@@ -51420,7 +51404,7 @@ impl Interp {
             vm.mop_get_with_proxy_metering_inner(
                 code,
                 inst,
-                id,
+                key,
                 receiver,
                 proxy_trap_metering,
                 meter_terminal_wrapper,
@@ -51435,7 +51419,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-        id: u16,
+        key: ReadKey,
         receiver: Slot,
         proxy_trap_metering: u64,
         meter_terminal_wrapper: bool,
@@ -51446,7 +51430,7 @@ impl Interp {
             return self.proxy_get_with_metering(
                 code,
                 inst,
-                id,
+                key,
                 receiver,
                 proxy_trap_metering,
                 meter_terminal_wrapper,
@@ -51484,6 +51468,17 @@ impl Interp {
                 }
             }
         }
+        // Past the metering, which is charged for either spelling. An index
+        // with no name resolves through the same uninterned walk every other
+        // index-keyed read uses; it reaches the identical exotic storages the
+        // id tail below consults (array items, TypedArray elements, String
+        // wrapper units) and then the prototype chain.
+        let id = match key {
+            ReadKey::Id(id) => id,
+            ReadKey::Index(index) => {
+                return self.uninterned_index_get(code, inst, index, receiver)
+            }
+        };
         // An exotic-array / function target's `length` / integer-index / `name`
         // / `prototype` own values live in side tables, not the slot chain (they
         // are not visible to `ordinary_get`), so honor them when a proxy
@@ -52225,14 +52220,14 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        self.proxy_get_with_metering(code, proxy, id, receiver, 0, false, false, false)
+        self.proxy_get_with_metering(code, proxy, ReadKey::Id(id), receiver, 0, false, false, false)
     }
 
     fn proxy_get_with_metering(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
-        id: u16,
+        key: ReadKey,
         receiver: Slot,
         proxy_trap_metering: u64,
         meter_terminal_wrapper: bool,
@@ -52250,7 +52245,7 @@ impl Interp {
                 return self.mop_get_with_proxy_metering(
                     code,
                     target,
-                    id,
+                    key,
                     receiver,
                     proxy_trap_metering,
                     meter_terminal_wrapper,
@@ -52264,7 +52259,7 @@ impl Interp {
             target,
             handler,
             trap,
-            ReadKey::Id(id),
+            key,
             receiver,
             proxy_trap_metering,
             meter_forwarded_target,
