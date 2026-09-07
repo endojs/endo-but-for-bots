@@ -2,21 +2,22 @@
 /* global setTimeout, clearTimeout */
 import harden from '@endo/harden';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, open, rename, rm } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  open,
+  realpath,
+  rename,
+  rm,
+} from 'node:fs/promises';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { createInterface } from 'node:readline';
+import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
+
 import { WorkerHaltError } from './worker-engine.js';
 
 /** @import { WorkerEngine } from './worker-engine.js' */
-
-/** @param {string} path */
-const digest = async path => {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
-  return hash.digest('hex');
-};
 
 /** @param {string} path */
 const syncFile = async path => {
@@ -70,10 +71,67 @@ export const makeIronhorseEngine = ({
     return join(images, `${ref}.sqlite`);
   };
 
+  /** @type {Awaited<ReturnType<typeof acquireIronhorseRuntime>> | undefined} */
+  let runtime;
+  let acquiring = false;
+  /** @type {Set<() => Promise<void>>} */
+  const incarnations = new Set();
+  const stopWorkers = async () => {
+    await Promise.all([...incarnations].map(stop => stop()));
+  };
   return harden({
     canSnapshot: true,
+    assertStoreOwnership: () => {
+      if (!runtime) throw Error('Ironhorse state directory is not owned');
+      runtime.assertOwned();
+    },
+    acquireStore: async statePath => {
+      if (runtime || acquiring)
+        throw Error('Ironhorse engine already owns a store');
+      if (!statePath) throw Error('Ironhorse requires a filesystem store');
+      acquiring = true;
+      try {
+        if (
+          resolvePath(storePath) !== resolvePath(statePath, 'heaps') ||
+          (await realpath(statePath)) !== (await realpath(dirname(storePath)))
+        ) {
+          throw Error(
+            'Ironhorse heaps must belong to the daemon state directory',
+          );
+        }
+        await mkdir(storePath, { recursive: true });
+        if (
+          (await realpath(storePath)) !==
+          join(await realpath(statePath), 'heaps')
+        ) {
+          throw Error('Ironhorse heaps directory must not be a symlink');
+        }
+        runtime = await acquireIronhorseRuntime({
+          statePath,
+          workerBinary,
+          bootPaths,
+          crankBudget,
+          onLost: () => {
+            void stopWorkers().catch(() => {});
+          },
+        });
+      } finally {
+        acquiring = false;
+      }
+      return async () => {
+        await stopWorkers();
+        await runtime?.release();
+        runtime = undefined;
+      };
+    },
     releaseSnapshot: async ref => rm(imagePath(ref), { force: true }),
     start: async ({ snapshot, onOutbound }) => {
+      if (!runtime)
+        throw Error(
+          'Acquire the Ironhorse state directory before starting workers',
+        );
+      const owned = runtime;
+      owned.assertOwned();
       const first = await mkdir(images, { recursive: true });
       if (first) {
         for (let path = images; ; path = dirname(path)) {
@@ -89,7 +147,7 @@ export const makeIronhorseEngine = ({
       try {
         if (snapshot != null) {
           const source = imagePath(snapshot);
-          if ((await digest(source)) !== snapshot) {
+          if ((await hashFile(source)) !== snapshot) {
             throw Error('Ironhorse snapshot digest mismatch');
           }
           await copyFile(source, heap);
@@ -139,9 +197,21 @@ export const makeIronhorseEngine = ({
         });
 
       const launch = async () => {
-        child = spawn(workerBinary, [heap, ...bootPaths], {
-          stdio: ['pipe', 'pipe', 'inherit'],
-        });
+        if (terminated)
+          throw Error('Ironhorse worker was terminated during startup');
+        owned.assertOwned();
+        child = spawn(
+          owned.workerBinary,
+          [
+            heap,
+            owned.profile,
+            join(storePath, 'active.lock'),
+            ...owned.bootPaths,
+          ],
+          {
+            stdio: ['pipe', 'pipe', 'inherit'],
+          },
+        );
         const process = child;
         exited = new Promise(resolve => {
           process.once('exit', (code, signal) => {
@@ -176,6 +246,7 @@ export const makeIronhorseEngine = ({
           }
         });
         const ready = await request();
+        owned.assertOwned();
         if (ready.op !== 'ready')
           throw Error('Ironhorse boot protocol mismatch');
       };
@@ -193,16 +264,23 @@ export const makeIronhorseEngine = ({
           throw Error('Ironhorse failed to close its SQLite heap');
       };
 
-      try {
-        await launch();
-      } catch (error) {
+      const terminate = async () => {
+        terminated = true;
         child?.kill('SIGKILL');
         await exited;
         await rm(directory, { recursive: true, force: true });
+        incarnations.delete(terminate);
+      };
+      incarnations.add(terminate);
+      try {
+        await launch();
+      } catch (error) {
+        await terminate();
         throw error;
       }
       return harden({
         deliver: async message => {
+          owned.assertOwned();
           // The queue and dispatch function belong to the trusted worker
           // bootstrap; the guest evaluator receives neither one.
           const source = `thixotropeDispatch(${JSON.stringify(JSON.stringify(message))});`;
@@ -223,7 +301,7 @@ export const makeIronhorseEngine = ({
         },
         snapshot: async () => {
           await close(); // SQLite folds the WAL before the file is copied.
-          const ref = await digest(heap);
+          const ref = await hashFile(heap);
           const temporary = join(directory, 'snapshot.sqlite');
           await copyFile(heap, temporary);
           await syncFile(temporary);
@@ -232,12 +310,7 @@ export const makeIronhorseEngine = ({
           await launch();
           return ref;
         },
-        terminate: async () => {
-          terminated = true;
-          child?.kill('SIGKILL');
-          await exited;
-          await rm(directory, { recursive: true, force: true });
-        },
+        terminate,
       });
     },
   });

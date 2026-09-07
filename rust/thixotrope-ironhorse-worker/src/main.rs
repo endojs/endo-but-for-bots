@@ -52,13 +52,82 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     Ok(outcome.result)
 }
 
+// Kernel locks are released on process death. Never unlink the lock files:
+// replacing their inodes would let two supervisors each hold a different lock.
+fn lock_file(
+    path: &std::path::Path,
+    operation: rustix::fs::FlockOperation,
+) -> Result<std::fs::File, String> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| format!("lock file: {e}"))?;
+    rustix::fs::flock(&file, operation).map_err(|e| format!("state directory is busy: {e}"))?;
+    Ok(file)
+}
+
+fn supervise_lock(state: &str) -> Result<(), String> {
+    use rustix::fs::FlockOperation::{NonBlockingLockExclusive, Unlock};
+    let root = std::path::Path::new(state);
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    // fd 1 is an inherited duplicate of the supervisor's open lock file.
+    // flock belongs to that open-file description: the Node parent retains
+    // ownership even if this helper is killed before it can report failure.
+    rustix::fs::flock(rustix::stdio::stdout(), NonBlockingLockExclusive)
+        .map_err(|e| format!("state directory is busy: {e}"))?;
+    let heaps = root.join("heaps");
+    std::fs::create_dir_all(&heaps).map_err(|e| e.to_string())?;
+    // Old workers retain shared leases until they actually exit. Holding the
+    // exclusive lease proves no abandoned incarnation can still be writing.
+    let active_path = heaps.join("active.lock");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let active = loop {
+        match lock_file(&active_path, NonBlockingLockExclusive) {
+            Ok(file) => break file,
+            Err(error) if std::time::Instant::now() >= deadline => return Err(error),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    };
+    // Cleanup is requested only AFTER the host validates persistent compatibility.
+    eprintln!("{{\"op\":\"locked\"}}");
+    io::stderr().flush().map_err(|e| e.to_string())?;
+    let mut input = io::stdin().lock();
+    let mut command = String::new();
+    input.read_line(&mut command).map_err(|e| e.to_string())?;
+    if command.trim() != "prepare" {
+        return Ok(());
+    }
+    let work = heaps.join("incarnations");
+    if work.exists() {
+        std::fs::remove_dir_all(&work).map_err(|e| e.to_string())?;
+    }
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    rustix::fs::flock(&active, Unlock).map_err(|e| e.to_string())?;
+    eprintln!("{{\"op\":\"ready\"}}");
+    io::stderr().flush().map_err(|e| e.to_string())?;
+    io::copy(&mut input, &mut io::sink()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let path = args
         .next()
         .ok_or("usage: thixotrope-ironhorse-worker heap.sqlite [boot.js ...]")?;
+    if path == "--lock-state" {
+        return supervise_lock(&args.next().ok_or("state directory required")?);
+    }
+    let profile = args.next().ok_or("runtime profile required")?;
+    let active_path = args.next().ok_or("worker lease path required")?;
+    let _active = lock_file(
+        std::path::Path::new(&active_path),
+        rustix::fs::FlockOperation::LockShared,
+    )?;
     let fresh = !std::path::Path::new(&path).exists();
-    let signature = Signature::new("thixotrope-ironhorse-v1");
+    let signature = Signature::new(&profile);
     let mut store = SqliteHeapStore::open(&path).map_err(|e| format!("open: {e:?}"))?;
     let mut session = if fresh {
         begin_store_session(Interp::new(), &signature, &mut store)
@@ -119,7 +188,14 @@ fn main() {
     match result {
         Ok(Ok(())) => {}
         other => {
-            eprintln!("worker failed: {other:?}");
+            if std::env::args().nth(1).as_deref() == Some("--lock-state") {
+                eprintln!(
+                    "{}",
+                    json!({"op": "error", "message": format!("{other:?}")})
+                );
+            } else {
+                eprintln!("worker failed: {other:?}");
+            }
             std::process::exit(1);
         }
     }

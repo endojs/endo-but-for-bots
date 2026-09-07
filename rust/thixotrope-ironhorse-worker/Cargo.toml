@@ -10,3 +10,4 @@ ironhorse-compile = { path = "../engine/ironhorse-compile" }
 ironhorse-snapshot = { path = "../engine/ironhorse-snapshot" }
 ironhorse-store-sqlite = { path = "../endo/ironhorse-store-sqlite" }
 serde_json = "1"
+rustix = { version = "1.1.4", features = ["fs", "stdio"] }

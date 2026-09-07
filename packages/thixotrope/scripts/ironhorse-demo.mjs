@@ -10,6 +10,7 @@ import {
   makeThixotropeDaemon,
   makeFsStore,
   makeIronhorseEngine,
+  inspectIronhorseStore,
 } from '../index.js';
 import { counterSource, callerSource } from '../src/demo-counter-vats.js';
 import { producerSource, listenerSource } from '../src/demo-promise-vats.js';
@@ -26,8 +27,8 @@ assert.ok(
 );
 const commands =
   demo === 'counter'
-    ? ['init', 'status', 'incr', 'check']
-    : ['init', 'status', 'listen', 'resolve', 'check'];
+    ? ['init', 'status', 'inspect', 'incr', 'check']
+    : ['init', 'status', 'inspect', 'listen', 'resolve', 'check'];
 if (command === 'help') {
   console.log(
     `Usage: yarn demo:ironhorse:${demo} ${commands.join('|')} [state-directory] [value]`,
@@ -36,6 +37,10 @@ if (command === 'help') {
 }
 assert.ok(commands.includes(command), `Unknown ${demo} command: ${command}`);
 const statePath = resolve(stateArgument);
+if (command === 'inspect') {
+  console.log(JSON.stringify(await inspectIronhorseStore(statePath), null, 2));
+  process.exit(0);
+}
 const packagePath = fileURLToPath(new URL('../', import.meta.url));
 const engine = makeIronhorseEngine({
   workerBinary:
@@ -112,51 +117,58 @@ try {
     demo,
     'Use a separate, fresh state directory for each demo',
   );
-  let guest = await daemon.lookup(config.publication);
-  if (command === 'incr') console.log(String(await E(guest).incr()));
-  if (command === 'listen') console.log(await E(guest).listen());
-  if (command === 'resolve')
-    console.log(await E(guest).resolve(value ?? 'resumed'));
-  if (command === 'check') {
-    if (demo === 'counter') {
-      const before = await E(guest).read();
-      assert.equal(await E(guest).incr(), before + 1n);
-      await daemon.shutdown();
-      daemon = await start();
-      guest = await daemon.lookup(config.publication);
-      assert.equal(await E(guest).read(), before + 1n);
-      console.log('PASS: cross-vat counter call and state survived restart.');
-    } else {
-      await E(guest).listen();
-      await daemon.shutdown();
-      daemon = await start();
-      guest = await daemon.lookup(config.publication);
-      assert.deepEqual(await E(guest).read(), { settled: false });
-      await E(guest).resolve('across restart');
-      for (let i = 0; i < 100; i += 1) {
-        if ((await E(guest).read()).settled) break;
+  if (command === 'status') {
+    console.log(
+      JSON.stringify({ demo, workers: daemon.inspectWorkers() }, null, 2),
+    );
+    process.exitCode = 0;
+  } else {
+    let guest = await daemon.lookup(config.publication);
+    if (command === 'incr') console.log(String(await E(guest).incr()));
+    if (command === 'listen') console.log(await E(guest).listen());
+    if (command === 'resolve')
+      console.log(await E(guest).resolve(value ?? 'resumed'));
+    if (command === 'check') {
+      if (demo === 'counter') {
+        const before = await E(guest).read();
+        assert.equal(await E(guest).incr(), before + 1n);
+        await daemon.shutdown();
+        daemon = await start();
+        guest = await daemon.lookup(config.publication);
+        assert.equal(await E(guest).read(), before + 1n);
+        console.log('PASS: cross-vat counter call and state survived restart.');
+      } else {
+        await E(guest).listen();
+        await daemon.shutdown();
+        daemon = await start();
+        guest = await daemon.lookup(config.publication);
+        assert.deepEqual(await E(guest).read(), { settled: false });
+        await E(guest).resolve('across restart');
+        for (let i = 0; i < 100; i += 1) {
+          if ((await E(guest).read()).settled) break;
+        }
+        assert.deepEqual(await E(guest).read(), {
+          settled: true,
+          value: 'across restart',
+        });
+        console.log(
+          'PASS: persisted cross-vat promise listener settled after restart.',
+        );
       }
-      assert.deepEqual(await E(guest).read(), {
-        settled: true,
-        value: 'across restart',
-      });
-      console.log(
-        'PASS: persisted cross-vat promise listener settled after restart.',
-      );
     }
+    console.log(
+      JSON.stringify(
+        {
+          vats: daemon.listWorkerIds(),
+          ...(demo === 'counter'
+            ? { count: String(await E(guest).read()) }
+            : { promise: await E(guest).read() }),
+        },
+        null,
+        2,
+      ),
+    );
   }
-  console.log(
-    JSON.stringify(
-      {
-        vats: daemon.listWorkerIds(),
-        ...(demo === 'counter'
-          ? { count: String(await E(guest).read()) }
-          : { promise: await E(guest).read() }),
-      },
-      null,
-      2,
-    ),
-  );
 } finally {
   await daemon.shutdown();
 }

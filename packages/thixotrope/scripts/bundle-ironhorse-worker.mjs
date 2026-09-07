@@ -19,9 +19,6 @@ fs.writeFileSync(
   `
 ${polyfills}
 delete globalThis.harden;
-// Materialize this lazy symbol-keyed intrinsic before SES removes it.
-// Later scope lookups must not install it onto a frozen Array.prototype.
-void Array.prototype[Symbol.unscopables];
 // Ironhorse advertises Iterator before its lazy helper objects are implemented.
 // Use the pre-helper iterator profile, including the shared prototype, rather
 // than leave half of the proposal reachable through iterator instances.
