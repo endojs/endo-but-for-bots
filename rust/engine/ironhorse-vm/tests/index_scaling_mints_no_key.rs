@@ -153,6 +153,71 @@ fn spreading_a_large_sparse_array_mints_no_key() {
     assert_result(&format!("var a = []; a.length = {N}; [...a].length"), "70000");
 }
 
+/// A Proxy anywhere on the chain makes EVERY index answerable, so the probe
+/// that decides whether to resolve a name cannot be the minting one. Adding
+/// `new Proxy(…, {})` around the argument re-armed the exhaustion on the very
+/// built-in this was meant to fix.
+#[test]
+fn array_from_over_a_proxy_mints_no_key() {
+    assert_result(
+        &format!("Array.from(new Proxy({{length: {N}}}, {{}})).length"),
+        "70000",
+    );
+}
+
+/// The Array Iterator reaches its elements through the METERED Proxy path, a
+/// separate `[[Get]]` that used to require a real id.
+#[test]
+fn iterating_a_proxy_over_a_large_array_mints_no_key() {
+    assert_result(
+        &format!("var b = []; b.length = {N}; Array.from(new Proxy(b, {{}})).length"),
+        "70000",
+    );
+    assert_result(
+        &format!(
+            "var b = []; b.length = {N};              var it = Array.prototype[Symbol.iterator].call(new Proxy(b, {{}}));              var n = 0; while (!it.next().done) n++; n"
+        ),
+        "70000",
+    );
+}
+
+/// The asynchronous twin of `Array.from`, whose element loop is the same code
+/// two hundred lines away and was left behind by the first pass.
+#[test]
+fn array_from_async_over_a_large_array_like_mints_no_key() {
+    assert_result(
+        &format!("Array.fromAsync({{length: {N}}}).then(function (a) {{}}); 'started'"),
+        "started",
+    );
+}
+
+#[test]
+fn array_from_over_a_proxy_still_answers_the_same() {
+    assert_result("Array.from(new Proxy({length: 3, 1: 'x'}, {})).join('|')", "|x|");
+    assert_result("var b = [1, 2, 3]; Array.from(new Proxy(b, {})).join('|')", "1|2|3");
+    assert_result("var b = [1, , 3]; Array.from(new Proxy(b, {})).join('|')", "1||3");
+    assert_result(
+        "var b = [1, 2]; Object.setPrototypeOf(b, {1: 'inh'});          Array.from(new Proxy(b, {})).join('|')",
+        "1|2",
+    );
+    assert_result(
+        "var b = [1, 2, 3]; Array.from(new Proxy(new Proxy(b, {}), {})).join('|')",
+        "1|2|3",
+    );
+    // The `get` trap is still CALLED for each index, with the canonical
+    // numeric string, even though no name was minted for it. (The trap has to
+    // pass symbols through: answering `Symbol.iterator` with a string is a
+    // TypeError on both engines and would prove nothing about indices.)
+    assert_result(
+        "var seen = []; \
+         var p = new Proxy({length: 2}, {get: function (t, k) { \
+             if (typeof k === 'symbol') { return undefined; } \
+             seen.push(String(k)); return k === 'length' ? 2 : 'v' + String(k); }}); \
+         Array.from(p).join('|') + '#' + seen.join(',')",
+        "v0|v1#length,0,1",
+    );
+}
+
 #[test]
 fn array_from_still_answers_the_same_as_before() {
     assert_result("Array.from({length: 3}).join(',')", ",,");
