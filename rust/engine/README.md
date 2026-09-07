@@ -3212,52 +3212,50 @@ surface, Ironhorse's Script goal agrees with node on every program this change
 concerns, including `'use strict'; var g=1; Object.freeze(globalThis); …` giving
 `TypeError:1:1` on both.
 
-Two disagreements in that probe are **pre-existing and unrelated** to the goal
-split, confirmed by reproducing them on paths this change does not touch:
+Two disagreements in that probe were **pre-existing and unrelated** to the goal
+split, confirmed by reproducing them on paths this change does not touch. Both
+are now closed, one on each side of the merge:
 
-- A global `var` binding is created **configurable**, where ECMA-262
-  `CreateGlobalVarBinding` requires non-configurable; `delete globalThis.g`
-  therefore answers `true` instead of `false`. Reproduces identically for a
-  **sloppy** program, which this change leaves byte-identical.
+- A global `var` binding was created **configurable**, where ECMA-262
+  `CreateGlobalVarBinding` requires non-configurable, so `delete globalThis.g`
+  answered `true`. It reproduced identically for a **sloppy** program, which the
+  framing change leaves byte-identical — that is what showed it was a separate
+  bug. Fixed here, as the `D` change above.
 - Assignment to an unresolvable identifier in strict code (`'use strict'; x = 0`)
-  assigns instead of throwing `ReferenceError`. That program declares no
-  top-level `var`, so it is outside the deviating class entirely.
+  assigned instead of throwing `ReferenceError`. That program declares no
+  top-level `var`, so it was outside the deviating class entirely; the mainline
+  fixed it independently (`fix(ironhorse): close the with-statement and
+  bare-assignment integrity bypasses`), and F057's
+  `an_undeclared_strict_assignment_is_a_reference_error_not_a_new_global` pins it.
 
-A third pre-existing bug surfaced while attributing the `D` change and is
-**fixed here** because it was what kept two cases un-attributable: **property
-access on `undefined`/`null` did not throw**. `undefined.enumerable` answered
-`undefined` where the spec, XS and node all raise a `TypeError` — a member
-access performs `RequireObjectCoercible`, so it must abort rather than yield a
-value. The harness's `verifyEnumerable` reads
-`Object.getOwnPropertyDescriptor(obj, name).enumerable`, so on a missing
-property XS died with `TypeError: cannot coerce undefined to object` while
-Ironhorse sailed on to a different assertion failure. `XS_CODE_GET_PROPERTY`
-now raises for those two kinds, mirroring what its `delete` neighbour already
-did. (Ironhorse's `Object.getOwnPropertyDescriptor` was never at fault: it
-returns `undefined` for a missing property, exactly like XS.)
+A third pre-existing bug surfaced while attributing the `D` change, because it
+was what kept two cases un-attributable: **property access on `undefined`/`null`
+did not throw**. `undefined.enumerable` answered `undefined` where the spec, XS
+and node all raise a `TypeError` — a member access performs
+`RequireObjectCoercible`, so it must abort rather than yield a value. The
+harness's `verifyEnumerable` reads
+`Object.getOwnPropertyDescriptor(obj, name).enumerable`, so on a missing property
+XS died with `TypeError: cannot coerce undefined to object` while Ironhorse
+sailed on to a different assertion failure. (Ironhorse's
+`Object.getOwnPropertyDescriptor` was never at fault: it returns `undefined` for
+a missing property, exactly like XS.)
 
-Fixing the read raised a **latent test hazard** worth recording, because the
-silent `undefined` had been hiding it. `ironhorse-snapshot/tests/gc_machine.rs`
-ran its second crank's bytecode directly on a machine linked against the *first*
-crank's symbols. The two tables differ — crank 1 interns `caller` (from the
-function it builds) and crank 2 does not — so every id from that slot on is
-shifted by one and crank 2's `keep` actually read `dead`. The test passed only
-because reading a property off the resulting `undefined` answered `undefined`
-instead of throwing; it was comparing garbage against garbage. Both tests now
-`relink_crank` per machine, as the other multi-crank tests already do, and crank
-2 completes with its real value. Ten further `run(&compiled[1].0)` sites in that
-same file carry the same shape; they pass today because their crank pairs happen
-to intern the same names, but none of them is protected by anything.
+**The mainline fixed this concurrently and more broadly** (review F007), and the
+merge takes its implementation over this branch's: it covers the reads on both
+the static and computed paths, the *writes* this branch had left open, and the
+iterable and destructuring bases besides, and it raises with XS's exact message
+(`cannot coerce undefined to object`) rather than a bare `TypeError`. The same
+is true of the **latent test hazard** the silent `undefined` had been hiding:
+`ironhorse-snapshot/tests/gc_machine.rs` ran its second crank's bytecode on a
+machine linked against the *first* crank's symbols, so ids shifted (crank 1
+interns `caller`, crank 2 does not) and crank 2's `keep` read `dead` — it was
+comparing garbage against garbage. Both branches found it and both fixed it the
+same way; the merge keeps the mainline's factored `run_crank` helper. Ten further
+`run(&compiled[1].0)` sites in that file carry the same shape and pass only
+because their crank pairs happen to intern the same names.
 
-Two further gaps in that same match are left alone, each its own fix:
+Two gaps in that same match remain, each its own fix:
 
-- The symmetric half of the one above — a **write** through a `null`/`undefined`
-  base (`undefined.x = 1`) is silently ignored where it must raise `TypeError`.
-  `XS_CODE_SET_PROPERTY` and `property_at_set` take a non-reference base straight
-  to the push. (The read side is fixed on **both** paths: the static
-  `XS_CODE_GET_PROPERTY` arm and the computed `property_at_get`, so
-  `undefined[0]` and `null[Symbol.iterator]` raise too. Fixing only the static
-  form would have left the computed one silent.)
 - A **boolean** primitive does not box to `%Boolean.prototype%`, so
   `true.toString()` throws where XS and node answer `"true"`. String, number and
   bigint bases all box; boolean has no arm.
