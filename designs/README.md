@@ -19,6 +19,14 @@ it),
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
 directories, and immutable package-content trees; specifies identical Node and
 Endor adapters over their existing mechanics and a readable-tree fixture seam),
+[worker-constraint-model](worker-constraint-model.md) (added 2026-08-16,
+landed 2026-09-04; Proposed: replaces the closed `kind: 'locked' | 'node'`
+worker-selection union with an open, multi-axis `WorkerConstraints` schema,
+runtime / persistence / version / target, each independently optional and
+flexible-by-default; today's two kinds migrate onto the runtime axis with zero
+behavior change and zero persisted-formula churn, and the durable/orthogonal
+persistence, version-pin, and target os/arch binary-fetch categories land as
+typed `Not Started` extension points naming the exact seam each plugs into),
 [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (added
 2026-07-30; capability-secure npm development publishing: an agent-facing
 registry proxy whose entire accepted mutation vocabulary is dev-release-shaped
@@ -284,6 +292,7 @@ LLM-agent stack).*
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
+| [worker-constraint-model](worker-constraint-model.md) | 2026-08-16 | 2026-09-04 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
@@ -512,6 +521,12 @@ from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
 
+The 2026-09-04 landing adds [worker-constraint-model](worker-constraint-model.md)
+(Proposed) to M11 (Rust Daemon `endor`), increasing Proposed by 1 and the design
+count by 1. (The absolute totals in the current-totals block above had already
+drifted before this pass; the maintainer's next grooming pass reconciles them by
+re-tallying the summary table's Status column.)
+
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
@@ -663,6 +678,8 @@ flowchart TD
         okey[ocapn-noise-key-only-session-boundary]
         oreconn[ocapn-noise-session-reconnect]
         oortho[ocapn-orthogonal-persistence<br/><i>IN PROGRESS</i>]
+        wcm[worker-constraint-model<br/><i>PROPOSED</i>]
+        oortho --> wcm
         docapn[daemon-ocapn-external-connectivity<br/><i>IN PROGRESS</i>]
         onet --> otcp --> onoise
         orev --> onoise
@@ -1390,6 +1407,7 @@ user interface move to Rust.
 | ironhorse-engine | Approved | Stage-1 design of the supervised `port-xs-to-rust-memory-safe-engine` program: feasibility, architecture, and a staged roadmap for porting the ~75 KLOC XS engine to a Rust crate the `endor` daemon embeds in-process, replacing the C engine behind the `Machine` API while preserving metering, the debugger protocol, and heap snapshots. Implementation accretes onto the same branch/PR (#600); all ten open questions resolved. The parent design that `ironhorse-snapshot-store-seam`, `ironhorse-meter-opcode-cost-instrumentation`, `ironhorse-test262-convergence`, and `ironhorse-debugger-recovery-and-uncaught` extend. |
 | ironhorse-meter-opcode-cost-instrumentation | Not Started | Sibling plan to `ironhorse-engine` § Metering: the opcode/builtin-step cost-calibration instrumentation that measures per-opcode real cost on a named reference platform, supplying the frozen integer weights for Ironhorse's release-versioned deterministic meter (accuracy-over-parity doctrine; determinism per release, recalibration across releases). |
 | ironhorse-test262-convergence | In Progress | Completion-phase milestone (per kriskowal's PR #600 directive): converge the bespoke per-stage corpus into test262-style cases and the dual-run harness into an `xst` analogue (`ironhorse-xst`). The bounded, resumable whole-tree reporting instrument has landed; language-surface convergence remains gated on the remaining `ironhorse-engine` build stages and promotes nothing ahead of them. |
+| [worker-constraint-model](worker-constraint-model.md) | Proposed | Replaces the closed `kind: 'locked' \| 'node'` worker-selection union with an open, multi-axis `WorkerConstraints` schema (runtime / persistence / version / target os-arch, each independently optional and flexible-by-default). Today's two kinds migrate onto the runtime axis with zero behavior change and zero persisted-formula churn: the persisted form is derived from the caller's explicit input (the predicate `manager.js:5250`'s spread already uses), so the seed values keep their legacy `kind` record bytes and a `constraints` field appears only for a genuinely new axis. The durable/orthogonal-persistence, version-pin, and target binary-fetch categories land as typed `Not Started` extension points naming the seam each plugs into; the OS/arch axis is named `target` (not `platform`) to avoid colliding with `daemon-endor-architecture`'s supervision-topology `WorkerPlatform`. |
 
 **Exit criterion:** `endor` runs as a second-seat daemon against the same
 state directory as the Node daemon, exposes a fully functional Chat TUI
@@ -1713,6 +1731,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endor-tui | XL | 5-8 weeks | 11 | Rust TUI: ratatui/crossterm, concept-map of every Chat component, XS `mxDebug` debugger integration (XL bumped 1.3x) |
 | endor-bus-tui | XL | 4-7 weeks | 11 | Bus-verb spec, XS handle API, Exo/CapTP wrapper; cross-worker layout composition (XL bumped 1.3x) |
 | endor-native-zip-xs | S-M | 2-3 days | 11 | Pure-Rust raw-DEFLATE host functions, `@endo/zip` `xs` conditional exports, bounded inflation, and XS snapshot callback-table migration |
+| worker-constraint-model | S-M | 3-4 days | 11 | Buildable core only (runtime axis): the `WorkerConstraints` schema and `resolve`/`encode`/`decode` seam in `manager.js`, the additive `makeWorker`/`WorkerFormula` widening, the `interfaces.js` closed-key-set guard, and the zero-churn migration of `'locked'`/`'node'` with the golden-record + property test catalog. Axes 2-4 (persistence/version/target) land as typed `Not Started` extension points at no additional build cost this cycle. |
 | endopi | Reference | — | — | Comparative analysis of the pi agent harness against endo; spins out the endopi-* gap-closing designs below |
 | endopi-edit-tool | S-M | 3 days | 3 | LLM-friendly oldText/newText edit primitive on `File` capability; reuses [cli-edit-verb](cli-edit-verb.md)'s diff helpers |
 | endopi-jsonl-transcript-format | S-M | 3 days | 3 | On-disk JSONL projection of the Lal transcript graph; satisfies endoclaw § *Persistence and Memory*'s "Pi-compatible jsonl files" directive |
@@ -1749,8 +1768,8 @@ date of this pass.
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
-| M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| M11: Rust Daemon (`endor`) (was M6) | 7 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`, `worker-constraint-model`) | 15-22 weeks | 17-24 weeks |
+| **Total remaining** | **65** (delta: +1 for this pass's M11 `worker-constraint-model` addition, raising M11's constituents 6->7; the absolute is left at 65 because it was already stale against the per-row cells, which sum to 69; the maintainer's next grooming pass reconciles the absolute, per `ARCHIVE.md`) + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the

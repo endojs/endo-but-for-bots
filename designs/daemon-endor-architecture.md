@@ -534,6 +534,22 @@ The legacy Node.js daemon (if still used) would set
 | `defaultWorkerKind` | `defaultPlatform` | Bootstrap parameter |
 | `workerKind` | `workerPlatform` | Caplet options field |
 
+> **Reconciliation with `worker-constraint-model.md` (Proposed).** This
+> rename **deletes `WorkerFormula.kind` and remaps its persisted values** to
+> `platform`, while `designs/worker-constraint-model.md` proposes a
+> multi-axis `WorkerConstraints` model that *preserves* `kind`'s exact bytes
+> (its zero-churn migration and golden byte-for-byte test are built on that).
+> Both designs migrate the **same on-disk field**, so they cannot both land as
+> written. The ownership split is settled: the constraint model's **runtime
+> axis owns the successor to `kind`'s engine selection**, and this design's
+> `separate`/`shared`/`node` `platform` is the **supervision** dimension (the
+> runtime axis's eventual engine/supervision split). But the **sequencing**
+> (which lands first, so the second rebases its migration onto the first
+> rather than shipping a second incompatible `kind` rewrite) is open and must
+> be decided jointly before either PR touches `kind` on disk. See
+> `worker-constraint-model.md` § *Reconciliation With Converging Work* and its
+> Open Question 8.
+
 ## Client bridging (`socket.rs`)
 
 `start_socket_listener`:
