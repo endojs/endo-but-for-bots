@@ -9,6 +9,12 @@
 //! reference followed by the `XS_STRICT_FLAG` test (`xsRun.c`
 //! `XS_CODE_SET_VARIABLE`), which is what the arm now does.
 //!
+//! Both halves of the opcode pair ask the same question — is this bare name
+//! resolvable? — so this suite also pins that they answer it the same way:
+//! `GET_VARIABLE`'s resolution and `SET_VARIABLE`'s guard must agree, in
+//! particular on a name that lives only on the global object's prototype
+//! chain.
+//!
 //! Verified against node driven through `vm.runInThisContext` (a faithful
 //! Script-goal reference; `vm.runInNewContext`'s contextified global is a
 //! proxy with its own artifacts).
@@ -141,13 +147,28 @@ fn a_resolvable_name_still_assigns_in_strict_code() {
     );
 }
 
+/// Whether the **read** half (`GET_VARIABLE`) finds `name` resolvable after
+/// `prelude`: the bare read completes rather than raising the unresolvable
+/// `ReferenceError`. Strict, so both halves are asked under the one regime
+/// where the store's rule bites.
+fn read_resolves(prelude: &str, name: &str) -> bool {
+    run(&format!("'use strict'; {prelude} {name}")).is_ok()
+}
+
+/// The same question put to the **store** half (`SET_VARIABLE`).
+fn store_resolves(prelude: &str, name: &str) -> bool {
+    run(&format!("'use strict'; {prelude} {name} = 1")).is_ok()
+}
+
 #[test]
-fn an_inherited_only_name_is_resolvable_for_the_store() {
+fn an_inherited_only_name_is_resolvable_for_both_the_read_and_the_store() {
     // A bare name resolves through `HasProperty`, which walks the prototype
-    // chain, so every `%Object.prototype%` member is a resolvable global name
-    // and a strict assignment to one must NOT raise step 6. ironhorse's global
-    // object carries a null prototype, so the store asks `%Object.prototype%`
-    // directly — the case that separates that walk from an own-property test.
+    // chain, so every `%Object.prototype%` member is a resolvable global name:
+    // a strict assignment to one must NOT raise step 6, and a *read* of one
+    // must answer its inherited value rather than the unresolvable
+    // `ReferenceError`. ironhorse's global object carries a null prototype, so
+    // both halves ask `%Object.prototype%` directly — the case that separates
+    // that walk from an own-property test.
     assert_eq!(
         run("'use strict'; Object.prototype.pp = 1; pp = 2; globalThis.pp")
             .expect("an inherited-only name must not raise the unresolvable error"),
@@ -158,19 +179,49 @@ fn an_inherited_only_name_is_resolvable_for_the_store() {
         "number"
     );
 
-    // NOTE: `GET_VARIABLE` does not yet ask the same question — `typeof
-    // toString` answers `"undefined"` here where XS answers `"function"`, and
-    // reading an inherited-only name raises the unresolvable ReferenceError.
-    // This test deliberately pins only the store half rather than the two
-    // halves' agreement: they genuinely disagree today, and asserting the
-    // agreement would pin the read side's bug as expected behavior.
-    let inherited_read = run("Object.prototype.pp = 1; pp");
-    assert!(
-        inherited_read.is_err(),
-        "read side unexpectedly resolves an inherited-only name ({inherited_read:?}) \
-         — if `GET_VARIABLE` now walks the chain too, restore the agreement \
-         assertion this note replaced"
-    );
+    // The read half answers the inherited VALUE, not `undefined` — `typeof
+    // toString` is `"function"` on XS and node, and `pp` is `1`.
+    assert_eq!(run("Object.prototype.pp = 1; pp").expect("completes"), "1");
+    assert_eq!(run("typeof toString").expect("completes"), "function");
+    assert_eq!(run("typeof hasOwnProperty").expect("completes"), "function");
+
+    // The two halves are one question — `HasProperty` on the global object —
+    // so they must answer it the same way for every shape of name. They once
+    // disagreed here (the store walked the chain, the read tested own
+    // properties only); this is the assertion that pins them back together.
+    for (prelude, name, resolvable) in [
+        ("Object.prototype.pp = 1;", "pp", true),
+        ("", "toString", true),
+        ("", "hasOwnProperty", true),
+        ("", "valueOf", true),
+        ("globalThis.own = 1;", "own", true),
+        ("", "genuinelyUndeclared", false),
+        ("Object.prototype.qq = 1; delete Object.prototype.qq;", "qq", false),
+    ] {
+        let read = read_resolves(prelude, name);
+        assert_eq!(
+            read,
+            store_resolves(prelude, name),
+            "the read and store halves disagree on whether {name:?} is resolvable \
+             after {prelude:?}"
+        );
+        assert_eq!(read, resolvable, "{name:?} after {prelude:?}");
+    }
+}
+
+#[test]
+fn a_name_in_its_temporal_dead_zone_is_not_an_unresolvable_name() {
+    // TDZ is not unresolvability: the name IS bound, so neither the chain walk
+    // nor the `typeof` tolerance may rescue it. Both forms throw, including
+    // for a name that would otherwise resolve off `%Object.prototype%`.
+    for src in [
+        "x; let x = 1",
+        "typeof x; let x = 1",
+        "toString; let toString = 1",
+        "typeof toString; let toString = 1",
+    ] {
+        expect_reference_error(src);
+    }
 }
 
 #[test]

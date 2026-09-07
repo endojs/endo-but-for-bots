@@ -14468,6 +14468,39 @@ impl Interp {
                             self,
                             return_depth
                         ))
+                    } else if self.instance_has(self.object_proto, name).0 {
+                        // `global_props` is the OWN-property index of the
+                        // global object, but a bare name resolves through
+                        // `HasProperty`, which walks the prototype chain: every
+                        // `%Object.prototype%` member (`toString`, `valueOf`,
+                        // `hasOwnProperty`, …) is a resolvable global name, so
+                        // reading one answers its inherited VALUE rather than
+                        // faulting — XS answers `typeof toString` with
+                        // `"function"`. This is the read-side twin of the
+                        // `SET_VARIABLE` unresolvable guard below, asked and
+                        // answered the same way: ironhorse's global object
+                        // carries a NULL prototype (a separate, pre-existing
+                        // divergence: `Object.getPrototypeOf(globalThis)` is
+                        // `null` here and `%Object.prototype%` in XS), so the
+                        // inherited half of the question is put to
+                        // `%Object.prototype%` directly. The `instance_has`
+                        // probe is read-only and unmetered — XS's own chain
+                        // walk is already folded into this arm's measured cost
+                        // — and the value comes back through the same full
+                        // `[[Get]]` the own-global read uses, receiver still
+                        // the global object, so an inherited accessor runs
+                        // with the `this` XS gives it and its abrupt
+                        // completion is observed.
+                        let global = Slot::of(
+                            Kind::Reference,
+                            Payload::Reference(self.global_obj),
+                        );
+                        Some(dispatch_result!(
+                            self.mop_get(code, self.object_proto, name, global),
+                            pc,
+                            self,
+                            return_depth
+                        ))
                     } else {
                         None
                     };
@@ -14493,7 +14526,13 @@ impl Interp {
                         // still throws — so this tolerance is gated on the name
                         // being absent from every scope (`resolve_get` returns
                         // `None` for both, but only the truly-unbound case is a
-                        // typeof-undefined).
+                        // typeof-undefined). An inherited-only global name is
+                        // not unresolvable either: the resolution above answers
+                        // it with `Some(inherited value)`, so it never reaches
+                        // this arm and `typeof toString` reads the inherited
+                        // function rather than short-circuiting. That is what
+                        // keeps this predicate and the resolution above
+                        // agreeing on the one question they both ask.
                         None if code.get(pc + ilen).copied()
                             == Some(Opcode::XS_CODE_TYPEOF as u8)
                             && !self.id_map.contains_key(&name)
