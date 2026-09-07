@@ -45,16 +45,38 @@
 //!    identical on the parent commit: a prototype-chain hit (+1), an
 //!    `arguments` object (+1), and a TypedArray fall-through (+2).
 //!    `with_statement.rs` never covered these shapes, which is why the drift
-//!    was never seen. Not introduced here, and not fixed here either.
-//! 2. **Newly correct paths whose cost is not yet calibrated.** The String
-//!    wrapper (+1) and the exotic-`length` store (−1) answer the right value
-//!    now and did not before, so their cost is being measured against XS for
-//!    the first time. Proxy `with` is the same story at larger scale: before
-//!    the seam change no trap ran from a `with` head at all, so there was no
-//!    meaningful cost to calibrate; ironhorse now runs XS's exact trap
-//!    sequence and under-charges the host frames around it. The
-//!    `WITH_SCOPABLE_HAS_METERING` / `WITH_UNSCOPABLES_GET_METERING` constants
-//!    were calibrated against the old chain-only walk.
+//!    was never seen.
+//! 2. **Newly correct paths whose cost was not yet calibrated.** The String
+//!    wrapper (+1) and the exotic-`length` store (−1) answered the right value
+//!    but had never had their cost measured against XS.
+//!
+//! **Four of those five are now closed** and gated [`exact`]; only the
+//! `arguments` object still runs one computron heavy, and its residue is in
+//! that exotic rather than in the scopable walk. Two corrections did it:
+//!
+//!  - The walk charged a whole `XS_CODE_METERING` per prototype **hop**. XS
+//!    pays the `mxPushUndefined`/`mxPop` pair inside `fxOrdinaryHasProperty` —
+//!    half a unit — per **frame**, meaning per level that does not find the
+//!    property own. A hit at depth `d` runs `d` frames; a miss off the end of
+//!    an ordinary chain runs a frame at the last object too, one more than the
+//!    number of hops. `ORDINARY_HAS_PROPERTY_FRAME_METERING` charges that, and
+//!    `XS_CODE_IN` shares it (see `in_operator_chain_metering.rs`).
+//!  - `Array.prototype[@@unscopables]` did not exist, so an array head never
+//!    paid for the blocklist get — and, worse than the cost,
+//!    `with (anArray) { keys }` resolved to `Array.prototype.keys` instead of
+//!    reading the enclosing `keys`. See the cluster at the end of this file.
+//!
+//! Proxy `with` remains [`result_only`]: before the seam change no trap ran
+//! from a `with` head at all, so there was no meaningful cost to calibrate.
+//! ironhorse runs XS's exact trap sequence and under-charges the host frames
+//! around it — and that residual is **not** in this seam. The Proxy MOP is
+//! under-metered with no `with` in the program at all: measured as the slope
+//! over a repeated operation on a trapless `new Proxy({a: 1}, {})`, −2.0 units
+//! per `'a' in p`, −3.0 per `p.a`, −7.0 per `p.a = 1`. A `with` read makes one
+//! `[[HasProperty]]` and two `[[Get]]`s on the head, a store two
+//! `[[HasProperty]]`s and a `[[Set]]`, so the figure tracks those controls.
+//! Closing it means calibrating `proxy_has`/`proxy_get`/`proxy_set`, which
+//! moves metering for every proxy program in the engine.
 //!
 //! Recording the gap in an executing test is the point: a result regression
 //! fails the build today, and the metering work has a named home rather than
@@ -255,27 +277,32 @@ fn with_function_binds_its_length_and_name() {
 #[test]
 fn with_typed_array_falls_through_for_an_absent_name() {
     // A TypedArray head binds no ordinary expando it does not have, so the name
-    // still resolves outward. Gap class 1: the +2 here is present on the parent
-    // commit too, with the same correct value.
-    result_only("var missing = 'outer'; var r = 0; with (new Uint8Array(2)) { r = missing; } r");
+    // still resolves outward. Was two computrons heavy; the per-frame
+    // correction to the scopable walk closed it.
+    exact("var missing = 'outer'; var r = 0; with (new Uint8Array(2)) { r = missing; } r");
 }
 
 #[test]
 fn with_array_write_targets_the_exotic_length() {
     // The parent commit answered `2:1`: the store went to the enclosing scope
-    // and the array kept its length. Gap class 2 for the cost (one light).
-    result_only("var a = [1, 2]; with (a) { length = 1; } a.length + ':' + a[0]");
+    // and the array kept its length. Was one computron light; exact now that
+    // the array head's `@@unscopables` blocklist exists to be consulted.
+    exact("var a = [1, 2]; with (a) { length = 1; } a.length + ':' + a[0]");
 }
 
 #[test]
 fn with_string_wrapper_binds_its_exotic_length() {
-    // The parent commit answered `'outer'`. Gap class 2 for the cost (one heavy).
-    result_only("var length = 'outer'; var r = 0; with (new String('ab')) { r = length; } r");
+    // The parent commit answered `'outer'`. Was one computron heavy; the
+    // per-frame correction closed it.
+    exact("var length = 'outer'; var r = 0; with (new String('ab')) { r = length; } r");
 }
 
 #[test]
 fn with_arguments_object_binds_its_length() {
-    // Gap class 1: correct on both commits, one computron heavy on both.
+    // Still one computron heavy, and the only one of the five recorded gaps the
+    // per-frame correction did not close: the residue is in the `arguments`
+    // exotic itself, not in the scopable walk, which is exact on every other
+    // head kind at every depth.
     result_only(
         "function f() { var r = 0; with (arguments) { r = length + ':' + 0; } return r; } f(9, 8)",
     );
@@ -291,7 +318,140 @@ fn with_ordinary_accessor_is_unchanged() {
 
 #[test]
 fn with_prototype_chain_lookup_is_unchanged() {
-    // Gap class 1: a prototype-chain hit over-charges by one computron on the
-    // parent commit and on this one alike — the seam change did not move it.
-    result_only("var r = 0; with (Object.create({x: 44})) { r = x; } r");
+    // A prototype-chain hit over-charged by one computron on the parent commit
+    // and when this file was written. That was the walk charging a whole
+    // `XS_CODE_METERING` per prototype *hop* where XS pays half a unit per
+    // `fxOrdinaryHasProperty` frame; exact now.
+    exact("var r = 0; with (Object.create({x: 44})) { r = x; } r");
+}
+
+// ---- `Array.prototype[@@unscopables]`: the blocklist an array head publishes
+
+#[test]
+fn array_unscopables_blocks_the_post_es5_methods() {
+    // Not merely a cost: without the blocklist these resolved to the array
+    // method instead of reading the enclosing binding.
+    exact("var keys = 'outer'; var r; with ([]) { r = keys; } r");
+    exact("var values = 'outer'; var r; with ([]) { r = values; } r");
+    exact("var flat = 'outer'; var r; with ([]) { r = flat; } r");
+    exact("var includes = 'outer'; var r; with ([]) { r = includes; } r");
+}
+
+#[test]
+fn array_unscopables_does_not_block_es5_methods_or_length() {
+    // `concat` predates the blocklist and `length` is not on it, so both still
+    // resolve against the array.
+    exact("var concat = 'outer'; var r; with ([]) { r = typeof concat; } r");
+    exact("var length = 'outer'; var r; with ([1, 2, 3]) { r = length; } r");
+}
+
+#[test]
+fn array_unscopables_object_shape() {
+    exact("Array.prototype[Symbol.unscopables].keys");
+    exact("typeof Array.prototype[Symbol.unscopables].concat");
+    exact(
+        "var d = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.unscopables); \
+         '' + d.writable + ',' + d.enumerable + ',' + d.configurable",
+    );
+    // Non-enumerable on `Array.prototype` itself.
+    exact("var n = 0; for (var k in Array.prototype) { n++; } n");
+    exact("Array.prototype[Symbol.unscopables] === Array.prototype[Symbol.unscopables]");
+}
+
+#[test]
+fn array_unscopables_key_order() {
+    // Own-key order is observable, and XS's is NOT the specification's: it
+    // lists `copyWithin` before `at`, and `values` before
+    // `toReversed`/`toSorted`/`toSpliced`. Building the list in 23.1.3.35 order
+    // (or in reverse, which insertion order made easy to get wrong) diverged
+    // from the oracle on every enumeration below while leaving every `with`
+    // case above passing — the blocklist's *behaviour* does not pin its
+    // *shape*, so both need gating.
+    exact("var a = []; for (var k in Array.prototype[Symbol.unscopables]) { a.push(k); } a.join(',')");
+    exact("JSON.stringify(Array.prototype[Symbol.unscopables])");
+}
+
+#[test]
+fn array_unscopables_is_ordinary_guest_state() {
+    // The blocklist is a plain configurable/writable object: a guest can drop
+    // it, swap it, extend it, or falsify an entry, and the walk follows.
+    exact(
+        "var keys = 'outer'; delete Array.prototype[Symbol.unscopables]; \
+         var r; with ([]) { r = typeof keys; } r",
+    );
+    exact(
+        "var keys = 'outer'; Array.prototype[Symbol.unscopables] = {}; \
+         var r; with ([]) { r = typeof keys; } r",
+    );
+    exact(
+        "var concat = 'outer'; Array.prototype[Symbol.unscopables].concat = true; \
+         var r; with ([]) { r = concat; } r",
+    );
+    exact(
+        "var keys = 'outer'; Array.prototype[Symbol.unscopables].keys = false; \
+         var r; with ([]) { r = typeof keys; } r",
+    );
+}
+
+#[test]
+fn explicit_unscopables_on_an_exotic_head() {
+    // An own `@@unscopables` on an array shadows `Array.prototype`'s, so the
+    // blocklist the walk consults is the object's own.
+    exact(
+        "var keys = 'outer'; var o = []; o[Symbol.unscopables] = {}; \
+         var r; with (o) { r = typeof keys; } r",
+    );
+    exact(
+        "var length = 'outer'; var o = [1, 2, 3]; o[Symbol.unscopables] = {length: true}; \
+         var r; with (o) { r = length; } r",
+    );
+}
+
+// ---- The scopable walk at depth, and over boxed primitives ------------
+
+/// A depth-3 prototype chain, `new C()` → `C.prototype` → `B.prototype` →
+/// `A.prototype`. Built with constructors rather than `Object.create` or a
+/// `__proto__` literal: both of those carry a small pre-existing metering
+/// residual of their own (−1/4 and +1/4 of a code unit per object), which would
+/// land here as setup noise and obscure what the walk costs.
+const CHAIN: &str = "function A() {} function B() {} function C() {} \
+                     B.prototype = new A(); C.prototype = new B(); ";
+
+#[test]
+fn prototype_chain_hit_at_each_depth() {
+    exact("function C() {} C.prototype.a = 1; var o = new C(); var r; with (o) { r = a; } r");
+    exact(&format!(
+        "{CHAIN} B.prototype.a = 1; var o = new C(); var r; with (o) {{ r = a; }} r"
+    ));
+    exact(&format!(
+        "{CHAIN} A.prototype.a = 1; var o = new C(); var r; with (o) {{ r = a; }} r"
+    ));
+}
+
+#[test]
+fn prototype_chain_total_miss_falls_through() {
+    exact("var x = 9; function C() {} var o = new C(); var r; with (o) { r = x; } r");
+    exact(&format!(
+        "{CHAIN} var x = 9; var o = new C(); var r; with (o) {{ r = x; }} r"
+    ));
+}
+
+#[test]
+fn store_through_a_prototype_chain_targets_the_head() {
+    exact(
+        "function C() {} C.prototype.a = 1; var o = new C(); with (o) { a = 7; } \
+         '' + o.a + ',' + C.prototype.a + ',' + o.hasOwnProperty('a')",
+    );
+}
+
+#[test]
+fn boxed_primitive_head_boxes_and_resolves() {
+    // `fxToInstance`'s two `mxMeterOne` steps had been omitted; in the `with`
+    // case that was masked by the old per-hop over-charge, so correcting the
+    // walk unmasked it. Not `with`-specific — `var {length: n} = 'ab'` was
+    // short by the same `1<<15`.
+    exact("var x = 9; var r; with ('abc') { r = length; } r");
+    exact("var x = 9; var r; with (0) { r = x; } r");
+    exact("var x = 9; var r; with (10n) { r = x; } r");
+    exact("var {length: n} = 'ab'; n");
 }

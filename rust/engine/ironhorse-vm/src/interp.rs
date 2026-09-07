@@ -841,6 +841,75 @@ pub const WITH_UNSCOPABLES_GET_METERING: u64 = 1 << 16;
 /// pinned XS oracle.
 pub const WITH_UNSCOPABLES_BLOCKLIST_GET_METERING: u64 = 1 << 15;
 
+/// The raw 16.16 cost of one `fxOrdinaryHasProperty` frame: the
+/// `mxPushUndefined`/`mxPop` pair it runs at every level that does **not** find
+/// the property own, before recurring into the prototype.
+///
+/// Neither the `mxBehavior*` dispatch macros nor anything else in `xsType.c`
+/// meters — that file contains no `mxMeterOne` at all. The cost is the stack
+/// discipline around the recursion (`xsType.c`):
+///
+/// ```c
+/// if (property) return 1;          /* own hit: no push, no pop */
+/// mxPushUndefined();               /* mxOverflow(-1) -> mxMeterOne */
+/// if (mxBehaviorGetPrototype(...)) result = mxBehaviorHasProperty(...);
+/// else result = 0;
+/// mxPop();                         /* mxMeterOne */
+/// ```
+///
+/// `mxPushUndefined()` expands through `mxOverflow(-1)`, which is
+/// `(mxMeterOne(), fxOverflow(…))`, and `mxPop()` is `(mxMeterOne(),
+/// the->stack++)`. Two `mxMeterOne` steps — half an `XS_CODE_METERING`, not the
+/// full unit a *dispatched* opcode pays.
+///
+/// Count **frames, not prototype hops.** A hit at depth `d` runs `d` frames
+/// (the level holding the property returns before its push). A miss off the end
+/// of an ordinary chain runs a frame at *every* object including the last,
+/// which is one more than the number of hops. A Proxy answering `has` itself
+/// contributes no frame, since `fxProxyHasProperty` does not run the pair.
+///
+/// Shared by `XS_CODE_IN` and the `with` scopable walk, which reach the same
+/// recursion — `fxRunIn` calls `fxHasAt` once and does not re-enter per level.
+/// Charging a whole `XS_CODE_METERING` per hop (as both sites did) was wrong in
+/// both directions: measured against the pinned oracle on constructor chains of
+/// verified depth 1..5, `in` ran +0.5 units per level long on a chain, hit and
+/// miss alike, and 0.5 short on `'zz' in Object.create(null)`, where there is a
+/// frame but no hop. Every `in` test used a shallow receiver, which descends no
+/// level, so the two cancelled into invisibility.
+pub const ORDINARY_HAS_PROPERTY_FRAME_METERING: u64 = 1 << 15;
+
+/// The own keys of `Array.prototype[@@unscopables]` (ECMA-262 23.1.3.35):
+/// every `Array.prototype` method added after ES5, whose name a pre-existing
+/// `with (anArray) { … }` body could already have been using as an ordinary
+/// variable. Each maps to `true`, so the `with` scopable walk reads through to
+/// the enclosing scope instead of resolving the method.
+///
+/// The order is **XS's**, not the specification's, and own-key order is
+/// observable — through `Object.getOwnPropertyNames`, `Object.keys`, `for`-`in`
+/// and `JSON.stringify` on the blocklist object. XS builds the list in the
+/// order the methods were added to the language rather than alphabetically, so
+/// it differs from 23.1.3.35 in two places: `copyWithin` precedes `at`, and
+/// `values` precedes `toReversed`/`toSorted`/`toSpliced`. Verified against the
+/// pinned oracle key for key, in order.
+const ARRAY_UNSCOPABLES: [&str; 16] = [
+    "copyWithin",
+    "at",
+    "entries",
+    "fill",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "flat",
+    "flatMap",
+    "includes",
+    "keys",
+    "values",
+    "toReversed",
+    "toSorted",
+    "toSpliced",
+];
+
 /// The raw 16.16 environment-setup residual `XS_CODE_WITH` accrues beyond its
 /// two `fxNewSlot` allocations and its own dispatch: the host-frame work
 /// `fxNewEnvironmentInstance` runs to splice the environment instance into the
@@ -14300,13 +14369,14 @@ impl Interp {
                             // to reproduce. Implementing step 3 here would break
                             // that pin deliberately, so the call is kept for its
                             // observable trap and its metered chain walk only.
-                            let (_still_exists, recursions) = dispatch_result!(
+                            let (_still_exists, frames) = dispatch_result!(
                                 self.mop_has_with_recursions(code, inst, name),
                                 pc,
                                 self,
                                 return_depth
                             );
-                            self.meter.tick_code_n(recursions);
+                            self.meter
+                                .tick_raw(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING);
                             let accepted = dispatch_result!(
                                 self.mop_set(code, inst, name, value, envref),
                                 pc,
@@ -17507,17 +17577,25 @@ impl Interp {
                         Some(id) => id,
                         None => return Halt::EngineInvariant("in:key"),
                     };
-                    // Answer with the metered chain walk: XS meters one
-                    // `XS_CODE_METERING` per prototype level the
-                    // `fxOrdinaryHasProperty` recursion descends.
-                    let (present, recursions) = dispatch_result!(
+                    // Answer with the metered chain walk: `fxRunIn` calls
+                    // `fxHasAt` once and does not re-enter per level, so the
+                    // per-level cost is the same `fxOrdinaryHasProperty` frame
+                    // the `with` scopable walk pays — half a code unit, not the
+                    // whole one this site charged per prototype *hop* before.
+                    // That ran long by `1<<15` per level on a deep chain and
+                    // short by the same on a null-prototype receiver; the
+                    // shallow objects the tests used descend no level, so
+                    // nothing caught either. `IN_METERING` is unchanged: it was
+                    // fixed by the own-hit case, which runs no frame.
+                    let (present, frames) = dispatch_result!(
                         self.mop_has_with_recursions(code, objref, id),
                         pc,
                         self,
                         return_depth
                     );
                     self.meter.tick_raw(IN_METERING);
-                    self.meter.tick_code_n(recursions);
+                    self.meter
+                        .tick_raw(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING);
                     self.push(Slot::boolean(present));
                     pc += size as usize;
                 }
@@ -27038,7 +27116,7 @@ impl Interp {
     /// whose data lives on the prototype.
     fn from_async_box_primitive(&mut self, v: Slot) -> Option<crate::value::SlotIndex> {
         if v.kind == Kind::String {
-            return Some(self.box_primitive_to_instance(Native::String, v));
+            return Some(self.box_primitive_wrapper(Native::String, v));
         }
         let proto = match v.kind {
             Kind::Integer | Kind::Number => self.number_proto,
@@ -29190,7 +29268,40 @@ impl Interp {
     /// characters are derived from this side-table payload by the property and
     /// CopyDataProperties seams. BigInt remains the only primitive without a
     /// modeled realm wrapper.
+    /// A ToObject of a primitive performed by the **language** rather than by a
+    /// built-in: `XS_CODE_TO_INSTANCE` (a `with` head, an object-destructuring
+    /// RHS) and the sloppy-callee `this` bind. Beyond the two allocations
+    /// [`Self::box_primitive_wrapper`] meters, XS pays two `mxMeterOne` steps
+    /// here — `fxToInstance` dispatching on the primitive's kind and calling
+    /// the per-type `fxNew<Type>Instance`.
+    ///
+    /// Measured as exactly `1<<15` per box, uniform across
+    /// Boolean/Number/String/Symbol/BigInt and across both constructs
+    /// (`with (0) { … }`, `var {length: n} = 'ab'`, `f.call(1)`), and omitted
+    /// entirely before.
+    ///
+    /// A ToObject performed *inside* a built-in — `CreateArrayIterator`'s
+    /// coercion in `Array.prototype.values.call('a')`, `Object(primitive)`,
+    /// `Object.getOwnPropertyDescriptor`'s receiver — does **not** pay it and
+    /// calls [`Self::box_primitive_wrapper`] directly. Whether XS truly charges
+    /// nothing on those paths or ironhorse has an offsetting gap elsewhere in
+    /// them is not settled here; they are left exactly as they metered before
+    /// this constant existed, so this moves only the two sites it measured.
     fn box_primitive_to_instance(
+        &mut self,
+        native: Native,
+        prim: Slot,
+    ) -> crate::value::SlotIndex {
+        let inst = self.box_primitive_wrapper(native, prim);
+        self.meter.tick_builtin_some(2);
+        inst
+    }
+
+    /// The wrapper allocation alone, with no `fxToInstance` dispatch cost: two
+    /// `fxNewSlot`s and the side-table payload. The entry point for a ToObject
+    /// performed *inside* a built-in, where XS reaches the wrapper without the
+    /// metered dispatch [`Self::box_primitive_to_instance`] models.
+    fn box_primitive_wrapper(
         &mut self,
         native: Native,
         prim: Slot,
@@ -29224,7 +29335,7 @@ impl Interp {
         native: Native,
         prim: Slot,
     ) -> crate::value::SlotIndex {
-        let inst = self.box_primitive_to_instance(native, prim);
+        let inst = self.box_primitive_wrapper(native, prim);
         self.slots.get_mut(inst).flag &= !XS_DONT_PATCH_FLAG;
         inst
     }
@@ -32255,19 +32366,19 @@ impl Interp {
                         return Err(self.catchable_type_error())
                     }
                     (Kind::Boolean, _) => {
-                        self.box_primitive_to_instance(Native::Boolean, arg0)
+                        self.box_primitive_wrapper(Native::Boolean, arg0)
                     }
                     (Kind::Integer | Kind::Number, _) => {
-                        self.box_primitive_to_instance(Native::Number, arg0)
+                        self.box_primitive_wrapper(Native::Number, arg0)
                     }
                     (Kind::String, _) => {
-                        self.box_primitive_to_instance(Native::String, arg0)
+                        self.box_primitive_wrapper(Native::String, arg0)
                     }
                     (Kind::Symbol, _) => {
-                        self.box_primitive_to_instance(Native::Symbol, arg0)
+                        self.box_primitive_wrapper(Native::Symbol, arg0)
                     }
                     (Kind::BigInt, _) => {
-                        self.box_primitive_to_instance(Native::BigInt, arg0)
+                        self.box_primitive_wrapper(Native::BigInt, arg0)
                     }
                     _ => return Err(self.catchable_type_error()),
                 };
@@ -46123,6 +46234,33 @@ impl Interp {
         let well_known_name = self.well_known_symbols.iter().find_map(|(name, value)| {
             (value.value == Payload::Reference(descriptor)).then_some(*name)
         });
+        // `Array.prototype[@@unscopables]` (ECMA-262 23.1.3.35) is the one
+        // well-known-symbol boot property that is **data**, not a method: a
+        // null-prototype object whose keys are the array methods added after
+        // ES5, each `true`, so `with (anArray) { keys }` sees the outer `keys`
+        // rather than the method. It is built here rather than through the
+        // method table below.
+        if well_known_name == Some("unscopables") {
+            if self.array_proto.is_null() || self.find_property(self.array_proto, id).is_some() {
+                return;
+            }
+            let list = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
+            for name in ARRAY_UNSCOPABLES {
+                let key = self.intern_key_unmetered(name);
+                // `CreateDataPropertyOrThrow`: writable, enumerable and
+                // configurable all true — flag 0.
+                self.set_own_unmetered_with_flag(list, key, Slot::boolean(true), 0);
+            }
+            // The property itself is {writable: false, enumerable: false,
+            // configurable: true}.
+            self.set_own_unmetered_with_flag(
+                self.array_proto,
+                id,
+                Slot::of(Kind::Reference, Payload::Reference(list)),
+                XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+            );
+            return;
+        }
         let installs = match well_known_name {
             Some("hasInstance") => vec![(
                 self.function_proto,
@@ -48919,8 +49057,11 @@ impl Interp {
         Ok(self.mop_has_with_recursions(code, inst, id)?.0)
     }
 
-    /// `O.[[HasProperty]](P)` plus the number of ordinary prototype descents
-    /// that XS meters for the `in` opcode. Each level dispatches through the
+    /// `O.[[HasProperty]](P)` plus the number of `fxOrdinaryHasProperty`
+    /// **frames** the walk runs — every level that does not find the property
+    /// own, which is `d` for a hit at depth `d` and one *more* than the number
+    /// of prototype hops for a miss off the end of an ordinary chain. Callers
+    /// meter one [`ORDINARY_HAS_PROPERTY_FRAME_METERING`] per frame. Each level dispatches through the
     /// object's MOP: a Proxy in an ordinary object's prototype chain must run
     /// its `has` trap, and an absent outer Proxy trap must forward to an inner
     /// Proxy target rather than treating either proxy as an ordinary slot
@@ -48932,20 +49073,29 @@ impl Interp {
         id: u16,
     ) -> Result<(bool, u64), Halt> {
         let mut current = inst;
-        let mut recursions = 0u64;
+        let mut frames = 0u64;
         loop {
             if self.proxies.contains_key(&current) {
-                return Ok((self.proxy_has(code, current, id)?, recursions));
+                // A Proxy answers through `fxProxyHasProperty`, which does not
+                // run the ordinary push/pop at its own level.
+                return Ok((self.proxy_has(code, current, id)?, frames));
             }
             if self.object_own_property_present(code, current, id)? {
-                return Ok((true, recursions));
+                // Found own: `fxOrdinaryHasProperty` returns before its push.
+                return Ok((true, frames));
             }
+            // This level did not find the property own, so XS's
+            // `fxOrdinaryHasProperty` ran its `mxPushUndefined`/`mxPop` pair
+            // here before recurring. Counting *these* rather than prototype
+            // hops is what makes the hit and total-miss paths one formula: a
+            // miss off the end of an ordinary chain pays a pair at the last
+            // object too, where there is no hop.
+            frames += 1;
             let prototype = self.instance_prototype(current);
             if prototype.is_null() {
-                return Ok((false, recursions));
+                return Ok((false, frames));
             }
             current = prototype;
-            recursions += 1;
         }
     }
 
@@ -50695,9 +50845,10 @@ impl Interp {
         obj: crate::value::SlotIndex,
         id: u16,
     ) -> Result<bool, Halt> {
-        let (present, recursions) = self.mop_has_with_recursions(code, obj, id)?;
+        let (present, frames) = self.mop_has_with_recursions(code, obj, id)?;
         self.meter.tick_raw(WITH_SCOPABLE_HAS_METERING);
-        self.meter.tick_code_n(recursions);
+        self.meter
+            .tick_raw(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING);
         if !present {
             return Ok(false);
         }
