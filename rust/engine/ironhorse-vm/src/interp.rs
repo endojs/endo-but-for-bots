@@ -3277,7 +3277,11 @@ enum JsonSource {
 /// emitted JSON text (including a lone surrogate supplied by a replacer list).
 #[derive(Clone, Debug)]
 struct JsonPropertyName {
-    id: u16,
+    /// The key as a [`ReadKey`]: an index whose canonical name the table has
+    /// never held stays an index, so walking a large array's elements mints
+    /// nothing (`JSON.stringify` over a 70,000-element array walked the id
+    /// space into its saturation guard).
+    key_id: ReadKey,
     key: Slot,
     units: Vec<u16>,
 }
@@ -33170,9 +33174,12 @@ impl Interp {
                     if key.kind != Kind::String {
                         continue;
                     }
-                    let id = self.to_property_id(code, key)?;
+                    // An enumeration OBSERVES; it must not mint a key per
+                    // index (`Object.keys` over a 70,000-element array walked
+                    // the id space into its saturation guard).
+                    let read_key = self.to_read_key(code, key)?;
                     if self
-                        .mop_get_own_property(code, inst, id)?
+                        .mop_get_own_property_read(code, inst, read_key)?
                         .is_some_and(|descriptor| descriptor.enumerable == Some(true))
                     {
                         keys.push(key);
@@ -33705,14 +33712,14 @@ impl Interp {
                     if key.kind != Kind::String {
                         continue;
                     }
-                    let id = self.to_property_id(code, key)?;
+                    let read_key = self.to_read_key(code, key)?;
                     if !self
-                        .mop_get_own_property(code, inst, id)?
+                        .mop_get_own_property_read(code, inst, read_key)?
                         .is_some_and(|descriptor| descriptor.enumerable == Some(true))
                     {
                         continue;
                     }
-                    let value = self.mop_get(code, inst, id, object)?;
+                    let value = self.mop_get_read(code, inst, read_key, object)?;
                     properties.push((key, value));
                 }
                 let n = properties.len() as u32;
@@ -37683,7 +37690,7 @@ impl Interp {
                 let empty_id = self.intern_key("");
                 let empty_key = self.property_key_slot(empty_id)?;
                 let root_name = JsonPropertyName {
-                    id: empty_id,
+                    key_id: ReadKey::Id(empty_id),
                     key: empty_key,
                     units: Vec::new(),
                 };
@@ -37826,8 +37833,8 @@ impl Interp {
             {
                 continue;
             }
-            let id = self.to_property_id(code, key)?;
-            property_list.push(JsonPropertyName { id, key, units });
+            let key_id = self.to_read_key(code, key)?;
+            property_list.push(JsonPropertyName { key_id, key, units });
         }
         Ok((None, Some(property_list)))
     }
@@ -37875,7 +37882,7 @@ impl Interp {
         cost: &mut u64,
     ) -> Result<Option<Vec<u16>>, Halt> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
-        let value = self.mop_get(code, holder, name.id, holder_slot)?;
+        let value = self.mop_get_read(code, holder, name.key_id, holder_slot)?;
         self.json_stringify_value(code, value, name, Some(holder_slot), state, cost)
     }
 
@@ -38042,17 +38049,24 @@ impl Interp {
         for index in 0..length {
             *cost += JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
             let text = index.to_string();
-            // Unmetered: XS walks the array here by index and never mints a
-            // key, so charging `intern_key`'s slot allocation put IronHorse
-            // exactly 256 raw units per element above the oracle
-            // (`JSON.stringify([1])` +256, `[1,2]` +512, `[1,2,3]` +768, and
-            // +0 for an object, whose keys really are names). IronHorse still
-            // needs an id to drive the observable `mop_get` below, so take the
-            // id without the charge.
-            let id = self.intern_key_unmetered(&text);
-            let key = self.property_key_slot(id)?;
+            // XS walks the array here by index and never mints a key. Taking
+            // the id unmetered kept the computron count right but still grew
+            // the name table one entry per element, so a long array exhausted
+            // the shared `u16` id space; the key is spelled from the index
+            // instead, exactly as `fxKeyAt` spells it.
+            let key_id = match u32::try_from(index) {
+                Ok(i) => match self.index_read_key_id(i) {
+                    Some(id) => ReadKey::Id(id),
+                    None => ReadKey::Index(i),
+                },
+                // Past the `u32` index space a length-derived position is an
+                // ordinary NAME, which XS interns too, so keep the unmetered
+                // id the oracle comparison was tuned for.
+                Err(_) => ReadKey::Id(self.intern_key_unmetered(&text)),
+            };
+            let key = self.read_key_slot(key_id)?;
             let name = JsonPropertyName {
-                id,
+                key_id,
                 key,
                 units: text.encode_utf16().collect(),
             };
@@ -38109,12 +38123,12 @@ impl Interp {
                 Payload::String(offset) if key.kind == Kind::String => self.str_units(offset),
                 _ => return Err(self.catchable_type_error()),
             };
-            let id = self.to_property_id(code, key)?;
+            let key_id = self.to_read_key(code, key)?;
             if self
-                .mop_get_own_property(code, inst, id)?
+                .mop_get_own_property_read(code, inst, key_id)?
                 .is_some_and(|descriptor| descriptor.enumerable == Some(true))
             {
-                names.push(JsonPropertyName { id, key, units });
+                names.push(JsonPropertyName { key_id, key, units });
             }
         }
         Ok(names)
@@ -48138,6 +48152,44 @@ impl Interp {
         }
     }
 
+    /// `[[DefineOwnProperty]]` dispatched on a [`ReadKey`].
+    ///
+    /// Only a TypedArray element can be defined without a name: its store is
+    /// the buffer, addressed by index, and nothing is ever promoted out of it.
+    ///
+    /// An ARRAY cannot, despite holding its items in a side table.
+    /// `array_define_index` falls through to `set_own_unmetered_with_flag` +
+    /// `ordinary_define_own_property` whenever the descriptor is not a bare
+    /// value — which is exactly the flags-only descriptor `Object.freeze` and
+    /// `Object.seal` apply — PROMOTING the compact item to an ordinary named
+    /// slot. That promotion needs a real id (passing `XS_NO_ID` mints a
+    /// property under id 0, which `mop_own_keys` then cannot name, halting
+    /// with `ordinary-ownKeys:unknown-key`). So freezing a large array costs
+    /// one name per element here, the same representation limit that makes
+    /// `o[i] = 1` in a loop and `Object.assign({}, bigArray)` cost one each.
+    /// XS has no such limit: it stamps the flags on the array slot in place.
+    fn mop_define_own_property_read(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        key: ReadKey,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Halt> {
+        let index = match key {
+            ReadKey::Id(id) => return self.mop_define_own_property(code, inst, id, desc),
+            ReadKey::Index(index) => index,
+        };
+        if !self.proxies.contains_key(&inst) {
+            if let Some(&ta) = self.typed_arrays.get(&inst) {
+                return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+                    vm.ta_index_define(code, ta, f64::from(index), desc)
+                });
+            }
+        }
+        let id = self.intern_key_unmetered(&index.to_string());
+        self.mop_define_own_property(code, inst, id, desc)
+    }
+
     /// `[[Delete]]` dispatched on a [`ReadKey`].
     fn mop_delete_read(
         &mut self,
@@ -50434,9 +50486,11 @@ impl Interp {
         let proxy = self.proxies.contains_key(&inst);
         for key in keys {
             self.meter.tick_raw(INTEGRITY_APPLY_PER_KEY_METERING);
-            let id = self.to_property_id(code, key)?;
+            // Stamping flags OBSERVES the key set and rewrites existing
+            // entries; it creates no name, so an index is not minted.
+            let key = self.to_read_key(code, key)?;
             let current = if frozen || !proxy {
-                self.mop_get_own_property(code, inst, id)?
+                self.mop_get_own_property_read(code, inst, key)?
             } else {
                 None
             };
@@ -50472,7 +50526,7 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 }
             };
-            if !self.mop_define_own_property(code, inst, id, desc)? {
+            if !self.mop_define_own_property_read(code, inst, key, desc)? {
                 return Ok(false);
             }
         }
@@ -50493,8 +50547,8 @@ impl Interp {
         self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
         for key in self.mop_own_keys(code, inst)? {
             self.meter.tick_raw(INTEGRITY_QUERY_PER_KEY_METERING);
-            let id = self.to_property_id(code, key)?;
-            if let Some(descriptor) = self.mop_get_own_property(code, inst, id)? {
+            let key = self.to_read_key(code, key)?;
+            if let Some(descriptor) = self.mop_get_own_property_read(code, inst, key)? {
                 if descriptor.configurable != Some(false)
                     || (frozen && descriptor.is_data() && descriptor.writable == Some(true))
                 {
@@ -51236,8 +51290,12 @@ impl Interp {
             idxs.sort_unstable();
             idxs.dedup();
             for i in idxs {
-                let id = self.intern_key(&i.to_string());
-                out.push(self.property_key_slot(id)?);
+                // The key is SPELLED from the index, never interned: XS's
+                // `fxKeyAt` builds it from `value.at.index`, and minting one
+                // per element walked the shared `u16` id space into its
+                // saturation guard — `Object.keys(a)` over a 70,000-element
+                // array poisoned the machine.
+                out.push(self.read_key_slot(ReadKey::Index(i))?);
             }
             let length_id = self.intern_key("length");
             if !is_arguments {
@@ -51266,8 +51324,7 @@ impl Interp {
             };
             let mut out = Vec::new();
             for index in 0..length {
-                let id = self.intern_key(&index.to_string());
-                out.push(self.property_key_slot(id)?);
+                out.push(self.read_key_slot(ReadKey::Index(index))?);
             }
             for id in self.ordered_own_key_ids(inst) {
                 if self
@@ -51291,8 +51348,7 @@ impl Interp {
         {
             let mut out = Vec::new();
             for index in 0..self.str_len(offset) {
-                let id = self.intern_key(&index.to_string());
-                out.push(self.property_key_slot(id)?);
+                out.push(self.read_key_slot(ReadKey::Index(index as u32))?);
             }
             let length_id = self.intern_key("length");
             out.push(self.property_key_slot(length_id)?);
