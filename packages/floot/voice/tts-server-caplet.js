@@ -4,7 +4,7 @@
 // Symmetric to audio-server-caplet.js (STT), but the other direction: it takes
 // a stream of reply text and returns a stream of synthesized audio bytes:
 //
-//   ttsServer.synthesize(textReader) -> audioReader
+//   ttsServer.synthesize(textReader, options?) -> audioReader
 //
 // textReader yields the reply wire shape this caplet cares about (APPEND
 // deltas, like the floot converse reply — NOT the STT replace wire):
@@ -37,7 +37,7 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
@@ -61,7 +61,7 @@ const PIPER_DEFAULTS = harden({
 
 /** @param {string} id */
 const voiceDisplayName = id => {
-  const match = /^(en_[A-Z]{2})-(.+)-(low|medium|high)$/.exec(id);
+  const match = /^(en_[A-Z]{2})-(.+)-(x_low|low|medium|high)$/.exec(id);
   if (!match) return id.replace(/[_-]+/g, ' ');
   const [, locale, speaker, quality] = match;
   let localeName = locale.replace('_', ' ');
@@ -194,6 +194,11 @@ const makePiper = ({
   let carry = null;
   /** @type {Promise<void> | null} */
   let exited = null;
+  // Fired once if piper fails on its own (a missing binary, a bad model, a
+  // crash) — never for an abort() — so the caller can end the audio wire at
+  // once instead of when the text wire eventually ends.
+  /** @type {(error: Error) => void} */
+  let onExit = () => {};
 
   const ensureSpawned = () => {
     if (child || aborted) return;
@@ -221,8 +226,12 @@ const makePiper = ({
       const done = err => {
         if (settled) return;
         settled = true;
-        if (err) reject(err);
-        else resolve(undefined);
+        if (err) {
+          reject(err);
+          if (!aborted) onExit(err);
+        } else {
+          resolve(undefined);
+        }
       };
       proc.on('error', err => done(err));
       // stdin can emit EPIPE if piper exits/closes before consuming input (bad
@@ -256,6 +265,9 @@ const makePiper = ({
     sampleRate,
     setOnChunk: cb => {
       onChunk = cb;
+    },
+    setOnExit: cb => {
+      onExit = cb;
     },
     // Queue one sentence. Newlines cannot appear inside a sentence (each line
     // is one piper utterance); collapse any stray whitespace defensively.
@@ -294,7 +306,8 @@ const pump = async (piper, text, writer) => {
   try {
     for await (const value of text) {
       if (value.type === 'delta') {
-        for (const s of chunker.push(value.text)) piper.speak(s);
+        const delta = typeof value.text === 'string' ? value.text : '';
+        for (const s of chunker.push(delta)) piper.speak(s);
       } else if (value.type === 'end') {
         break;
       } else if (value.type === 'abort') {
@@ -325,15 +338,29 @@ export const make = async (_powers, context, { env = {} } = {}) => {
   const binary = env.FLOOT_TTS_BINARY || 'piper';
   const modelPath = env.FLOOT_TTS_MODEL;
   if (!modelPath) throw new Error('FLOOT_TTS_MODEL is required');
+  // The ranges advertised to clients; every synthesis option, and the
+  // configured default speed, must fall inside them.
+  const ranges = harden({
+    speed: harden({ min: 0.25, max: 4, step: 0.05 }),
+    noiseScale: harden({ min: 0, max: 2, step: 0.05 }),
+    noiseW: harden({ min: 0, max: 2, step: 0.05 }),
+    sentenceSilence: harden({ min: 0, max: 5, step: 0.05 }),
+  });
   // Speed drives piper's --length-scale (1/speed), so a non-positive or
   // non-finite value yields a nonsensical scale and piper fails obscurely.
-  // Reject it up front with a capability-level error instead.
+  // Reject it up front with a capability-level error instead — and hold it to
+  // the advertised range, since it becomes the default that every
+  // synthesize() is validated against.
   let speed = PIPER_DEFAULTS.speed;
   if (env.FLOOT_TTS_SPEED !== undefined && env.FLOOT_TTS_SPEED !== '') {
     const parsed = Number(env.FLOOT_TTS_SPEED);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
+    if (
+      !Number.isFinite(parsed) ||
+      parsed < ranges.speed.min ||
+      parsed > ranges.speed.max
+    ) {
       throw new Error(
-        `FLOOT_TTS_SPEED must be a positive number, got "${env.FLOOT_TTS_SPEED}".`,
+        `FLOOT_TTS_SPEED must be a number between ${ranges.speed.min} and ${ranges.speed.max}, got "${env.FLOOT_TTS_SPEED}".`,
       );
     }
     speed = parsed;
@@ -344,41 +371,71 @@ export const make = async (_powers, context, { env = {} } = {}) => {
   /** @type {Map<string, { id: string, name: string, modelPath: string, sampleRate: number }>} */
   const voicesById = new Map();
   /** @param {string} path */
+  const isFile = path =>
+    statSync(path, { throwIfNoEntry: false })?.isFile() === true;
+  /**
+   * Register the voice at `path` (a `.onnx` with its `.onnx.json` beside it).
+   *
+   * @param {string} path
+   * @returns {Error | undefined} why the voice was not registered
+   */
   const addVoice = path => {
     const id = basename(path, '.onnx');
     const configPath = `${path}.json`;
-    if (!existsSync(path) || !existsSync(configPath)) return;
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    const sampleRate = config?.audio?.sample_rate;
-    if (typeof sampleRate !== 'number' || sampleRate <= 0) {
+    try {
+      if (!isFile(path) || !isFile(configPath)) {
+        return Error(`${path} and ${configPath} must both be files`);
+      }
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      const sampleRate = config?.audio?.sample_rate;
+      if (typeof sampleRate !== 'number' || sampleRate <= 0) {
+        return Error(`${configPath} is missing audio.sample_rate`);
+      }
+      voicesById.set(
+        id,
+        harden({
+          id,
+          name: voiceDisplayName(id),
+          modelPath: path,
+          sampleRate,
+        }),
+      );
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error : Error(String(error));
+    }
+  };
+  // Sibling voices are optional extras: one that is broken (a half-downloaded
+  // model, a config that is really an HTML error page) is skipped with a
+  // diagnostic, never allowed to take the configured voice down with it.
+  /** @type {string[]} */
+  let siblings = [];
+  try {
+    siblings = readdirSync(modelDir).sort();
+  } catch (error) {
+    console.error(
+      `Floot TTS: cannot list the voices beside ${modelPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  for (const name of siblings) {
+    if (name.endsWith('.onnx')) {
+      const skipped = addVoice(join(modelDir, name));
+      if (skipped) {
+        console.error(`Floot TTS: skipping voice ${name}: ${skipped.message}`);
+      }
+    }
+  }
+  if (!voicesById.has(defaultVoice)) {
+    const reason = addVoice(modelPath);
+    if (reason) {
       throw new Error(
-        `piper voice config ${configPath} missing audio.sample_rate`,
+        `Piper default voice ${modelPath} is not usable: ${reason.message}`,
       );
     }
-    voicesById.set(
-      id,
-      harden({
-        id,
-        name: voiceDisplayName(id),
-        modelPath: path,
-        sampleRate,
-      }),
-    );
-  };
-  for (const name of readdirSync(modelDir).sort()) {
-    if (name.endsWith('.onnx')) addVoice(join(modelDir, name));
-  }
-  addVoice(modelPath);
-  if (!voicesById.has(defaultVoice)) {
-    throw new Error(`Piper default voice is not readable: ${modelPath}`);
   }
 
-  const ranges = harden({
-    speed: harden({ min: 0.25, max: 4, step: 0.05 }),
-    noiseScale: harden({ min: 0, max: 2, step: 0.05 }),
-    noiseW: harden({ min: 0, max: 2, step: 0.05 }),
-    sentenceSilence: harden({ min: 0, max: 5, step: 0.05 }),
-  });
   const defaults = harden({
     voice: defaultVoice,
     speed,
@@ -399,26 +456,36 @@ export const make = async (_powers, context, { env = {} } = {}) => {
    * @param {'speed' | 'noiseScale' | 'noiseW' | 'sentenceSilence'} name
    */
   const numberOption = (options, name) => {
-    const value =
-      options[name] === undefined ? defaults[name] : Number(options[name]);
+    const raw = options[name];
+    if (raw === undefined) return defaults[name];
     const range = ranges[name];
-    if (!Number.isFinite(value) || value < range.min || value > range.max) {
+    // A number, not anything Number() would coerce: '' and null would read as
+    // 0, true as 1, and a one-element array as its element.
+    if (
+      typeof raw !== 'number' ||
+      !Number.isFinite(raw) ||
+      raw < range.min ||
+      raw > range.max
+    ) {
       throw new Error(
-        `TTS ${name} must be between ${range.min} and ${range.max}, got "${options[name]}".`,
+        `TTS ${name} must be a number between ${range.min} and ${range.max}, got ${String(raw)}.`,
       );
     }
-    return value;
+    return raw;
   };
 
-  // Abort any in-flight piper subprocesses when the caplet is cancelled (the
-  // formula is removed or re-provisioned), so they don't leak.
-  const pipers = new Set();
+  // Every synthesis in flight, as a `stop(reason)` that aborts its piper, ends
+  // its audio wire, and releases its text wire. Cancellation of the caplet
+  // (the formula is removed or re-provisioned) stops them all at once, so no
+  // piper leaks and no consumer waits on a wire that will never end.
+  /** @type {Set<(reason: string) => void>} */
+  const live = new Set();
   if (context) {
     E(context)
       .whenCancelled()
       .catch(() => {
-        for (const piper of pipers) piper.abort();
-        pipers.clear();
+        for (const stop of live) stop('TTS capability cancelled');
+        live.clear();
       });
   }
 
@@ -439,25 +506,35 @@ export const make = async (_powers, context, { env = {} } = {}) => {
         sentenceSilence: numberOption(options, 'sentenceSilence'),
         sampleRate: voice.sampleRate,
       });
-      pipers.add(piper);
-      // If the consumer stops pulling (replay interrupted, barge-in, or the
-      // speech settings changed), abort piper so it doesn't keep synthesizing
-      // sentences no one will receive — and stop pulling the text wire too, so
-      // whoever feeds it (a daemon-side speech branch watching a live turn)
-      // learns nobody is listening instead of pushing the rest of the reply
-      // into a channel that is never drained.
       // The guard types the wire as a bare Passable; it is a Far StreamReader
       // of text events (see the header), which iterateReader expects.
       const text = iterateReader(/** @type {any} */ (textReader), {
         buffer: 4,
       });
-      const { writer, reader } = makeAudioChannel(() => {
+      // Stop this synthesis for good: abort piper so it doesn't keep
+      // synthesizing sentences no one will receive, end the audio wire, and
+      // stop pulling the text wire too, so whoever feeds it (a daemon-side
+      // speech view of a live turn) learns nobody is listening instead of
+      // pushing the rest of the reply into a channel that is never drained.
+      /** @type {(reason: string) => void} */
+      let stop = () => {};
+      // The consumer stopped pulling: replay interrupted, barge-in, mute, or
+      // the speech settings changed.
+      const { writer, reader } = makeAudioChannel(() =>
+        stop('audio consumer closed'),
+      );
+      stop = reason => {
         piper.abort();
+        writer.abort(reason);
         text.return().catch(() => {});
-      });
+      };
+      // A piper that fails on its own (a missing binary, a bad model, a crash)
+      // ends the audio wire right away, not when the text wire eventually does.
+      piper.setOnExit(error => stop(error.message));
+      live.add(stop);
       // pump settles the writer on every path; guard the floating promise and
-      // drop the piper from the live set once the turn ends.
-      pump(piper, text, writer).finally(() => pipers.delete(piper));
+      // forget this synthesis once it ends.
+      pump(piper, text, writer).finally(() => live.delete(stop));
       return reader;
     },
     getConfiguration: () => configuration,
