@@ -111,6 +111,28 @@ fn the_computed_key_path_boxes_a_primitive_base_the_same_way() {
 }
 
 #[test]
+fn a_computed_read_on_a_symbol_does_not_reach_its_description_slot() {
+    // A symbol value carries `Payload::Reference(desc)`, so before the kind
+    // match `property_at_get` treated the description slot as the receiver:
+    // `sym['toString']` missed `%Symbol.prototype%` entirely, and a symbol
+    // built from an object (its argument is stored raw, without `ToString`)
+    // handed out that object's own properties.
+    for (source, expected) in [
+        ("var s=Symbol('x'); typeof s['toString']", "function"),
+        ("var s=Symbol('x'); s['toString']()", "Symbol(x)"),
+        ("var o={x:5}; var s=Symbol(o); String(s['x'])", "undefined"),
+        ("String(Symbol([1,2,3])[1])", "undefined"),
+        // The dot form always resolved the prototype; the two must agree.
+        ("var o={x:5}; var s=Symbol(o); String(s.x)", "undefined"),
+        ("var s=Symbol('x'); s.toString()", "Symbol(x)"),
+    ] {
+        let out = run(source);
+        assert!(out.completed, "`{source}` must complete; halt: {:?}", out.halt);
+        assert_eq!(out.result, expected, "{source}");
+    }
+}
+
+#[test]
 fn a_sloppy_write_through_a_non_nullish_primitive_base_stays_silent() {
     // `RequireObjectCoercible` passes for a number/string/boolean base, so
     // the store targets a throwaway wrapper: sloppy code sees the assignment

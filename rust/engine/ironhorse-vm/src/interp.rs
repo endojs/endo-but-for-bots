@@ -46273,15 +46273,19 @@ impl Interp {
             }
             return Ok(self.string_property_get(off, id));
         }
-        // A primitive bigint, number or boolean boxes to its wrapper prototype
-        // for a computed property read just as it does for the static
+        // A primitive bigint, number, boolean or symbol boxes to its wrapper
+        // prototype for a computed property read just as it does for the static
         // `GET_PROPERTY` path: `true['toString']` and `true.toString` must name
-        // the same inherited method. (A primitive symbol carries a
-        // `Payload::Reference`, so it is excluded here and handled below.)
+        // the same inherited method. The match is on the receiver's KIND, which
+        // is what makes the symbol case correct: a symbol value carries
+        // `Payload::Reference(desc)`, so without this arm it reaches the
+        // generic reference arm below and reads properties off its own
+        // description slot (`Symbol({x:5})['x']` was `5`).
         let boxed_proto = match obj.kind {
             Kind::BigInt => self.bigint_proto,
             Kind::Integer | Kind::Number => self.number_proto,
             Kind::Boolean => self.boolean_proto,
+            Kind::Symbol => self.symbol_proto,
             _ => crate::value::SlotIndex::NULL,
         };
         if !boxed_proto.is_null() {
