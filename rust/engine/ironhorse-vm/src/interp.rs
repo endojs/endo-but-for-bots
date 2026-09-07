@@ -33627,21 +33627,31 @@ impl Interp {
                     let mut excluded = Vec::new();
                     for index in 2..argc {
                         let key = self.stack[base + 4 + index];
-                        excluded.push(self.to_property_id(code, key)?);
+                        excluded.push(self.to_read_key(code, key)?);
                     }
                     let keys = self.mop_own_keys(code, source)?;
                     for key in keys {
-                        let id = self.to_property_id(code, key)?;
-                        if excluded.contains(&id) {
+                        // The un-fixed twin of `Object.assign`'s source side.
+                        // Naming ran BEFORE both filters, so `{length,
+                        // ...rest}` over a 70,000-unit String wrapper minted a
+                        // name for every key — including the one it excludes
+                        // and every one it skips as non-enumerable — and
+                        // poisoned the machine.
+                        let read_key = self.to_read_key(code, key)?;
+                        if excluded
+                            .iter()
+                            .any(|&e| self.refresh_read_key(e) == self.refresh_read_key(read_key))
+                        {
                             continue;
                         }
                         let enumerable = self
-                            .mop_get_own_property(code, source, id)?
+                            .mop_get_own_property_read(code, source, read_key)?
                             .is_some_and(|descriptor| descriptor.enumerable == Some(true));
                         if !enumerable {
                             continue;
                         }
-                        let value = self.mop_get(code, source, id, from)?;
+                        let read_key = self.refresh_read_key(read_key);
+                        let value = self.mop_get_read(code, source, read_key, from)?;
                         let copied = OrdinaryDescriptor {
                             value: Some(value),
                             writable: Some(true),
@@ -33649,7 +33659,11 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        if !self.mop_define_own_property(code, target, id, copied)? {
+                        // Only a key that SURVIVES both filters is copied, and
+                        // copying creates a property on the target, which in
+                        // this representation needs a name.
+                        let read_key = self.refresh_read_key(read_key);
+                        if !self.mop_define_own_property_read(code, target, read_key, copied)? {
                             return Err(self.catchable_type_error_msg("copy property".into()));
                         }
                     }
