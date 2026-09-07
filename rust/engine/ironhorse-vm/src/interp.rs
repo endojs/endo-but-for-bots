@@ -27367,11 +27367,20 @@ impl Interp {
         if index > u32::MAX as u64 {
             return Ok(Err(self.build_error("TypeError", 0, 0)));
         }
-        // Minted before the compact arm for the same reason as
-        // `array_generic_create_data_property`: the pinned XS interns the index
-        // name here too, and the slot allocation `intern_key` charges is what
-        // keeps `Array.from`/`Array.of` element writes raw-exact against it.
-        let id = self.intern_key(&index.to_string());
+        // Look the index name up; do NOT mint it. XS mints nothing here:
+        // `fx_Array_from_aux` defines each element through `mxDefineIndex`,
+        // which is `fxDefineAll(the, …, XS_NO_ID, index, …)` (`xsAPI.c:1172`)
+        // — the item slot addressed by index, no name involved. Minting one
+        // per element made `Array.from({length: 70000})`, a single call with
+        // no guest loop in it, exhaust the `u16` id space and poison the
+        // machine. (The earlier comment here claimed the mint kept metering
+        // raw-exact against XS. It does not: every index whose name is
+        // already in the table — which is every index small programs
+        // measure — took the same lookup either way, so the claim was
+        // untestable at the sizes it was checked at, and false at the source.
+        // Measured before and after, the raw meter is byte-identical.)
+        let index_key = index as u32;
+        let id = self.index_read_key_id(index_key);
         let descriptor = OrdinaryDescriptor {
             value: Some(value),
             writable: Some(true),
@@ -27380,8 +27389,10 @@ impl Interp {
             ..OrdinaryDescriptor::default()
         };
         if self.arrays.contains_key(&target) {
-            let index = index as u32;
-            let ordinary = self.ordinary_get_own_descriptor(target, id);
+            let index = index_key;
+            // A name the table never held cannot key an ordinary shadow slot,
+            // so its absence is the answer without a lookup.
+            let ordinary = id.and_then(|id| self.ordinary_get_own_descriptor(target, id));
             let compact = self.arrays[&target].items().get(&index).copied();
             let compact_is_default = compact.is_some_and(|item| {
                 item.flag & (XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG) == 0
@@ -27396,8 +27407,12 @@ impl Interp {
                 return Ok(Ok(()));
             }
         }
+        let key = match id {
+            Some(id) => ReadKey::Id(id),
+            None => ReadKey::Index(index_key),
+        };
         match self.array_from_try(|this| {
-            this.mop_define_own_property(code, target, id, descriptor)
+            this.mop_define_own_property_read(code, target, key, descriptor)
         })? {
             Ok(true) => Ok(Ok(())),
             Ok(false) => Ok(Err(self.build_error("TypeError", 0, 0))),
@@ -50279,8 +50294,10 @@ impl Interp {
             return Ok(self.array_item_value(inst, item));
         }
         if self.arrays.contains_key(&inst) {
-            let id = self.intern_key(&i.to_string());
-            return self.mop_get(code, inst, id, receiver);
+            // A hole. The read still walks the prototype chain, but through
+            // the shared non-interning probe: minting here made
+            // `Array.from(sparse)` cost a name per hole.
+            return self.arraylike_index_walk(code, inst, i, receiver);
         }
         if let Some(Slot {
             kind: Kind::String,
@@ -50288,10 +50305,31 @@ impl Interp {
             ..
         }) = self.wrapper_data.get(&inst).copied()
         {
-            return Ok(self.string_index_get(off, i as u32));
+            if i < self.str_len(off) as u64 {
+                return Ok(self.string_index_get(off, i as u32));
+            }
         }
-        let id = self.intern_key(&i.to_string());
-        self.mop_get(code, inst, id, receiver)
+        self.arraylike_index_walk(code, inst, i, receiver)
+    }
+
+    /// `? Get(O, ToString(i))` for the array-like seam, index-safe.
+    ///
+    /// The name is minted only when some chain level can actually answer the
+    /// index — the shared probe's contract. `Array.from({length: 70000})`
+    /// reads 70,000 indices that no level answers; interning each one walked
+    /// the `u16` id space into the saturation guard that poisons the machine,
+    /// which made a one-line call a denial of service on the engine.
+    fn arraylike_index_walk(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        i: u64,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        match self.array_generic_interned_index_id(inst, i) {
+            Some(id) => self.mop_get(code, inst, id, receiver),
+            None => Ok(Slot::undefined()),
+        }
     }
 
     /// `Object.fromEntries`'s `AddEntriesFromIterable`. Each yielded entry must
