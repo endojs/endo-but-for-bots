@@ -7864,16 +7864,42 @@ impl Interp {
     /// **Harness only.** A default machine has no `$262`: the host object
     /// carries a memory-detach primitive that a hardened realm must not
     /// expose, so `Interp::new` does not build it (architecture review
-    /// F143) and only the conformance harness calls this. Call it BEFORE
-    /// [`Self::link_intrinsics`] so the link pass binds the `$262` global
-    /// and the `detachArrayBuffer` method under the program's ids; a later
-    /// relink still picks them up for a crank that first names them.
+    /// F143) and only the conformance harness calls this. Idempotent.
+    ///
+    /// **Must be called BEFORE [`Self::link_intrinsics`]**, and now
+    /// PANICS rather than merely documenting it. The link pass binds the
+    /// names a program references by looking each one up in `intrinsics`;
+    /// an entry inserted after that pass has run is never consulted
+    /// again for the ids it already considered, so an inverted wiring
+    /// order produced a machine whose `$262` was silently unreachable —
+    /// `typeof $262` answered `"undefined"` on a harness machine, with
+    /// no diagnostic and a whole conformance run's worth of wrong
+    /// verdicts behind it. The assertion is unconditional: this runs once
+    /// per machine at wiring time, and a debug-only check would leave the
+    /// release harness — the only caller — unprotected.
+    ///
     /// Minted above `boot_slot_count`, so it is a runtime native that no
-    /// snapshot carries — the harness never checkpoints. Idempotent.
+    /// snapshot carries, and restore boots a default machine that
+    /// installs no host. A machine carrying `$262` is therefore refused
+    /// by the persist gate ([`Self::stored_unpersistable_row`]) on the
+    /// host's PRESENCE — not merely when a guest stores the native — so
+    /// "the harness never checkpoints" is enforced rather than assumed.
+    /// Both contracts are locked by `tests/test262_host_gate.rs`.
     pub fn install_test262_host(&mut self) {
         if self.intrinsics.contains_key("$262") {
             return;
         }
+        // `symbol_names` is empty on a fresh boot and populated by
+        // `link_intrinsics` (through `bind_program_symbols`), so it is the
+        // machine's "has been linked" signal. A program with NO names
+        // leaves it empty after linking, but such a program references no
+        // `$262` either, so the proxy never misses a case that matters.
+        assert!(
+            self.symbol_names.is_empty(),
+            "install_test262_host must be called BEFORE link_intrinsics; \
+             installing after the link pass leaves `$262` bound to nothing \
+             and every conformance test that names it silently wrong"
+        );
         let host = self.slots.alloc(Slot::instance(self.object_proto));
         let detach = self.alloc_named_method(
             NativeMethod::Test262DetachArrayBuffer,
@@ -10279,6 +10305,29 @@ impl Interp {
     }
 
     fn stored_unpersistable_row_inner(&self, dirty_heap_only: bool) -> Option<&'static str> {
+        // The test262 `$262` host ([`Self::install_test262_host`]):
+        // harness-only, minted above `boot_slot_count`, carried by no
+        // atom, and re-derived by nothing on the resume path — restore
+        // boots a DEFAULT machine, which installs no host at all.
+        //
+        // Refused on the host's PRESENCE rather than left to the
+        // doomed-set walk below, because that walk cannot see the whole
+        // defect. It refuses a machine that STORED the native (`var f =
+        // $262.detachArrayBuffer`) or called it, but a guest that only
+        // OBSERVES the binding (`typeof $262`) stores no function
+        // reference: the walk finds nothing, the checkpoint succeeds,
+        // and the resumed machine silently has no `$262` for a later
+        // crank to name. Presence is also the honest question — a
+        // machine carrying the conformance host IS a conformance
+        // machine, and conformance machines do not persist. That
+        // invariant used to live in prose on `install_test262_host`
+        // ("the harness never checkpoints"); this is the enforcement.
+        //
+        // Costs one hash lookup on a table every machine has, so it
+        // leads: a default machine (no `$262`) falls straight through.
+        if self.intrinsics.contains_key("$262") {
+            return Some("a test262 `$262` host object, which no snapshot carries");
+        }
         // A pending reaction whose KIND names suspended async machinery
         // (an `await`'s resumption, an async generator's, an
         // `Array.fromAsync` step) points at instance rows the image
