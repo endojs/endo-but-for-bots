@@ -134,6 +134,7 @@ export const makeFixture = async (
   return harden({
     statePath,
     store,
+    publication,
     ownerId: ownerVat.workerId,
     guestId: guestVat.workerId,
     get daemon() {

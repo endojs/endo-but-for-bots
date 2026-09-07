@@ -687,6 +687,12 @@ test.serial(
     const listed = await transcript(t, path, '', 'applications');
     t.is(listed.code, 0);
     t.is(JSON.parse(listed.output)[0].name, 'counter');
+    const graph = await transcript(t, path, '', 'reachability');
+    t.is(graph.code, 0);
+    t.is(JSON.parse(graph.output).workers.length, 2);
+    const collection = await transcript(t, path, '', 'collect');
+    t.is(collection.code, 0);
+    t.deepEqual(JSON.parse(collection.output), []);
     const admin = await connect(t, path);
     t.is(
       await admin.call('evaluate', "E(E(apps).get('counter')).incr()"),
