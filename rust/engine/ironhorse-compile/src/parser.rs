@@ -100,19 +100,19 @@ type PResult<T> = Result<T, ParseError>;
 ///   template substitution, an arrow body — costs [`CASCADE_COST`] plus the
 ///   operand charges the cascade passes on the way down: the whole
 ///   precedence cascade is re-entered, about 35 KiB of frames per level
-///   unoptimized, so about 100 levels (101 nested parentheses compile, 102
-///   do not);
+///   unoptimized, so about 90 levels (91 nested parentheses compile, 92 do
+///   not);
 /// - a nested statement, a `new` operand or a destructuring-pattern level
 ///   costs [`STATEMENT_COST`]: 512 levels (about 10 KiB each);
-/// - an assignment, unary or conditional operand — the cheap right-recursive
-///   chains such as `a ? b : c ? d : …` or `!!!!x` — costs [`OPERAND_COST`]:
-///   about 1,000 levels (about 2 KiB each).
+/// - an assignment, unary, exponentiation or conditional operand — the cheap
+///   right-recursive chains such as `a ? b : c ? d : …`, `2 ** 2 ** …` or
+///   `!!!!x` — costs [`OPERAND_COST`]: about 1,000 levels (about 2 KiB each).
 ///
 /// Every corner stays under 6 MiB of host stack unoptimized and under 2 MiB
 /// optimized. A flat sequence the grammar folds into a left-nested tree
-/// (`a + a + … + a`) never recurses here; its depth is bounded by the
-/// scoper's [`crate::scoper::TREE_DEPTH_LIMIT`]. `tests/recursion_bounds.rs`
-/// pins every boundary.
+/// (`a + a + … + a`) never recurses here; the tree it builds is bounded
+/// instead, at [`crate::ast::TREE_DEPTH_LIMIT`], as each node is built.
+/// `tests/recursion_bounds.rs` pins every boundary.
 pub const PARSER_STACK_BUDGET: u32 = 1024;
 /// Budget units for one expression-cascade re-entry (see
 /// [`PARSER_STACK_BUDGET`]).
@@ -358,11 +358,11 @@ impl Parser {
     }
 
     fn push_integer(&mut self, value: i32, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::Integer, line, flags: 0, children: Vec::new(), value: Value::Integer(value) })));
+        self.push(Item::Node(Box::new(Node::new(Token::Integer, line, 0, Vec::new(), Value::Integer(value)))));
     }
 
     fn push_number(&mut self, value: f64, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::Number, line, flags: 0, children: Vec::new(), value: Value::Number(value) })));
+        self.push(Item::Node(Box::new(Node::new(Token::Number, line, 0, Vec::new(), Value::Number(value)))));
     }
 
     fn push_string(&mut self, value: Vec<u16>, line: u32, escaped: bool) {
@@ -378,13 +378,7 @@ impl Parser {
         if legacy {
             flags |= flags::STRING_LEGACY;
         }
-        self.push(Item::Node(Box::new(Node {
-            token: Token::String,
-            line,
-            flags,
-            children: Vec::new(),
-            value: Value::Str(value),
-        })));
+        self.push(Item::Node(Box::new(Node::new(Token::String, line, flags, Vec::new(), Value::Str(value)))));
     }
 
     /// `fxPushStringNode` sets `flags = states[0].escaped`
@@ -397,13 +391,7 @@ impl Parser {
         if error {
             flags |= flags::STRING_ERROR;
         }
-        self.push(Item::Node(Box::new(Node {
-            token: Token::String,
-            line,
-            flags,
-            children: Vec::new(),
-            value: Value::Str(value),
-        })));
+        self.push(Item::Node(Box::new(Node::new(Token::String, line, flags, Vec::new(), Value::Str(value)))));
     }
 
     /// An untagged template's cooked value is coded through `fxStringNodeCode`,
@@ -430,11 +418,11 @@ impl Parser {
     }
 
     fn push_raw(&mut self, value: Vec<u16>, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::String, line, flags: 0, children: Vec::new(), value: Value::Str(value) })));
+        self.push(Item::Node(Box::new(Node::new(Token::String, line, 0, Vec::new(), Value::Str(value)))));
     }
 
     fn push_bigint(&mut self, value: crate::lexer::BigIntLiteral, line: u32) {
-        self.push(Item::Node(Box::new(Node { token: Token::Bigint, line, flags: 0, children: Vec::new(), value: Value::BigInt(value) })));
+        self.push(Item::Node(Box::new(Node::new(Token::Bigint, line, 0, Vec::new(), Value::BigInt(value)))));
     }
 
     /// `fxPushNodeStruct` — pop `count` stack items and build a node of
@@ -447,7 +435,16 @@ impl Parser {
         }
         let start = self.stack.len() - count;
         let children: Vec<Item> = self.stack.split_off(start);
-        let node = Node { token, line, flags: self.flags & flags::INHERITED, children, value: Value::None };
+        let node = Node::new(token, line, self.flags & flags::INHERITED, children, Value::None);
+        // The tree-depth invariant: no node deeper than
+        // [`crate::ast::TREE_DEPTH_LIMIT`] is ever built, so no later pass —
+        // nor the tree's own drop glue — recurses past it. This is where a
+        // flat run the grammar folds into a left-nested chain (`binary_ladder`,
+        // member and call chains) grows one level per operand without any
+        // parser recursion to charge.
+        if node.depth > crate::ast::TREE_DEPTH_LIMIT {
+            return Err(self.error("stack overflow"));
+        }
         self.push(Item::Node(Box::new(node)));
         Ok(())
     }
@@ -489,7 +486,7 @@ impl Parser {
     /// exactly as `fxPushNodeStruct` would (used by the off-stack
     /// cover-grammar binding conversions).
     fn new_inherited_node(&self, token: Token, line: u32, children: Vec<Item>) -> Item {
-        Item::Node(Box::new(Node { token, line, flags: self.flags & flags::INHERITED, children, value: Value::None }))
+        Item::Node(Box::new(Node::new(token, line, self.flags & flags::INHERITED, children, Value::None)))
     }
 
     /// `fxDefineNodeNew(DEFINE, symbol)` + `node->initializer = pop`: pop
@@ -497,13 +494,7 @@ impl Parser {
     /// `symbol`.
     fn push_define(&mut self, symbol: String, line: u32) {
         let init = self.pop();
-        self.push(Item::Node(Box::new(Node {
-            token: Token::Define,
-            line,
-            flags: 0,
-            children: vec![Item::Symbol(symbol), init],
-            value: Value::None,
-        })));
+        self.push(Item::Node(Box::new(Node::new(Token::Define, line, 0, vec![Item::Symbol(symbol), init], Value::None))));
     }
 
     /// Push an already-collected list of items as a `List` slot (the
@@ -894,7 +885,15 @@ impl Parser {
     /// `fxExponentiationExpression` — right-associative, and a leading
     /// unary operand cannot be an exponentiation base (`-x ** y` is an
     /// early error handled by routing to `fxUnaryExpression`).
+    /// `fxExponentiationExpression`. One [`OPERAND_COST`] recursion point:
+    /// `**` is right-associative, so `2 ** 2 ** …` recurses here per operand
+    /// — after the charged operand production has already returned, so this
+    /// production must charge for itself.
     fn exponentiation_expression(&mut self) -> PResult<()> {
+        self.nested(OPERAND_COST, |p| p.exponentiation_expression_inner())
+    }
+
+    fn exponentiation_expression_inner(&mut self) -> PResult<()> {
         if has_flag(self.cur.token, UNARY_EXPRESSION) {
             self.unary_expression()
         } else {

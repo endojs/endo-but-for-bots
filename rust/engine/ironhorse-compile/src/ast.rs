@@ -147,6 +147,26 @@ pub enum Item {
     List(Vec<Item>),
 }
 
+/// The deepest tree the compiler will build or walk, in [`Node::depth`]
+/// levels.
+///
+/// Every pass after the parser recurses once per tree level on the host's
+/// native stack — the scoper's hoist and bind walks, the coder's node
+/// dispatch and symbol interning, the cover-grammar conversions, and the
+/// tree's own drop glue — and the tree is deeper than the source is nested
+/// wherever the grammar folds a flat run into a left-nested chain:
+/// `a + a + … + a` with `n` terms, or `a.b.c…` with `n` members, is `n`
+/// levels deep although the parser never recursed for it (a 100,000-term
+/// chain, about 200 KB of source, overflowed a 32 MiB stack merely being
+/// dropped). [`crate::parser::PARSER_STACK_BUDGET`] bounds source nesting;
+/// this bounds the tree itself: the parser refuses to build a node past it
+/// with its `"stack overflow"` `SyntaxError`, so no deeper tree ever exists
+/// for a later pass to recurse over, and the scoper and coder re-check it
+/// as a backstop. It sits above any tree the parser budget can produce
+/// through nesting (the deepest, a 512-level statement nest, is about 1,500
+/// levels), so only the flat-chain shapes ever reach it.
+pub const TREE_DEPTH_LIMIT: u32 = 2048;
+
 /// An AST node: XS's `sxNode` common part (`description->token`, `line`,
 /// `flags`) plus its child slots and any leaf payload.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,12 +182,40 @@ pub struct Node {
     pub children: Vec<Item>,
     /// Leaf payload for value-bearing nodes.
     pub value: Value,
+    /// The height of this subtree in node and list levels (a leaf is 1),
+    /// maintained by [`Node::new`] so the parser can refuse a tree past
+    /// [`TREE_DEPTH_LIMIT`] in constant time per node.
+    pub depth: u32,
 }
 
 impl Node {
+    /// A node of `token` at `line` over `children`, its depth computed from
+    /// theirs.
+    pub fn new(token: Token, line: u32, flags: u32, children: Vec<Item>, value: Value) -> Node {
+        let depth = 1 + children.iter().map(item_depth).max().unwrap_or(0);
+        Node {
+            token,
+            line,
+            flags,
+            children,
+            value,
+            depth,
+        }
+    }
+
     /// A childless node of `token` at `line` with no flags.
     pub fn leaf(token: Token, line: u32) -> Node {
-        Node { token, line, flags: 0, children: Vec::new(), value: Value::None }
+        Node::new(token, line, 0, Vec::new(), Value::None)
+    }
+}
+
+/// The height of one stack/child slot: a node's recorded depth, one more
+/// than a list's deepest element, and nothing for a symbol or `NULL`.
+pub fn item_depth(item: &Item) -> u32 {
+    match item {
+        Item::Node(node) => node.depth,
+        Item::List(items) => 1 + items.iter().map(item_depth).max().unwrap_or(0),
+        Item::Symbol(_) | Item::Null => 0,
     }
 }
 

@@ -523,20 +523,42 @@ impl Parser {
         self.push_node_struct(2, Token::Label, line)
     }
 
+    /// `fxIfStatement`. An `else if` chain is parsed in a loop rather than
+    /// by recursing `statement(0)` → `if_statement` once per branch: each
+    /// branch would otherwise hold a [`STATEMENT_COST`] frame for the whole
+    /// chain, and generated dispatch code reaches hundreds of branches. The
+    /// open levels' `if` lines are kept on a side stack and the right-nested
+    /// `If` nodes are folded innermost-first once the chain's tail is on the
+    /// node stack — exactly the tree, lines and flags the recursion built.
     fn if_statement(&mut self) -> PResult<()> {
-        let line = self.cur.line;
-        self.match_token(Token::If)?;
-        self.match_token(Token::LeftParenthesis)?;
-        self.comma_expression()?;
-        self.match_token(Token::RightParenthesis)?;
-        self.statement(0)?;
-        if self.cur.token == Token::Else {
-            self.match_token(Token::Else)?;
+        let mut open_lines: Vec<u32> = Vec::new();
+        loop {
+            let line = self.cur.line;
+            self.match_token(Token::If)?;
+            self.match_token(Token::LeftParenthesis)?;
+            self.comma_expression()?;
+            self.match_token(Token::RightParenthesis)?;
             self.statement(0)?;
-        } else {
-            self.push_null();
+            open_lines.push(line);
+            if self.cur.token == Token::Else {
+                self.match_token(Token::Else)?;
+                if self.cur.token == Token::If {
+                    // `else if`: the alternate is the next level of the chain
+                    // (`statement(0)` would dispatch straight back here).
+                    continue;
+                }
+                self.statement(0)?;
+            } else {
+                self.push_null();
+            }
+            break;
         }
-        self.push_node_struct(3, Token::If, line)
+        // Each level's `[condition, consequent, alternate]` are the top three
+        // stack items once the level below it has been folded into one node.
+        while let Some(line) = open_lines.pop() {
+            self.push_node_struct(3, Token::If, line)?;
+        }
+        Ok(())
     }
 
     fn return_statement(&mut self) -> PResult<()> {
@@ -1693,38 +1715,32 @@ impl Parser {
     /// `constructor(){}`), matching the shape `fxClassExpression` builds.
     fn synthesize_default_constructor(&mut self, heritage_flag: bool, line: u32) {
         let strict = self.flags & flags::INHERITED;
-        let empty_params = || Item::Node(Box::new(Node {
-            token: Token::ParamsBinding,
-            line,
-            flags: strict,
-            children: vec![Item::List(Vec::new())],
-            value: Value::None,
-        }));
+        let empty_params = || Item::Node(Box::new(Node::new(Token::ParamsBinding, line, strict, vec![Item::List(Vec::new())], Value::None)));
         // name
         let name = Item::Null;
         let (params, body, fflags);
         if heritage_flag {
             // params: (...args)
-            let arg = Item::Node(Box::new(Node { token: Token::Arg, line, flags: strict, children: vec![Item::Symbol("args".to_string()), Item::Null], value: Value::None }));
-            let rest = Item::Node(Box::new(Node { token: Token::RestBinding, line, flags: strict, children: vec![arg], value: Value::None }));
-            params = Item::Node(Box::new(Node { token: Token::ParamsBinding, line, flags: strict, children: vec![Item::List(vec![rest])], value: Value::None }));
+            let arg = Item::Node(Box::new(Node::new(Token::Arg, line, strict, vec![Item::Symbol("args".to_string()), Item::Null], Value::None)));
+            let rest = Item::Node(Box::new(Node::new(Token::RestBinding, line, strict, vec![arg], Value::None)));
+            params = Item::Node(Box::new(Node::new(Token::ParamsBinding, line, strict, vec![Item::List(vec![rest])], Value::None)));
             // body: super(...args)
-            let access = Item::Node(Box::new(Node { token: Token::Access, line, flags: strict, children: vec![Item::Symbol("args".to_string())], value: Value::None }));
-            let spread = Item::Node(Box::new(Node { token: Token::Spread, line, flags: strict, children: vec![access], value: Value::None }));
-            let mut sup_params = Node { token: Token::Params, line, flags: strict, children: vec![Item::List(vec![spread])], value: Value::None };
+            let access = Item::Node(Box::new(Node::new(Token::Access, line, strict, vec![Item::Symbol("args".to_string())], Value::None)));
+            let spread = Item::Node(Box::new(Node::new(Token::Spread, line, strict, vec![access], Value::None)));
+            let mut sup_params = Node::new(Token::Params, line, strict, vec![Item::List(vec![spread])], Value::None);
             sup_params.flags |= flags::SPREAD;
-            let sup = Item::Node(Box::new(Node { token: Token::Super, line, flags: strict, children: vec![Item::Node(Box::new(sup_params))], value: Value::None }));
-            let stmt = Item::Node(Box::new(Node { token: Token::Statement, line, flags: strict, children: vec![sup], value: Value::None }));
-            body = Item::Node(Box::new(Node { token: Token::Body, line, flags: strict, children: vec![stmt], value: Value::None }));
+            let sup = Item::Node(Box::new(Node::new(Token::Super, line, strict, vec![Item::Node(Box::new(sup_params))], Value::None)));
+            let stmt = Item::Node(Box::new(Node::new(Token::Statement, line, strict, vec![sup], Value::None)));
+            body = Item::Node(Box::new(Node::new(Token::Body, line, strict, vec![stmt], Value::None)));
             fflags = flags::STRICT | flags::DERIVED | flags::METHOD | flags::TARGET | flags::SUPER;
         } else {
             params = empty_params();
-            let undef = Item::Node(Box::new(Node { token: Token::Undefined, line, flags: strict, children: Vec::new(), value: Value::None }));
-            let stmt = Item::Node(Box::new(Node { token: Token::Statement, line, flags: strict, children: vec![undef], value: Value::None }));
-            body = Item::Node(Box::new(Node { token: Token::Body, line, flags: strict, children: vec![stmt], value: Value::None }));
+            let undef = Item::Node(Box::new(Node::new(Token::Undefined, line, strict, Vec::new(), Value::None)));
+            let stmt = Item::Node(Box::new(Node::new(Token::Statement, line, strict, vec![undef], Value::None)));
+            body = Item::Node(Box::new(Node::new(Token::Body, line, strict, vec![stmt], Value::None)));
             fflags = flags::STRICT | flags::BASE | flags::METHOD | flags::TARGET;
         }
-        let func = Item::Node(Box::new(Node { token: Token::Function, line, flags: fflags, children: vec![name, params, body], value: Value::None }));
+        let func = Item::Node(Box::new(Node::new(Token::Function, line, fflags, vec![name, params, body], Value::None)));
         self.push(func);
     }
 
@@ -1939,13 +1955,7 @@ impl Parser {
         match node.token {
             Token::Const | Token::Let | Token::Var => {
                 if let Some(Item::Symbol(s)) = node.children.first() {
-                    let spec = Item::Node(Box::new(Node {
-                        token: Token::Specifier,
-                        line: node.line,
-                        flags: self.flags & flags::INHERITED,
-                        children: vec![Item::Symbol(s.clone()), Item::Null],
-                        value: Value::None,
-                    }));
+                    let spec = Item::Node(Box::new(Node::new(Token::Specifier, node.line, self.flags & flags::INHERITED, vec![Item::Symbol(s.clone()), Item::Null], Value::None)));
                     out.push(spec);
                 }
             }
