@@ -98,20 +98,29 @@ Superset verified, zero lost: every path in `../refresh-20260829/covered.txt`
 one net gain over that sweep is a `DisposableStack` disposal case the
 sibling-boundary fence unblocked, and the `failures` list is empty.
 
-## Regenerating this artifact
+## Regenerating a comparison
+
+Run from `rust/engine/ironhorse-262` at the commit being measured.
+To reproduce the historical measurement, use the recorded provenance commit.
+A run at a different commit is a new comparison and must preserve its own provenance.
 
 ```sh
-# 1. Sweep the pinned corpus at head (endo_sha in baseline.json provenance):
-scripts/full-run.sh --test262-dir <tc39/test262@be13516fb644 checkout> \
+scripts/full-run.sh --test262-dir <pinned-test262-checkout> \
   --no-fetch --jobs 14 --oracle on --output <out>
-# 2. covered.txt is every `report.json` case with category "covered",
-#    byte-sorted (locale-pinned, so the file does not reorder under a
-#    non-C LC_COLLATE):
-python3 -c 'import json,sys; print("\n".join(sorted((c["path"] for c in json.load(open(sys.argv[1]))["cases"] if c["category"]=="covered"), key=lambda s:s.encode())))' \
-  <out>/report.json | LC_ALL=C sort -c /dev/stdin && \
-  python3 -c 'import json,sys; print("\n".join(sorted((c["path"] for c in json.load(open(sys.argv[1]))["cases"] if c["category"]=="covered"), key=lambda s:s.encode())))' \
-  <out>/report.json > covered.txt
-# 3. baseline.json's totals_by_category, infrastructure_reasons, and provenance
-#    are report.json's `summary.by_category`, the infrastructure reason tally,
-#    and `provenance`.
+python3 - <out>/report.json > covered.txt <<'PYTHON'
+import json
+import sys
+
+with open(sys.argv[1]) as report_file:
+    report = json.load(report_file)
+paths = {case["path"] for case in report["cases"]
+         if case["category"] == "covered"}
+for path in sorted(paths, key=str.encode):
+    print(path)
+PYTHON
+LC_ALL=C sort -c covered.txt
 ```
+
+The category totals and provenance come from `report.json`'s
+`summary.by_category` and `provenance` fields.
+The infrastructure reasons are the reason tally for infrastructure cases.
