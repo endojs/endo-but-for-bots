@@ -99,3 +99,82 @@ fn enumeration_still_answers_correctly() {
         assert_eq!(out.result, want, "{source}");
     }
 }
+
+/// A key snapshotted as an INDEX must be re-resolved before it is used, in
+/// case guest code named that index in between.
+///
+/// `json_stringify_own_names` snapshots every key before any value is read,
+/// and a replacer list is cached for the whole stringify. A `ReadKey::Index`
+/// answers out of the array item table, but `array_define_index` PROMOTES an
+/// item to an ordinary named slot for any descriptor that is not a bare data
+/// value — so a replacer (or a getter) that defines such a property mid-walk
+/// moved it out from under the cached key, and the property silently vanished
+/// from the output. Verified against the XS oracle: all three answer
+/// `{"0":1,"1":99}`.
+///
+/// The holder has to be an object whose index properties live in the array
+/// side table but which is not `IsArray` — `arguments` is the reachable case.
+#[test]
+fn a_key_named_mid_stringify_is_still_serialized() {
+    let promote = "Object.defineProperty(args, '1', \
+        { value: 99, enumerable: true, writable: false, configurable: false })";
+    // Promoted by a replacer function, from a data descriptor.
+    let out = run(&format!(
+        "(function () {{ var args = arguments; \
+           return JSON.stringify(args, function (k, v) {{ if (k === '0') {{ {promote}; }} return v; }}); \
+         }})(1, 2)"
+    ));
+    assert!(out.completed, "halt {:?}", out.halt);
+    assert_eq!(out.result, r#"{"0":1,"1":99}"#);
+
+    // Promoted by a replacer function, from an accessor descriptor.
+    let out = run(
+        "(function () { var args = arguments; \
+           return JSON.stringify(args, function (k, v) { \
+             if (k === '0') { Object.defineProperty(args, '1', \
+               { get: function () { return 99; }, enumerable: true, configurable: true }); } \
+             return v; }); \
+         })(1, 2)",
+    );
+    assert!(out.completed, "halt {:?}", out.halt);
+    assert_eq!(out.result, r#"{"0":1,"1":99}"#);
+
+    // No replacer at all: a getter already on index 0 promotes index 1.
+    let out = run(&format!(
+        "(function () {{ var args = arguments; \
+           Object.defineProperty(args, '0', {{ get: function () {{ {promote}; return 1; }}, \
+             enumerable: true, configurable: true }}); \
+           return JSON.stringify(args); }})(1, 2)"
+    ));
+    assert!(out.completed, "halt {:?}", out.halt);
+    assert_eq!(out.result, r#"{"0":1,"1":99}"#);
+}
+
+/// A long replacer ARRAY is read by index too, and reading it must mint
+/// nothing — the same defect the element walk had.
+#[test]
+fn a_long_replacer_list_mints_no_key() {
+    let out = run(
+        "var r = []; for (var i = 0; i < 70000; i++) r[i] = 'k' + (i % 3); \
+         JSON.stringify({ k0: 1, k1: 2, k2: 3 }, r).length",
+    );
+    assert!(out.completed, "MINTS -> halt {:?}", out.halt);
+}
+
+/// Ordinary `JSON.stringify` behaviour is unchanged by any of the above.
+#[test]
+fn json_stringify_still_answers_correctly() {
+    for (source, want) in [
+        ("JSON.stringify([1, 2, 3])", "[1,2,3]"),
+        ("JSON.stringify({ a: [1, { b: 2 }] })", r#"{"a":[1,{"b":2}]}"#),
+        ("JSON.stringify({ a: 1, b: 2 }, ['b', 'a', 'b'])", r#"{"b":2,"a":1}"#),
+        ("JSON.stringify([1, 2, 3], [0, 1])", "[1,2,3]"),
+        ("JSON.stringify([1, , 3])", "[1,null,3]"),
+        ("JSON.stringify({ toJSON: function (k) { return 'tj:' + k; } })", r#""tj:""#),
+        ("JSON.stringify(new Uint8Array(3))", r#"{"0":0,"1":0,"2":0}"#),
+    ] {
+        let out = run(source);
+        assert!(out.completed, "halt {:?}\n  {source}", out.halt);
+        assert_eq!(out.result, want, "{source}");
+    }
+}

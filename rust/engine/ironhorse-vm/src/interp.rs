@@ -37796,8 +37796,14 @@ impl Interp {
         }
         let mut property_list = Vec::new();
         for index in 0..length {
-            let id = self.intern_key(&index.to_string());
-            let item = self.mop_get(code, inst, id, replacer)?;
+            // Reading the replacer array is a READ: `length > u32::MAX` was
+            // refused above, and XS walks it by index without minting a key,
+            // so a long replacer list must not grow the name table either.
+            let key_id = match self.index_read_key_id(index as u32) {
+                Some(id) => ReadKey::Id(id),
+                None => ReadKey::Index(index as u32),
+            };
+            let item = self.mop_get_read(code, inst, key_id, replacer)?;
             let string = match item.kind {
                 Kind::String => Some(item),
                 Kind::Integer | Kind::Number => Some(self.to_string_slot_metered(item)),
@@ -37882,7 +37888,13 @@ impl Interp {
         cost: &mut u64,
     ) -> Result<Option<Vec<u16>>, Halt> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
-        let value = self.mop_get_read(code, holder, name.key_id, holder_slot)?;
+        // `json_stringify_own_names` snapshots every key BEFORE any value is
+        // read, and a replacer list is cached for the whole stringify, so a
+        // replacer or getter can name an index between the snapshot and this
+        // live Get. Refresh, or the promoted property silently vanishes from
+        // the output.
+        let key_id = self.refresh_read_key(name.key_id);
+        let value = self.mop_get_read(code, holder, key_id, holder_slot)?;
         self.json_stringify_value(code, value, name, Some(holder_slot), state, cost)
     }
 
@@ -38054,15 +38066,12 @@ impl Interp {
             // the name table one entry per element, so a long array exhausted
             // the shared `u16` id space; the key is spelled from the index
             // instead, exactly as `fxKeyAt` spells it.
-            let key_id = match u32::try_from(index) {
-                Ok(i) => match self.index_read_key_id(i) {
-                    Some(id) => ReadKey::Id(id),
-                    None => ReadKey::Index(i),
-                },
-                // Past the `u32` index space a length-derived position is an
-                // ordinary NAME, which XS interns too, so keep the unmetered
-                // id the oracle comparison was tuned for.
-                Err(_) => ReadKey::Id(self.intern_key_unmetered(&text)),
+            // `length > u32::MAX` was refused above, so the position always
+            // fits the index space.
+            let index = index as u32;
+            let key_id = match self.index_read_key_id(index) {
+                Some(id) => ReadKey::Id(id),
+                None => ReadKey::Index(index),
             };
             let key = self.read_key_slot(key_id)?;
             let name = JsonPropertyName {
@@ -47694,6 +47703,25 @@ impl Interp {
     /// `tick_slot_alloc` is also the metering-faithful answer.
     fn index_read_key_id(&self, index: u32) -> Option<u16> {
         self.symbol_ids.get(&index.to_string()).copied()
+    }
+
+    /// Re-resolve a [`ReadKey`] that was captured earlier in the same
+    /// operation, in case the guest has since NAMED that index.
+    ///
+    /// A `ReadKey::Index` answers out of the side tables, so it is only valid
+    /// while the property still lives there. `array_define_index` promotes a
+    /// compact item to an ordinary named slot for any descriptor that is not
+    /// a bare data value, and that promotion interns the name — so a key
+    /// snapshotted before guest code ran must be refreshed before it is used,
+    /// or the read misses a property the object demonstrably has.
+    fn refresh_read_key(&self, key: ReadKey) -> ReadKey {
+        match key {
+            ReadKey::Index(index) => match self.index_read_key_id(index) {
+                Some(id) => ReadKey::Id(id),
+                None => ReadKey::Index(index),
+            },
+            key => key,
+        }
     }
 
     /// Resolve a key slot for a READ-side operation, minting nothing for an
