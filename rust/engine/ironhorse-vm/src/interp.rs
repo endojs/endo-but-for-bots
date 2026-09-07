@@ -47345,6 +47345,22 @@ impl Interp {
         index: u32,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
+        // Charged against the native-recursion budget like every other MOP
+        // entry point: forwarding down a chain of untrapped proxies recurses
+        // here, and an unbudgeted recursion overflows the real stack and
+        // aborts the process instead of halting with `StackOverflow`.
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.uninterned_index_get_inner(code, inst, index, receiver)
+        })
+    }
+
+    fn uninterned_index_get_inner(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
         let mut cur = inst;
         while !cur.is_null() {
             if self.proxies.contains_key(&cur) {
@@ -47480,6 +47496,19 @@ impl Interp {
     /// `[[GetOwnProperty]]` of an index key the name table has no id for —
     /// [`Self::mop_get_own_property`] with the index known directly.
     fn uninterned_index_own_descriptor(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+        // Budget-charged for the same reason as [`Self::uninterned_index_get`],
+        // and to match `mop_get_own_property`, the id-keyed twin.
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            vm.uninterned_index_own_descriptor_inner(code, inst, index)
+        })
+    }
+
+    fn uninterned_index_own_descriptor_inner(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
