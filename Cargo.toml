@@ -5,3 +5,6 @@ members = ["rust/ocapn_noise", "rust/endo", "rust/endo/xsnap", "rust/endo/ironho
 # (resolved question 9) without entangling this workspace's members.
 exclude = ["rust/engine"]
 resolver = "2"
+
+[profile.release]
+overflow-checks = true

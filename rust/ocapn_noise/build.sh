@@ -15,6 +15,10 @@ export RUSTFLAGS="${RUSTFLAGS:-} \
   --remap-path-prefix=${HOME_DIR}=~"
 # Single codegen unit: removes parallel-codegen ordering nondeterminism.
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+# This committed artifact has its own reproducible profile. Preserve its
+# existing arithmetic codegen when the workspace's IronHorse release builds
+# enable overflow checks; changing this pin requires regenerating the wasm.
+export CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=false
 # `--locked` makes cargo refuse to silently update the lockfile.
 # Since rust/ocapn_noise is a workspace member, the only lockfile
 # cargo consults is the workspace-root ../../Cargo.lock; a build
