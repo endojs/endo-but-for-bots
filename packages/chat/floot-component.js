@@ -529,16 +529,17 @@ export const flootComponent = (
    * @typedef {'speed' | 'noiseScale' | 'noiseW' | 'sentenceSilence'}
    *   NumericTtsSetting
    */
-  // Seeded with Piper's own defaults until the TTS object's configuration and
-  // the whole-Floot preferences arrive (see the load at mount).
-  /** @type {TtsSettings} */
-  let ttsSettings = {
-    voice: '',
+  // Piper's own defaults: the seed until the TTS object's configuration and
+  // the whole-Floot preferences arrive (see the load at mount), and the
+  // fallback for a value the object neither accepts nor replaces.
+  const ttsSeed = harden({
     speed: 1,
     noiseScale: 0.667,
     noiseW: 0.8,
     sentenceSilence: 0.2,
-  };
+  });
+  /** @type {TtsSettings} */
+  let ttsSettings = { voice: '', ...ttsSeed };
   /**
    * @type {{
    *   voices: Array<{ id: string, name: string }>,
@@ -1596,6 +1597,9 @@ export const flootComponent = (
       notify();
       return;
     }
+    // Still inside the tap: prime the audio context now, since a hands-free
+    // reply starts from the utterance timer, not a gesture.
+    if (ttsEnabled && ttsServer) prepareTts();
     micActive = true;
     calibrating = true;
     calibStart = Date.now();
@@ -1644,12 +1648,14 @@ export const flootComponent = (
       const name = /** @type {Error} */ (err).name;
       const message = /** @type {Error} */ (err).message;
       if (name === 'NotAllowedError' || name === 'SecurityError') {
-        // Distinguish a *site*-level block from an *OS*-level one. If the
-        // browser reports the site permission as 'denied', the fix is in the
-        // browser's site settings. If it's still 'prompt'/'granted' yet
-        // getUserMedia was rejected without a dialog, the browser tried to ask
-        // but the OS withheld the mic from the browser app (or a system-wide
-        // mic switch is off) — this is the "set to Ask, yet no prompt" case.
+        // Say where the block is, as far as this browser will tell. A site
+        // permission of 'denied' means the browser's site settings. Chrome
+        // names a prompt the user closed ("dismissed") and a microphone the
+        // OS withheld from the browser app ("denied by system", with the site
+        // permission still 'granted' — the "set to Ask, yet no prompt" case).
+        // Anything else — 'prompt', or a browser with no microphone
+        // permission query at all (Firefox) — could be either place, and the
+        // guidance says so instead of guessing.
         let permState = '';
         try {
           const permStatus = await navigator.permissions?.query?.(
@@ -1660,30 +1666,55 @@ export const flootComponent = (
           // Permissions API unsupported, or 'microphone' isn't a known name on
           // this browser — leave permState empty and give generic guidance.
         }
+        const android =
+          typeof navigator !== 'undefined' &&
+          /android/i.test(navigator.userAgent || '');
         // A home-screen install (PWA/WebAPK, or a Chrome shortcut) has its own
-        // app entry, so its mic permission lives under that app in Android
-        // settings — not necessarily under the browser the user thinks of.
+        // app entry, so its mic permission lives under that app in the
+        // system's settings — not necessarily under the browser the user
+        // thinks of.
         const standalone =
           (typeof window !== 'undefined' &&
             !!window.matchMedia?.('(display-mode: standalone)')?.matches) ||
           /** @type {any} */ (navigator).standalone === true;
         const appNote = standalone
-          ? ' (This is installed to your home screen, so its microphone ' +
-            'permission is under that installed app in Android Settings → ' +
-            'Apps, which may differ from the browser.)'
+          ? ` (This is installed to your home screen, so its microphone ` +
+            `permission is under that installed app in ${
+              android ? 'Android Settings → Apps' : 'the system settings'
+            }, which may differ from the browser.)`
           : '';
+        const osLevel = /system/i.test(message) || permState === 'granted';
         if (permState === 'denied') {
           micError =
             `Microphone blocked for this site. Tap the address-bar lock → ` +
             `Permissions → Microphone → Allow (or “Reset permissions”), ` +
             `reload, then tap 🎤 again.${appNote}`;
-        } else {
+        } else if (/dismissed/i.test(message)) {
+          micError =
+            'The microphone prompt was closed without an answer. Tap 🎤 ' +
+            'again and choose Allow.';
+        } else if (osLevel && android) {
           micError =
             `The browser tried to ask for the microphone but got no answer, ` +
             `so the block is at the phone’s OS level. Enable Android Settings ` +
             `→ Apps → (your browser) → Permissions → Microphone, and turn on ` +
             `the system “Microphone access” switch (swipe down → Privacy / ` +
             `Quick Settings). Then tap 🎤 again.${appNote}`;
+        } else if (osLevel) {
+          micError =
+            `The system withheld the microphone from this browser. Allow it ` +
+            `in the operating system’s microphone privacy settings (on a Mac: ` +
+            `System Settings → Privacy & Security → Microphone), then tap 🎤 ` +
+            `again.${appNote}`;
+        } else {
+          micError =
+            `Microphone access was refused. Allow the microphone when the ` +
+            `browser asks; if it never asks, check this site’s permissions ` +
+            `(address-bar lock → Permissions → Microphone) and ${
+              android
+                ? 'the phone’s Settings → Apps → (your browser) → Permissions'
+                : 'the operating system’s microphone privacy setting'
+            } for this browser, then tap 🎤 again.${appNote}`;
         }
       } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
         micError = 'No microphone was found on this device.';
@@ -1782,10 +1813,21 @@ export const flootComponent = (
   // cannot strand it on the document with no disposer to remove it.
   const onVisibilityChange = () => screenWakeLock.refresh();
 
+  // Each request for playback. stopTts() bumps it too, so a request that
+  // resumes after the audio context resumed (mute, Stop, barge-in, or unmount
+  // meanwhile) finds itself superseded and lets go of its stream instead of
+  // starting it.
+  let ttsRequestSeq = 0;
+
   // Create/resume the audio context. Also called synchronously from the Send
   // gesture (see submit) so autoplay is allowed by the time audio arrives.
   const prepareTts = () => {
-    if (!ttsCtx) ttsCtx = new AudioContext();
+    try {
+      if (!ttsCtx) ttsCtx = new AudioContext();
+    } catch {
+      // No Web Audio here (a stripped-down webview): replies stay text-only.
+      return Promise.resolve();
+    }
     if (ttsCtx.state === 'suspended') {
       return ttsCtx.resume().catch(() => {});
     }
@@ -1794,6 +1836,7 @@ export const flootComponent = (
 
   const stopTts = () => {
     ttsPlaybackId += 1;
+    ttsRequestSeq += 1;
     for (const src of ttsSources) {
       try {
         src.onended = null;
@@ -1866,8 +1909,23 @@ export const flootComponent = (
     /** @type {FlootTurn | null} */ speechTurn = null,
   ) => {
     if (!ttsServer) return;
+    ttsRequestSeq += 1;
+    const mySeq = ttsRequestSeq;
     await prepareTts();
-    if (!ttsCtx) return;
+    if (
+      cancelled ||
+      !ttsCtx ||
+      mySeq !== ttsRequestSeq ||
+      (speechTurn && !ttsEnabled)
+    ) {
+      // Superseded, muted, or unmounted while the audio context resumed:
+      // release the daemon-side branch rather than leave it synthesizing for
+      // nobody.
+      iterateReader(audioReader)
+        .return()
+        .catch(() => {});
+      return;
+    }
     // Begin a fresh session: bump the token and adopt this reader.
     stopTts();
     ttsSpeechTurn = speechTurn;
@@ -1885,8 +1943,14 @@ export const flootComponent = (
           break;
         }
       }
-    } catch {
-      // stream torn down (close) — playback already scheduled stays
+    } catch (err) {
+      // The iteration throws only when the stream could not start (no such
+      // voice, TTS unreachable) or its transport failed; a stopTts() close
+      // ends it cleanly and an in-band abort is a value. Say so, unless this
+      // playback was superseded meanwhile. Audio already scheduled plays out.
+      if (!cancelled && myId === ttsPlaybackId) {
+        setStatus(`speech failed: ${/** @type {Error} */ (err).message}`);
+      }
     } finally {
       if (myId === ttsPlaybackId && ttsActiveStream === audio) {
         ttsActiveStream = null;
@@ -1917,7 +1981,11 @@ export const flootComponent = (
   // Toggle spoken replies. Turning it off mid-reply silences the current one.
   const toggleTts = () => {
     ttsEnabled = !ttsEnabled;
-    if (!ttsEnabled) {
+    if (ttsEnabled) {
+      // Still inside the tap: prime the audio context for the hands-free
+      // path, whose replies start from the utterance timer, not a gesture.
+      if (ttsServer) prepareTts();
+    } else {
       stopTts();
     }
     notify();
@@ -1945,16 +2013,29 @@ export const flootComponent = (
   // A range slider fires one input event per pixel, and every restart
   // re-speaks the reply so far; commit after the last change in a burst.
   let ttsSettingsTimer = 0;
+  // Set once the user changes a setting here, so the settings load still in
+  // flight at mount (see below) cannot snap their choice back.
+  let ttsSettingsDirty = false;
   const commitTtsSettings = () => {
     ttsSettingsTimer = 0;
     mirrorTtsSettings();
     const speechTurn = ttsSpeechTurn;
-    if (speechTurn && (ttsSpeaking || ttsActiveStream)) speakTurn(speechTurn);
+    // Restart only a reply still being produced. For one that has finished,
+    // a restart would be the whole reply from the top; its tail plays out and
+    // the new settings apply from the next reply (or a replay).
+    if (
+      speechTurn &&
+      speechTurn === activeTurn &&
+      (ttsSpeaking || ttsActiveStream)
+    ) {
+      speakTurn(speechTurn);
+    }
   };
   const setTtsSetting = (
     /** @type {keyof TtsSettings} */ name,
     /** @type {string | number} */ raw,
   ) => {
+    ttsSettingsDirty = true;
     if (name === 'voice') {
       ttsSettings = { ...ttsSettings, voice: `${raw}` };
     } else {
@@ -2116,25 +2197,30 @@ export const flootComponent = (
         );
         const pick = (/** @type {string} */ key) => prefs[key] ?? saved[key];
         const voiceIds = new Set(voices.map(voice => voice.id));
-        const voice = `${pick('voice') || defaults.voice || ''}`;
+        // A setting the user changed while this load was in flight wins over
+        // what it fetched: a selection must not snap back. Either way the
+        // values are held to the object's voices and ranges.
         /** @type {TtsSettings} */
-        const next = {
-          voice: voiceIds.has(voice)
-            ? voice
-            : `${defaults.voice || voices[0]?.id || ''}`,
-          speed: Number(pick('speed') ?? defaults.speed ?? ttsSettings.speed),
-          noiseScale: Number(
-            pick('noiseScale') ?? defaults.noiseScale ?? ttsSettings.noiseScale,
-          ),
-          noiseW: Number(
-            pick('noiseW') ?? defaults.noiseW ?? ttsSettings.noiseW,
-          ),
-          sentenceSilence: Number(
-            pick('sentenceSilence') ??
-              defaults.sentenceSilence ??
-              ttsSettings.sentenceSilence,
-          ),
-        };
+        const next = ttsSettingsDirty
+          ? { ...ttsSettings }
+          : {
+              voice: `${pick('voice') || defaults.voice || ''}`,
+              speed: Number(pick('speed') ?? defaults.speed ?? ttsSeed.speed),
+              noiseScale: Number(
+                pick('noiseScale') ?? defaults.noiseScale ?? ttsSeed.noiseScale,
+              ),
+              noiseW: Number(
+                pick('noiseW') ?? defaults.noiseW ?? ttsSeed.noiseW,
+              ),
+              sentenceSilence: Number(
+                pick('sentenceSilence') ??
+                  defaults.sentenceSilence ??
+                  ttsSeed.sentenceSilence,
+              ),
+            };
+        if (!voiceIds.has(next.voice)) {
+          next.voice = `${defaults.voice || voices[0]?.id || ''}`;
+        }
         /** @type {NumericTtsSetting[]} */
         const numericSettings = [
           'speed',
@@ -2149,7 +2235,9 @@ export const flootComponent = (
             !Number.isFinite(value) ||
             (range && (value < Number(range.min) || value > Number(range.max)))
           ) {
-            next[name] = Number(defaults[name]);
+            // Back to the object's default — or, should it not name one,
+            // Piper's.
+            next[name] = Number(defaults[name] ?? ttsSeed[name]);
           }
         }
         ttsSettings = next;
