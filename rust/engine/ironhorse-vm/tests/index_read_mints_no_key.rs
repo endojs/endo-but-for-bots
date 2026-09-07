@@ -281,3 +281,50 @@ fn a_proxy_trap_is_looked_up_once_per_operation_for_either_key_spelling() {
         assert_result(&format!("{counter} {expr}; looks.join(',')"), trap);
     }
 }
+
+/// The index walk and the id path must agree on the ANSWER for every
+/// receiver shape.
+///
+/// Which one runs is decided by whether the index's canonical name happens to
+/// be interned — an unrelated `z[0] = 1` elsewhere in the program flips it —
+/// so the two must be indistinguishable to the guest. They are not
+/// indistinguishable in COST: ironhorse stores an ordinary object's index
+/// property as a named slot, so the id path scans the name chain while the
+/// index walk consults the side tables, and the two differ by a computron or
+/// two. XS has no such split (`fxOrdinarySetProperty` with `id == 0` grows an
+/// internal array slot, and `fxOrdinaryGetProperty` with `id == 0` reads it
+/// back, interning nothing either way), which is why the index walk is the
+/// closer of the two to the oracle.
+#[test]
+fn the_index_walk_and_the_id_path_agree_on_every_receiver_shape() {
+    // `z[0] = 1` interns "0" without touching the receiver under test, so the
+    // same source runs down the id path in the second machine.
+    for prelude in ["", "var z = {}; z[0] = 1;"] {
+        let at = |body: &str| format!("{prelude} {body}");
+        assert_result(&at("var o = Object.create(Object.create({})); String(o[0])"), "undefined");
+        assert_result(&at("var o = Object.create(Object.create({})); String(0 in o)"), "false");
+        assert_result(&at("var o = Object.create(null); String(0 in o)"), "false");
+        assert_result(&at("var o = {}; String(delete o[0])"), "true");
+        assert_result(&at("var o = {}; String(o.hasOwnProperty(0))"), "false");
+        assert_result(
+            &at("var o = {}; String(Object.getOwnPropertyDescriptor(o, 0) === undefined)"),
+            "true",
+        );
+        assert_result(&at("var o = {}; String(Reflect.get(o, 0))"), "undefined");
+        assert_result(&at("var o = {}; String(Reflect.has(o, 0))"), "false");
+        assert_result(&at("var a = [7]; String(a[0])"), "7");
+        assert_result(&at("var a = [7]; String(0 in a)"), "true");
+        assert_result(&at("var a = [7]; String(a.hasOwnProperty(0))"), "true");
+        assert_result(&at("var p = new Proxy({}, {}); String(p[0])"), "undefined");
+        assert_result(&at("var p = new Proxy({}, {}); String(0 in p)"), "false");
+        assert_result(&at("var p = new Proxy([7], {}); String(p[0])"), "7");
+        assert_result(&at("var t = new Uint8Array(2); String(t[0])"), "0");
+        assert_result(&at("var t = new Uint8Array(2); String(0 in t)"), "true");
+        assert_result(&at("var t = new Uint8Array(2); String(9 in t)"), "false");
+        assert_result(&at("var s = new String('hi'); String(s[0])"), "h");
+        assert_result(&at("var s = new String('hi'); String(delete s[0])"), "false");
+        assert_result(&at("var o = Object.create([1, 2, 3]); String(o[2])"), "3");
+        // The write path and the read path agree about what an index names.
+        assert_result(&at("var o = {}; o[4] = 'v'; String(o[4]) + o.hasOwnProperty(4) + (4 in o)"), "vtruetrue");
+    }
+}
