@@ -171,6 +171,12 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
   t.is(opts.mounts[0].innerPath, '/workspace');
   // No credential named → no secret env.
   t.deepEqual(opts.env, {});
+  t.deepEqual(host.spawnCalls[0].opts.env, {
+    HOME: '/tmp/claude-home',
+    XDG_CONFIG_HOME: '/tmp/claude-home/.config',
+    CLAUDE_CONFIG_DIR: '/tmp/claude-home/.claude',
+    IS_SANDBOX: '1',
+  });
 });
 
 test('provisioning is memoized across sends', async t => {
