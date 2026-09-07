@@ -108,6 +108,40 @@ fn an_index_read_still_reaches_the_exotics_that_answer_without_a_name() {
     assert_result("var p = new Proxy(new Uint8Array(2), {}); p[0]", "0");
 }
 
+/// The post-trap `[[Get]]` invariant check (ECMA-262 10.5.8 step 10) still
+/// runs for an index the key table has no id for.
+///
+/// This is the one arm where the read still mints a key: the check has to
+/// name the index back to the target, and a target whose own index properties
+/// live in a SIDE TABLE — a String wrapper's units here — has to be asked. An
+/// ordinary target is skipped instead (it cannot carry an own property under a
+/// name that was never interned), which is what keeps a trapping proxy over
+/// novel indices inside the id space.
+#[test]
+fn a_get_trap_cannot_contradict_a_non_configurable_index_it_was_never_named_for() {
+    // A String wrapper's units are non-configurable and non-writable without
+    // any define naming them, so the key table has no id for "0" when the
+    // trap runs — and the trap's lie must still be rejected.
+    assert_result(
+        "var p = new Proxy(new String('hi'), { get: function () { return 'z'; } }); \
+         var r = 'no-throw'; try { r = p[0]; } catch (e) { r = (e instanceof TypeError) ? 'TypeError' : 'other'; } r",
+        "TypeError",
+    );
+    // The honest answer passes the same check.
+    assert_result(
+        "var p = new Proxy(new String('hi'), { get: function () { return 'h'; } }); p[0]",
+        "h",
+    );
+    // A TypedArray element is writable and configurable, so a differing trap
+    // result is permitted rather than rejected.
+    assert_result(
+        "var p = new Proxy(new Uint8Array(2), { get: function () { return 5; } }); p[0]",
+        "5",
+    );
+    // A frozen array behind an untrapped proxy still forwards to the item.
+    assert_result("var a = [7]; Object.freeze(a); var p = new Proxy(a, {}); p[0]", "7");
+}
+
 /// A trapping proxy still answers with the trap's value, and the trap still
 /// sees the canonical numeric string for the index.
 #[test]
