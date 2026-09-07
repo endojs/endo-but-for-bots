@@ -21,7 +21,18 @@ import { makeError, q, X } from '@endo/errors';
  * @typedef {object} ProcReader
  * @property {(path: string) => Promise<string>} readFile   UTF-8 text.
  * @property {(path: string) => Promise<string>} readLink   Symlink target.
+ * @property {(path: string) => Promise<bigint>} readInode  Inode number.
  */
+
+/**
+ * Recognize "this file is not here", which for some `procfs` entries is
+ * an answer rather than a failure to get one.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+const isMissing = error =>
+  /** @type {{ code?: string }} */ (error)?.code === 'ENOENT';
 
 /** Namespaces the hosted-agent profile requires to be private. */
 const NAMESPACE_FILES = harden({
@@ -186,15 +197,30 @@ export const readNetworkNamespace = async (proc, pid) => {
   }
   let routableRoutes;
   try {
-    routableRoutes =
-      countRoutableIpv4Routes(await proc.readFile(`/proc/${pid}/net/route`)) +
-      countRoutableIpv6Routes(
-        await proc.readFile(`/proc/${pid}/net/ipv6_route`),
-      );
+    routableRoutes = countRoutableIpv4Routes(
+      await proc.readFile(`/proc/${pid}/net/route`),
+    );
   } catch (e) {
     throw makeError(
       X`cannot read the slice routing table: ${q(/** @type {Error} */ (e).message)}`,
     );
+  }
+  try {
+    routableRoutes += countRoutableIpv6Routes(
+      await proc.readFile(`/proc/${pid}/net/ipv6_route`),
+    );
+  } catch (e) {
+    // A kernel booted with `ipv6.disable=1` has no `ipv6_route` at all,
+    // and no IPv6 routes either, so its absence is zero rather than a
+    // refusal. Every other failure still is one. This is the only read
+    // here that can be answered by its own absence: an empty interface
+    // inventory and an unreadable one must not collapse together, but a
+    // missing IPv6 route table and an empty one genuinely do.
+    if (!isMissing(e)) {
+      throw makeError(
+        X`cannot read the slice IPv6 routing table: ${q(/** @type {Error} */ (e).message)}`,
+      );
+    }
   }
   return harden({ namespaceId, interfaces, routableRoutes });
 };
@@ -259,7 +285,9 @@ harden(SECCOMP_MODE_FILTER);
 /**
  * Read what the kernel says about a live process: the uid and gid it
  * holds *inside its own user namespace*, its seccomp mode, whether it
- * can regain privileges, and its effective capability set.
+ * can regain privileges, and its capability masks. All three masks are
+ * reported, because an empty effective set beside a populated permitted
+ * or bounding set is a posture the process can undo.
  *
  * `/proc/<pid>/status` reports the ids in the reader's namespace, which
  * for a rootless container is the unprivileged host id the subuid range
@@ -267,12 +295,18 @@ harden(SECCOMP_MODE_FILTER);
  * through the target's own `uid_map` is what turns the host's view back
  * into the slice's.
  *
+ * One level of translation is enough however deeply the target's user
+ * namespace is nested, because the kernel writes `uid_map`'s outside
+ * column in the namespace of whoever opens the file (see
+ * `user_namespaces(7)`) — for this reader, the daemon's own. Walking a
+ * parent chain here would translate through the same namespaces twice.
+ *
  * A field this kernel does not report comes back `null`, which callers
  * read as "not proved" rather than as an answer either way.
  *
  * @param {ProcReader} proc
  * @param {number} pid
- * @returns {Promise<{ uid: number, gid: number, seccompMode: number | null, noNewPrivs: boolean | null, effectiveCapabilities: bigint | null }>}
+ * @returns {Promise<{ uid: number, gid: number, seccompMode: number | null, noNewPrivs: boolean | null, effectiveCapabilities: bigint | null, permittedCapabilities: bigint | null, boundingCapabilities: bigint | null }>}
  */
 export const readProcessStatus = async (proc, pid) => {
   await null;
@@ -336,6 +370,8 @@ export const readProcessStatus = async (proc, pid) => {
     seccompMode: numericField('Seccomp', 1),
     noNewPrivs: noNewPrivs === null ? null : noNewPrivs === 1,
     effectiveCapabilities: capabilityField('CapEff'),
+    permittedCapabilities: capabilityField('CapPrm'),
+    boundingCapabilities: capabilityField('CapBnd'),
   });
 };
 harden(readProcessStatus);
@@ -350,5 +386,38 @@ export const makeProcReader = fsModule =>
   harden({
     readFile: path => fsModule.promises.readFile(path, 'utf8'),
     readLink: path => fsModule.promises.readlink(path),
+    readInode: async path => {
+      await null;
+      // `bigint: true` because an inode number is a 64-bit kernel
+      // quantity, and namespace identity is exactly the case where
+      // silently rounding one would compare two namespaces equal.
+      const stats = await fsModule.promises.stat(path, { bigint: true });
+      return stats.ino;
+    },
   });
 harden(makeProcReader);
+
+/**
+ * Identify the network namespace a bind-mounted `netns` path names.
+ *
+ * A namespace pinned at a path is not a symlink into `nsfs`, so it has
+ * no `net:[…]` target to read; its inode is the same number the
+ * `/proc/<pid>/ns/net` link of a process inside it reports.
+ *
+ * @param {ProcReader} proc
+ * @param {string} netnsPath
+ * @returns {Promise<string>}
+ */
+export const readNetworkNamespaceIdAtPath = async (proc, netnsPath) => {
+  await null;
+  let inode;
+  try {
+    inode = await proc.readInode(netnsPath);
+  } catch (e) {
+    throw makeError(
+      X`cannot identify the network namespace at ${q(netnsPath)}: ${q(/** @type {Error} */ (e).message)}`,
+    );
+  }
+  return `net-${inode}`;
+};
+harden(readNetworkNamespaceIdAtPath);

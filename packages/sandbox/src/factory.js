@@ -374,14 +374,23 @@ export const makeSandboxFactory = (
 
   /**
    * @param {SandboxMakeOpts['backend']} selector
+   * @param {boolean} [needsPolicy] Consider only drivers that can
+   *   enforce and attest a slice policy.
    * @returns {Promise<{ driver?: SandboxDriver; failures: BackendProbe[] }>}
    */
-  const pickDriver = async selector => {
+  const pickDriver = async (selector, needsPolicy = false) => {
     await null;
-    const candidates =
+    const named =
       selector === undefined || selector === 'auto'
         ? driverList
         : driverList.filter(driver => driver.name === selector);
+    // A backend that cannot attest is not a candidate for a slice that
+    // has to be attested. Without this, `auto` picks the first available
+    // driver — bwrap, which `agent.js` registers first — and every
+    // policy slice fails on a host that has both backends installed.
+    const candidates = needsPolicy
+      ? named.filter(driver => driver.policy !== undefined)
+      : named;
     /** @type {BackendProbe[]} */
     const failures = [];
     for (const driver of candidates) {
@@ -480,14 +489,17 @@ export const makeSandboxFactory = (
   const make = async opts => {
     if (ownerLost !== undefined) throw ownerCancelledError(ownerLost);
     const selector = opts.backend ?? 'auto';
-    const selected = await pickDriver(selector);
+    const needsPolicy = opts.policy !== undefined;
+    const selected = await pickDriver(selector, needsPolicy);
     const { driver } = selected;
     if (driver === undefined) {
       const reasons = selected.failures
         .map(probe => `${probe.name}: ${probe.reason ?? 'unavailable'}`)
         .join('; ');
       throw makeError(
-        X`no backend available for ${q(selector)}: ${reasons || 'no drivers registered'}`,
+        needsPolicy
+          ? X`no backend that can enforce and attest a slice policy is available for ${q(selector)}: ${reasons || 'no policy-capable driver registered'}`
+          : X`no backend available for ${q(selector)}: ${reasons || 'no drivers registered'}`,
       );
     }
 
@@ -497,8 +509,12 @@ export const makeSandboxFactory = (
     const mountSpecs = opts.mounts ?? [];
     const resolvedMounts = await Promise.all(mountSpecs.map(resolveMount));
     let scratchHostPath = '';
+    // A policy declares the slice's whole mount table, and the scratch
+    // layer is a writable path outside it. Minting one anyway would put
+    // every policy slice into the driver's own "no undeclared mount"
+    // rejection, on any daemon whose powers can actually allocate one.
     try {
-      scratchHostPath = await acquireScratchHostPath();
+      if (!needsPolicy) scratchHostPath = await acquireScratchHostPath();
     } catch (e) {
       // Scratch is optional in Phase 1 — some callers may want a
       // pure read-only slice. Re-throw only if we actually need it
@@ -534,12 +550,6 @@ export const makeSandboxFactory = (
       // back, and only the driver knows that.
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
     });
-
-    if (opts.policy !== undefined && driver.policy === undefined) {
-      throw makeError(
-        X`backend ${q(driver.name)} cannot enforce or attest a slice policy`,
-      );
-    }
 
     const driverSlice = await driver.prepareSlice(sliceSpec);
     // Drivers may attach a `runtimeDetails` summary to the slice

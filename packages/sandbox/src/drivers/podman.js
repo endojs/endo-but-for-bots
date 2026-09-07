@@ -9,6 +9,7 @@ import { makeCgroup2Probe } from '../limits.js';
 import {
   makeProcReader,
   readNetworkNamespace,
+  readNetworkNamespaceIdAtPath,
   readProcessStatus,
   readUnsharedNamespaces,
 } from '../observe.js';
@@ -1159,6 +1160,72 @@ export const makePodmanDriver = ({
   };
 
   /**
+   * Ask the engine whether it is running without host root.
+   *
+   * `probe()` establishes this too, but `prepareSlice` is a public
+   * entry point a consumer can reach without going through the
+   * factory's probe gate — and an attestation stamped
+   * `backend: 'rootless-podman'` that nothing checked is exactly the
+   * unverified claim this module exists to refuse.
+   *
+   * @param {typeof import('child_process')} cp
+   * @param {string} runtime
+   * @returns {Promise<boolean>}
+   */
+  const isRootless = async (cp, runtime) => {
+    const result = await spawnAndCollect(
+      cp,
+      'podman',
+      podmanArgs(runtime, ['info', '--format', '{{.Host.Security.Rootless}}']),
+      { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+    );
+    return result.code === 0 && result.stdout.trim() === 'true';
+  };
+
+  /**
+   * Identify the network namespace the policy's broker sidecar holds,
+   * so the attestation can insist the slice joined *that* one. A
+   * loopback-only inventory alone does not distinguish the broker's
+   * namespace from a fresh empty one.
+   *
+   * @param {typeof import('child_process')} cp
+   * @param {string} runtime
+   * @param {import('../observe.js').ProcReader} proc
+   * @param {SlicePolicyRequest['brokerSidecar']} sidecar
+   * @returns {Promise<string>}
+   */
+  const resolveBrokerNamespaceId = async (cp, runtime, proc, sidecar) => {
+    await null;
+    if (Object.hasOwn(sidecar, 'netnsPath')) {
+      return readNetworkNamespaceIdAtPath(
+        proc,
+        /** @type {{ netnsPath: string }} */ (sidecar).netnsPath,
+      );
+    }
+    const container = /** @type {{ container: string }} */ (sidecar).container;
+    const result = await spawnAndCollect(
+      cp,
+      'podman',
+      podmanArgs(runtime, [
+        'container',
+        'inspect',
+        '--format',
+        '{{.State.Pid}}',
+        container,
+      ]),
+      { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+    );
+    const sidecarPid = Number(result.stdout.trim());
+    if (result.code !== 0 || !Number.isInteger(sidecarPid) || sidecarPid <= 0) {
+      throw makeError(
+        X`broker sidecar ${q(container)} is not a running container: ${q(result.stderr.trim() || result.stdout.trim())}`,
+      );
+    }
+    const observedSidecar = await readNetworkNamespace(proc, sidecarPid);
+    return observedSidecar.namespaceId;
+  };
+
+  /**
    * Create, start, and attest the slice's policy anchor.
    *
    * The anchor is an ordinary operation container created from the same
@@ -1256,13 +1323,33 @@ export const makePodmanDriver = ({
         throw makeError(X`podman policy anchor is not running`);
       }
       const proc = await getProcfs();
-      const [unsharedNamespaces, network, processIdentity, cgroup2] =
-        await Promise.all([
-          readUnsharedNamespaces(proc, pid),
-          readNetworkNamespace(proc, pid),
-          readProcessStatus(proc, pid),
-          cgroup2Probe.probe(),
-        ]);
+      const [
+        unsharedNamespaces,
+        anchorNetwork,
+        processIdentity,
+        cgroup2,
+        brokerNamespaceId,
+        rootless,
+      ] = await Promise.all([
+        readUnsharedNamespaces(proc, pid),
+        readNetworkNamespace(proc, pid),
+        readProcessStatus(proc, pid),
+        cgroup2Probe.probe(),
+        resolveBrokerNamespaceId(cp, runtime, proc, request.brokerSidecar),
+        isRootless(cp, runtime),
+      ]);
+      const network = harden({ ...anchorNetwork, brokerNamespaceId });
+      // The exact-label reconciliation is the other half of the reaping
+      // proof — the half that covers containers whose owning daemon died
+      // before it could remove them — so it is run and its outcome
+      // carried, rather than restated from the pid namespace that
+      // `attestSlicePolicy` has already insisted on.
+      let reconciled = true;
+      try {
+        await ensureOrphanSweep(cp);
+      } catch {
+        reconciled = false;
+      }
       /** @type {Map<string, bigint | null>} */
       const volumeQuotas = new Map(
         await Promise.all(
@@ -1278,7 +1365,7 @@ export const makePodmanDriver = ({
       );
       const attestation = attestSlicePolicy(request, {
         inspect,
-        rootless: true,
+        rootless,
         unsharedNamespaces,
         network,
         processIdentity,
@@ -1286,10 +1373,9 @@ export const makePodmanDriver = ({
         resources: harden({ cgroupControllers: cgroup2.controllers }),
         // A private pid namespace puts every descendant — setsid,
         // double-forked, or backgrounded — inside the container the
-        // driver force-removes, and the exact-label sweep this probe
-        // already ran covers the containers whose owning daemon died
-        // before it could.
-        descendantReaping: unsharedNamespaces.pid,
+        // driver force-removes; reconciliation covers the ones whose
+        // owning daemon died first.
+        descendantReaping: unsharedNamespaces.pid && reconciled,
       });
       return harden({ anchorName, attestation });
     } catch (e) {

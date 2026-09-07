@@ -15,6 +15,7 @@ const DIGEST = `sha256:${'a1'.repeat(32)}`;
 const OTHER_DIGEST = `sha256:${'b2'.repeat(32)}`;
 
 const GIB = 1024n * 1024n * 1024n;
+const MIB = 1024n * 1024n;
 
 /**
  * A request that satisfies the profile, so each negative case can name
@@ -35,7 +36,8 @@ const makeRequest = (overrides = {}) =>
       cpuCores: 4,
       openFiles: 4096,
       coreBytes: 0n,
-      writableBytes: 16n * GIB,
+      shmBytes: 64n * MIB,
+      writableBytes: 16n * GIB + 64n * MIB,
     }),
     mounts: harden([
       harden({
@@ -93,6 +95,7 @@ const makeInspect = mutate => {
       Devices: [],
       Memory: 4_294_967_296,
       MemorySwap: 4_294_967_296,
+      ShmSize: 67_108_864,
       PidsLimit: 512,
       CpuQuota: 400_000,
       CpuPeriod: 100_000,
@@ -140,6 +143,8 @@ const makeIdentity = (overrides = {}) =>
     seccompMode: 2,
     noNewPrivs: true,
     effectiveCapabilities: 0n,
+    permittedCapabilities: 0n,
+    boundingCapabilities: 0n,
     ...overrides,
   });
 
@@ -160,6 +165,7 @@ const makeState = (overrides = {}) =>
     }),
     network: harden({
       namespaceId: 'net-4026532567',
+      brokerNamespaceId: 'net-4026532567',
       interfaces: harden(['lo']),
       routableRoutes: 0,
     }),
@@ -230,7 +236,7 @@ test('a request rejects a writable ceiling its mounts do not add up to', t => {
         ...request,
         resources: { ...request.resources, writableBytes: 32n * GIB },
       }),
-    { message: /does not equal the sum of its writable mounts/ },
+    { message: /does not equal the sum of its writable paths/ },
   );
 });
 
@@ -264,7 +270,10 @@ test('a request rejects a duplicated destination', t => {
             sizeBytes: 1n * GIB,
           },
         ],
-        resources: { ...request.resources, writableBytes: 17n * GIB },
+        resources: {
+          ...request.resources,
+          writableBytes: 17n * GIB + 64n * MIB,
+        },
       }),
     { message: /destination .* is duplicated/ },
   );
@@ -337,6 +346,8 @@ test('policy argv carries every ceiling the request named', t => {
       'nofile=4096:4096',
       '--ulimit',
       'core=0:0',
+      '--shm-size',
+      '67108864',
       '--volume',
       'workspace-s1:/workspace:rw,nosuid,nodev',
       '--volume',
@@ -386,7 +397,8 @@ test('an observed slice attests every control', t => {
       cpuCores: 4,
       openFiles: 4096,
       coreBytes: 0n,
-      writableBytes: 16n * GIB,
+      shmBytes: 64n * MIB,
+      writableBytes: 16n * GIB + 64n * MIB,
     },
   );
   t.deepEqual(
@@ -451,6 +463,7 @@ const unprovedStates = [
     {
       network: harden({
         namespaceId: 'net-4026532567',
+        brokerNamespaceId: 'net-4026532567',
         interfaces: harden(['lo', 'eth0']),
         routableRoutes: 1,
       }),
@@ -462,6 +475,7 @@ const unprovedStates = [
     {
       network: harden({
         namespaceId: 'net-4026532567',
+        brokerNamespaceId: 'net-4026532567',
         interfaces: harden(['lo']),
         routableRoutes: 2,
       }),
@@ -681,6 +695,46 @@ const unprovedStates = [
     /mount workspace storage ceiling/,
   ],
   [
+    'a permitted capability the process can raise back',
+    { processIdentity: makeIdentity({ permittedCapabilities: 0x2000n }) },
+    /dropped capabilities/,
+  ],
+  [
+    'a bounding set a descendant could acquire from',
+    { processIdentity: makeIdentity({ boundingCapabilities: 0x3fn }) },
+    /dropped capabilities/,
+  ],
+  [
+    "a loopback-only namespace that is not the broker's",
+    {
+      network: harden({
+        namespaceId: 'net-4026539999',
+        brokerNamespaceId: 'net-4026532567',
+        interfaces: harden(['lo']),
+        routableRoutes: 0,
+      }),
+    },
+    /broker namespace identity/,
+  ],
+  [
+    'a shared-memory tmpfs the runtime sized on its own',
+    {
+      inspect: makeInspect(record => {
+        record.HostConfig.ShmSize = 134_217_728;
+      }),
+    },
+    /shared-memory ceiling/,
+  ],
+  [
+    'a runtime that reports no shared-memory size at all',
+    {
+      inspect: makeInspect(record => {
+        delete record.HostConfig.ShmSize;
+      }),
+    },
+    /shared-memory ceiling/,
+  ],
+  [
     'descendants nothing reaps',
     { descendantReaping: false },
     /descendant reaping/,
@@ -703,4 +757,42 @@ test('attestation refuses a runtime whose report it cannot read', t => {
   t.throws(() => attestSlicePolicy(policy, makeState({ inspect: {} })), {
     message: /is not enforced/,
   });
+});
+
+test('a request rejects /dev/shm in the mount table', t => {
+  const request = makeRequest();
+  // The runtime takes its size from `--shm-size` and would ignore a
+  // second declaration of the same path, so the table is the wrong
+  // place to write it and saying so beats silently losing the ceiling.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest({
+        ...request,
+        mounts: [
+          ...request.mounts,
+          {
+            role: 'shm',
+            kind: 'tmpfs',
+            destination: '/dev/shm',
+            sizeBytes: 64n * MIB,
+          },
+        ],
+      }),
+    { message: /belongs in resources.shmBytes/ },
+  );
+});
+
+test('the writable total counts the shared-memory ceiling too', t => {
+  const request = makeRequest();
+  t.throws(
+    () =>
+      assertSlicePolicyRequest({
+        ...request,
+        // Exactly the mount-table sum, which now leaves shmBytes
+        // uncovered — the aggregate must account for every writable
+        // path, not only the ones in the table.
+        resources: { ...request.resources, writableBytes: 16n * GIB },
+      }),
+    { message: /does not equal the sum of its writable paths/ },
+  );
 });

@@ -1667,7 +1667,8 @@ const makeLivePolicy = async sidecarName => {
       cpuCores: 1,
       openFiles: 1024,
       coreBytes: 0n,
-      writableBytes: 96n * mib,
+      shmBytes: 16n * mib,
+      writableBytes: 112n * mib,
     }),
     mounts: harden([
       harden({
@@ -1771,6 +1772,22 @@ test.serial(
       ['/tmp', '/run', '/scratch'],
     );
     t.regex(attestation.networkNamespaceId, /^net-\d+$/);
+    // The reported namespace is the sidecar's, not merely some
+    // loopback-only one: a broker lease binds to this id.
+    const sidecarPid = await podmanRun([
+      'container',
+      'inspect',
+      '--format',
+      '{{.State.Pid}}',
+      sidecarName,
+    ]);
+    const sidecarNetns = nodeFs.readlinkSync(
+      `/proc/${sidecarPid.stdout.trim()}/ns/net`,
+    );
+    t.is(
+      attestation.networkNamespaceId,
+      sidecarNetns.replace(/^net:\[(\d+)\]$/, 'net-$1'),
+    );
 
     // The slice really is confined to that namespace: an operation in it
     // sees loopback and nothing else.
