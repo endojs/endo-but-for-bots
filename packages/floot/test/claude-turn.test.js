@@ -134,6 +134,57 @@ test('translator emits partial text without duplicating assistant text', async t
   t.is(translator.finish().finalText, 'Hello world.');
 });
 
+test('translator keeps each character once across the CLI record interleaving', async t => {
+  const { writer, log } = makeRecordingWriter();
+  const translator = makeClaudeEventTranslator(writer);
+  const start = id =>
+    translator.handle({
+      type: 'stream_event',
+      event: { type: 'message_start', message: { id } },
+    });
+  const delta = text =>
+    translator.handle({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        delta: { type: 'text_delta', text },
+      },
+    });
+  const assistant = (id, content) =>
+    translator.handle({ type: 'assistant', message: { id, content } });
+
+  // The wire as `claude -p --include-partial-messages` emits it: one
+  // assistant record per content block, a thinking record before the text
+  // starts, the text record after its deltas, then the tool use.
+  start('msg_1');
+  assistant('msg_1', [{ type: 'thinking', thinking: '…' }]);
+  delta('Let me ');
+  delta('check. ');
+  // A thinking-only record between a message's deltas and its text record
+  // must not un-remember that the text already streamed.
+  assistant('msg_1', [{ type: 'thinking', thinking: '…' }]);
+  assistant('msg_1', [{ type: 'text', text: 'Let me check. ' }]);
+  assistant('msg_1', [
+    { type: 'tool_use', id: 'toolu_1', name: 'Read', input: { path: 'a' } },
+  ]);
+  translator.handle({
+    type: 'user',
+    message: {
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' }],
+    },
+  });
+  // A second message with no partials at all (an older CLI, or a message
+  // that arrived whole) is still spoken.
+  start('msg_2');
+  assistant('msg_2', [{ type: 'text', text: 'Done.' }]);
+
+  t.deepEqual(
+    log.filter(entry => entry.kind === 'delta').map(entry => entry.payload),
+    ['Let me ', 'check. ', 'Done.'],
+  );
+  t.is(translator.finish().finalText, 'Let me check. Done.');
+});
+
 test('translator falls back to streamed text without a result summary', async t => {
   const { writer } = makeRecordingWriter();
   const translator = makeClaudeEventTranslator(writer);
