@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 23;
+pub const STORE_SCHEMA_VERSION: u32 = 24;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1377,14 +1377,14 @@ impl SmallState {
     /// in schema 17, Intl bound functions in schema 18, and private
     /// elements in schema 19, disposable stacks in schema 20,
     /// synchronous generators in schema 21, error frames in schema 22,
-    /// and the promise cluster in schema 23 the same
-    /// way). Since store schema v4 the free-list section is
+    /// the promise cluster in schema 23, and async activations in schema 24
+    /// the same way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 30] = [
+        let sections: [Vec<u8>; 31] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1418,6 +1418,7 @@ impl SmallState {
             crate::image::encode_generators(&self.generators),
             crate::image::encode_error_frames(&self.errors),
             crate::image::encode_promise_cluster(&self.promise_cluster),
+            crate::image::encode_async_instances(&self.promise_cluster.async_instances),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1650,12 +1651,18 @@ impl SmallState {
         }
         // Schema-23 promise cluster, same empty-section migration rule.
         let promise_bytes = section("small state promise section")?;
-        let promise_cluster = if promise_bytes.is_empty() {
+        let mut promise_cluster = if promise_bytes.is_empty() {
             ironhorse_vm::PromiseClusterSnapshot::default()
         } else {
             crate::image::decode_promise_cluster(promise_bytes).map_err(StoreError::Snapshot)?
         };
-        // Same exact-consumption rule as the manifest: thirty
+        let async_bytes = section("small state async section")?;
+        promise_cluster.async_instances = if async_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_async_instances(async_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: thirty-one
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -2060,6 +2067,7 @@ pub fn migrate_store(
             20 => migrate_v20_to_v21(store)?,
             21 => migrate_v21_to_v22(store)?,
             22 => migrate_v22_to_v23(store)?,
+            23 => migrate_v23_to_v24(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2613,6 +2621,39 @@ fn migrate_v22_to_v23(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let mut new_small = small;
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 23;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
+/// Schema 23 -> 24: add suspended async activations, formerly refused.
+fn migrate_v23_to_v24(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 24;
     manifest.root = compute_root(
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,

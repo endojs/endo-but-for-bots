@@ -124,6 +124,9 @@ pub const IBFN: FourCc = FourCc(*b"IBFN");
 pub const PRIV: FourCc = FourCc(*b"PRIV");
 /// `DISP` — DisposableStack/AsyncDisposableStack state and records.
 pub const DISP: FourCc = FourCc(*b"DISP");
+/// `ASYN` — suspended async-function activations linked from PRMS reactions.
+pub const ASYN: FourCc = FourCc(*b"ASYN");
+
 /// `GENR` — synchronous generator lifecycle and saved activations.
 pub const GENR: FourCc = FourCc(*b"GENR");
 /// `PRMS` — the promise cluster: per-instance settlement state and
@@ -163,9 +166,9 @@ pub const INTL: FourCc = FourCc(*b"INTL");
 /// container from a newer format (the one honest source of new tags)
 /// is already refused by version.
 pub const CANONICAL_ATOM_ORDER: &[FourCc] = &[
-    VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR, ARRY, COLL, REGY, ERRD, ESTK,
-    ABUF, TARR, DVIW, WRAP, REGX, ARGB, TMPR, INTL, ITER, DATE, FUNC, PROX, ACCS, IBFN, PRIV,
-    DISP, GENR, PRMS, NFLR,
+    VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR, ARRY, COLL, REGY, ERRD, ESTK, ABUF,
+    TARR, DVIW, WRAP, REGX, ARGB, TMPR, INTL, ITER, DATE, FUNC, PROX, ACCS, IBFN, PRIV, DISP, GENR,
+    PRMS, ASYN, NFLR,
 ];
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
@@ -191,11 +194,12 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// version 7 adds Intl bound-function links; version 8 adds private
 /// elements; version 9 adds disposable stacks; version 10 adds
 /// synchronous generators; version 11 adds error construction frames
-/// (`ESTK`); version 12 adds the promise cluster (`PRMS`).
+/// (`ESTK`); version 12 adds the promise cluster (`PRMS`); version 13 adds
+/// suspended async-function activations (`ASYN`).
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 12;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 13;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
@@ -316,7 +320,7 @@ pub enum VersionError {
 /// `Interp::create_intrinsics` changes any boot-derived slot identity or
 /// metadata table. The engine-owned suffix prevents a host from accidentally
 /// reusing its callback signature across an incompatible boot change.
-pub const BOOT_LAYOUT_VERSION: u32 = 19;
+pub const BOOT_LAYOUT_VERSION: u32 = 21;
 
 const BOOT_LAYOUT_SIGNATURE_KEY: &str = "|ironhorse-boot=";
 
@@ -506,7 +510,7 @@ mod tests {
         let s = Signature::new("ironhorse-worker-v1");
         assert_eq!(
             s.encode(),
-            b"ironhorse-worker-v1|ironhorse-boot=19",
+            b"ironhorse-worker-v1|ironhorse-boot=21",
             "the engine-owned boot generation travels with every host signature"
         );
         assert_eq!(Signature::decode(&s.encode()).unwrap(), s);

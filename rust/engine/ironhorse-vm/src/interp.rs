@@ -2887,6 +2887,8 @@ pub enum NativeMethod {
     /// (`fx_DataView_prototype_set`): coerce and write an element of the type
     /// indexed by the payload. One `mxMeterOne` per write.
     DataViewSet(u8),
+    /// Reflective DataView prototype accessors: buffer, byteLength, byteOffset.
+    DataViewAccessor(u8),
     /// `Promise.prototype.then(onFulfilled, onRejected)`
     /// (`fx_Promise_prototype_then`): register the reaction pair on the
     /// receiver promise and return a fresh derived promise the reaction's
@@ -4872,6 +4874,7 @@ pub struct Interp {
     /// RUNTIME (a computed string key) has an id no install has seen, and
     /// filtering by the unit's own table length refused it forever.
     installed_names_len: usize,
+    installing_intrinsics: bool,
     /// Poison latch: the two property-key id spaces met (the name table
     /// growing up collided with [`Self::next_symbol_key_id`] minting
     /// down), so any further intern would alias an existing key. Set by
@@ -5696,6 +5699,17 @@ pub struct GeneratorRow {
     pub frame: Option<SavedFrameRow>,
 }
 
+/// A suspended async function, carried with its promise cluster. Completed
+/// instances have no resumable state and are omitted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsyncRow {
+    pub owner: u32,
+    pub frame: SavedFrameRow,
+    pub result_promise: u32,
+    pub resolve: Slot,
+    pub reject: Slot,
+}
+
 /// One registered reaction of a pending [`PromiseRow`] (the serialized
 /// [`PromiseReaction`]). The four handler/capability slots are ordinary
 /// value slots; `kind` is the reaction's drain behavior:
@@ -5709,8 +5723,8 @@ pub struct GeneratorRow {
 /// | 11 | `FinallyAwait` | original rejection boolean | — |
 /// | 12 | `CombineDirect` | combinator index | element index |
 ///
-/// Bytes 3–10 (`AsyncAwait`, the three `AsyncGenerator*`s, the four
-/// `FromAsync*`s) name suspended async machinery whose instance rows
+/// Byte 3 (`AsyncAwait`) names an activation in `ASYN`. Bytes 4–10
+/// (the three `AsyncGenerator*`s and four `FromAsync*`s) name machinery whose rows
 /// are still Pending in the snapshot ledger, so the persist gate
 /// refuses a machine holding one
 /// ([`Interp::stored_unpersistable_row`]) and the decoder refuses the
@@ -5793,6 +5807,7 @@ pub struct CombinatorRow {
 /// byte-identical clusters even before the continued one's next sweep.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PromiseClusterSnapshot {
+    pub async_instances: Vec<AsyncRow>,
     pub promises: Vec<PromiseRow>,
     pub functions: Vec<PromiseFnRow>,
     pub guards: Vec<bool>,
@@ -5802,6 +5817,7 @@ pub struct PromiseClusterSnapshot {
 impl PromiseClusterSnapshot {
     pub fn is_empty(&self) -> bool {
         self.promises.is_empty()
+            && self.async_instances.is_empty()
             && self.functions.is_empty()
             && self.guards.is_empty()
             && self.combinators.is_empty()
@@ -6173,6 +6189,7 @@ impl Interp {
             default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
             next_symbol_key_id: u16::MAX,
             installed_names_len: 0,
+            installing_intrinsics: false,
             id_space_exhausted: false,
             last_crank_completed: true,
             symbol_names: Vec::new(),
@@ -6977,8 +6994,8 @@ impl Interp {
         // `%ArrayBuffer.prototype%`: the species-constructing `slice` method
         // plus the recognized-but-unimplemented methods bound so a reference
         // is an honest NAMED skip (`Halt::Unsupported`) rather than a
-        // completion divergence. `byteLength` is an accessor getter routed
-        // through `byte_length_id` in `GET_PROPERTY`, not a bound method.
+        // completion divergence. `byteLength` also needs a real descriptor:
+        // SES captures its getter through getOwnPropertyDescriptor at boot.
         self.arraybuffer_proto = self
             .intrinsics
             .get("ArrayBuffer")
@@ -7008,6 +7025,9 @@ impl Interp {
             self.proto_methods.push((self.arraybuffer_proto, name, mf));
         }
         for (name, method) in [
+            // All supported buffers are fixed length, so these getters have
+            // the same receiver checks, detachment behavior, and result.
+            ("byteLength", NativeMethod::ArrayBufferMaxByteLengthGetter),
             ("detached", NativeMethod::ArrayBufferDetachedGetter),
             (
                 "maxByteLength",
@@ -7049,6 +7069,20 @@ impl Interp {
             .get("DataView")
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
+        for (index, name) in ["buffer", "byteLength", "byteOffset"].iter().enumerate() {
+            let getter = self.alloc_named_method(
+                NativeMethod::DataViewAccessor(index as u8),
+                &format!("get {name}"),
+                0,
+            );
+            self.proto_accessors.push((
+                self.dataview_proto,
+                ProtoAccessorKey::String(name),
+                getter,
+                None,
+                "DataView",
+            ));
+        }
         // (get-method name, set-method name, element-type index into
         // TYPED_ARRAY_TYPES). Static names — no per-boot allocation. The
         // BigInt64/BigUint64 get/set are bound so a reference is an honest
@@ -7122,7 +7156,10 @@ impl Interp {
         // `%AsyncGeneratorPrototype%` and `%AsyncGeneratorFunction.prototype%`.
         // Async-generator instances expose the same three request methods as
         // generators, but each returns a promise and requests are serialized.
-        let async_generator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        // Async generators inherit the shared %AsyncIteratorPrototype%,
+        // which in turn inherits Object.prototype. SES discovers both levels.
+        let async_iterator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        let async_generator_proto = self.slots.alloc(Slot::instance(async_iterator_proto));
         self.async_generator_proto = async_generator_proto;
         for (name, arity, m) in [
             ("next", 1, NativeMethod::AsyncGeneratorNext),
@@ -7157,6 +7194,8 @@ impl Interp {
         // resolves `%GeneratorFunction%` rather than plain `Function`.
         let generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         self.generator_function_proto = generator_function_proto;
+        self.proto_methods
+            .push((generator_function_proto, "prototype", generator_proto));
         // The three non-global dynamic-function constructors
         // `%GeneratorFunction%` / `%AsyncFunction%` / `%AsyncGeneratorFunction%`.
         // None is a global binding (they are reachable only through the
@@ -8880,6 +8919,8 @@ impl Interp {
         full: bool,
         keep: impl Fn(u16) -> bool,
     ) {
+        let was_installing = self.installing_intrinsics;
+        self.installing_intrinsics = true;
         // Every id in `names` is CONSIDERED by this pass (admitted or
         // deliberately skipped by `keep`), so the floor for future
         // partial passes advances to the full table (wave-6 W6-7).
@@ -8891,7 +8932,9 @@ impl Interp {
             if !keep(id) {
                 continue;
             }
-            if self.global_props.contains_key(&id) {
+            if self.global_props.contains_key(&id)
+                || self.slots.get(self.global_obj).flag & XS_DONT_PATCH_FLAG != 0
+            {
                 continue;
             }
             if let Some(&func) = self.intrinsics.get(name.as_str()) {
@@ -9149,7 +9192,9 @@ impl Interp {
                 if !full && self.find_property(proto, mid).is_some() {
                     continue;
                 }
-                let flag = if mname == "prototype" {
+                let flag = if mname == "prototype" && proto == self.generator_function_proto {
+                    XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG
+                } else if mname == "prototype" {
                     XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
                 } else {
                     XS_DONT_ENUM_FLAG
@@ -9316,6 +9361,7 @@ impl Interp {
         // redundant re-installs that would revert guest edits (see the
         // fn doc).
         if !full {
+            self.installing_intrinsics = was_installing;
             return;
         }
         // `%Symbol.prototype%` and `%Date.prototype%` each have a standard
@@ -9453,7 +9499,7 @@ impl Interp {
         }
         if let Some(id) = self.well_known_symbol_property_id("asyncIterator") {
             self.set_own_unmetered_with_flag(
-                self.async_generator_proto,
+                self.instance_prototype(self.async_generator_proto),
                 id,
                 Slot::of(
                     Kind::Reference,
@@ -9587,6 +9633,7 @@ impl Interp {
                 self.set_own_unmetered_with_flag(proto, symbol_id, function, XS_DONT_ENUM_FLAG);
             }
         }
+        self.installing_intrinsics = was_installing;
     }
 
     /// Run the next top-level program with **eval-program** declaration-
@@ -9813,7 +9860,12 @@ impl Interp {
         // deliberate replacement of it, which a re-install would
         // clobber — the same floor scoping `relink_crank` applies.
         let floor = self.installed_names_len;
-        self.install_intrinsic_bindings(&eval_names, false, move |id| (id as usize) > floor);
+        // The install floor is in REALM ids, not this eval unit's local
+        // symbol numbering. Passing eval_names shrank the floor after a
+        // short eval and let the next reflective read resurrect deleted
+        // intrinsics (including SES's tamed constructors).
+        let realm_names = self.symbol_names.clone();
+        self.install_intrinsic_bindings(&realm_names, false, move |id| (id as usize) > floor);
         // The unit may reference a well-known property name (`length`, `name`,
         // `then`, a RegExp getter, …) the outer program never used; its id is
         // now in the realm table, so refresh the exotic-property id caches that
@@ -10231,6 +10283,10 @@ impl Interp {
     /// been observable in this machine, so their create-only installation is
     /// sound and unmetered.
     fn materialize_intrinsic_own_surface(&mut self, inst: crate::value::SlotIndex) {
+        // Materialization is boot work, never authority to extend a sealed object.
+        if self.slots.get(inst).flag & XS_DONT_PATCH_FLAG != 0 {
+            return;
+        }
         let mut member_names: Vec<&'static str> = self
             .proto_methods
             .iter()
@@ -10263,8 +10319,28 @@ impl Interp {
         {
             member_names.push("stack");
         }
+        if inst == self.global_obj {
+            member_names.extend(self.intrinsics.keys().copied());
+            member_names.extend(["undefined", "NaN", "Infinity", "globalThis"]);
+        }
         if member_names.is_empty() {
             return;
+        }
+        // Complete symbol-keyed boot surfaces before own-key reflection or
+        // integrity operations. Interning once also preserves later deletions.
+        let descriptors: Vec<_> = self
+            .well_known_symbols
+            .iter()
+            .filter_map(|(_, value)| {
+                if let Payload::Reference(descriptor) = value.value {
+                    Some(descriptor)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for descriptor in descriptors {
+            self.intern_symbol_key(descriptor);
         }
         member_names.sort_unstable();
         member_names.dedup();
@@ -10593,8 +10669,8 @@ impl Interp {
         // A pending reaction whose KIND names suspended async machinery
         // (an `await`'s resumption, an async generator's, an
         // `Array.fromAsync` step) points at instance rows the image
-        // does not carry yet (`async_instances`/`async_generators`/
-        // `from_async` are still Pending in the ledger). Every
+        // does not carry yet (`async_generators`/`from_async` are Pending).
+        // Ordinary async functions carry their frames in ASYN. Every
         // RESUMABLE async suspension is anchored by exactly such a
         // reaction on a live promise — an unanchored instance is
         // unreachable and swept — so refusing by kind here is the whole
@@ -10609,6 +10685,7 @@ impl Interp {
                 !matches!(
                     r.kind,
                     ReactionKind::User
+                        | ReactionKind::AsyncAwait(_)
                         | ReactionKind::FinallyReturn
                         | ReactionKind::FinallyAwait(_)
                         | ReactionKind::Combine(_, _)
@@ -10758,8 +10835,16 @@ impl Interp {
 
         // Suspended generator frames: every slot of a saved activation
         // travels, so every one of them can retain a doomed native.
-        let frame_hit = self.generators.values().any(|g| {
-            g.frame.as_ref().is_some_and(|f| {
+        let frame_hit = self
+            .generators
+            .values()
+            .filter_map(|g| g.frame.as_ref())
+            .chain(
+                self.async_instances
+                    .values()
+                    .filter_map(|a| a.frame.as_ref()),
+            )
+            .any(|f| {
                 f.locals.iter().any(names)
                     || f.args.iter().any(names)
                     || f.stack_slice.iter().any(names)
@@ -10768,7 +10853,10 @@ impl Interp {
                     || names(&f.result)
                     || f.jumps.iter().any(|j| names(&j.env))
             })
-        });
+            || self
+                .async_instances
+                .values()
+                .any(|a| names(&a.resolve_fn) || names(&a.reject_fn));
         if frame_hit {
             return Some("a stored reference to a non-persisted native function");
         }
@@ -11937,10 +12025,9 @@ impl Interp {
     /// skipped, as everywhere: a swept instance's stale row names
     /// nothing.
     ///
-    /// Async-flavored reactions serialize by kind byte like everything
-    /// else — the persist gate refuses the machine before an honest
-    /// writer can reach this verb with one, and the decoder refuses the
-    /// byte from a dishonest one.
+    /// AsyncAwait reactions name the suspended frames carried alongside
+    /// PRMS in ASYN. Async-generator and Array.fromAsync reactions still
+    /// refuse at the persistence boundary.
     pub fn promise_cluster_snapshot(&self) -> PromiseClusterSnapshot {
         let mut promises: Vec<(crate::value::SlotIndex, &PromiseData)> = self
             .promises
@@ -11983,7 +12070,23 @@ impl Interp {
             .map(|(new, &old)| (old, new as u32))
             .collect();
 
+        let mut async_instances: Vec<_> = self
+            .async_instances
+            .iter()
+            .filter(|(owner, data)| !self.slots.is_free_index(**owner) && !data.done)
+            .filter_map(|(owner, data)| {
+                data.frame.as_ref().map(|frame| AsyncRow {
+                    owner: owner.0,
+                    frame: Self::saved_frame_snapshot(frame),
+                    result_promise: data.result_promise.0,
+                    resolve: data.resolve_fn,
+                    reject: data.reject_fn,
+                })
+            })
+            .collect();
+        async_instances.sort_unstable_by_key(|row| row.owner);
         PromiseClusterSnapshot {
+            async_instances,
             promises: promises
                 .into_iter()
                 .map(|(owner, data)| PromiseRow {
@@ -12163,6 +12266,13 @@ impl Interp {
                             && r.on_rejected.kind == Kind::Reference =>
                         {
                             ReactionKind::FinallyReturn
+                        }
+                        3 if r.b == 0
+                            && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                                .iter()
+                                .all(|slot| slot.kind == Kind::Undefined) =>
+                        {
+                            ReactionKind::AsyncAwait(crate::value::SlotIndex(r.a))
                         }
                         11 if capability_ok(&r.resolve, &r.reject)
                             && r.a <= 1
@@ -12368,6 +12478,28 @@ impl Interp {
                 },
             );
         }
+        for row in snap.async_instances {
+            if self
+                .async_instances
+                .contains_key(&crate::value::SlotIndex(row.owner))
+                || !owners.contains(&row.result_promise)
+            {
+                return false;
+            }
+            let Some(frame) = Self::restore_saved_frame(row.frame) else {
+                return false;
+            };
+            self.async_instances.insert(
+                crate::value::SlotIndex(row.owner),
+                AsyncData {
+                    frame: Some(frame),
+                    result_promise: crate::value::SlotIndex(row.result_promise),
+                    resolve_fn: row.resolve,
+                    reject_fn: row.reject,
+                    done: false,
+                },
+            );
+        }
         self.promise_guards = snap.guards;
         self.combinators = snap
             .combinators
@@ -12394,43 +12526,65 @@ impl Interp {
     /// second pass closes that intentional restore-order cycle.
     pub fn restored_promise_capabilities_are_valid(&self) -> bool {
         let reactions_valid = self.promises.values().all(|promise| {
-            promise.reactions.iter().all(|reaction| match reaction.kind {
-                ReactionKind::User | ReactionKind::FinallyAwait(_) => {
-                    self.is_callable_value(reaction.resolve)
-                        && self.is_callable_value(reaction.reject)
-                }
-                ReactionKind::FinallyReturn => {
-                    self.is_callable_value(reaction.resolve)
-                        && self.is_callable_value(reaction.reject)
-                        && self.is_constructor_value(reaction.on_rejected)
-                }
-                ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => self
-                    .combinators
-                    .get(ci as usize)
-                    .is_some_and(|c| {
-                        self.is_callable_value(c.resolve) && self.is_callable_value(c.reject)
-                    }),
-                _ => true,
-            })
+            promise
+                .reactions
+                .iter()
+                .all(|reaction| match reaction.kind {
+                    ReactionKind::User | ReactionKind::FinallyAwait(_) => {
+                        self.is_callable_value(reaction.resolve)
+                            && self.is_callable_value(reaction.reject)
+                    }
+                    ReactionKind::FinallyReturn => {
+                        self.is_callable_value(reaction.resolve)
+                            && self.is_callable_value(reaction.reject)
+                            && self.is_constructor_value(reaction.on_rejected)
+                    }
+                    ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
+                        self.combinators.get(ci as usize).is_some_and(|c| {
+                            self.is_callable_value(c.resolve) && self.is_callable_value(c.reject)
+                        })
+                    }
+                    _ => true,
+                })
         });
-        reactions_valid
-            && self.promise_functions.values().all(|data| {
-                if data.guard != PROMISE_FINALLY_HANDLER_GUARD {
-                    return true;
+        let mut awaited = std::collections::BTreeSet::new();
+        for promise in self.promises.values() {
+            for reaction in &promise.reactions {
+                if let ReactionKind::AsyncAwait(owner) = reaction.kind {
+                    if !self.async_instances.contains_key(&owner) || !awaited.insert(owner.0) {
+                        return false;
+                    }
                 }
-                let Some(&handler_id) = self.symbol_ids.get("[[PromiseFinallyHandler]]") else {
-                    return false;
-                };
-                let Some(&constructor_id) =
-                    self.symbol_ids.get("[[PromiseFinallyConstructor]]")
-                else {
-                    return false;
-                };
-                self.is_callable_value(self.instance_get(data.promise, handler_id))
-                    && self.is_constructor_value(
-                        self.instance_get(data.promise, constructor_id),
-                    )
-            })
+            }
+        }
+        reactions_valid && self.async_instances.iter().all(|(owner, a)| {
+            let function = |slot: Slot| match slot.value {
+                Payload::Reference(f) => self.promise_functions.get(&f),
+                _ => None,
+            };
+            let pair = matches!((function(a.resolve_fn), function(a.reject_fn)), (Some(r), Some(j))
+                    if r.promise == a.result_promise && j.promise == a.result_promise
+                        && !r.reject && j.reject && r.guard == j.guard
+                        && self.promise_guards.get(r.guard) == Some(&false));
+            pair && awaited.contains(&owner.0)
+                && self.is_callable_value(a.resolve_fn)
+                && self.is_callable_value(a.reject_fn)
+                && a.frame
+                    .as_ref()
+                    .is_some_and(|f| self.functions.contains_key(&f.cur_func))
+        }) && self.promise_functions.values().all(|data| {
+            if data.guard != PROMISE_FINALLY_HANDLER_GUARD {
+                return true;
+            }
+            let Some(&handler_id) = self.symbol_ids.get("[[PromiseFinallyHandler]]") else {
+                return false;
+            };
+            let Some(&constructor_id) = self.symbol_ids.get("[[PromiseFinallyConstructor]]") else {
+                return false;
+            };
+            self.is_callable_value(self.instance_get(data.promise, handler_id))
+                && self.is_constructor_value(self.instance_get(data.promise, constructor_id))
+        })
     }
 
     /// Quiescent snapshot of the four Temporal record tables (ledger
@@ -12947,7 +13101,10 @@ impl Interp {
     /// later lookup from resurrecting it. The name and property (or its
     /// deletion) then travel through the ordinary snapshot tables.
     fn materialize_runtime_global(&mut self, id: u16, name: &str) {
-        if self.global_obj.is_null() || self.global_props.contains_key(&id) {
+        if self.global_obj.is_null()
+            || self.global_props.contains_key(&id)
+            || self.slots.get(self.global_obj).flag & XS_DONT_PATCH_FLAG != 0
+        {
             return;
         }
         let value = if let Some(function) = self.intrinsics.get(name).copied() {
@@ -18096,18 +18253,11 @@ impl Interp {
                 // resolved through the global intern table exactly as `fxAt`
                 // does and answered by a full prototype-chain walk
                 // (`fxHasAll`). A program symbol present own-or-inherited ⇒
-                // `true`. When ironhorse's (possibly
-                // incomplete) chain does not hold the name, `false` is sound
-                // only if the name can be no inherited built-in: a boot
-                // default-key name the program never referenced could be an
-                // unlinked inherited method (`'toString' in {}` is `true` in
-                // XS), so it self-names rather than risk a wrong `false`; a
-                // genuinely-novel name (absent from the boot key table) is
-                // absent everywhere, so `in` is soundly `false`, `fxAt`
-                // interning one key slot. Integer-index keys route through the
-                // receiver's exotic own-property behavior; a non-object right
-                // operand remains an error outside this opcode's covered
-                // grammar.
+                // `true`. Computed non-index names complete create-only
+                // intrinsic linking before lookup; canonical integer-index
+                // keys remain uninterned and follow exotic own-property
+                // behavior. A non-object RHS throws a catchable TypeError
+                // before coercing the left operand.
                 XS_CODE_IN => {
                     let obj = self.pop();
                     let key = self.pop();
@@ -18177,18 +18327,8 @@ impl Interp {
                             continue;
                         }
                     }
-                    // A boot default-key name the program never referenced may
-                    // name an inherited intrinsic that ironhorse did not link.
-                    // Retain the existing soundness gate before interning the
-                    // converted key; symbols and all other strings are exact.
-                    if let (Kind::String, Payload::String(off)) = (key.kind, key.value) {
-                        let name = self.str_text(off);
-                        if !self.symbol_ids.contains_key(&name)
-                            && self.default_keys.contains(name.as_str())
-                        {
-                            return Halt::Unsupported("in:unlinked-default-key");
-                        }
-                    }
+                    // Computed non-index keys also need the create-only intrinsic
+                    // linking seam used by Reflect.has (including SES permits).
                     // A canonical index string is what XS's `fxAt` turns into
                     // `(XS_NO_ID, index)`; uninterned, it stays an index here
                     // and mints nothing, so `for (i…) i in o` cannot walk the
@@ -18200,16 +18340,14 @@ impl Interp {
                         match string_to_index(&name).filter(|_| !self.symbol_ids.contains_key(&name))
                         {
                             Some(index) => ReadKey::Index(index),
-                            None => match self.property_key_id(key, false) {
-                                Some(id) => ReadKey::Id(id),
-                                None => return Halt::EngineInvariant("in:key"),
-                            },
+                            None => ReadKey::Id(dispatch_result!(
+                                self.to_property_id(code, key), pc, self, return_depth
+                            )),
                         }
                     } else {
-                        match self.property_key_id(key, false) {
-                            Some(id) => ReadKey::Id(id),
-                            None => return Halt::EngineInvariant("in:key"),
-                        }
+                        ReadKey::Id(dispatch_result!(
+                            self.to_property_id(code, key), pc, self, return_depth
+                        ))
                     };
                     // Answer with the metered chain walk: `fxRunIn` calls
                     // `fxHasAt` once and does not re-enter per level, so the
@@ -18238,6 +18376,19 @@ impl Interp {
                 XS_CODE_DUB => {
                     let top = self.stack.last().copied().unwrap_or_else(Slot::undefined);
                     self.push(top);
+                    pc += size as usize;
+                }
+                XS_CODE_DUB_AT => {
+                    // Preserve both the receiver and the already-coerced key
+                    // for a computed compound assignment (xsRun.c DUB_AT).
+                    let n = self.stack.len();
+                    if n < 2 {
+                        return Halt::EngineInvariant("dub_at:stack-underflow");
+                    }
+                    let receiver = self.stack[n - 2];
+                    let key = self.stack[n - 1];
+                    self.push(receiver);
+                    self.push(key);
                     pc += size as usize;
                 }
                 XS_CODE_POP => {
@@ -21930,6 +22081,9 @@ impl Interp {
                     self.populate_collection_from_dense_array(code, inst, a)?;
                 }
                 Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            Native::WeakMap | Native::WeakSet | Native::Map | Native::Set => {
+                return Err(self.catchable_type_error());
             }
             // `new ArrayBuffer(byteLength)` (`fx_ArrayBuffer` +
             // `fxNewArrayBufferInstance`): a fresh zero-filled buffer. The
@@ -30158,6 +30312,9 @@ impl Interp {
     /// inherited prototype value (unmetered in XS) or already folded into a
     /// measured construct constant.
     fn set_own_unmetered(&mut self, inst: crate::value::SlotIndex, id: u16, value: Slot) {
+        if self.installing_intrinsics && self.slots.get(inst).flag & XS_DONT_PATCH_FLAG != 0 {
+            return;
+        }
         if let Some(p) = self.find_property(inst, id) {
             let s = self.slots.get_mut(p);
             s.kind = value.kind;
@@ -30182,6 +30339,9 @@ impl Interp {
         value: Slot,
         flag: u8,
     ) {
+        if self.installing_intrinsics && self.slots.get(inst).flag & XS_DONT_PATCH_FLAG != 0 {
+            return;
+        }
         if let Some(p) = self.find_property(inst, id) {
             let s = self.slots.get_mut(p);
             s.kind = value.kind;
@@ -30213,6 +30373,9 @@ impl Interp {
         get: Option<Slot>,
         set: Option<Slot>,
     ) {
+        if self.installing_intrinsics && self.slots.get(inst).flag & XS_DONT_PATCH_FLAG != 0 {
+            return;
+        }
         // `{enumerable: false, configurable: true}`: DONT_ENUM set, DONT_DELETE
         // clear. The getter/setter flags mark the slot an accessor.
         let flag = XS_DONT_ENUM_FLAG | XS_GETTER_FLAG | XS_SETTER_FLAG;
@@ -35745,6 +35908,22 @@ impl Interp {
             // lives in the helper; a non-integer view / OOB index / non-clean
             // operand / the blocking-agent surface self-names an honest skip.
             NativeMethod::Atomic(op) => self.atomics_dispatch(op, base)?,
+            NativeMethod::DataViewAccessor(index) => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.data_views.contains_key(&r) => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let view = self.data_views[&inst];
+                if index != 0 && self.detached_buffers.contains(&view.buffer) {
+                    return Err(self.catchable_type_error());
+                }
+                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
+                match index {
+                    0 => Slot::of(Kind::Reference, Payload::Reference(view.buffer)),
+                    1 => Slot::number(view.size as f64),
+                    _ => Slot::number(view.offset as f64),
+                }
+            }
             // `DataView.prototype.get<Type>(byteOffset[, littleEndian])`
             // (`fx_DataView_prototype_get`): read an element at `byteOffset`
             // honoring endianness (default big-endian). One `mxMeterOne`.
@@ -47287,7 +47466,9 @@ impl Interp {
         // rather than the method. It is built here rather than through the
         // method table below.
         if well_known_name == Some("unscopables") {
-            if self.array_proto.is_null() || self.find_property(self.array_proto, id).is_some() {
+            if self.array_proto.is_null()
+                || self.slots.get(self.array_proto).flag & XS_DONT_PATCH_FLAG != 0
+                || self.find_property(self.array_proto, id).is_some() {
                 return;
             }
             let list = self.slots.alloc(Slot::instance(crate::value::SlotIndex::NULL));
@@ -47361,7 +47542,8 @@ impl Interp {
             _ => return,
         };
         for (owner, method, label, flags) in installs {
-            if self.find_property(owner, id).is_some() {
+            if self.find_property(owner, id).is_some()
+                || self.slots.get(owner).flag & XS_DONT_PATCH_FLAG != 0 {
                 continue;
             }
             assert!(!method.is_null(), "{label}");
@@ -50479,6 +50661,7 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_prevent_extensions(code, inst);
         }
+        self.materialize_intrinsic_own_surface(inst);
         self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
         Ok(true)
     }

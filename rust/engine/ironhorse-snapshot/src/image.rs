@@ -2128,44 +2128,45 @@ pub(crate) fn decode_disposable_stacks(
     Ok(rows)
 }
 
+fn encode_frame_slots(v: &mut Vec<u8>, rows: &[Slot]) {
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        crate::slot_codec::encode_slot(row, v);
+    }
+}
+fn encode_frame_id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for &(id, index) in rows {
+        v.extend_from_slice(&id.to_be_bytes());
+        v.extend_from_slice(&index.to_be_bytes());
+    }
+}
+fn encode_saved_frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow) {
+    encode_frame_slots(v, &row.locals);
+    encode_frame_id_map(v, &row.id_map);
+    encode_frame_slots(v, &row.args);
+    crate::slot_codec::encode_slot(&row.this_val, v);
+    crate::slot_codec::encode_slot(&row.env, v);
+    v.extend_from_slice(&row.cur_func.to_be_bytes());
+    v.push(row.cur_target as u8);
+    v.extend_from_slice(&row.target_func.to_be_bytes());
+    v.push(row.strict as u8);
+    crate::slot_codec::encode_slot(&row.result, v);
+    encode_frame_slots(v, &row.stack_slice);
+    v.extend_from_slice(&(row.jumps.len() as u32).to_be_bytes());
+    for jump in &row.jumps {
+        v.extend_from_slice(&jump.target_pc.to_be_bytes());
+        v.extend_from_slice(&jump.stack_offset.to_be_bytes());
+        v.extend_from_slice(&jump.locals_len.to_be_bytes());
+        encode_frame_id_map(v, &jump.id_map);
+        v.extend_from_slice(&jump.call_depth_offset.to_be_bytes());
+        crate::slot_codec::encode_slot(&jump.env, v);
+        v.push(jump.flag);
+    }
+    v.extend_from_slice(&row.resume_pc.to_be_bytes());
+}
+
 pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> {
-    fn slots(v: &mut Vec<u8>, rows: &[Slot]) {
-        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
-        for row in rows {
-            crate::slot_codec::encode_slot(row, v);
-        }
-    }
-    fn id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
-        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
-        for &(id, index) in rows {
-            v.extend_from_slice(&id.to_be_bytes());
-            v.extend_from_slice(&index.to_be_bytes());
-        }
-    }
-    fn frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow) {
-        slots(v, &row.locals);
-        id_map(v, &row.id_map);
-        slots(v, &row.args);
-        crate::slot_codec::encode_slot(&row.this_val, v);
-        crate::slot_codec::encode_slot(&row.env, v);
-        v.extend_from_slice(&row.cur_func.to_be_bytes());
-        v.push(row.cur_target as u8);
-        v.extend_from_slice(&row.target_func.to_be_bytes());
-        v.push(row.strict as u8);
-        crate::slot_codec::encode_slot(&row.result, v);
-        slots(v, &row.stack_slice);
-        v.extend_from_slice(&(row.jumps.len() as u32).to_be_bytes());
-        for jump in &row.jumps {
-            v.extend_from_slice(&jump.target_pc.to_be_bytes());
-            v.extend_from_slice(&jump.stack_offset.to_be_bytes());
-            v.extend_from_slice(&jump.locals_len.to_be_bytes());
-            id_map(v, &jump.id_map);
-            v.extend_from_slice(&jump.call_depth_offset.to_be_bytes());
-            crate::slot_codec::encode_slot(&jump.env, v);
-            v.push(jump.flag);
-        }
-        v.extend_from_slice(&row.resume_pc.to_be_bytes());
-    }
     let mut v = Vec::new();
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
@@ -2175,90 +2176,93 @@ pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> 
             None => v.push(0),
             Some(saved) => {
                 v.push(1);
-                frame(&mut v, saved);
+                encode_saved_frame(&mut v, saved);
             }
         }
     }
     v
 }
 
+fn u64_value(c: &mut Cursor<'_>) -> Result<u64, SnapshotError> {
+    Ok(((c.u32()? as u64) << 32) | c.u32()? as u64)
+}
+fn boolean(c: &mut Cursor<'_>) -> Result<bool, SnapshotError> {
+    match c.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(SnapshotError::Corrupt("generator frame: bad boolean byte")),
+    }
+}
+fn decode_frame_slots(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / SLOT_RECORD_BYTES));
+    for _ in 0..count {
+        rows.push(c.slot()?);
+    }
+    Ok(rows)
+}
+fn decode_frame_id_map(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<(u16, u64)>, SnapshotError> {
+    let count = c.u32()? as usize;
+    let mut rows: Vec<(u16, u64)> = Vec::with_capacity(count.min(p.len() / 10));
+    for _ in 0..count {
+        let row = (c.u16()?, u64_value(c)?);
+        if rows.last().is_some_and(|previous| row.0 <= previous.0) {
+            return Err(SnapshotError::Corrupt(
+                "generator frame: id map not strictly ascending",
+            ));
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+fn decode_saved_frame(
+    c: &mut Cursor<'_>,
+    p: &[u8],
+) -> Result<ironhorse_vm::SavedFrameRow, SnapshotError> {
+    let locals = decode_frame_slots(c, p)?;
+    let frame_id_map = decode_frame_id_map(c, p)?;
+    let args = decode_frame_slots(c, p)?;
+    let this_val = c.slot()?;
+    let env = c.slot()?;
+    let cur_func = c.u32()?;
+    let cur_target = boolean(c)?;
+    let target_func = c.u32()?;
+    let strict = boolean(c)?;
+    let result = c.slot()?;
+    let stack_slice = decode_frame_slots(c, p)?;
+    let jump_count = c.u32()? as usize;
+    let mut jumps = Vec::with_capacity(jump_count.min(p.len() / 50));
+    for _ in 0..jump_count {
+        jumps.push(ironhorse_vm::SavedJumpRow {
+            target_pc: u64_value(c)?,
+            stack_offset: u64_value(c)?,
+            locals_len: u64_value(c)?,
+            id_map: decode_frame_id_map(c, p)?,
+            call_depth_offset: u64_value(c)?,
+            env: c.slot()?,
+            flag: c.u8()?,
+        });
+    }
+    Ok(ironhorse_vm::SavedFrameRow {
+        locals,
+        id_map: frame_id_map,
+        args,
+        this_val,
+        env,
+        cur_func,
+        cur_target,
+        target_func,
+        strict,
+        result,
+        stack_slice,
+        jumps,
+        resume_pc: u64_value(c)?,
+    })
+}
+
 pub(crate) fn decode_generators(
     p: &[u8],
 ) -> Result<Vec<ironhorse_vm::GeneratorRow>, SnapshotError> {
-    fn u64_value(c: &mut Cursor<'_>) -> Result<u64, SnapshotError> {
-        Ok(((c.u32()? as u64) << 32) | c.u32()? as u64)
-    }
-    fn boolean(c: &mut Cursor<'_>) -> Result<bool, SnapshotError> {
-        match c.u8()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(SnapshotError::Corrupt("generator frame: bad boolean byte")),
-        }
-    }
-    fn slots(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
-        let count = c.u32()? as usize;
-        let mut rows = Vec::with_capacity(count.min(p.len() / SLOT_RECORD_BYTES));
-        for _ in 0..count {
-            rows.push(c.slot()?);
-        }
-        Ok(rows)
-    }
-    fn id_map(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<(u16, u64)>, SnapshotError> {
-        let count = c.u32()? as usize;
-        let mut rows: Vec<(u16, u64)> = Vec::with_capacity(count.min(p.len() / 10));
-        for _ in 0..count {
-            let row = (c.u16()?, u64_value(c)?);
-            if rows.last().is_some_and(|previous| row.0 <= previous.0) {
-                return Err(SnapshotError::Corrupt(
-                    "generator frame: id map not strictly ascending",
-                ));
-            }
-            rows.push(row);
-        }
-        Ok(rows)
-    }
-    fn frame(c: &mut Cursor<'_>, p: &[u8]) -> Result<ironhorse_vm::SavedFrameRow, SnapshotError> {
-        let locals = slots(c, p)?;
-        let frame_id_map = id_map(c, p)?;
-        let args = slots(c, p)?;
-        let this_val = c.slot()?;
-        let env = c.slot()?;
-        let cur_func = c.u32()?;
-        let cur_target = boolean(c)?;
-        let target_func = c.u32()?;
-        let strict = boolean(c)?;
-        let result = c.slot()?;
-        let stack_slice = slots(c, p)?;
-        let jump_count = c.u32()? as usize;
-        let mut jumps = Vec::with_capacity(jump_count.min(p.len() / 50));
-        for _ in 0..jump_count {
-            jumps.push(ironhorse_vm::SavedJumpRow {
-                target_pc: u64_value(c)?,
-                stack_offset: u64_value(c)?,
-                locals_len: u64_value(c)?,
-                id_map: id_map(c, p)?,
-                call_depth_offset: u64_value(c)?,
-                env: c.slot()?,
-                flag: c.u8()?,
-            });
-        }
-        Ok(ironhorse_vm::SavedFrameRow {
-            locals,
-            id_map: frame_id_map,
-            args,
-            this_val,
-            env,
-            cur_func,
-            cur_target,
-            target_func,
-            strict,
-            result,
-            stack_slice,
-            jumps,
-            resume_pc: u64_value(c)?,
-        })
-    }
-
     let mut c = Cursor::new(p, "generators");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 6));
@@ -2278,7 +2282,7 @@ pub(crate) fn decode_generators(
         }
         let saved = match c.u8()? {
             0 => None,
-            1 => Some(frame(&mut c, p)?),
+            1 => Some(decode_saved_frame(&mut c, p)?),
             _ => return Err(SnapshotError::Corrupt("generators: bad frame tag")),
         };
         if (state == 2) != saved.is_none() {
@@ -2290,6 +2294,45 @@ pub(crate) fn decode_generators(
             state,
             owner,
             frame: saved,
+        });
+    }
+    c.done()?;
+    Ok(rows)
+}
+
+/// Async activations (`ASYN`), sharing the generator saved-frame encoding.
+pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::AsyncRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&row.result_promise.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.resolve, &mut v);
+        crate::slot_codec::encode_slot(&row.reject, &mut v);
+        encode_saved_frame(&mut v, &row.frame);
+    }
+    v
+}
+
+pub(crate) fn decode_async_instances(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::AsyncRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "async instances");
+    let count = c.u32()? as usize;
+    let mut rows: Vec<ironhorse_vm::AsyncRow> = Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows.last().is_some_and(|row| owner <= row.owner) {
+            return Err(SnapshotError::Corrupt(
+                "async instances: owners not strictly ascending",
+            ));
+        }
+        rows.push(ironhorse_vm::AsyncRow {
+            owner,
+            result_promise: c.u32()?,
+            resolve: c.slot()?,
+            reject: c.slot()?,
+            frame: decode_saved_frame(&mut c, p)?,
         });
     }
     c.done()?;
@@ -2349,7 +2392,7 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 /// discipline every compound atom follows (a view names a buffer row, a
 /// generator frame names a function row):
 ///
-/// - an async-flavored reaction kind (bytes 3–10) is refused by name —
+/// - async generators and Array.fromAsync (bytes 4–10) are refused by name —
 ///   it would resume machinery no atom carries, and the persist gate
 ///   refuses the machine before an honest writer can emit one; byte 11 is the
 ///   resumable second half of `Promise.prototype.finally`, and byte 12 is a
@@ -2412,7 +2455,7 @@ pub(crate) fn decode_promise_cluster(
             let resolve = c.slot()?;
             let reject = c.slot()?;
             let kind = c.u8()?;
-            if kind > 2 && kind != 11 && kind != 12 {
+            if kind > 3 && kind != 11 && kind != 12 {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: reaction kind does not resume",
                 ));
@@ -2596,6 +2639,14 @@ pub(crate) fn decode_promise_cluster(
                         "promise cluster: malformed direct combinator callback"
                     }));
                 }
+            } else if r.kind == 3 {
+                if r.b != 0
+                    || ![r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                        .iter()
+                        .all(|slot| slot.kind == Kind::Undefined)
+                {
+                    return Err(SnapshotError::Corrupt("async reaction: invalid payload"));
+                }
             } else {
                 let both_references =
                     r.resolve.kind == Kind::Reference && r.reject.kind == Kind::Reference;
@@ -2645,6 +2696,7 @@ pub(crate) fn decode_promise_cluster(
         functions,
         guards,
         combinators,
+        async_instances: Vec::new(),
     })
 }
 
@@ -3442,6 +3494,7 @@ static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
         functions: Vec::new(),
         guards: Vec::new(),
         combinators: Vec::new(),
+        async_instances: Vec::new(),
     };
 
 static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
@@ -3956,9 +4009,19 @@ pub(crate) fn check_image_slot_bounds(
     }
     let mut body_starts: std::collections::HashMap<u32, std::collections::BTreeSet<u64>> =
         std::collections::HashMap::new();
-    for row in lang.generators {
-        owned(row.owner)?;
-        let Some(frame) = &row.frame else {
+    for (owner, frame) in lang
+        .generators
+        .iter()
+        .map(|row| (row.owner, row.frame.as_ref()))
+        .chain(
+            lang.promise_cluster
+                .async_instances
+                .iter()
+                .map(|row| (row.owner, Some(&row.frame))),
+        )
+    {
+        owned(owner)?;
+        let Some(frame) = frame else {
             continue;
         };
         owned(frame.cur_func)?;
@@ -4117,6 +4180,60 @@ pub(crate) fn check_image_slot_bounds(
             check(&r.on_rejected)?;
             check(&r.resolve)?;
             check(&r.reject)?;
+        }
+    }
+    let mut awaited = std::collections::BTreeSet::new();
+    for reaction in lang
+        .promise_cluster
+        .promises
+        .iter()
+        .flat_map(|p| &p.reactions)
+    {
+        if reaction.kind == 3
+            && (!awaited.insert(reaction.a)
+                || lang
+                    .promise_cluster
+                    .async_instances
+                    .binary_search_by_key(&reaction.a, |a| a.owner)
+                    .is_err())
+        {
+            return Err(SnapshotError::Corrupt(
+                "async reaction: missing or duplicate activation",
+            ));
+        }
+    }
+    for row in &lang.promise_cluster.async_instances {
+        owned(row.owner)?;
+        owned(row.result_promise)?;
+        check(&row.resolve)?;
+        check(&row.reject)?;
+        let function = |slot: &Slot| match slot.value {
+            Payload::Reference(owner) => lang
+                .promise_cluster
+                .functions
+                .binary_search_by_key(&owner.0, |f| f.function)
+                .ok()
+                .map(|i| &lang.promise_cluster.functions[i]),
+            _ => None,
+        };
+        let pair = matches!((function(&row.resolve), function(&row.reject)), (Some(a), Some(b))
+            if a.promise == row.result_promise && b.promise == row.result_promise
+                && !a.reject && b.reject && a.guard == b.guard
+                && (a.guard as usize) < lang.promise_cluster.guards.len()
+                && !lang.promise_cluster.guards[a.guard as usize]);
+        if !pair
+            || !awaited.contains(&row.owner)
+            || lang
+                .promise_cluster
+                .promises
+                .binary_search_by_key(&row.result_promise, |p| p.owner)
+                .is_err()
+            || row.resolve.kind != Kind::Reference
+            || row.reject.kind != Kind::Reference
+        {
+            return Err(SnapshotError::Corrupt(
+                "async activation: invalid promise capability or anchor",
+            ));
         }
     }
     for row in &lang.promise_cluster.functions {
@@ -4439,6 +4556,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
     // pre-floor container.
+    if !image.promise_cluster.async_instances.is_empty() {
+        w.atom(
+            crate::format::ASYN,
+            &encode_async_instances(&image.promise_cluster.async_instances),
+        );
+    }
     if let Some(floor) = image.name_floor {
         w.atom(crate::format::NFLR, &floor.to_be_bytes());
     }
@@ -4711,10 +4834,13 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => Vec::new(),
     };
     let generators = match r.find(crate::format::GENR) {
-        Some(a) => present_and_non_empty(decode_generators(a.payload)?, "GENR atom present but empty; the writer omits it")?,
+        Some(a) => present_and_non_empty(
+            decode_generators(a.payload)?,
+            "GENR atom present but empty; the writer omits it",
+        )?,
         None => Vec::new(),
     };
-    let promise_cluster = match r.find(crate::format::PRMS) {
+    let mut promise_cluster = match r.find(crate::format::PRMS) {
         Some(a) => {
             let cluster = decode_promise_cluster(a.payload)?;
             if cluster.is_empty() {
@@ -4725,6 +4851,13 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             cluster
         }
         None => ironhorse_vm::PromiseClusterSnapshot::default(),
+    };
+    promise_cluster.async_instances = match r.find(crate::format::ASYN) {
+        Some(a) => present_and_non_empty(
+            decode_async_instances(a.payload)?,
+            "ASYN atom present but empty",
+        )?,
+        None => Vec::new(),
     };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {

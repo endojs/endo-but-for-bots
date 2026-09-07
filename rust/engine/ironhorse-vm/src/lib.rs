@@ -41,16 +41,15 @@ pub use compartment::{
 };
 pub use gc::{GcStats, Heap};
 pub use interp::{
-    dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, BoundFunctionRow,
-    CollatorData, CollectionSnapshot, CompiledSource, DateTimeFormatData, DisposableStackRow,
-    DisposalRecordRow, FunctionRow, FunctionStateSnapshot, GeneratorRow, Halt, Interp,
-    IntlBoundFunctionRow, IntlTables, IteratorRow, ListFormatData, LocaleData, Native,
-    CombinatorRow, NumberFormatData, PluralRulesData, PrivateAccessorRow, PrivateElementSnapshot,
-    PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseReactionRow, PromiseRow,
-    PanicKind, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError, RunOutcome,
-    SavedFrameRow, SavedJumpRow,
-    SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
-    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
+    dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, AsyncRow,
+    BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, CompiledSource,
+    DateTimeFormatData, DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot,
+    GeneratorRow, Halt, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow, ListFormatData,
+    LocaleData, Native, NumberFormatData, PluralRulesData, PrivateAccessorRow,
+    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow,
+    PromiseReactionRow, PromiseRow, PanicKind, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError,
+    RunOutcome, SavedFrameRow, SavedJumpRow, SegmentIteratorData, SegmenterData, SegmentsData,
+    SourceCompileError, SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{

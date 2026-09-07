@@ -352,7 +352,7 @@ fn a_held_resolver_persists_in_every_former_refusal_holder() {
 /// object whose row every `.next()` consults. Each refuses by name,
 /// on every verb, writing nothing.
 #[test]
-fn a_pending_await_refuses_every_persist_verb() {
+fn a_pending_await_is_now_carried() {
     let (b, n) = compile(
         "var p = 0; var t = 0; \
          p = (async function () { await new Promise(function (rs, rj) {}); })(); t = 7; t",
@@ -361,10 +361,9 @@ fn a_pending_await_refuses_every_persist_verb() {
     m.link_intrinsics(&n);
     let out = m.run(&b);
     assert!(out.completed, "fixture crank: {:?}", out.halt);
-    assert_every_persist_verb_refuses(
-        m,
-        "a promise reaction that would resume a non-persisted async frame",
-    );
+    assert!(m.write_snapshot(&sig()).is_ok());
+    let mut store = MemoryStore::new();
+    assert!(begin_store_session(m, &sig(), &mut store).is_ok());
 }
 
 #[test]

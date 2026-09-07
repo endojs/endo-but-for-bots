@@ -296,7 +296,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // `Symbol(desc)` started coercing its argument at construction, so
         // the accessor has something to return). Boot-layout signature
         // generation 19; format unchanged.
-        "9af19100e0b18e29b033a6c404b2999d40909b068ac51cd4b58b9130c33b71be",
+        // Re-pinned for format 13 (ASYN) and boot generation 21: SES
+        // intrinsic reflection changes the boot heap and linked surfaces.
+        "9a258493722cb2b4d656832ee9f04164dc35e025d00abed48d1990fe542b048a",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -493,7 +495,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob on 2026-09-07 for the boot-minted
         // `get Symbol.prototype.description` accessor function, with boot
         // generation 19. Schema and format remain unchanged.
-        "92a146c1073483f2dc3541de2656ba42205981ada11a826bbff033180e6c98b6",
+        // Re-pinned with the blob for format 13 and boot generation 21,
+        // plus schema 24 adding the async-activation small-state section.
+        "869d192fd050a1d49214cda1e5303c471a981494a5dee0c4815eacf8f7417250",
         "epoch-3 seal chain"
     );
 }
