@@ -21,7 +21,9 @@
     "./account.js": "./src/account.js",
     "./account-oracle.js": "./src/account-oracle.js",
     "./turn-ledger.js": "./src/turn-ledger.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./provider-broker.js": "./src/provider-broker.js",
+    "./provider-transport.js": "./src/provider-transport.js"
   },
   "scripts": {
     "build": "exit 0",

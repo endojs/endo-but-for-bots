@@ -22,7 +22,8 @@
     "./backend-factory.js": "./backend-factory.js",
     "./app-server-transport.js": "./app-server-transport.js",
     "./protocol.js": "./protocol.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./sandbox-policy.js": "./src/sandbox-policy.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -46,7 +47,8 @@
     "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "ava": "catalog:dev",
-    "eslint": "catalog:dev"
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
   },
   "ava": {
     "files": [
