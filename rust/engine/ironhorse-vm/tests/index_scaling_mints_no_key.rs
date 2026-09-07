@@ -9,13 +9,22 @@
 //! each of them a one-line denial of service on the whole engine:
 //!
 //! ```js
-//! Object.freeze(bigArray)                       // and seal, and harden
+//! Object.freeze(bigArray)                       // and seal
+//! harden(bigArray)                              // and petrify
 //! Array.from({length: 70000})
 //! Array.from(sparseBigArray)                    // and [...sparseBigArray]
 //! Array.prototype.map.call(new Proxy(a, {}), f) // and every generic read
 //! JSON.parse(json, (k, v) => v)                 // an identity reviver
 //! Object.getOwnPropertyNames(new Proxy(a, {ownKeys}))
+//! Object.keys(new Proxy(bigArray, {}))          // and values, and entries
 //! ```
+//!
+//! Each built-in had to be found separately, because each carries its own key
+//! loop. Fixing `set_integrity_level` did not fix `harden`, which reimplements
+//! it; fixing `getOwnPropertyNames` over a Proxy did not fix `Object.keys`
+//! over one, which is the spelling people actually write. A pin that names
+//! only the shape it was written for will keep passing while its neighbour
+//! poisons the machine.
 //!
 //! XS mints on none of them: an index reaches `mxBehaviorGetProperty` /
 //! `mxBehaviorDefineOwnProperty` as `(XS_NO_ID, index)`, addressing an item
@@ -517,5 +526,193 @@ fn object_assign_still_copies_only_enumerable_own_keys() {
              seen.push('get:' + String(k)); return t[k]; }}); \
          JSON.stringify(Object.assign({}, src)) + '#' + seen.join(',')",
         "{\"0\":7,\"1\":8}#get:0,get:1",
+    );
+}
+
+// ------------------------------------ Object.keys / values / entries (Proxy)
+
+/// The far more common spelling than `getOwnPropertyNames`, and the one the
+/// first pass missed: `object_static_proxy` has its own loop, so the pin above
+/// passed only because it happened to use `getOwnPropertyNames`.
+#[test]
+fn object_keys_over_a_proxy_over_a_large_array_mints_no_key() {
+    let setup = format!("{} var p = new Proxy(a, {{}});", big());
+    assert_result(&format!("{setup} Object.keys(p).length"), "70000");
+    assert_result(&format!("{setup} Object.values(p).length"), "70000");
+    assert_result(&format!("{setup} Object.entries(p).length"), "70000");
+}
+
+#[test]
+fn object_keys_over_a_proxy_still_answers_the_same() {
+    assert_result(
+        "var s = Object('abc'); Object.keys(new Proxy(s, {})).join(',')",
+        "0,1,2",
+    );
+    assert_result(
+        "var s = Object('abc'); Object.values(new Proxy(s, {})).join(',')",
+        "a,b,c",
+    );
+    assert_result(
+        "JSON.stringify(Object.entries(new Proxy([7, 8], {})))",
+        "[[\"0\",7],[\"1\",8]]",
+    );
+    // A non-enumerable own key is still skipped, by both keys and values.
+    assert_result(
+        "var t = {}; Object.defineProperty(t, '0', {value: 1, enumerable: false}); \
+         Object.keys(new Proxy(t, {})).join(',') + '|' \
+         + Object.values(new Proxy(t, {})).length",
+        "|0",
+    );
+    // Every trap is still called, once each, in the same order.
+    assert_result(
+        "var log = []; \
+         var p = new Proxy([7, 8], { \
+             get: function (t, k) { log.push('g:' + String(k)); return t[k]; }, \
+             getOwnPropertyDescriptor: function (t, k) { \
+                 log.push('d:' + String(k)); return Reflect.getOwnPropertyDescriptor(t, k); }, \
+             ownKeys: function (t) { log.push('k'); return Reflect.ownKeys(t); }}); \
+         Object.values(p).join(',') + '#' + log.join(',')",
+        "7,8#k,d:0,g:0,d:1,g:1,d:length",
+    );
+}
+
+// ------------------------------------------------------- harden and petrify
+
+/// `Object.freeze` of a large array was taught not to mint; `harden` — the
+/// entry point a SES-shaped engine actually calls — has its OWN key loop and
+/// was left behind, so the same freeze still poisoned the machine.
+#[test]
+fn hardening_a_large_array_mints_no_key() {
+    assert_result(
+        &format!("{} harden(a); String(Object.isFrozen(a))", big()),
+        "true",
+    );
+}
+
+/// A String wrapper's units are NOT skipped: XS's `fx_harden` clears its
+/// `useIndexes` flag only for a TypedArray (`xsLockdown.c:232`), so every unit
+/// is reached and defined. Defining one creates nothing — an in-range index is
+/// already immutable, and the answer is only whether the descriptor is
+/// compatible — so it needs no name, which is what lets this complete.
+#[test]
+fn hardening_a_large_string_wrapper_mints_no_key() {
+    assert_result(
+        &format!(
+            "var s = new String('x'.repeat({N})); harden(s); \
+             String(Object.isFrozen(s)) + '|' + s[0] + '|' + s.length"
+        ),
+        "true|x|70000",
+    );
+}
+
+#[test]
+fn petrifying_a_large_array_mints_no_key() {
+    assert_result(
+        &format!("{} petrify(a); String(Object.isFrozen(a))", big()),
+        "true",
+    );
+}
+
+#[test]
+fn harden_and_petrify_still_answer_the_same() {
+    // harden is transitive; petrify is not.
+    assert_result(
+        "var o = harden({a: 1, b: {c: 2}}); \
+         String(Object.isFrozen(o)) + '|' + String(Object.isFrozen(o.b))",
+        "true|true",
+    );
+    assert_result(
+        "var o = petrify({a: 1, b: {c: 2}}); \
+         String(Object.isFrozen(o)) + '|' + String(Object.isFrozen(o.b))",
+        "true|false",
+    );
+    assert_result(
+        "var a = harden([1, 2, 3]); String(Object.isFrozen(a)) + '|' + a.join(',')",
+        "true|1,2,3",
+    );
+    // A String wrapper's synthetic indices are already immutable and are
+    // skipped, not stamped — the `skip_indexes` branch that used to need a
+    // NAME to recognise an index.
+    assert_result(
+        "var s = Object('ab'); harden(s); String(Object.isFrozen(s)) + '|' + s[0]",
+        "true|a",
+    );
+    assert_result(
+        "var s = Object('ab'); petrify(s); String(Object.isFrozen(s))",
+        "true",
+    );
+    // The units really are stamped-compatible, not skipped-and-forgotten: the
+    // descriptor reads as non-writable and a write is refused.
+    assert_result(
+        "var s = Object('ab'); harden(s); \
+         JSON.stringify(Object.getOwnPropertyDescriptor(s, '0'))",
+        "{\"value\":\"a\",\"writable\":false,\"enumerable\":true,\"configurable\":false}",
+    );
+    assert_result(
+        "var s = Object('ab'); harden(s); try { s[0] = 'Z'; } catch (e) {} s[0]",
+        "a",
+    );
+    // An ordinary expando on the wrapper is still frozen alongside the units.
+    assert_result(
+        "var s = Object('ab'); s.x = 1; harden(s); String(Object.isFrozen(s)) + '|' \
+         + String(Object.getOwnPropertyDescriptor(s, 'x').writable)",
+        "true|false",
+    );
+    // A TypedArray's elements are likewise skipped, and it stays unfrozen.
+    assert_result(
+        "var t = new Uint8Array([1, 2]); harden(t); \
+         String(Object.isFrozen(t)) + '|' + t[0]",
+        "false|1",
+    );
+}
+
+// ------------------------------------------------------------- object rest
+
+/// The un-fixed twin of `Object.assign`'s source side: naming ran before both
+/// the excluded-key filter and the enumerability test, so a key the pattern
+/// throws away still cost an id.
+///
+/// This does NOT make every rest pattern scale — a key that is actually COPIED
+/// creates a property on an ordinary target, which in this representation
+/// needs a name (the standing limit documented for `o[i] = v`). What it fixes
+/// is the keys that are skipped, which used to cost exactly as much as the
+/// ones that were kept.
+#[test]
+fn object_rest_mints_nothing_for_a_key_it_skips() {
+    assert_result(
+        &format!(
+            "{} var p = new Proxy(a, {{ \
+                 getOwnPropertyDescriptor: function (t, k) {{ \
+                     return k === 'length' \
+                         ? {{value: 1, enumerable: true, configurable: true}} \
+                         : {{value: 1, enumerable: false, configurable: true}}; }}, \
+                 ownKeys: function (t) {{ return Object.getOwnPropertyNames(t); }}}}); \
+             var {{length, ...rest}} = p; Object.keys(rest).length",
+            big()
+        ),
+        "0",
+    );
+}
+
+#[test]
+fn object_rest_still_copies_the_right_keys() {
+    assert_result(
+        "var s = Object('abc'); var {length, ...rest} = s; JSON.stringify(rest)",
+        "{\"0\":\"a\",\"1\":\"b\",\"2\":\"c\"}",
+    );
+    assert_result(
+        "var o = {a: 1, b: 2, c: 3}; var {a, ...rest} = o; JSON.stringify(rest)",
+        "{\"b\":2,\"c\":3}",
+    );
+    // An INDEX as the excluded key — the case the `ReadKey` comparison has to
+    // get right, since one side may be spelled `Index` and the other `Id`.
+    assert_result(
+        "var a = [1, 2, 3]; var {0: first, ...rest} = a; JSON.stringify(rest)",
+        "{\"1\":2,\"2\":3}",
+    );
+    assert_result(
+        "var o = {}; Object.defineProperty(o, 'h', {value: 1, enumerable: false}); \
+         o.v = 2; var {...r} = o; JSON.stringify(r)",
+        "{\"v\":2}",
     );
 }
