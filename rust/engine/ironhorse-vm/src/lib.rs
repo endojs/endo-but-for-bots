@@ -250,7 +250,7 @@ mod tests {
         // Settled core:
         assert!(Halt::StackOverflow(3).is_panic());
         assert!(Halt::MeterAbort.is_panic());
-        assert!(Halt::EngineInvariant("test invariant").is_panic());
+        assert!(Halt::EngineInvariant("bitwise:stack-underflow").is_panic());
         assert!(Halt::Panic(PanicKind::EngineFault {
             message: "arena kind check".to_string(),
             location: None,
