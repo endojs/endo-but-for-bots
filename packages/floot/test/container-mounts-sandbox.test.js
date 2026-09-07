@@ -405,7 +405,7 @@ test('the last detach recreates without the bind, then releases the 9P mount', a
   t.deepEqual([...world.storedRecords()], []);
 });
 
-test('terminate releases every runtime bridge the client was handed', async t => {
+test('terminate leaves the bridges to the registrar that minted them', async t => {
   const world = makeWorld();
   world.capsById.set('cap-a', mountShapedCap());
   world.capsById.set('cap-b', mountShapedCap());
@@ -428,17 +428,21 @@ test('terminate releases every runtime bridge the client was handed', async t =>
     '/mnt/b': 'rw',
   });
 
-  // terminate() destroys the whole CLI environment, not one session's view
-  // of it, so both bridges the registrar handed in are unmounted.
+  // A bridge is three things — a kernel mount, a daemon Mount pet name, and
+  // the provider's cache entry — and only the provider drops all three
+  // together. If terminate unmounted the handles here, the provider's cache
+  // would still hold them under their DETERMINISTIC keys, and the next
+  // request for the same key would be served a Mount cap over an empty
+  // directory that the slice binds without complaint.
   await incarnation.client.terminate();
-  t.deepEqual(
-    [...world.attachUnmounts()].sort(),
-    world
-      .attachMounts()
-      .map(mount => mount.mountPoint)
-      .sort(),
-  );
+  t.deepEqual(world.attachUnmounts(), []);
+  t.is(world.attachMountNames().length, 2);
+
+  // The registrar is what releases them, and it still can.
+  await registrar.releaseSession('sess-mnt');
   t.is(world.attachUnmounts().length, 2);
+  t.deepEqual(world.attachMountNames(), []);
+  t.deepEqual([...world.storedRecords()], []);
 });
 
 test('an attach the bridge refuses leaves no record and no bind', async t => {

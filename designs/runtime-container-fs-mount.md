@@ -35,9 +35,10 @@ Built:
   records the runtime bind set; a live slice is disposed and immediately
   re-minted with `mounts = workspace + extras` (the in-flight turn aborts
   with a recreate-labelled reason), while an unprovisioned client binds the
-  set on its next lazy provision. `terminate()` additionally unmounts every
-  extra's 9P handle; a mere recreate never touches them (the registrar owns
-  them across recreates).
+  set on its next lazy provision. Neither a recreate nor `terminate()`
+  touches an extra's 9P handle: the registrar owns every bridge, because
+  releasing one also means dropping its daemon `Mount` pet name and the
+  provider's cache entry for it (see *Who releases a bridge* below).
 - Tests: `packages/floot/test/container-mounts.test.js` (the registrar
   against fakes), `packages/claude-sandbox/test/container-mount-bridge.test.js`
   (the 9P bridge), recreate coverage in
@@ -47,8 +48,8 @@ Built:
   pieces wired together with only the daemon host agent, the 9P mounter and
   the sandbox factory faked: a held cap becomes a `/mnt/` bind in the
   slice's mount list, survives a restart of every worker-local map, honours
-  `ro` at all three layers, and releases its bridge on last detach and on
-  terminate.
+  `ro` at all three layers, is released by the registrar on last detach, and
+  outlives a `terminate()` that has no business releasing it.
 
 ### Not yet wired
 
@@ -128,6 +129,17 @@ consequence of the design as written, not an oversight in the code.
   caller releases a session whose client stays alive, the container keeps the
   bind until its slice is next disposed. The wiring sketch above puts
   `releaseSession` after the client removal for exactly this reason.
+- **No timeout on the recreate teardown.** Every step of it — dispose, unmount,
+  revoke — is wrapped so a *rejection* cannot wedge the gate, but a call that
+  never settles (an unresponsive slice worker, an unreachable 9P mounter)
+  leaves `pendingTeardown` unresolved, and every later turn chains behind it.
+  `terminate()` has always had the same shape; attach makes it reachable from a
+  hotter path.
+- **The bridge trusts its caller to derive keys.** `assertBridgeKey` rejects
+  anything that could escape the mountpoint base, but the mount pet name it
+  builds (`claude-attach-<key>`) shares a namespace with the workspace name
+  (`claude-<sessionId>-workspace`). The registrar's keys are content hashes, so
+  it cannot collide; another caller passing literal keys could.
 - **The overlap check sees only other attaches.** `/mnt/` is assumed disjoint
   from the slice's own binds, which holds while `WORKSPACE_PATH` is
   `/workspace`. A deployment that set it under `/mnt/` could let a guest attach
@@ -308,9 +320,33 @@ of session ids) for `(capId, innerPath)` on the **shared `ClaudeClient`**.
 call `removeMount` for the session mount pet name, and drop the bind on the
 next slice.
 
-**`ClaudeClient.terminate()`** still disposes the slice and unmounts **all**
-mounts (workspace, config, extras) — destroying the shared CLI environment, not
-equivalent to one session's detach.
+**`ClaudeClient.terminate()`** disposes the slice and unmounts the mounts it
+owns — the workspace, and the config dir when the CLI runtime adds one. It
+does **not** unmount the runtime-attached extras; see below.
+
+### Who releases a bridge
+
+The registrar mints every bridge and is the only thing that releases one,
+including when the client it was bound into terminates.
+
+The sketch originally had `terminate()` unmount each extra's 9P handle, on the
+reasoning that terminate destroys the whole CLI environment rather than one
+session's view of it. That is wrong in a way adversarial review made concrete.
+A bridge is three things — a kernel 9P mount, a daemon `Mount` pet name, and
+the provider's cache entry — and only the provider can drop all three
+together. Unmounting the handle from the client tears down the first while the
+other two still point at it. Because bridge keys are **deterministic**, the
+next request for that same `(key, capId, mode)` — a restart replay, a retry, a
+second session attaching the same cap at the same path — hits the provider's
+cache and is handed the stale `Mount` cap. The slice binds it without error,
+and `git` inside the container runs against an empty directory. Silently, on
+the design's primary use case.
+
+So the client only ever binds. The cost is that a client terminated without a
+corresponding `detach` or `releaseSession` leaves its bridges up until the
+registrar drops the records — a bounded, visible leak (the mounts are listed
+by the mounter, the names are in the petstore, and the records are in the
+journal) rather than a silent wrong answer.
 
 ### Immediate slice recreate (MVP)
 

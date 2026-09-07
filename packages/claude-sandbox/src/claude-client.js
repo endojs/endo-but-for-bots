@@ -164,9 +164,10 @@ const defaultStderrIterable = proc =>
  * @property {string} innerPath - Slice-internal path, under `/mnt/`.
  * @property {'ro' | 'rw'} mode
  * @property {{ unmount: () => Promise<void> }} [handle] - Host-side 9P mount
- *   handle backing the cap. The attach registrar owns it across slice
- *   recreates; `terminate()` still unmounts it, because terminate destroys
- *   the whole CLI environment rather than one bind.
+ *   handle backing the cap, carried for diagnostics. The attach registrar
+ *   owns it — across recreates AND across `terminate()` — because releasing
+ *   a bridge also means dropping its daemon Mount pet name and the
+ *   provider's cache entry. The client never unmounts it.
  */
 
 /**
@@ -297,6 +298,11 @@ export const makeClaudeClient = ({
   // (lazy) provision.
   /** @type {readonly ExtraMountSpec[]} */
   let extraMounts = harden([]);
+  // The exact `extraMounts` array the live (or in-flight) provision went in
+  // with. Identity, not contents: `extraMounts` is replaced wholesale, so a
+  // match means the provision read this very set.
+  /** @type {readonly ExtraMountSpec[]} */
+  let provisionedExtras = harden([]);
   // True while a recreate is tearing down the live slice, so the killed
   // in-flight turn's abort reason names the recreate instead of a bare
   // signal.
@@ -333,9 +339,17 @@ export const makeClaudeClient = ({
       // mounts, and a fresh credential grant with no owner left to release
       // them.
       guardLive();
-      const pending = pendingTeardown.then(() =>
-        /** @type {NonNullable<typeof provision>} */ (provision)(extraMounts),
-      );
+      const pending = pendingTeardown.then(() => {
+        // Read the bind set at the moment the provision actually starts, not
+        // when it was scheduled, and record WHICH set it went in with. A
+        // `setExtraMounts` racing a first `send()` can land in between, and
+        // without this the recreate branch could not tell that the provision
+        // it is about to tear down already carries the new binds.
+        provisionedExtras = extraMounts;
+        return /** @type {NonNullable<typeof provision>} */ (provision)(
+          extraMounts,
+        );
+      });
       provisioned = pending;
       // A transient provisioning failure (image pull, 9P mount EPERM,
       // slice mint) must not permanently brick the session: drop the
@@ -580,6 +594,28 @@ export const makeClaudeClient = ({
           X`ClaudeClient(${q(sessionId)}): extra mounts require a lazily-provisioned client (no provision thunk to recreate the slice with)`,
         );
       }
+      // Validate at the boundary, where the values genuinely arrive untyped:
+      // the interface guard admits any copyRecord, and a `mode` that is
+      // neither "ro" nor "rw" must fail CLOSED. Coercing an unrecognized
+      // value to read-write would widen a bind the caller may well have
+      // meant to be read-only.
+      for (const extra of extras) {
+        if (extra.mode !== 'ro' && extra.mode !== 'rw') {
+          throw makeError(
+            X`ClaudeClient(${q(sessionId)}): extra mount ${q(extra.innerPath)} has mode ${q(extra.mode)}; expected "ro" or "rw"`,
+          );
+        }
+        if (typeof extra.innerPath !== 'string' || extra.innerPath === '') {
+          throw makeError(
+            X`ClaudeClient(${q(sessionId)}): every extra mount needs a non-empty innerPath`,
+          );
+        }
+        if (!extra.cap) {
+          throw makeError(
+            X`ClaudeClient(${q(sessionId)}): extra mount ${q(extra.innerPath)} has no capability to bind`,
+          );
+        }
+      }
       extraMounts = harden([...extras]);
       if (provisioned === undefined) {
         // Nothing live: the new set binds on the next (lazy) provision.
@@ -602,6 +638,15 @@ export const makeClaudeClient = ({
           } catch {
             // The prior provision failed and already cleaned up after
             // itself; the next provision binds the new set.
+            return;
+          }
+          if (provisionedExtras === extraMounts) {
+            // A provision that was already in flight when this call landed
+            // read the new set on its way in, so the live slice ALREADY
+            // carries these binds. Tearing it down to mint an identical one
+            // would kill the very first turn for nothing. Put the provision
+            // back and stop.
+            provisioned = prior;
             return;
           }
           // Dispose the slice first: it kills the in-flight `claude` (that
@@ -759,20 +804,19 @@ export const makeClaudeClient = ({
           // best-effort
         }
       }
-      // Runtime-attached extras destroyed too: terminate destroys the
-      // whole shared CLI environment, not one session's view of it, so
-      // every 9P bridge handed in with the attach set is released (a mere
-      // recreate never touches these). Done before the provisioned check —
-      // an attach can precede the first provision.
-      for (const extra of extraMounts) {
-        if (extra.handle) {
-          try {
-            await E(extra.handle).unmount();
-          } catch {
-            // best-effort; the bridge caplet also unmounts on teardown
-          }
-        }
-      }
+      // Runtime-attached extras are NOT unmounted here, and that is the
+      // point of `handle` being on the spec at all: only the attach
+      // registrar can release a bridge, because releasing one also means
+      // dropping the daemon Mount pet name and the provider's own cache
+      // entry for it. Unmounting the handle directly from here would tear
+      // down the kernel mount while both of those still pointed at it, and
+      // the provider — whose cache is keyed by a DETERMINISTIC key, so a
+      // replay asks for the same one — would then hand the next caller a
+      // Mount cap over an empty directory. The container would bind it
+      // without error and `git` would run against nothing.
+      //
+      // So the client only ever binds; the registrar mints and releases,
+      // on detach and when the last session reference goes away.
       // Only tear down what was actually provisioned. If the workspace
       // was never provisioned (lazy client that never ran), there is
       // no container or mount to release.

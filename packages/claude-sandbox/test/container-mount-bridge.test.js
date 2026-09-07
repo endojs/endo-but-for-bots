@@ -68,12 +68,19 @@ const makeBridgeHarness = (options = {}) => {
   });
   const mountCalls = [];
   const unmounts = [];
+  // Tests may make unmount reject, which is the failure the bridge must not
+  // paper over: minting again at the same deterministic mountpoint would
+  // stack a second 9P mount over the one still attached.
+  let unmountFails = false;
   const fsMounter = harden({
     async mount(fs, mountPoint, opts) {
       // A real 9P handle is an exo; the guard on the bridge result demands a
       // declared remotable, so the fake must be Far too.
       const handle = Far('FakeFs9pMountHandle', {
         async unmount() {
+          if (unmountFails) {
+            throw Error('umount: target is busy');
+          }
           unmounts.push(mountPoint);
         },
       });
@@ -96,6 +103,9 @@ const makeBridgeHarness = (options = {}) => {
     mountCalls,
     unmounts,
     provider,
+    failUnmounts: (/** @type {boolean} */ value) => {
+      unmountFails = value;
+    },
   };
 };
 
@@ -341,4 +351,95 @@ test('concurrent provides for one key mint a single 9P mount', async t => {
   t.is(h.mountCalls.length, 1);
   t.is(a.mountCap, b.mountCap);
   t.is(a.handle, b.handle);
+});
+
+test('a re-mint whose stale teardown fails is refused, not stacked', async t => {
+  const h = makeBridgeHarness();
+  h.byId.set(
+    'cap-s',
+    harden({ __getMethodNames__: () => ['entry', 'readText', 'writeText'] }),
+  );
+  await E(h.provider).provideContainerMountBridge(
+    harden({ key: 'stale', capId: 'cap-s', mode: 'rw' }),
+  );
+  t.is(h.mountCalls.length, 1);
+
+  // The same key with a different mode has to tear the stale bridge down
+  // first. If that unmount fails, the mountpoint is still attached — minting
+  // over it would stack two 9P mounts and leak the one underneath along with
+  // its bridge server and socket.
+  h.failUnmounts(true);
+  await t.throwsAsync(
+    () =>
+      E(h.provider).provideContainerMountBridge(
+        harden({ key: 'stale', capId: 'cap-s', mode: 'ro' }),
+      ),
+    { message: /could not release the stale bridge/ },
+  );
+  t.is(h.mountCalls.length, 1);
+
+  // The cache entry was put back, so the bridge is still reachable — a
+  // release can find it once the mountpoint frees up, and a matching
+  // request still gets the live bridge rather than a second mount.
+  h.failUnmounts(false);
+  await E(h.provider).provideContainerMountBridge(
+    harden({ key: 'stale', capId: 'cap-s', mode: 'rw' }),
+  );
+  t.is(h.mountCalls.length, 1);
+  await E(h.provider).releaseContainerMountBridge('stale');
+  t.deepEqual(h.unmounts, ['/attach-mounts/claude-attach-stale']);
+});
+
+test('a release whose unmount fails still drops the pet name', async t => {
+  const h = makeBridgeHarness();
+  h.byId.set(
+    'cap-r',
+    harden({ __getMethodNames__: () => ['entry', 'readText'] }),
+  );
+  await E(h.provider).provideContainerMountBridge(
+    harden({ key: 'relfail', capId: 'cap-r', mode: 'rw' }),
+  );
+  t.true(h.names.has('claude-attach-relfail'));
+
+  // The caller has already dropped whatever referenced this bridge, so
+  // refusing would only strand it silently. The name goes; the still-live
+  // mount is reported for an operator to reap.
+  h.failUnmounts(true);
+  await E(h.provider).releaseContainerMountBridge('relfail');
+  t.deepEqual(h.unmounts, []);
+  t.false(h.names.has('claude-attach-relfail'));
+
+  // And the key is free again: a later provide mints a fresh bridge rather
+  // than serving the one whose unmount failed.
+  h.failUnmounts(false);
+  await E(h.provider).provideContainerMountBridge(
+    harden({ key: 'relfail', capId: 'cap-r', mode: 'rw' }),
+  );
+  t.is(h.mountCalls.length, 2);
+});
+
+test('a provide and a release for one key do not interleave', async t => {
+  const h = makeBridgeHarness();
+  h.byId.set(
+    'cap-pr',
+    harden({ __getMethodNames__: () => ['entry', 'readText'] }),
+  );
+  await E(h.provider).provideContainerMountBridge(
+    harden({ key: 'prkey', capId: 'cap-pr', mode: 'rw' }),
+  );
+
+  // Issued together: without the per-key lock the release could remove the
+  // pet name the provide just registered, cancelling a Mount formula the
+  // cache still pointed at.
+  await Promise.all([
+    E(h.provider).releaseContainerMountBridge('prkey'),
+    E(h.provider).provideContainerMountBridge(
+      harden({ key: 'prkey', capId: 'cap-pr', mode: 'rw' }),
+    ),
+  ]);
+  // Whichever order they ran in, the surviving state is coherent: the live
+  // bridge's mountpoint is registered, and no mount is left without a name.
+  const registered = h.names.has('claude-attach-prkey');
+  const liveMounts = h.mountCalls.length - h.unmounts.length;
+  t.is(registered ? 1 : 0, liveMounts);
 });

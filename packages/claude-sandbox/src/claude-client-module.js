@@ -258,13 +258,16 @@ export const make = (powers, context, contextWrapper = {}) => {
             // Runtime-attached extras (designs/runtime-container-fs-mount.md):
             // caps the session guest holds, already bridged over 9P by the host
             // attach registrar and registered as daemon Mount caps. Read-write
-            // by default — the primary use case is modifying the cap's tree
-            // with in-slice Linux tools (git especially). Only the bind fields
-            // flow to the slice; the registrar's 9P handle stays host-side.
+            // is the intended default — the primary use case is modifying the
+            // cap's tree with in-slice Linux tools (git especially) — but an
+            // unrecognized mode resolves to `ro`, not `rw`: `setExtraMounts`
+            // rejects one outright, and this last line must not be the place a
+            // malformed value widens a bind. Only the bind fields flow to the
+            // slice; the registrar's 9P handle stays host-side.
             ...extraMounts.map(extra => ({
               cap: extra.cap,
               innerPath: extra.innerPath,
-              mode: extra.mode === 'ro' ? 'ro' : 'rw',
+              mode: extra.mode === 'rw' ? 'rw' : 'ro',
             })),
           ],
           network,
