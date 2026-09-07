@@ -38,6 +38,54 @@ evaluation implies a fresh worker, and the result is the only handle
 returned (the worker persists like any other and shows up in
 `listWorkerIds()`).
 
+## Local supervisor and workspace
+
+Build the Ironhorse worker and bundles as described below, then run:
+
+```sh
+yarn workspace @endo/thixotrope thix serve ./private-state
+# In another terminal:
+yarn workspace @endo/thixotrope thix attach ./private-state
+yarn workspace @endo/thixotrope thix status ./private-state
+yarn workspace @endo/thixotrope thix stop ./private-state
+```
+
+`serve` runs in the foreground and creates a private state directory (mode 0700).
+It accepts local OCapN admin sessions on `control.sock` (mode 0600).
+Only the supervisor opens the persistence store.
+The socket grants full local administration; anyone running as the same OS user
+can administer this workspace.
+A service manager can restart the foreground process; clients never start it implicitly.
+
+`attach` evaluates one JavaScript line at a time in the same persisted workspace vat.
+Use `globalThis.name = value` for bindings shared between evaluations.
+Top-level `const` and `let` declarations are scoped to their individual evaluation;
+closures containing those variables persist when retained by the workspace.
+Ctrl-D or Ctrl-C detaches the terminal, leaving the supervisor running.
+Piped input works too, and evaluation failures produce a nonzero exit status.
+A lost connection reports an uncertain evaluation outcome and never retries it.
+
+The workspace has `E`, `Far`, `harden`, and a `vats` controller.
+For example, enter each of these as one line:
+
+```js
+(async () => { globalThis.other = await E(vats).createWorker('counter'); })()
+(async () => { globalThis.counter = await E(other).evaluate("(() => { let count = 0n; return Far('Counter', { incr: () => ++count }); })()"); })()
+E(counter).incr()
+```
+
+Detach, stop and restart the supervisor, then attach and call `E(counter).incr()` again.
+Both vats retain their state and the reference between them; calls pass through comms.
+A publication keeps the workspace vat reachable without an inventory layer.
+Optional user inventories can be ordinary guest Maps.
+
+`status` reports worker state and cumulative process-local counts and milliseconds
+for delivery (including its commit cranks), snapshot creation, and engine startup/wake.
+These are coarse measurements, not a latency benchmark or isolated fsync timings.
+The idle sleep delay is 30 seconds; `stop`, SIGINT, and SIGTERM park workers before exit.
+Quarantined workspaces remain inspectable with `status`; this version offers no repair command.
+
+
 ## Ironhorse demos and CI tests
 
 Each demo runs two guest vats in separate Ironhorse processes, connected only
