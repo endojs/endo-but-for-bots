@@ -408,3 +408,86 @@ fn a_property_is_enumerable_probe_mints_no_key() {
         assert_result(source, want);
     }
 }
+
+/// A trap that NAMES the index mid-flight must not escape its invariant.
+///
+/// The post-trap check asks the target by index, and the index arms answer out
+/// of the side tables on the premise that no ordinary slot can exist under a
+/// name the table never held. A trap invalidates that premise the moment it
+/// names the index: `Object.defineProperty(t, 888881, …)` — or merely
+/// `t[888881] = 1; Object.freeze(t)` — promotes it to an ordinary slot the
+/// index arm cannot see, and the check was silently skipped, letting a trap
+/// contradict a non-configurable target property. The name spelling of the
+/// same program always threw.
+///
+/// It also fired the wrong way: a trap that names the index and then honestly
+/// REPORTS it was rejected, because the check could not see the property the
+/// target really had.
+#[test]
+fn a_trap_that_names_the_index_mid_flight_is_still_held_to_the_invariant() {
+    let guard = |setup: &str, expr: &str| {
+        format!(
+            "{setup} var r = 'no-throw'; try {{ r = String({expr}); }} \
+             catch (e) {{ r = (e instanceof TypeError) ? 'TypeError' : 'other'; }} r"
+        )
+    };
+    let named = |i: u32, extra: &str| {
+        format!("Object.defineProperty(t, {i}, {{ value: 1, configurable: false{extra} }})")
+    };
+    for (setup, expr) in [
+        (
+            format!(
+                "var t = {{}}; var p = new Proxy(t, {{ get: function () {{ {}; return 2; }} }});",
+                named(888881, ", writable: false")
+            ),
+            "p[888881]".to_string(),
+        ),
+        (
+            "var t = {}; var p = new Proxy(t, { get: function () { \
+               t[888885] = 1; Object.freeze(t); return 2; } });"
+                .to_string(),
+            "p[888885]".to_string(),
+        ),
+        (
+            format!(
+                "var t = {{}}; var p = new Proxy(t, {{ has: function () {{ {}; return false; }} }});",
+                named(888882, "")
+            ),
+            "888882 in p".to_string(),
+        ),
+        (
+            format!(
+                "var t = {{}}; var p = new Proxy(t, {{ deleteProperty: function () {{ {}; return true; }} }});",
+                named(888883, "")
+            ),
+            "delete p[888883]".to_string(),
+        ),
+        (
+            format!(
+                "var t = {{}}; var p = new Proxy(t, {{ getOwnPropertyDescriptor: function () {{ \
+                   {}; return undefined; }} }});",
+                named(888886, "")
+            ),
+            "Object.getOwnPropertyDescriptor(p, 888886)".to_string(),
+        ),
+    ] {
+        let out = run(&guard(&setup, &expr));
+        assert!(out.completed, "halt {:?}", out.halt);
+        assert_eq!(out.result, "TypeError", "{setup} {expr}");
+    }
+
+    // The reverse direction: naming the index and then reporting it honestly
+    // must NOT throw — the target really does have that property.
+    let out = run(&guard(
+        "var t = {}; var p = new Proxy(t, { getOwnPropertyDescriptor: function () { \
+           Object.defineProperty(t, 888884, { value: 1, configurable: false }); \
+           return { value: 1, configurable: false }; } });",
+        "Object.getOwnPropertyDescriptor(p, 888884).value",
+    ));
+    assert!(out.completed, "halt {:?}", out.halt);
+    assert_eq!(out.result, "1");
+
+    // Honest traps are unaffected.
+    assert_result("String(new Proxy([7], {})[0])", "7");
+    assert_result("String(new Proxy({}, { get: function () { return 5; } })[0])", "5");
+}
