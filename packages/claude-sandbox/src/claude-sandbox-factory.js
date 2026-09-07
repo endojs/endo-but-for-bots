@@ -50,11 +50,11 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 /** @import { FarRef } from '@endo/eventual-send' */
 
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+import { toCurrentSpecifier } from './current-specifier.js';
 
-const clientModuleSpecifier = new URL(
-  './claude-client-module.js',
-  import.meta.url,
-).href;
+const clientModuleSpecifier = toCurrentSpecifier(
+  new URL('./claude-client-module.js', import.meta.url).href,
+);
 
 /**
  * Source for a **per-session powers** cap, built by the factory via

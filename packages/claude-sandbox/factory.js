@@ -41,10 +41,11 @@ import { readFileSync } from 'node:fs';
 import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 
-const factoryCapletSpecifier = new URL(
-  'src/claude-sandbox-factory.js',
-  import.meta.url,
-).href;
+import { toCurrentSpecifier } from './src/current-specifier.js';
+
+const factoryCapletSpecifier = toCurrentSpecifier(
+  new URL('src/claude-sandbox-factory.js', import.meta.url).href,
+);
 
 // On-disk markdown describing the directory's objects, copied into a
 // `<dir>/readme.md` blob at provision time. Kept on disk (not inlined) so it
