@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
-import { makeError, q, X } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 import { M } from '@endo/patterns';
 
 import { provisionClaudeSession } from './provision-claude-session.js';
@@ -18,10 +18,18 @@ const nodeFsModuleSpecifier = toCurrentSpecifier(
     .href,
 );
 
+/**
+ * Where per-session client formulas live on the host by default: a directory
+ * the backend owns, beside the sandbox infrastructure `setup-host.js` mints.
+ */
+export const DEFAULT_SESSIONS_PATH = harden(['claude-sandbox', 'sessions']);
+
 const ClaudeSessionProvisionerInterface = M.interface(
   'ClaudeSessionProvisioner',
   {
     provision: M.callWhen(M.string()).optional(M.record()).returns(M.string()),
+    lookup: M.callWhen(M.string()).returns(M.any()),
+    cancel: M.callWhen(M.string()).returns(M.undefined()),
     remove: M.callWhen(M.string()).returns(M.undefined()),
     help: M.call().returns(M.string()),
   },
@@ -38,11 +46,11 @@ const assertSessionId = sessionId => {
 
 /**
  * Make a narrowly scoped service that can only provision Claude clients for
- * Floot session ids beneath one fixed controller profile.
+ * Floot session ids beneath one fixed sessions directory.
  *
  * @param {any} hostAgent
  * @param {{
- *   flootDir: string,
+ *   sessionsPath?: readonly string[],
  *   clientBase: string,
  *   credentialsName: string,
  *   workspaceBaseDir: string,
@@ -63,7 +71,7 @@ export const makeClaudeSessionProvisioner = (
   powers = {},
 ) => {
   const {
-    flootDir,
+    sessionsPath = DEFAULT_SESSIONS_PATH,
     clientBase,
     credentialsName,
     workspaceBaseDir,
@@ -95,12 +103,20 @@ export const makeClaudeSessionProvisioner = (
     const clientName = `${clientBase}-${sessionId}`;
     return harden({
       clientName,
-      clientPath: harden([flootDir, 'controller-profile', clientName]),
+      clientPath: harden([...sessionsPath, clientName]),
       filesystemName: `claude-workspace-${sessionId}`,
       workspaceDir: path.join(workspaceBaseDir, sessionId),
       configFilesystemName: `claude-config-${sessionId}`,
       configDir: path.join(configBaseDir, sessionId),
     });
+  };
+
+  // The sessions directory is created on first use so a fresh host needs no
+  // setup step beyond minting the caplet that owns it.
+  const ensureSessionsDirectory = async () => {
+    if (!(await E(hostAgent).has(...sessionsPath))) {
+      await E(hostAgent).makeDirectory([...sessionsPath]);
+    }
   };
 
   /**
@@ -121,6 +137,7 @@ export const makeClaudeSessionProvisioner = (
       configDir,
     } = namesFor(sessionId);
     if (await E(hostAgent).has(...clientPath)) return clientName;
+    await ensureSessionsDirectory();
 
     // A prior interrupted attempt may have left only the temporary pet names.
     if (await E(hostAgent).has(filesystemName)) {
@@ -161,11 +178,9 @@ export const makeClaudeSessionProvisioner = (
         removeNames: [filesystemName, configFilesystemName],
       },
     );
-    if (!(await E(hostAgent).has(...clientPath))) {
-      throw new Error(
-        `Claude session provisioner did not store "${clientPath.join('/')}".`,
-      );
-    }
+    const stored = await E(hostAgent).has(...clientPath);
+    stored ||
+      Fail`Claude session provisioner did not store ${q(clientPath.join('/'))}.`;
     return clientName;
   };
 
@@ -182,6 +197,36 @@ export const makeClaudeSessionProvisioner = (
           inFlight.set(sessionId, result);
         }
         return result;
+      },
+      /**
+       * The session's ClaudeClient capability, or `undefined` when the session
+       * has not been provisioned.
+       *
+       * @param {string} sessionId
+       */
+      async lookup(sessionId) {
+        const { clientPath } = namesFor(sessionId);
+        await inFlight.get(sessionId)?.catch(() => {});
+        if (!(await E(hostAgent).has(...clientPath))) return undefined;
+        return E(hostAgent).lookup(...clientPath);
+      },
+      /**
+       * Stop the session's live incarnation without deleting it: the daemon
+       * cancels the client formula, which tears down its slice, mounts, and
+       * credential grant, and the next `lookup` reincarnates it fresh over
+       * the same durable workspace and transcript.
+       *
+       * @param {string} sessionId
+       */
+      async cancel(sessionId) {
+        const { clientPath } = namesFor(sessionId);
+        await inFlight.get(sessionId)?.catch(() => {});
+        if (await E(hostAgent).has(...clientPath)) {
+          await E(hostAgent).cancel(
+            [...clientPath],
+            Error(`Claude session ${sessionId} stopped`),
+          );
+        }
       },
       async remove(sessionId) {
         const {
@@ -207,19 +252,21 @@ export const makeClaudeSessionProvisioner = (
         await removeDirectory(configDir, { recursive: true, force: true });
       },
       help: () =>
-        'ClaudeSessionProvisioner: provision(flootSessionId) creates one isolated ClaudeClient and workspace; remove(flootSessionId) tears them down.',
+        'ClaudeSessionProvisioner: provision(flootSessionId, options?) creates one isolated ClaudeClient, workspace, and config dir; lookup(id) returns the client; cancel(id) stops its live incarnation; remove(id) tears everything down.',
     },
   );
 };
 harden(makeClaudeSessionProvisioner);
 
 /**
+ * Standalone caplet entry point (the hosted backend composes the provisioner
+ * in-process instead; see `claude-backend-module.js`).
+ *
  * @param {any} hostAgent
  * @param {unknown} _context
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = (hostAgent, _context, { env = {} } = {}) => {
-  const flootDir = env.FLOOT_DIR || process.env.ENDO_FLOOT_DIR || 'floot';
   const clientBase =
     env.CLAUDE_CLIENT_NAME ||
     process.env.ENDO_CLAUDE_CLIENT_NAME ||
@@ -242,7 +289,6 @@ export const make = (hostAgent, _context, { env = {} } = {}) => {
     process.env.ENDO_CLAUDE_SANDBOX_IMAGE ||
     'oci:localhost/claude-code:latest';
   return makeClaudeSessionProvisioner(hostAgent, {
-    flootDir,
     clientBase,
     credentialsName,
     workspaceBaseDir,

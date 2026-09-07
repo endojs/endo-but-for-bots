@@ -24,6 +24,9 @@
       "path": "../far/tsconfig.composite.json"
     },
     {
+      "path": "../hosted-agent/tsconfig.composite.json"
+    },
+    {
       "path": "../init/tsconfig.composite.json"
     },
     {
