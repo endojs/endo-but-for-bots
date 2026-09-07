@@ -46769,14 +46769,11 @@ impl Interp {
             Some(trap) => trap,
             None => return self.uninterned_index_get(code, target, index, receiver),
         };
-        let offset = self.alloc_str_text(index.to_string().as_bytes());
-        let key = Slot::of(Kind::String, Payload::String(offset));
         self.proxy_get_trapped(
             code,
             target,
             handler,
             trap,
-            key,
             TrapKeyId::Index(index),
             receiver,
             0,
@@ -50094,13 +50091,11 @@ impl Interp {
                 )
             }
         };
-        let key = self.property_key_slot(id)?;
         self.proxy_get_trapped(
             code,
             target,
             handler,
             trap,
-            key,
             TrapKeyId::Id(id),
             receiver,
             proxy_trap_metering,
@@ -50119,7 +50114,6 @@ impl Interp {
         target: crate::value::SlotIndex,
         handler: crate::value::SlotIndex,
         trap: Slot,
-        key: Slot,
         key_id: TrapKeyId,
         receiver: Slot,
         proxy_trap_metering: u64,
@@ -50138,6 +50132,16 @@ impl Interp {
         self.meter.tick_raw(proxy_trap_metering);
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        // Built here, after the trap's metering, so the id-keyed read keeps
+        // the order it had before this arm was shared. An index with no id
+        // spells its own key, exactly as XS's `fxKeyAt` does for `XS_NO_ID`.
+        let key = match key_id {
+            TrapKeyId::Id(id) => self.property_key_slot(id)?,
+            TrapKeyId::Index(index) => {
+                let offset = self.alloc_str_text(index.to_string().as_bytes());
+                Slot::of(Kind::String, Payload::String(offset))
+            }
+        };
         let saved_context = self.array_iterator_proxy_get_context;
         if let TrapKeyId::Id(id) = key_id {
             // The Array Iterator metering context is installed only by the
