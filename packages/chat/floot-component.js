@@ -368,9 +368,9 @@ const makeAudioChannel = () => {
 };
 harden(makeAudioChannel);
 
-// A text feed the chat pushes reply text into: streaming reply
-// deltas while a turn runs, or a finished message's full text for replay. The
-// remote TTS object consumes the deltas and returns an audio stream.
+// A text feed the chat pushes a finished message's full text into for replay.
+// The remote TTS object consumes it and returns an audio stream. (A live turn
+// is spoken by the daemon instead, from its own view of the turn.)
 // Wire (APPEND deltas): { type:'delta', text } | { type:'end' } | { type:'abort' }
 const makeTextFeed = () => {
   const { push, reader, isClosed } = makeBufferedReader();
@@ -433,6 +433,9 @@ const JUNK_PHRASES = harden(
 
 const DEFAULT_TITLE = 'New chat';
 const DEFAULT_PRESET_ID = 'general';
+// How long after the last voice-settings change to persist it and restart any
+// speech in progress with it.
+const TTS_SETTINGS_COMMIT_MS = 300;
 
 /**
  * Floot Chat Space, host wrapper. Resolves a Floot factory from the
@@ -462,9 +465,12 @@ const DEFAULT_PRESET_ID = 'general';
  * mic: speech is captured as 16 kHz mono PCM, streamed to
  * `transcribe(audioReader) -> textReader`, and the transcript fills the compose
  * box live; on end the assembled message is sent. When `ttsPath` is given, it
- * resolves a text-to-speech object: reply deltas are streamed to
- * `synthesize(textReader) -> audioReader` (raw s16le mono PCM, one event per
- * sentence) and played back via Web Audio as they arrive.
+ * resolves a text-to-speech object and hands it to the daemon: a spoken reply
+ * is a view of the turn the daemon speaks (`turn.speak(ttsServer, options)`),
+ * so reply text never round-trips through this browser to be heard; the audio
+ * stream that comes back (raw s16le mono PCM) is played via Web Audio as it
+ * arrives. Voice and Piper controls come from the object's `getConfiguration()`
+ * and are kept as whole-Floot preferences on the factory, cached per device.
  *
  * @param {HTMLElement} $parent
  * @param {unknown} rootPowers
@@ -513,6 +519,36 @@ export const flootComponent = (
   // Spoken replies on by default when a TTS object is wired; toggled by the
   // speaker button. Replay buttons work regardless of this live-speech setting.
   let ttsEnabled = hasTts;
+  /**
+   * @typedef {{
+   *   voice: string, speed: number, noiseScale: number, noiseW: number,
+   *   sentenceSilence: number,
+   * }} TtsSettings
+   */
+  /**
+   * @typedef {'speed' | 'noiseScale' | 'noiseW' | 'sentenceSilence'}
+   *   NumericTtsSetting
+   */
+  // Seeded with Piper's own defaults until the TTS object's configuration and
+  // the whole-Floot preferences arrive (see the load at mount).
+  /** @type {TtsSettings} */
+  let ttsSettings = {
+    voice: '',
+    speed: 1,
+    noiseScale: 0.667,
+    noiseW: 0.8,
+    sentenceSilence: 0.2,
+  };
+  /**
+   * @type {{
+   *   voices: Array<{ id: string, name: string }>,
+   *   ranges: Record<string, { min: number, max: number, step: number }>,
+   * }}
+   */
+  let ttsConfiguration = { voices: [], ranges: {} };
+  // Per-device cache of the settings, keyed by the TTS object so two wired
+  // objects with different voices do not share one.
+  const ttsStorageKey = `floot-tts:${(ttsPath || []).join('/')}`;
 
   // ── View-model state (read by getState, mutated by the host engine) ─────────
   /**
@@ -580,6 +616,23 @@ export const flootComponent = (
     status = s;
     notify();
   };
+  const saveTtsSettings = () => {
+    try {
+      window.localStorage.setItem(ttsStorageKey, JSON.stringify(ttsSettings));
+    } catch {
+      // Storage may be unavailable in a private or embedded browser context.
+    }
+  };
+  // The synthesis options handed to the TTS object (directly for a replay,
+  // through the daemon for a spoken turn). An unset voice means its default.
+  const currentTtsOptions = () =>
+    harden({
+      ...(ttsSettings.voice ? { voice: ttsSettings.voice } : {}),
+      speed: ttsSettings.speed,
+      noiseScale: ttsSettings.noiseScale,
+      noiseW: ttsSettings.noiseW,
+      sentenceSilence: ttsSettings.sentenceSilence,
+    });
 
   const getActiveSession = () =>
     sessions.find(s => s.id === activeSessionId) || null;
@@ -783,6 +836,11 @@ export const flootComponent = (
         thresholdPct: PCT(meterThreshold),
         transcript: voiceTranscript,
         replayingText,
+        ttsSettings: { ...ttsSettings },
+        ttsConfiguration: {
+          voices: ttsConfiguration.voices.map(voice => ({ ...voice })),
+          ranges: { ...ttsConfiguration.ranges },
+        },
       },
       objects: {
         controller: profilePath.join('/'),
@@ -841,11 +899,6 @@ export const flootComponent = (
   /** @type {WeakMap<FlootSession, FlootTurn>} */
   const displayedPrompts = new WeakMap();
 
-  // The text feed driving live spoken replies for the current turn (null when
-  // TTS is off or idle). Aborting it ends synthesis; stopTts() halts playback.
-  /** @type {ReturnType<typeof makeTextFeed> | null} */
-  let turnTtsFeed = null;
-
   // Cancel the in-flight turn (Stop button or voice barge-in). Returns a promise
   // that resolves once the turn has fully unwound.
   const cancelTurn = () => {
@@ -854,21 +907,17 @@ export const flootComponent = (
     // Stop button: explicitly tear the turn down (unlike leaving the space,
     // which lets it keep running in the background).
     if (activeTurn) activeTurn.stop();
-    if (turnTtsFeed) turnTtsFeed.abort();
     stopTts(); // also silences any spoken reply in progress
     return turnPromise || Promise.resolve();
   };
 
   // Voice barge-in: the user started speaking over a live reply. Unlike the Stop
   // button's hard cancel, don't abort the turn — just silence its spoken reply
-  // and let it finish in the background (and in history). The user's interjection
-  // is queued after it (submitChain waits on the running turn).
+  // (dropping the audio stream is what tells the daemon to stop speaking it)
+  // and let it finish in the background (and in history). The user's
+  // interjection is queued after it (submitChain waits on the running turn).
   const softBargeIn = () => {
     if (!busy) return;
-    if (turnTtsFeed) {
-      turnTtsFeed.abort();
-      turnTtsFeed = null;
-    }
     stopTts();
     setStatus('continuing in background…');
   };
@@ -880,17 +929,13 @@ export const flootComponent = (
   /**
    * @param {FlootTurn} turn
    * @param {FlootSession} session
-   * @param {boolean} [speakLive] feed reply deltas to TTS
    * @returns {Promise<void>}
    */
-  const attachTurnView = (turn, session, speakLive = false) => {
+  const attachTurnView = (turn, session) => {
     busy = true;
     turnCancelled = false;
     activeTurn = turn;
     sessionStatus.delete(session.id);
-    // On reattach the bubble already shows what streamed before; only speak text
-    // that arrives from here on.
-    let lastSpoken = turn.streamingText.length;
     setStatus(`${turn.phase || 'thinking'}…`);
     if (turn.usage) usage = turn.usage;
     notify();
@@ -906,8 +951,6 @@ export const flootComponent = (
           detachActiveTurnView = null;
           activeTurn = null;
           busy = false;
-          if (turnTtsFeed) turnTtsFeed.abort();
-          turnTtsFeed = null;
           notify();
         }
         resolve();
@@ -934,21 +977,12 @@ export const flootComponent = (
         if (activeSessionId !== turn.sessionId) return;
         if (ev.type === 'snapshot') {
           // The turn's state as of the moment this view opened. Repaint from
-          // it; anything it already carries is text nobody here has spoken.
+          // it; speech, if any, is the daemon's own view of the same turn.
           if (turn.usage) usage = turn.usage;
           setStatus(`${turn.phase || 'thinking'}…`);
         } else if (ev.type === 'delta' || ev.type === 'final') {
-          if (
-            speakLive &&
-            turnTtsFeed &&
-            turn.streamingText.length > lastSpoken
-          ) {
-            turnTtsFeed.delta(turn.streamingText.slice(lastSpoken));
-            lastSpoken = turn.streamingText.length;
-          }
           notify();
         } else if (ev.type === 'tool_call') {
-          lastSpoken = 0;
           notify();
         } else if (ev.type === 'tool_result') {
           notify();
@@ -962,11 +996,6 @@ export const flootComponent = (
           notify();
         } else if (ev.type === 'done') {
           const stopped = turnCancelled;
-          if (turnTtsFeed) {
-            if (turn.error) turnTtsFeed.abort();
-            else turnTtsFeed.end();
-            turnTtsFeed = null;
-          }
           if (turn.error) {
             sessionStatus.set(turn.sessionId, 'error');
             status = `error: ${turn.error}`;
@@ -1015,15 +1044,10 @@ export const flootComponent = (
     }
     notify();
 
-    // Speak the reply as it streams: feed deltas to the TTS object and play the
-    // returned audio stream. Sentence-by-sentence, so audio starts mid-reply.
-    const speakLive = ttsEnabled && Boolean(ttsServer);
-    if (speakLive) {
-      turnTtsFeed = makeTextFeed();
-      playAudioStream(E(ttsServer).synthesize(turnTtsFeed.reader));
-    }
     // Start the turn on the daemon — it keeps running if this space is left —
-    // then render it through the shared view.
+    // then render it through the shared view. A spoken reply is a second view
+    // of the same turn, which the daemon speaks (see speakTurn).
+    const speakLive = ttsEnabled && Boolean(ttsServer);
     const turnRef = E(facetFor(session)).startTurn(text);
     const turn = startFlootTurn(
       turnsForFactory(factory),
@@ -1032,7 +1056,8 @@ export const flootComponent = (
       turnRef,
     );
     displayedPrompts.set(session, turn);
-    await attachTurnView(turn, session, speakLive);
+    if (speakLive) speakTurn(turn);
+    await attachTurnView(turn, session);
   };
 
   // Serialize submissions so an auto-sent voice utterance can't overlap a typed
@@ -1046,6 +1071,10 @@ export const flootComponent = (
     pendingUtterance = '';
     const text = (raw || '').trim();
     if (!text) return submitChain;
+    // Create/resume the audio context now, still inside the user's Send
+    // gesture: a browser refuses autoplay when the first resume happens only
+    // after the remote round trips that start the turn and its speech.
+    if (ttsEnabled && ttsServer) prepareTts();
     inputText = '';
     const submittedSessionId = activeSessionId;
     // Stand a placeholder up now, so the message is visible for as long as it
@@ -1639,6 +1668,10 @@ export const flootComponent = (
   // caplet's onClose and aborts piper mid-utterance).
   /** @type {any} */
   let ttsActiveStream = null;
+  // The turn whose spoken view is playing, so a settings change can restart
+  // its speech; null while playback is idle or a replay is speaking.
+  /** @type {FlootTurn | null} */
+  let ttsSpeechTurn = null;
   let ttsNextStart = 0;
   let ttsSpeaking = false;
 
@@ -1669,6 +1702,16 @@ export const flootComponent = (
   // cannot strand it on the document with no disposer to remove it.
   const onVisibilityChange = () => screenWakeLock.refresh();
 
+  // Create/resume the audio context. Also called synchronously from the Send
+  // gesture (see submit) so autoplay is allowed by the time audio arrives.
+  const prepareTts = () => {
+    if (!ttsCtx) ttsCtx = new AudioContext();
+    if (ttsCtx.state === 'suspended') {
+      return ttsCtx.resume().catch(() => {});
+    }
+    return Promise.resolve();
+  };
+
   const stopTts = () => {
     ttsPlaybackId += 1;
     for (const src of ttsSources) {
@@ -1687,6 +1730,7 @@ export const flootComponent = (
       ttsActiveStream.return().catch(() => {});
       ttsActiveStream = null;
     }
+    ttsSpeechTurn = null;
     if (ttsSpeaking) {
       ttsSpeaking = false;
       notify();
@@ -1727,6 +1771,7 @@ export const flootComponent = (
       ttsSources = ttsSources.filter(s => s !== src);
       if (!ttsSources.length && ttsSpeaking) {
         ttsSpeaking = false;
+        if (!ttsActiveStream) ttsSpeechTurn = null;
         notify();
       }
     };
@@ -1734,18 +1779,18 @@ export const flootComponent = (
 
   // Pull synthesized audio from a TTS stream and play it back in order. Resolves
   // when the stream ends or playback is superseded by a newer stopTts().
-  const playAudioStream = async (/** @type {any} */ audioReader) => {
+  // `speechTurn` names the turn being spoken (null for a replay of a finished
+  // message), so a settings change can restart its speech.
+  const playAudioStream = async (
+    /** @type {any} */ audioReader,
+    /** @type {FlootTurn | null} */ speechTurn = null,
+  ) => {
     if (!ttsServer) return;
-    if (!ttsCtx) ttsCtx = new AudioContext();
-    if (ttsCtx.state === 'suspended') {
-      try {
-        await ttsCtx.resume();
-      } catch {
-        // best effort
-      }
-    }
+    await prepareTts();
+    if (!ttsCtx) return;
     // Begin a fresh session: bump the token and adopt this reader.
     stopTts();
+    ttsSpeechTurn = speechTurn;
     const myId = ttsPlaybackId;
     const audio = iterateReader(audioReader, { buffer: 4 });
     ttsActiveStream = audio;
@@ -1765,6 +1810,7 @@ export const flootComponent = (
     } finally {
       if (myId === ttsPlaybackId && ttsActiveStream === audio) {
         ttsActiveStream = null;
+        if (!ttsSources.length) ttsSpeechTurn = null;
       }
     }
   };
@@ -1778,7 +1824,9 @@ export const flootComponent = (
     feed.end();
     replayingText = text;
     notify();
-    playAudioStream(E(ttsServer).synthesize(feed.reader)).finally(() => {
+    playAudioStream(
+      E(ttsServer).synthesize(feed.reader, currentTtsOptions()),
+    ).finally(() => {
       if (replayingText === text) {
         replayingText = '';
         notify();
@@ -1790,13 +1838,57 @@ export const flootComponent = (
   const toggleTts = () => {
     ttsEnabled = !ttsEnabled;
     if (!ttsEnabled) {
-      if (turnTtsFeed) {
-        turnTtsFeed.abort();
-        turnTtsFeed = null;
-      }
       stopTts();
     }
     notify();
+  };
+
+  // Ask the daemon for a spoken view of a turn and play it. Called again with
+  // new settings it restarts speech: the fresh view opens on everything the
+  // turn has said so far, and adopting its stream drops the previous one —
+  // which is what tells the daemon that branch is no longer wanted. A speak()
+  // that rejects (no such voice, TTS unreachable) just ends the iteration in
+  // playAudioStream; the text reply is unaffected.
+  const speakTurn = (/** @type {FlootTurn} */ turn) => {
+    if (!ttsServer) return;
+    playAudioStream(E(turn.ref).speak(ttsServer, currentTtsOptions()), turn);
+  };
+
+  // Mirror the settings to the whole-Floot preferences so the change follows
+  // the user across sessions and devices. Best-effort: the per-device cache
+  // already applied it, and an older factory simply rejects the call.
+  const mirrorTtsSettings = () => {
+    E(factory)
+      .setVoicePreferences(harden({ ...ttsSettings }))
+      .catch(() => {});
+  };
+  // A range slider fires one input event per pixel, and every restart
+  // re-speaks the reply so far; commit after the last change in a burst.
+  let ttsSettingsTimer = 0;
+  const commitTtsSettings = () => {
+    ttsSettingsTimer = 0;
+    mirrorTtsSettings();
+    const speechTurn = ttsSpeechTurn;
+    if (speechTurn && (ttsSpeaking || ttsActiveStream)) speakTurn(speechTurn);
+  };
+  const setTtsSetting = (
+    /** @type {keyof TtsSettings} */ name,
+    /** @type {string | number} */ raw,
+  ) => {
+    if (name === 'voice') {
+      ttsSettings = { ...ttsSettings, voice: `${raw}` };
+    } else {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return;
+      ttsSettings = { ...ttsSettings, [name]: value };
+    }
+    saveTtsSettings();
+    notify();
+    if (ttsSettingsTimer) clearTimeout(ttsSettingsTimer);
+    ttsSettingsTimer = window.setTimeout(
+      commitTtsSettings,
+      TTS_SETTINGS_COMMIT_MS,
+    );
   };
 
   // ── Controller (the view's only handle on the host engine) ───────────────────
@@ -1855,6 +1947,12 @@ export const flootComponent = (
     toggleTts() {
       toggleTts();
     },
+    setTtsSetting(
+      /** @type {keyof TtsSettings} */ name,
+      /** @type {string | number} */ value,
+    ) {
+      setTtsSetting(name, value);
+    },
     replayMessage(/** @type {string} */ text) {
       replayMessage(text);
     },
@@ -1905,6 +2003,86 @@ export const flootComponent = (
     subtree: true,
     characterData: true,
   });
+
+  // ── Voice settings ───────────────────────────────────────────────────────────
+  // Build the controls from the TTS object's own configuration (voices, ranges,
+  // defaults) and seed them by precedence: the whole-Floot preferences on the
+  // factory, then this device's cache, then the object's defaults. An older
+  // factory has no preferences call — that reads as "unset" — and an older or
+  // swapped TTS object without getConfiguration() still synthesizes with its
+  // defaults, so both failures are tolerated.
+  if (ttsServer) {
+    Promise.all([
+      E(ttsServer).getConfiguration(),
+      E(factory)
+        .getVoicePreferences()
+        .catch(() => ({})),
+    ])
+      .then(([config, serverPrefs]) => {
+        if (cancelled) return;
+        const voices = Array.isArray(config?.voices) ? config.voices : [];
+        const defaults = config?.defaults || {};
+        const ranges = config?.ranges || {};
+        /** @type {Record<string, unknown>} */
+        let saved = {};
+        try {
+          const raw = window.localStorage.getItem(ttsStorageKey);
+          if (raw) saved = JSON.parse(raw);
+        } catch {
+          // Ignore unavailable storage and malformed old settings.
+        }
+        const prefs = /** @type {Record<string, unknown>} */ (
+          serverPrefs || {}
+        );
+        const pick = (/** @type {string} */ key) => prefs[key] ?? saved[key];
+        const voiceIds = new Set(voices.map(voice => voice.id));
+        const voice = `${pick('voice') || defaults.voice || ''}`;
+        /** @type {TtsSettings} */
+        const next = {
+          voice: voiceIds.has(voice)
+            ? voice
+            : `${defaults.voice || voices[0]?.id || ''}`,
+          speed: Number(pick('speed') ?? defaults.speed ?? ttsSettings.speed),
+          noiseScale: Number(
+            pick('noiseScale') ?? defaults.noiseScale ?? ttsSettings.noiseScale,
+          ),
+          noiseW: Number(
+            pick('noiseW') ?? defaults.noiseW ?? ttsSettings.noiseW,
+          ),
+          sentenceSilence: Number(
+            pick('sentenceSilence') ??
+              defaults.sentenceSilence ??
+              ttsSettings.sentenceSilence,
+          ),
+        };
+        /** @type {NumericTtsSetting[]} */
+        const numericSettings = [
+          'speed',
+          'noiseScale',
+          'noiseW',
+          'sentenceSilence',
+        ];
+        for (const name of numericSettings) {
+          const range = ranges[name];
+          const value = next[name];
+          if (
+            !Number.isFinite(value) ||
+            (range && (value < Number(range.min) || value > Number(range.max)))
+          ) {
+            next[name] = Number(defaults[name]);
+          }
+        }
+        ttsSettings = next;
+        ttsConfiguration = { voices, ranges };
+        // Warm the per-device cache with the resolved values so a later
+        // offline load still reflects the whole-Floot choice.
+        saveTtsSettings();
+        notify();
+      })
+      .catch(() => {
+        // Older/swapped TTS objects can still synthesize with defaults.
+      });
+  }
 
   // ── Initial load ─────────────────────────────────────────────────────────────
   // Load the session list from the factory (most-recent first), seeding a
@@ -2032,9 +2210,11 @@ export const flootComponent = (
     // (don't return the reader, which would abort the agent). The turn finishes
     // and persists; a later remount reattaches or falls back to history.
     if (detachActiveTurnView) detachActiveTurnView();
-    if (turnTtsFeed) {
-      turnTtsFeed.abort();
-      turnTtsFeed = null;
+    if (ttsSettingsTimer) {
+      // A change still waiting for its burst to end is not lost with the tab.
+      clearTimeout(ttsSettingsTimer);
+      ttsSettingsTimer = 0;
+      mirrorTtsSettings();
     }
     stopMic();
     stopTts();
