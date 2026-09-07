@@ -563,6 +563,46 @@ returns the swept ids.
 `daemon.unpublish(secret)` removes a locator root so a published vat
 can become garbage.
 
+### Explaining retention
+
+`thix reachability ./private-state` reports the live administrative view without
+waking guest vats; `thix collect ./private-state` retires currently collectible vats.
+The JSON report contains each worker's diagnostic label, awake state, direct roots,
+one path from a root, and the cross-session references used by collection.
+Publication roots never reveal their secrets.
+Both commands use the same graph through `daemon.inspectReachability({ keep })`.
+The embedder's `keep` option can explicitly retain known worker ids for a collection.
+
+Roots include publications, awake workers, explicit keeps, and remote sessions
+holding references into a vat.
+A remote root reports whether its connection is currently attached and whether its
+session is durable: a disconnected resumable session still retains its references.
+References propagate from rooted workers, including the built-in host worker-facade
+capability's target even when that vat has not exported an application object yet.
+Pending answer routes and active promise listeners also carry retention edges.
+Deposited gifts and withdrawal waiters remain roots until the hub releases them;
+their secret identifiers are omitted from the report.
+Outstanding host calls are temporary `host-operation` roots, tracked until settlement.
+The endpoint's cached imports and evaluator shells do not independently root workers.
+Collection rechecks reachability between retirements because incoming messages can
+change the graph while an earlier retirement is finishing.
+
+This is a conservative vat-level view of protocol references, not an explanation of
+every JavaScript object or variable in a heap.
+Dropping an inventory entry or application record releases that ordinary reference;
+protocol references can remain until guest GC reports their release.
+The diagnostic will show those remaining edges rather than promise immediate deletion.
+The collector does not force guest GC, close durable peer sessions, or stop awake vats.
+Use normal idle sleep (30 seconds in the supervisor) and inspect again.
+Retiring one vat may wake another through protocol cleanup, requiring a later pass.
+Registered host resources that internally retain workers need an explicit `keep`;
+only the built-in worker-facade's target is automatically represented.
+
+CI verifies that removing a publication collects its unrooted cross-vat component,
+deletes the worker stores and SQLite snapshot images, and remains collected after restart.
+It also verifies facade-only retention, live-peer retention through disconnect,
+and release of a pending host call's root when its answer settles.
+
 ## System resources
 
 Host capabilities reach guests as durable exports.

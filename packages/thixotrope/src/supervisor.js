@@ -308,6 +308,8 @@ export const serveThixotrope = async (
         );
       },
       applications: () => E(applications).list(),
+      reachability: () => daemon.inspectReachability(),
+      collect: () => daemon.collectVats(),
       inventoryStatus: () => E(inventory).subscriptionCounts(),
     };
     server.on('connection', socket => {

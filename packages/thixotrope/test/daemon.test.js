@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { E } from '@endo/eventual-send';
+import harden from '@endo/harden';
 import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
@@ -36,12 +37,20 @@ const COUNTER_SOURCE = `
 })()
 `;
 
-/** @param {import('ava').ExecutionContext} t */
-const makeDaemon = async t => {
+/** @import { ExecutionContext } from 'ava' */
+/** @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options] */
+const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  const store = makeFsStore(statePath);
   const daemon = await makeThixotropeDaemon({
-    store: makeFsStore(statePath),
+    store: harden({
+      ...store,
+      deleteWorker: id => {
+        store.deleteWorker(id);
+        onDeleteWorker(id);
+      },
+    }),
     engine: makePeerJournalReplayEngine(),
     codec: syrupCodec,
     resources: { timer: makeTimerResource },
@@ -329,3 +338,31 @@ test('the hub redeems an inbound gift on behalf of a worker', async t => {
     'the worker called through the hub-redeemed gift',
   );
 });
+
+test.serial(
+  'collection rechecks roots acquired while retiring an earlier candidate',
+  async t => {
+    t.timeout(10_000);
+    let deleting;
+    const daemon = await makeDaemon(t, {
+      onDeleteWorker: id => deleting?.(id),
+    });
+    const first = await daemon.createWorker();
+    const second = await daemon.createWorker();
+    const roots = new Map([
+      [first.workerId, await first.evaluate(COUNTER_SOURCE)],
+      [second.workerId, await second.evaluate(COUNTER_SOURCE)],
+    ]);
+    await first.sleep();
+    await second.sleep();
+    const [victim, rescued] = daemon.inspectReachability().collectible;
+    t.is(daemon.inspectReachability().collectible.length, 2);
+    deleting = id => {
+      if (id === victim)
+        daemon.publish(roots.get(rescued), 'rescued-during-collection');
+    };
+    t.deepEqual(await daemon.collectVats(), [victim]);
+    t.true(daemon.listWorkerIds().includes(rescued));
+    t.is(await E(await daemon.lookup('rescued-during-collection')).incr(), 1);
+  },
+);

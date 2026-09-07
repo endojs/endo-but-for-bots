@@ -16,6 +16,7 @@ import {
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { derivePipeResumption } from './pipe-network.js';
 import { isSessionToken } from './store-fs.js';
+import { inspectVatReachability } from './vat-reachability.js';
 import { makeWorkerSessionRecords } from './worker-session-records.js';
 
 /**
@@ -85,6 +86,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   on the receiving declaration. Its default leaves the result as
  *   unconstrained as it was before, so an embedder that names nothing
  *   is unaffected.
+ * @property {(options?: { keep?: Array<string> }) => ReturnType<typeof inspectVatReachability>} inspectReachability
  * @property {(options?: { keep?: Array<string> }) => Promise<Array<string>>} collectVats
  * @property {() => Promise<void>} shutdown
  * @property {() => Promise<void>} crash drain queued work then terminate without snapshots
@@ -216,6 +218,9 @@ const buildDaemon = async ({
     workerId: ENDPOINT_ID,
     role: 'worker',
   });
+  // These are outgoing answer positions, not restored incoming resolver obligations.
+  // Settled cached answers and imports do not independently pin their vats.
+  const pendingEndpointAnswers = new Set();
   const endpointClient = await makeOcapn({
     codec,
     debugLabel: 'thixotrope-endpoint',
@@ -226,6 +231,14 @@ const buildDaemon = async ({
         /** @type {string} */ slot,
         /** @type {FarRef<object>} */ value,
       ) => {
+        if (slot[0] === 'a' && slot[1] === '-') {
+          const position = slot.slice(2);
+          pendingEndpointAnswers.add(position);
+          const settled = () => {
+            pendingEndpointAnswers.delete(position);
+          };
+          void Promise.resolve(value).then(settled, settled);
+        }
         if (slot[0] === 'o' && slot[1] === '-') {
           importPositions.set(value, BigInt(slot.slice(2)));
         }
@@ -863,6 +876,24 @@ const buildDaemon = async ({
     }
   };
 
+  /** @param {{keep?: string[]}} [options] */
+  const inspectReachability = ({ keep = [] } = {}) =>
+    inspectVatReachability({
+      workers: [...workers].map(([workerId, entry]) => ({
+        workerId,
+        awake: entry.transport.isAwake(),
+        debugLabel: store.provideWorkerStore(workerId).getMeta().debugLabel,
+      })),
+      hubState: store.getHubState(),
+      endpointExports: store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()
+        ?.exports,
+      endpointPendingAnswers: [...pendingEndpointAnswers],
+      connectedSessions: [...connectionSessions.values()].flatMap(binding =>
+        binding ? [binding.key] : [],
+      ),
+      keep,
+    });
+
   /** @type {ThixotropeDaemon} */
   const daemon = {
     location,
@@ -902,48 +933,18 @@ const buildDaemon = async ({
     },
     unpublish: secret => hub.unpublish(secret),
     lookup,
+    inspectReachability,
     collectVats: async ({ keep = [] } = {}) => {
-      const { publishedOrigins, holdings } = hub.inspect();
-      const marked = new Set(keep);
-      for (const origin of publishedOrigins) {
-        if (workers.has(/** @type {string} */ (origin))) {
-          marked.add(origin);
+      const candidates = inspectReachability({ keep }).collectible;
+      const swept = [];
+      for (const workerId of candidates) {
+        // Retirement yields: a new root or message may have appeared since the
+        // previous victim. Recheck instead of sweeping a stale candidate list.
+        if (inspectReachability({ keep }).collectible.includes(workerId)) {
+          // eslint-disable-next-line no-await-in-loop
+          await retireWorkerNow(workerId);
+          swept.push(workerId);
         }
-      }
-      for (const [workerId, entry] of workers.entries()) {
-        if (entry.transport.isAwake()) {
-          marked.add(workerId);
-        }
-      }
-      // Holder keeps target: a worker stays if a remote peer, a
-      // marked worker, or the keep list holds a reference into it.
-      // The endpoint is deliberately not a root (its cached shells
-      // must not pin every worker). Propagate to a fixpoint.
-      const isRootHolder = (/** @type {string} */ holder) =>
-        holder !== ENDPOINT_SESSION && !workers.has(holder);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const { origin, holders } of holdings) {
-          if (workers.has(origin) && !marked.has(origin)) {
-            if (
-              holders.some(
-                (/** @type {string} */ holder) =>
-                  isRootHolder(holder) || marked.has(holder),
-              )
-            ) {
-              marked.add(origin);
-              changed = true;
-            }
-          }
-        }
-      }
-      const swept = [...workers.keys()].filter(
-        workerId => !marked.has(workerId),
-      );
-      for (const workerId of swept) {
-        // eslint-disable-next-line no-await-in-loop
-        await retireWorkerNow(workerId);
       }
       return harden(swept.sort());
     },

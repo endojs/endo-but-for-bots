@@ -32,6 +32,8 @@ try {
       process.removeListener('SIGTERM', stop);
     }
   } else if (
+    command === 'reachability' ||
+    command === 'collect' ||
     command === 'install' ||
     command === 'applications' ||
     command === 'inventory' ||
@@ -101,7 +103,9 @@ try {
       } else {
         const result = await client.call(command);
         console.log(
-          command === 'status' || command === 'applications'
+          ['status', 'applications', 'reachability', 'collect'].includes(
+            command,
+          )
             ? JSON.stringify(result, null, 2)
             : result,
         );
@@ -112,7 +116,7 @@ try {
     }
   } else {
     console.log(
-      'Usage: thix serve|attach|install|applications|inventory|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|applications|inventory|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
