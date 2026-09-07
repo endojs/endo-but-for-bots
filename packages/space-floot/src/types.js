@@ -8,6 +8,10 @@
 export {};
 
 /**
+ * `pending` marks a submission the host has accepted but not yet run: it is
+ * queued behind the turn in flight, and `pendingId` identifies it to
+ * `sendPendingNow`, `editPending` and `cancelPending`.
+ *
  * @typedef {{
  *   role: 'user' | 'assistant' | 'tool',
  *   text?: string,
@@ -15,6 +19,8 @@ export {};
  *   name?: string,
  *   args?: string,
  *   result?: string | null,
+ *   pending?: boolean,
+ *   pendingId?: number,
  *   meta?: { mail?: { from?: string } },
  * }} FlootMessage
  */
@@ -108,6 +114,9 @@ export {};
  * @property {(listener: () => void) => () => void} subscribe
  * @property {(text?: string) => void} send
  * @property {() => void} stop
+ * @property {(pendingId: number) => void} [sendPendingNow]
+ * @property {(pendingId: number, text: string) => void} [editPending]
+ * @property {(pendingId: number) => void} [cancelPending]
  * @property {(id: string) => void} selectSession
  * @property {(presetId?: string, model?: string, reasoningEffort?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession

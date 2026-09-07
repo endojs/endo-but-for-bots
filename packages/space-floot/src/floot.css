@@ -21,7 +21,6 @@
   --fl-green: #22c55e;
   --fl-amber: #f59e0b;
   --fl-tool: #a78bfa;
-  --fl-tool-result: #86efac;
   --fl-mail: #0e7490;
   --fl-mail-text: #e0f2fe;
   position: relative;
@@ -628,16 +627,160 @@
   max-height: 150px;
   overflow-y: auto;
 }
-.floot-tool.result {
-  background: #1a2e1a;
-  border-color: #2a3e2a;
-  color: var(--fl-tool-result);
+/* `.floot-tool` is now emitted only by the raw debug view, which has no result
+   rows: a tool call and its result are one action entry below, so the `result`
+   modifier this block used to carry went with the two-row rendering. */
+
+/* ── Agent actions ──────────────────────────────────────────────────────────
+   Every action between two replies collapses into one group, and each action
+   inside it collapses its call and result together. Both are closed by default
+   so the transcript reads as conversation, with the machinery one click away. */
+.floot-actions {
+  max-width: 80%;
+  background: #16162a;
+  border: 1px solid #2a2a3e;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--fl-tool);
+  overflow: hidden;
+  animation: floot-fade 0.15s ease;
 }
-.floot-tool.result .floot-tool-label {
+.floot-actions-head,
+.floot-action-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.floot-actions-head:hover,
+.floot-action-head:hover {
+  background: #1e1e36;
+}
+.floot-caret {
+  flex: none;
+  color: #7c6fbf;
+}
+.floot-actions-count {
+  flex: none;
+  color: #c4b5fd;
+  font-weight: 600;
+}
+.floot-actions-detail,
+.floot-action-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7c6fbf;
+}
+.floot-action-preview {
+  color: #6b6b8c;
+}
+.floot-actions-body {
+  border-top: 1px solid #2a2a3e;
+}
+.floot-action + .floot-action {
+  border-top: 1px solid #23233a;
+}
+.floot-action-name {
+  flex: none;
+  color: #a5b4fc;
+}
+.floot-action-running {
+  flex: none;
+  margin-left: auto;
+  color: var(--fl-green);
+}
+.floot-action-body {
+  padding: 0 0.7rem 0.6rem 1.5rem;
+}
+.floot-action-section + .floot-action-section {
+  margin-top: 0.5rem;
+}
+.floot-action-section.result .floot-tool-label {
   color: #4ade80;
 }
-.floot-tool.result .floot-tool-pre {
+.floot-action-section.result .floot-tool-pre {
   color: #bbf7d0;
+}
+
+/* JavaScript tokens for the exec-family entries. */
+.floot-code {
+  color: #d8d8f0;
+}
+.floot-tok-keyword {
+  color: #c792ea;
+}
+.floot-tok-literal,
+.floot-tok-number {
+  color: #f78c6c;
+}
+.floot-tok-string,
+.floot-tok-template {
+  color: #c3e88d;
+}
+.floot-tok-regexp,
+.floot-tok-punctuation {
+  color: #89ddff;
+}
+.floot-tok-comment {
+  color: #676e95;
+  font-style: italic;
+}
+.floot-tok-identifier {
+  color: #d8d8f0;
+}
+
+/* ── Pending submissions ───────────────────────────────────────────────────
+   A queued message renders after the live turn, below the thinking indicator.
+   Position and muting carry the meaning — it is visibly not sent yet — so it
+   needs no badge; a label on every queued line would just be noise. */
+.floot-msg-row.pending .floot-msg {
+  opacity: 0.55;
+  background: #2a2a3e;
+  color: #b8b8cc;
+}
+.floot-pending-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+}
+.floot-pending-action {
+  padding: 0 0.4rem;
+  background: none;
+  border: 1px solid #2a2a3e;
+  border-radius: 6px;
+  color: #7c6fbf;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.7rem;
+}
+.floot-pending-action:hover {
+  background: #1e1e36;
+  color: #c4b5fd;
+}
+.floot-pending-delete:hover {
+  border-color: #7c2a2a;
+  color: #f87171;
+}
+.floot-pending-input {
+  width: min(80%, 32rem);
+  min-height: 3.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #4a4a6a;
+  border-radius: 12px;
+  background: #1a1a2e;
+  color: var(--fl-user-text);
+  font: inherit;
+  resize: vertical;
 }
 
 .floot-backdrop {
@@ -804,18 +947,27 @@
 
 /* ── Narrow screens, continued ─────────────────────────────────────────────
    The drawer sidebar above handles navigation; these are about the transcript
-   itself. A bubble capped at 80% of a 390px screen wastes a third of the width
-   it needs most.
-
-   Scoped to the classes this branch's transcript actually emits. The round
-   this block came from also carried rules for an action-group and pending-
-   action UI (`.floot-action*`, `.floot-pending-*`) that arrives with a later
-   change; those selectors match nothing here, so they are left for the change
-   that brings the markup rather than kept as rules no one can see working. */
+   itself, which grew action groups and pending controls. A bubble capped at
+   80% of a 390px screen wastes a third of the width it needs most. */
 @media (max-width: 640px) {
   .floot-msg,
+  .floot-actions,
   .floot-tool {
     max-width: 92%;
+  }
+
+  /* An action header is name + preview + state on one line; on a phone the
+     preview has nowhere to go, so let the row wrap instead of clipping the
+     part that says what the action did. */
+  .floot-actions-head,
+  .floot-action-head {
+    flex-wrap: wrap;
+  }
+
+  .floot-actions-detail,
+  .floot-action-preview {
+    flex-basis: 100%;
+    white-space: normal;
   }
 
   /* Code and results: wrap rather than scroll sideways, and give them more of
@@ -824,5 +976,20 @@
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 40vh;
+  }
+
+  .floot-action-body {
+    padding-left: 0.7rem;
+  }
+
+  /* Touch targets: these were sized for a pointer. */
+  .floot-pending-action,
+  .floot-actions-head,
+  .floot-action-head {
+    min-height: 36px;
+  }
+
+  .floot-pending-input {
+    width: 100%;
   }
 }
