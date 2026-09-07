@@ -604,8 +604,16 @@ Beyond the podman prerequisites above, a policy slice needs:
 - A prepared network namespace holding the broker's loopback listener
   and no routable interface, named by `brokerSidecar` — as a running
   container, or as a namespace pinned at a path.
-- Each declared volume created with a storage quota, since nothing can
-  impose one on a volume after the fact.
+- Each declared volume provisioned with an enforced storage quota before use.
+  Pass a trusted `volumeQuota` observer when constructing the sandbox plugin
+  or Podman driver; a recorded Podman `size` option is not enforcement evidence.
+  `@endo/sandbox/xfs-volume-quota.js` provides an XFS observer that binds the
+  kernel project hard limit and inheritance flag to the volume path, device,
+  and inode.
+  Its bounded, read-only command capability needs host quota-read privilege.
+  The host must assign a unique project recursively to the empty volume before
+  use and retain exclusive control of quota assignment and parent directories.
+  Ordinary rootless containers cannot be given that host privilege.
 - An image pinned and resolvable by digest in local storage. Under a
   policy the whole reference must be in `name@sha256:<64 hex>` form:
   it reaches the runtime as a positional argument, so one beginning

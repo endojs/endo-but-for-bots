@@ -165,10 +165,7 @@ export const makeCgroup2Probe = ({ fs: fsOverride } = {}) => {
       fsImpl = {
         async readFile(path, encoding) {
           const dec = new TextDecoder(encoding);
-          const raw = await fsModule.promises.readFile(
-            path,
-            /** @type {any} */ (encoding),
-          );
+          const raw = await fsModule.promises.readFile(path);
           return dec.decode(raw);
         },
       };

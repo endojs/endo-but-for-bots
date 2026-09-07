@@ -113,9 +113,9 @@ const ANCHOR_INSPECT = harden({
       { Name: 'RLIMIT_CORE', Soft: 0, Hard: 0 },
     ],
     Tmpfs: {
-      '/tmp': 'rw,nosuid,nodev,size=2147483648',
-      '/run': 'rw,nosuid,nodev,size=1073741824',
-      '/scratch': 'rw,nosuid,nodev,size=1073741824',
+      '/tmp': 'rw,nosuid,nodev,size=2147483648,uid=1000,gid=1000,mode=0700',
+      '/run': 'rw,nosuid,nodev,size=1073741824,uid=1000,gid=1000,mode=0700',
+      '/scratch': 'rw,nosuid,nodev,size=1073741824,uid=1000,gid=1000,mode=0700',
     },
   },
   Mounts: [
@@ -245,8 +245,14 @@ const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
     'image-exists': {},
     'image-env': { stdout: '["PATH=/usr/local/bin:/usr/bin:/bin"]\n' },
     'image-digest': { stdout: `${DIGEST}\n` },
-    'volume-workspace-s1': { stdout: '{"Options":{"size":"8GiB"}}\n' },
-    'volume-codex-state-s1': { stdout: '{"Options":{"o":"size=4GiB"}}\n' },
+    'volume-workspace-s1': {
+      stdout:
+        '{"Mountpoint":"/volumes/workspace-s1/_data","Options":{"size":"8GiB"}}\n',
+    },
+    'volume-codex-state-s1': {
+      stdout:
+        '{"Mountpoint":"/volumes/codex-state-s1/_data","Options":{"o":"size=4GiB"}}\n',
+    },
     'container-inspect': { stdout: `${JSON.stringify([ANCHOR_INSPECT])}\n` },
     'sidecar-pid': { stdout: `${SIDECAR_PID}\n` },
     create: {},
@@ -290,7 +296,7 @@ const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
 };
 
 /**
- * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean }} [options]
+ * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean, volumeQuota?: any }} [options]
  */
 const makeDriverUnderTest = (options = {}) => {
   /** @type {Array<{ command: string, args: string[] }>} */
@@ -306,6 +312,22 @@ const makeDriverUnderTest = (options = {}) => {
     env: {},
     ownerId: 'formula-policy-owner',
     procfs: options.procfs ?? makeProcfs(),
+    volumeQuota: Object.hasOwn(options, 'volumeQuota')
+      ? options.volumeQuota
+      : harden({
+          observe: async ({ name, mountpoint }) =>
+            harden({
+              version: 'VolumeQuotaEvidenceV1',
+              name,
+              mountpoint,
+              device: '12',
+              inode: name === 'workspace-s1' ? '11' : '12',
+              projectId: name === 'workspace-s1' ? 11 : 12,
+              hardBytes: name === 'workspace-s1' ? 8n * GIB : 4n * GIB,
+              enforced: true,
+              projectInherited: true,
+            }),
+        }),
   });
   return { driver, calls };
 };
@@ -376,10 +398,10 @@ test('the anchor is created under the whole policy prefix', async t => {
     'workspace-s1:/workspace:rw,nosuid,nodev',
     'codex-state-s1:/codex-home:rw,nosuid,nodev',
   ]);
-  t.deepEqual(valuesOf('--tmpfs'), [
-    '/tmp:rw,nosuid,nodev,size=2147483648',
-    '/run:rw,nosuid,nodev,size=1073741824',
-    '/scratch:rw,nosuid,nodev,size=1073741824',
+  t.deepEqual(valuesOf('--mount'), [
+    'type=tmpfs,destination=/tmp,rw,nosuid,nodev,tmpfs-size=2147483648,tmpfs-mode=0700,U=true,notmpcopyup',
+    'type=tmpfs,destination=/run,rw,nosuid,nodev,tmpfs-size=1073741824,tmpfs-mode=0700,U=true,notmpcopyup',
+    'type=tmpfs,destination=/scratch,rw,nosuid,nodev,tmpfs-size=1073741824,tmpfs-mode=0700,U=true,notmpcopyup',
   ]);
   // The anchor runs the argv the caller named from the pinned image.
   t.deepEqual(argv.slice(-3), [IMAGE, '/bin/sleep', 'infinity']);
@@ -633,6 +655,21 @@ test('the orphan sweep runs before the anchor it is evidence about', async t => 
   t.true(sweepAt < createAt, 'the sweep ran first');
 });
 
+test('attested anchor and operation preserve stdin at create and attach', async t => {
+  const { driver, calls } = makeDriverUnderTest();
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  t.teardown(() => driver.teardown(slice));
+  const proc = await driver.spawn(slice, ['/bin/cat'], {});
+  await proc.wait();
+  const created = createCalls(calls);
+  t.is(created.length, 2);
+  for (const call of created) t.true(call.args.includes('--interactive'));
+  const attach = calls.find(
+    call => call.args[0] === 'start' && call.args.includes('--attach'),
+  );
+  t.true(attach?.args.includes('--interactive'));
+});
+
 test('an operation the engine resolved differently is refused', async t => {
   let inspectCount = 0;
   const { driver } = makeDriverUnderTest({
@@ -640,11 +677,11 @@ test('an operation the engine resolved differently is refused', async t => {
       'container-inspect': {
         get stdout() {
           inspectCount += 1;
-          // The anchor is inspected twice (before and after the procfs
-          // reads); the operation's inspect is the third, and this host
+          // The anchor is inspected before start and twice around procfs
+          // reads; the operation's inspect is the fourth, and this host
           // has quietly stopped applying the pid ceiling by then.
           const record =
-            inspectCount >= 3
+            inspectCount >= 4
               ? {
                   ...ANCHOR_INSPECT,
                   HostConfig: { ...ANCHOR_INSPECT.HostConfig, PidsLimit: 0 },
@@ -680,11 +717,11 @@ test('an anchor that stopped while it was read is not attested', async t => {
       'container-inspect': {
         get stdout() {
           inspectCount += 1;
-          // The second inspect is the re-check after the procfs reads:
+          // The third inspect is the re-check after the procfs reads:
           // an `attestationArgv` that did not in fact block has exited,
           // and the kernel may have handed that pid to someone else.
           const record =
-            inspectCount >= 2
+            inspectCount >= 3
               ? { ...ANCHOR_INSPECT, State: { Running: false, Pid: 0 } }
               : ANCHOR_INSPECT;
           return `${JSON.stringify([record])}\n`;
@@ -737,7 +774,7 @@ test('a refused operation gives its reservation back', async t => {
           // Refuse the first operation only: the second must still be
           // admissible, which it is not if the first kept its slot.
           const record =
-            inspectCount === 3
+            inspectCount === 4
               ? {
                   ...ANCHOR_INSPECT,
                   HostConfig: { ...ANCHOR_INSPECT.HostConfig, PidsLimit: 0 },
@@ -883,4 +920,33 @@ test('a broker-only slice does not probe for a rootless network backend', async 
   await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   // It joins the namespace the policy names and never consults one.
   t.false(calls.some(call => ['slirp4netns', 'pasta'].includes(call.command)));
+});
+
+test('recorded volume size cannot substitute for kernel quota evidence', async t => {
+  const { driver } = makeDriverUnderTest({ volumeQuota: undefined });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /storage ceiling/,
+  });
+});
+
+test('quota evidence for a different physical volume fails construction', async t => {
+  const { driver } = makeDriverUnderTest({
+    volumeQuota: harden({
+      observe: async ({ name }) =>
+        harden({
+          version: 'VolumeQuotaEvidenceV1',
+          name,
+          mountpoint: '/other/_data',
+          device: '12',
+          inode: '11',
+          projectId: 11,
+          hardBytes: 8n * GIB,
+          enforced: true,
+          projectInherited: true,
+        }),
+    }),
+  });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /storage ceiling/,
+  });
 });

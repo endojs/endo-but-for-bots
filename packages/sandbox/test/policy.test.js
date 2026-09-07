@@ -110,9 +110,10 @@ const makeInspect = mutate => {
         { Name: 'RLIMIT_CORE', Soft: 0, Hard: 0 },
       ],
       Tmpfs: {
-        '/tmp': 'rw,nosuid,nodev,size=2147483648',
-        '/run': 'rw,nosuid,nodev,size=1073741824',
-        '/scratch': 'rw,nosuid,nodev,size=1073741824',
+        '/tmp': 'rw,nosuid,nodev,size=2147483648,uid=1000,gid=1000,mode=0700',
+        '/run': 'rw,nosuid,nodev,size=1073741824,uid=1000,gid=1000,mode=0700',
+        '/scratch':
+          'rw,nosuid,nodev,size=1073741824,uid=1000,gid=1000,mode=0700',
       },
     },
     Mounts: [
@@ -365,12 +366,12 @@ test('policy argv carries every ceiling the request named', t => {
       'workspace-s1:/workspace:rw,nosuid,nodev',
       '--volume',
       'codex-state-s1:/codex-home:rw,nosuid,nodev',
-      '--tmpfs',
-      '/tmp:rw,nosuid,nodev,size=2147483648',
-      '--tmpfs',
-      '/run:rw,nosuid,nodev,size=1073741824',
-      '--tmpfs',
-      '/scratch:rw,nosuid,nodev,size=1073741824',
+      '--mount',
+      'type=tmpfs,destination=/tmp,rw,nosuid,nodev,tmpfs-size=2147483648,tmpfs-mode=0700,U=true,notmpcopyup',
+      '--mount',
+      'type=tmpfs,destination=/run,rw,nosuid,nodev,tmpfs-size=1073741824,tmpfs-mode=0700,U=true,notmpcopyup',
+      '--mount',
+      'type=tmpfs,destination=/scratch,rw,nosuid,nodev,tmpfs-size=1073741824,tmpfs-mode=0700,U=true,notmpcopyup',
     ],
   );
 });
@@ -964,3 +965,26 @@ test('a security option the policy never asked for is refused', t => {
     ),
   );
 });
+
+for (const option of ['uid=0', 'gid=0', 'mode=0777']) {
+  test(`tmpfs ownership drift ${option} fails attestation`, t => {
+    const field = option.split('=')[0];
+    const inspect = makeInspect(record => {
+      record.HostConfig.Tmpfs['/tmp'] = record.HostConfig.Tmpfs['/tmp']
+        .split(',')
+        .filter(part => !part.startsWith(`${field}=`))
+        .concat(option)
+        .join(',');
+    });
+    t.throws(
+      () =>
+        attestSlicePolicy(
+          assertSlicePolicyRequest(makeRequest()),
+          makeState({ inspect }),
+        ),
+      {
+        message: /mount tmp ownership/,
+      },
+    );
+  });
+}

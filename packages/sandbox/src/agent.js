@@ -5,6 +5,7 @@ import { makePodmanDriver } from './drivers/podman.js';
 import { makeSandboxFactory } from './factory.js';
 
 /** @import { SandboxDriver, SandboxFactory, SandboxPowers } from './types.js' */
+/** @import { VolumeQuotaEvidence } from './xfs-volume-quota.js' */
 
 /**
  * `make-unconfined` entry point for the `@endo/sandbox` plugin.
@@ -25,7 +26,9 @@ import { makeSandboxFactory } from './factory.js';
  *
  * @param {SandboxPowers} powers - guest powers from the daemon
  * @param {unknown} context - formula cancellation context
- * @param {{ env?: Record<string, string>, ownerId?: string }} [options]
+ * @param {{ env?: Record<string, string>, ownerId?: string,
+ * volumeQuota?: { observe(input: {name: string, mountpoint: string}): Promise<VolumeQuotaEvidence> } }} [options]
+ *   Operator construction options, never supplied by a slice client.
  * @returns {Promise<SandboxFactory>}
  */
 export const make = async (powers, context, options = {}) => {
@@ -52,6 +55,7 @@ export const make = async (powers, context, options = {}) => {
       makePodmanDriver({
         env: options.env ?? {},
         ownerId: options.ownerId ?? options.env?.ENDO_SANDBOX_OWNER_ID,
+        volumeQuota: options.volumeQuota,
       }),
     );
   } catch (e) {

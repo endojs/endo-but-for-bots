@@ -168,15 +168,14 @@ test('dispose aborts a pending body read and refuses subsequent dispatch', async
   });
   let cancelled = false;
   const body = new ReadableStream({
-    pull() {
-      began();
-    },
+    pull() {},
     cancel() {
       cancelled = true;
     },
   });
   const lease = setup(async (_url, options) => {
     signal = options.signal;
+    began();
     return new Response(body);
   });
   t.teardown(lease.dispose);
@@ -212,4 +211,37 @@ test('request bounds, header smuggling and redirects are rejected', async t => {
   await t.throwsAsync(() => E(redirected.transport).request(request), {
     message: 'Provider transport failed',
   });
+});
+
+test('incremental reader delivers before EOF and retains deadline while idle', async t => {
+  t.timeout(1000);
+  let closed = false;
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('hello'));
+    },
+    cancel() {
+      closed = true;
+    },
+  });
+  const lease = setup(async () => new Response(body));
+  t.teardown(lease.dispose);
+  const response = await E(lease.transport).requestStream(request);
+  t.deepEqual(await E(response.reader).next(), { done: false, value: 'hello' });
+  t.is(lease.timers.size, 1);
+  lease.timeout();
+  await t.throwsAsync(() => E(response.reader).next(), { message: /stopped/ });
+  t.true(closed);
+  t.is(lease.timers.size, 0);
+});
+
+test('incremental cancellation settles an outstanding pull', async t => {
+  t.timeout(1000);
+  const lease = setup(async () => new Response(new ReadableStream()));
+  t.teardown(lease.dispose);
+  const response = await E(lease.transport).requestStream(request);
+  const pull = E(response.reader).next();
+  await E(response.reader).return();
+  await t.throwsAsync(pull, { message: /failed/ });
+  t.is(lease.timers.size, 0);
 });

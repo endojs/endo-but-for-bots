@@ -15,7 +15,8 @@
  *      actually did — the container runtime's own resolved view, the
  *      namespace links of the live process, the interface inventory of
  *      the network namespace it joined, and the quota recorded against
- *      each writable volume — and returns a `SlicePolicyAttestationV1`
+ *      each writable volume from a kernel quota observer — and returns a
+ *      `SlicePolicyAttestationV1`
  *      record only when every control is proved.
  *
  * The two halves are deliberately separate. Requested flags are a
@@ -568,8 +569,8 @@ export const assemblePolicyArgv = policy => {
   for (const mount of policy.mounts) {
     if (mount.kind === 'tmpfs') {
       argv.push(
-        '--tmpfs',
-        `${mount.destination}:rw,nosuid,nodev,size=${mount.sizeBytes}`,
+        '--mount',
+        `type=tmpfs,destination=${mount.destination},rw,nosuid,nodev,tmpfs-size=${mount.sizeBytes},tmpfs-mode=0700,U=true,notmpcopyup`,
       );
     } else {
       argv.push(
@@ -633,7 +634,7 @@ const effectiveMountOptions = options => {
   } else {
     return [];
   }
-  return parts.map(option => option.trim().split('=')[0]).filter(o => o !== '');
+  return parts.map(option => option.trim()).filter(o => o !== '');
 };
 
 /**
@@ -806,7 +807,7 @@ const attestMounts = (policy, state) => {
         return unproved(`mount ${mount.role}`, `missing ${missing.join(',')}`);
       }
       // The writable ceiling: a tmpfs carries its own `size=`, a volume
-      // carries a quota the storage driver recorded against it. Neither
+      // carries a quota independently observed from the kernel. Neither
       // is a flag we can take on faith, so both are read back.
       let ceiling = effective.sizeBytes;
       if (mount.kind === 'volume') {
@@ -828,6 +829,21 @@ const attestMounts = (policy, state) => {
       }
       if (ceiling !== mount.sizeBytes) {
         return unproved(`mount ${mount.role} storage ceiling`, ceiling);
+      }
+      if (mount.kind === 'tmpfs') {
+        // The single-UID slice must be able to use its declared writable roots.
+        // Inspect must preserve the requested ownership, not image-directory
+        // defaults such as root-owned /run or /workspace.
+        const optionValues = Object.fromEntries(
+          effective.options.map(option => option.split('=')),
+        );
+        if (
+          optionValues.uid !== String(policy.uid) ||
+          optionValues.gid !== String(policy.gid) ||
+          !['0700', '700'].includes(optionValues.mode)
+        ) {
+          return unproved(`mount ${mount.role} ownership`);
+        }
       }
       return harden({
         role: mount.role,

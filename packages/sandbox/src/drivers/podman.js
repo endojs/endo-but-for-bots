@@ -3,6 +3,7 @@
 /* global Buffer, process */
 
 import { makeError, q, X } from '@endo/errors';
+import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeCgroup2Probe } from '../limits.js';
@@ -18,7 +19,6 @@ import {
   assemblePolicyArgv,
   assertSlicePolicyRequest,
   attestSlicePolicy,
-  parseByteSize,
   PINNED_IMAGE_REFERENCE_PATTERN,
   REQUIRED_CGROUP_CONTROLLERS,
   sliceConfigFingerprint,
@@ -469,6 +469,9 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
     `${PODMAN_OWNER_LABEL}=${extras.ownerId}`,
     '--label',
     `${PODMAN_OPERATION_LABEL}=${extras.operationId}`,
+    // start --interactive only attaches stdin if create kept it open.
+    // The same setting applies to the attested anchor and each operation.
+    '--interactive',
   ];
 
   if (extras.policyArgv !== undefined) {
@@ -598,6 +601,7 @@ harden(assembleCreateArgv);
  *                                                            captured
  *                                                            `procfs` text
  *                                                            in tests.
+ * @param {{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing.
  * @returns {SandboxDriver}
  */
 export const makePodmanDriver = ({
@@ -606,6 +610,7 @@ export const makePodmanDriver = ({
   ociRuntime,
   ownerId,
   procfs,
+  volumeQuota,
 } = {}) => {
   // Lazy-resolve `child_process` so callers in test environments can
   // inject a stub without paying the import cost up front.
@@ -1119,14 +1124,13 @@ export const makePodmanDriver = ({
   };
 
   /**
-   * Read back what a named volume actually is: the storage quota
-   * recorded against it, and whether it is a host directory wearing a
-   * volume's name.
+   * Read back what a named volume actually is: an independently observed
+   * kernel quota, and whether it is a host directory wearing a volume's name.
    *
    * A volume is durable state the operator created; the sandbox does
    * not create it and cannot impose a ceiling on it after the fact, so
-   * the ceiling has to have been recorded by whoever did. A `null`
-   * ceiling is an unproved one.
+   * a trusted host observer must read back its enforced ceiling. Podman's
+   * recorded size option is only a request. A `null` ceiling is unproved.
    *
    * The host-backing half matters because `--opt device=/home/agent
    * --opt o=bind` produces something the runtime reports as
@@ -1161,8 +1165,8 @@ export const makePodmanDriver = ({
       return unreadable;
     }
     const entry = Array.isArray(record) ? record[0] : record;
-    const options = entry?.Options;
-    if (typeof options !== 'object' || options === null) return unreadable;
+    const options = entry?.Options ?? {};
+    if (typeof options !== 'object') return unreadable;
     const mountOptions =
       typeof options.o === 'string' ? options.o.split(',') : [];
     const hostPath =
@@ -1171,15 +1175,55 @@ export const makePodmanDriver = ({
         : mountOptions.includes('bind')
           ? (options.device ?? '(unnamed)')
           : null;
-    // Storage drivers record the ceiling either as a `size` option or
-    // folded into the mount-option string a `local` volume carries.
-    const direct = parseByteSize(options.size);
-    const folded = mountOptions
-      .find(option => option.startsWith('size='))
-      ?.slice('size='.length);
+    // Options.size is the request stored by Podman, not observed enforcement.
+    // Rootless Podman can record it without allocating a project quota.
+    // Only an independent trusted host observer may establish this ceiling.
+    let sizeBytes = null;
+    if (
+      hostPath === null &&
+      volumeQuota !== undefined &&
+      typeof entry?.Mountpoint === 'string'
+    ) {
+      const evidence = await E(volumeQuota).observe({
+        name,
+        mountpoint: entry.Mountpoint,
+      });
+      const projectId = evidence?.projectId;
+      const hardBytes = evidence?.hardBytes;
+      const expectedKeys = [
+        'version',
+        'name',
+        'mountpoint',
+        'device',
+        'inode',
+        'projectId',
+        'hardBytes',
+        'enforced',
+        'projectInherited',
+      ].sort();
+      if (
+        evidence?.version === 'VolumeQuotaEvidenceV1' &&
+        evidence.name === name &&
+        evidence.mountpoint === entry.Mountpoint &&
+        typeof evidence.device === 'string' &&
+        /^[0-9]+$/.test(evidence.device) &&
+        typeof evidence.inode === 'string' &&
+        /^[1-9][0-9]*$/.test(evidence.inode) &&
+        typeof projectId === 'number' &&
+        Number.isInteger(projectId) &&
+        projectId > 0 &&
+        projectId <= 0xffff_ffff &&
+        typeof hardBytes === 'bigint' &&
+        hardBytes > 0n &&
+        evidence.enforced === true &&
+        evidence.projectInherited === true &&
+        Object.keys(evidence).sort().join(',') === expectedKeys.join(',')
+      ) {
+        sizeBytes = hardBytes;
+      }
+    }
     return harden({
-      sizeBytes:
-        direct ?? (folded === undefined ? null : parseByteSize(folded)),
+      sizeBytes,
       hostPath: typeof hostPath === 'string' ? hostPath : null,
     });
   };
@@ -1428,6 +1472,14 @@ export const makePodmanDriver = ({
           X`podman policy anchor create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
         );
       }
+      // Compare operation admission to the anchor at the same lifecycle
+      // stage. Podman materializes inherited defaults (notably NPROC) at
+      // start, so a running anchor's metadata differs from an identical
+      // not-yet-started operation. Kernel attestation below still observes
+      // the running anchor and verifies its effective controls.
+      const configuredFingerprint = sliceConfigFingerprint(
+        await inspectContainer(cp, runtime, anchorName),
+      );
       const started = await spawnAndCollect(
         cp,
         'podman',
@@ -1505,7 +1557,7 @@ export const makePodmanDriver = ({
       claimNamespaces(anchorName, namespaces);
       return harden({
         anchorName,
-        fingerprint: sliceConfigFingerprint(inspect),
+        fingerprint: configuredFingerprint,
         attestation,
       });
     } catch (e) {
