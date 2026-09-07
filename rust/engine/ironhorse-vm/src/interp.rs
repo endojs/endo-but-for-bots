@@ -48709,6 +48709,18 @@ impl Interp {
         }
     }
 
+    /// Whether a [`ReadKey`] names a canonical integer index — answerable
+    /// without a name when it is an `Index`, and by the name's own spelling
+    /// when the table already holds one.
+    fn read_key_is_index(&self, key: ReadKey) -> bool {
+        match key {
+            ReadKey::Index(_) => true,
+            ReadKey::Id(id) => self
+                .string_key_name(id)
+                .is_some_and(|name| string_to_index(&name).is_some()),
+        }
+    }
+
     /// The name id for a [`ReadKey`] that is about to be used by an operation
     /// which CREATES a property, minting one if the table has never held it.
     ///
@@ -49207,6 +49219,35 @@ impl Interp {
                 return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
                     Ok(vm.array_define_index(inst, id, index, desc))
                 });
+            }
+            // A String wrapper's in-range index is an immutable own property.
+            // A define against it CREATES nothing — the answer is only whether
+            // the descriptor is compatible with the one already there — so it
+            // needs no name either.
+            //
+            // This arm is what `harden` needs. XS's `fx_harden` clears its
+            // `useIndexes` flag only for a TYPED ARRAY (`xsLockdown.c:232`),
+            // so a String wrapper's indices are reached and defined like any
+            // other key; ironhorse must reach them too, and minting a name per
+            // unit made `harden(new String('x'.repeat(70000)))` poison the
+            // machine even after the array case was fixed.
+            if let Some(Slot {
+                kind: Kind::String,
+                value: Payload::String(off),
+                ..
+            }) = self.wrapper_data.get(&inst).copied()
+            {
+                let shadowed = self
+                    .index_read_key_id(index)
+                    .is_some_and(|id| self.find_property(inst, id).is_some());
+                if !shadowed && u64::from(index) < self.str_len(off) as u64 {
+                    let current = self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+                        vm.uninterned_index_own_descriptor(code, inst, index)
+                    })?;
+                    if let Some(current) = current {
+                        return Ok(self.is_compatible_descriptor(false, &desc, Some(&current)));
+                    }
+                }
             }
         }
         let id = self.intern_key_unmetered(&index.to_string());
@@ -50140,15 +50181,18 @@ impl Interp {
         let skip_indexes = self.typed_arrays.contains_key(&inst);
         for key in self.mop_own_keys(code, inst)? {
             self.meter.tick_raw(HARDEN_PER_KEY_METERING / 2);
-            let id = self.to_property_id(code, key)?;
-            if skip_indexes
-                && self
-                    .string_key_name(id)
-                    .is_some_and(|name| string_to_index(&name).is_some())
-            {
+            // Stamping flags OBSERVES the key set and rewrites existing
+            // entries; it creates no name. `set_integrity_level` was taught
+            // this and `harden` — which is the entry point a SES-shaped
+            // engine actually calls — has its OWN loop, so it was left
+            // minting a name per key: `Object.freeze(bigArray)` completed
+            // while `harden(bigArray)`, the same freeze, still poisoned the
+            // machine.
+            let read_key = self.to_read_key(code, key)?;
+            if skip_indexes && self.read_key_is_index(read_key) {
                 continue;
             }
-            let Some(current) = self.mop_get_own_property(code, inst, id)? else {
+            let Some(current) = self.mop_get_own_property_read(code, inst, read_key)? else {
                 continue;
             };
             let frozen = if current.is_accessor() {
@@ -50163,7 +50207,9 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 }
             };
-            if !self.mop_define_own_property(code, inst, id, frozen)? {
+            // The descriptor read can run a proxy trap that names this index.
+            let read_key = self.refresh_read_key(read_key);
+            if !self.mop_define_own_property_read(code, inst, read_key, frozen)? {
                 return Err(self.catchable_type_error());
             }
         }
@@ -50175,8 +50221,8 @@ impl Interp {
         }
         for key in keys {
             self.meter.tick_raw(HARDEN_PER_KEY_METERING / 2);
-            let id = self.to_property_id(code, key)?;
-            let Some(descriptor) = self.mop_get_own_property(code, inst, id)? else {
+            let read_key = self.to_read_key(code, key)?;
+            let Some(descriptor) = self.mop_get_own_property_read(code, inst, read_key)? else {
                 continue;
             };
             if let Some(value) = descriptor.value {
@@ -50220,15 +50266,14 @@ impl Interp {
                 .is_some_and(|value| value.kind == Kind::String);
         for key in self.mop_own_keys(code, inst)? {
             self.meter.tick_raw(PETRIFY_PER_KEY_METERING);
-            let id = self.to_property_id(code, key)?;
-            if skip_indexes
-                && self
-                    .string_key_name(id)
-                    .is_some_and(|name| string_to_index(&name).is_some())
-            {
+            // The same observation-only stamp as `harden` above, and the same
+            // reason it must not mint: `petrify` is `harden`'s single-object
+            // half and reaches every key of the object it is handed.
+            let read_key = self.to_read_key(code, key)?;
+            if skip_indexes && self.read_key_is_index(read_key) {
                 continue;
             }
-            let Some(current) = self.mop_get_own_property(code, inst, id)? else {
+            let Some(current) = self.mop_get_own_property_read(code, inst, read_key)? else {
                 continue;
             };
             let frozen = if current.is_accessor() {
@@ -50243,7 +50288,8 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 }
             };
-            if !self.mop_define_own_property(code, inst, id, frozen)? {
+            let read_key = self.refresh_read_key(read_key);
+            if !self.mop_define_own_property_read(code, inst, read_key, frozen)? {
                 return Err(self.catchable_type_error());
             }
         }
