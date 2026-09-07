@@ -5,11 +5,13 @@
 //
 // Floot mirrors fae's factory/driver/guest topology (see @endo/fae) but trades
 // fae's mailbox-driven, fully-buffered reply for a *pull-based streaming*
-// interface: the agent exposes `converse(text) -> replyReader`, where
-// replyReader is a Far StreamReader (src/stream.js) that yields reply-token
-// deltas as the LLM produces them. This is the same wire the voice Space
-// already consumes for transcripts (audio-server-caplet.js), so a client can
-// stream the assistant's reply token-by-token and (later) feed it to TTS.
+// interface: a session exposes `startTurn(text) -> FlootTurn`, whose `watch()`
+// yields a Far StreamReader (src/stream.js) of reply-token deltas as the LLM
+// produces them. This is the same wire the voice Space already consumes for
+// transcripts (audio-server-caplet.js), so a client can stream the assistant's
+// reply token-by-token and (later) feed it to TTS. The turn itself belongs to
+// the daemon (src/session-turn.js): watching is how a client sees it, not what
+// keeps it alive.
 //
 // Persistence and provisioning match fae: per-session conversation history lives
 // in the session guest's petstore via @endo/conversation-tree, and a single
@@ -44,7 +46,7 @@ import {
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
 import { runHostedTurn } from './src/hosted-turn.js';
-import { makeReplyChannel } from './src/stream.js';
+import { makeSessionTurn } from './src/session-turn.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
@@ -154,13 +156,13 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
-// The session facet handed to the UI. `converse` is synchronous (it returns the
-// reply reader immediately, then streams), so it is guarded with `M.call`; the
-// rest are async (`M.callWhen`). Guards are permissive — the daemon path is not
-// runtime-tested here.
+// The session facet handed to the UI. `startTurn` is synchronous (it hands back
+// the turn immediately, before the turn runs), so it is guarded with `M.call`;
+// the rest are async (`M.callWhen`). Guards are permissive — the daemon path is
+// not runtime-tested here.
 const FlootSessionInterface = M.interface('FlootSession', {
   getInfo: M.callWhen().returns(M.record()),
-  converse: M.call(M.any()).returns(M.remotable()),
+  startTurn: M.call(M.any()).returns(M.remotable()),
   getHistory: M.callWhen().returns(M.any()),
   getUsage: M.callWhen().returns(M.any()),
   getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
@@ -1038,9 +1040,10 @@ export const makeStreamingAgent = async (
       stopped
         ? Promise.reject(Error('Floot session agent is shutting down'))
         : runTurn(input, writer, meta, turnController.signal).catch(err => {
-            // A consumer that stopped pulling (reply reader closed) aborts `signal`,
-            // tearing down the in-flight provider stream. That's a clean stop, not a
-            // failure, and the writer is already settled, so swallow it.
+            // A cancelled turn (`FlootTurn.cancel`, or shutdown) aborts
+            // `signal`, tearing down the in-flight provider stream. That's a
+            // clean stop, not a failure, and the turn's owner has already
+            // closed the reply channel, so swallow it.
             if (turnController.signal.aborted) {
               if (
                 err?.name === 'HostedTurnCancellationError' ||
@@ -1489,7 +1492,7 @@ const newSessionId = () =>
  * Each session is, internally, its own EndoGuest (isolated petstore for
  * conversation history, tool endowments, and — later — an inbox). That a session
  * "is a guest" is an implementation detail hidden behind opaque session facets
- * (Far objects with `converse(input) -> replyReader` and `getHistory()`). The
+ * (Far objects with `startTurn(input) -> FlootTurn` and `getHistory()`). The
  * factory operates each session guest's petstore directly via an in-process
  * `makeStreamingAgent`, so there is exactly one pin (the factory) rather than a
  * pin per session.
@@ -2033,29 +2036,27 @@ export const make = (hostPowers, _context, { env } = {}) => {
           });
         },
         /**
+         * Start a turn and hand back a handle to it. The daemon owns the turn:
+         * it drains the reply channel locally and persists the result, so a
+         * caller that stops observing — an unmounted component, a closed tab, a
+         * dropped gateway — does not stop the work. Only `cancel()` does.
+         *
+         * This is the same authority the inbox path already has: a mail turn
+         * runs against a daemon-side buffering writer and nobody's disconnect
+         * can end it. Handing the reply channel itself to the browser gave the
+         * UI turn a weaker guarantee than the mail turn, which is backwards.
+         *
          * @param {string | object} input
-         * @returns {object} replyReader
+         * @returns {object} a FlootTurn
          */
-        converse(input) {
-          // Abort the in-flight turn when the consumer stops pulling the reply
-          // (UI Stop / barge-in): makeReplyChannel fires onClose on
-          // reader.return/throw, aborting the signal threaded into the provider
-          // stream so the model stops generating instead of running on unseen.
-          const controller = new AbortController();
-          const { writer, reader } = makeReplyChannel(() => controller.abort());
-          (async () => {
-            try {
+        startTurn(input) {
+          return makeSessionTurn({
+            run: async (writer, signal) => {
               await assertSessionReady(id);
               const agent = await getAgent(id);
-              await agent.converse(input, writer, undefined, controller.signal);
-            } catch (error) {
-              if (controller.signal.aborted) return;
-              writer.abort(
-                error instanceof Error ? error.message : String(error),
-              );
-            }
-          })();
-          return reader;
+              await agent.converse(input, writer, undefined, signal);
+            },
+          });
         },
         async getHistory() {
           await assertSessionReady(id);
@@ -2116,7 +2117,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           });
         },
         help() {
-          return 'Floot session: converse(input) returns a streaming reply reader; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -2335,7 +2336,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     /** @type {any[]} */ (registry).push(entry);
     await saveRegistry();
     // Build the agent now so the new session immediately follows its inbox
-    // (addressable by mail without waiting for a first UI converse) and its
+    // (addressable by mail without waiting for a first UI turn) and its
     // preset objects are provisioned up front.
     try {
       await getAgent(id);
@@ -2901,7 +2902,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(). Session facets expose converse(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(). Session facets expose startTurn() -> FlootTurn, getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:

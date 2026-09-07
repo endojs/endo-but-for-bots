@@ -4,8 +4,11 @@ A streaming LLM agent harness for the Endo daemon, plus the two voice caplets
 that make it a hands-free voice assistant.
 
 - **Factory** (`agent.js`) — a fae-like factory that owns one guest per chat
-  session and exposes `converse(text) -> replyReader`, a pull-based stream of
-  reply-token deltas (`src/stream.js`).
+  session and exposes `startTurn(text) -> FlootTurn`, a turn the daemon runs and
+  a caller watches through `watch()`, a pull-based stream of reply-token deltas
+  (`src/stream.js`).
+  The turn belongs to the daemon (`src/session-turn.js`): watching is how a
+  client sees it, and only `cancel()` stops it.
 - **Voice caplets** (`voice/`) — two independent, swappable daemon objects:
   - `floot-stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
     (`voice/audio-server-caplet.js`): `transcribe(audioReader) -> textReader`.
