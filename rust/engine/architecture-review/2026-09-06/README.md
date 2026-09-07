@@ -20,6 +20,18 @@ The summary's [Revision history](ARCHITECTURE-REVIEW.md#revision-history)
 records the outcome, each affected finding carries a Status line, and
 Appendix A carries both the original and the refreshed location for every
 finding.
+**Revised again 2026-09-07 against
+[`6c1e1d6b`](https://github.com/endojs/endo-but-for-bots/commit/6c1e1d6b).**
+239 further commits landed, 119 of them touching the reviewed paths, much of it
+in direct response to this review.
+All 191 findings were re-verified again: 37 are fixed, 32 are partially fixed,
+and 122 still stand; 55 are now pinned by a regression test that did not exist
+at review time.
+All six critical findings are closed.
+The earlier revision's per-finding statuses were **not** overwritten: a finding
+resolved since carries an additional Status line, and Appendix A carries a
+location and a status column per revision.
+
 The lens reports and region maps in this directory were **not** revised: they
 are the reviewers' original artifacts and describe `97d8de25` only, so treat a
 claim in them as current only if the summary's entry for that finding still
