@@ -27383,8 +27383,12 @@ impl Interp {
         // raw-exact against XS. It does not: every index whose name is
         // already in the table — which is every index small programs
         // measure — took the same lookup either way, so the claim was
-        // untestable at the sizes it was checked at, and false at the source.
-        // Measured before and after, the raw meter is byte-identical.)
+        // untestable at the sizes it was checked at, and false at the source:
+        // `fx_Array_from_aux` defines through `mxDefineIndex`, which interns
+        // nothing. Computron counts are unchanged; the raw meter drops the
+        // 256 units per NOVEL index name that `intern_key` used to charge,
+        // which is well under one computron for the sizes any test measures
+        // but is not literally zero.)
         let index_key = index as u32;
         let id = self.index_read_key_id(index_key);
         let descriptor = OrdinaryDescriptor {
@@ -42923,11 +42927,22 @@ impl Interp {
         value: Slot,
     ) -> Result<(), Halt> {
         // The id is minted here, before the compact arm that does not read it,
-        // because the pinned XS interns the index name on this path too: the
-        // slot allocation `intern_key` charges is exactly the 256 raw units per
-        // element the oracle charges, and `flat_map_retains_calibrated_dense_metering`
-        // pins that. Deferring it to the slow arm makes IronHorse 256 raw units
-        // per element cheaper than XS.
+        // because the 256 raw units per element `intern_key` charges are what
+        // `flat_map_retains_calibrated_dense_metering` measured against the
+        // oracle. That pin is why this site was NOT converted alongside
+        // `array_from_define`: there the equivalent claim was checked against
+        // XS and found false (`fx_Array_from_aux` defines through
+        // `mxDefineIndex`, i.e. `(XS_NO_ID, index)`, and interns nothing), but
+        // which XS routine this path mirrors — and so where its 256 units
+        // really come from — has not been established. Do not copy the
+        // `array_from_define` reasoning here without measuring first: the two
+        // comments describe different XS code.
+        //
+        // Consequence, unfixed: this mints one name per element, so
+        // `bigArrayOfArrays.flatMap(x => x)` still walks the `u16` id space
+        // into the saturation guard. `concat` and `slice` do not route
+        // through here and already match the oracle exactly at 70,000
+        // elements.
         let id = self.array_generic_index_id(index);
         // A compact Array index is strictly below 2^32 - 1. The string
         // "4294967295" and every wider safe-integer key are ordinary
@@ -47855,11 +47870,15 @@ impl Interp {
     /// operation, in case the guest has since NAMED that index.
     ///
     /// A `ReadKey::Index` answers out of the side tables, so it is only valid
-    /// while the property still lives there. `array_define_index` promotes a
-    /// compact item to an ordinary named slot for any descriptor that is not
-    /// a bare data value, and that promotion interns the name — so a key
-    /// snapshotted before guest code ran must be refreshed before it is used,
-    /// or the read misses a property the object demonstrably has.
+    /// while the property still lives there — and while no name for it
+    /// exists, since an `Index` and the `Id` it refreshes to must not be
+    /// treated as different properties. Guest code running mid-operation can
+    /// change both: any write of a novel index name interns it, and
+    /// `array_define_index` still PROMOTES a compact item to an ordinary
+    /// named slot for an ACCESSOR descriptor, minting the name as it goes. So
+    /// a key snapshotted before guest code ran must be refreshed before it is
+    /// used, or the read misses a property the object demonstrably has and an
+    /// equality test splits one property in two.
     fn refresh_read_key(&self, key: ReadKey) -> ReadKey {
         match key {
             ReadKey::Index(index) => match self.index_read_key_id(index) {
