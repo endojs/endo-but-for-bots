@@ -60,8 +60,9 @@ export const SettingsPanel = ({ state, controller }) => {
 
   // The voice controls are built from what the TTS object advertises: its
   // voices and the ranges of its Piper knobs. Until that arrives (or when an
-  // older object has no configuration) the sliders fall back to a generic
-  // range and the current values.
+  // older object has no configuration) the sliders fall back to the ranges
+  // the Piper caplet enforces, so a value chosen early is never one it would
+  // refuse, and to the current values.
   const settings = v.ttsSettings || {
     voice: '',
     speed: 1,
@@ -71,11 +72,17 @@ export const SettingsPanel = ({ state, controller }) => {
   };
   const configuration = v.ttsConfiguration || { voices: [], ranges: {} };
   const ranges = configuration.ranges || {};
+  const fallbackRanges = {
+    speed: { min: 0.25, max: 4, step: 0.05 },
+    noiseScale: { min: 0, max: 2, step: 0.05 },
+    noiseW: { min: 0, max: 2, step: 0.05 },
+    sentenceSilence: { min: 0, max: 5, step: 0.05 },
+  };
   const rangeControl = (
     /** @type {'speed' | 'noiseScale' | 'noiseW' | 'sentenceSilence'} */ name,
     /** @type {string} */ label,
   ) => {
-    const range = ranges[name] || { min: 0, max: 2, step: 0.05 };
+    const range = ranges[name] || fallbackRanges[name];
     const value = Number(settings[name] ?? 0);
     return Control(
       label,
