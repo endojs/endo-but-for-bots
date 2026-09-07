@@ -2047,6 +2047,9 @@ pub fn partial_collect(
     store: &dyn HeapStore,
 ) -> Result<u32, StoreError> {
     let interp = session.machine();
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
     assert!(
         interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
         "partial collect requires a clean checkpoint boundary (dirty rows present)"
@@ -2086,6 +2089,11 @@ pub fn partial_collect(
             root_pages.insert(p as u32);
         }
     }
+    // The projection can discover counted-state corruption and poison
+    // the machine. Refuse before querying or applying a collection.
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
     // The decision query goes through the trait so an indexed backend
     // answers it with transfer proportional to the ANSWER (the SQLite
     // recursive CTE) instead of the dense whole-edge-set read.
@@ -2093,6 +2101,11 @@ pub fn partial_collect(
     let reached = store.reachable_page_set(&roots)?;
     let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
     let freed = session.machine_mut().free_pages(&dead);
+    // Pruning a dead bulk row can discover an undercount masked in
+    // the bitmap by another reference to the same page.
+    if !session.machine().is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
     // A full partial collect re-examines everything, so the
     // generational candidate set restarts empty.
     session.gen_dirty.clear();
@@ -2141,6 +2154,9 @@ pub fn generational_collect(
     store: &dyn HeapStore,
 ) -> Result<u32, StoreError> {
     let interp = session.machine();
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
     assert!(
         interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
         "generational collect requires a clean checkpoint boundary (dirty rows present)"
@@ -2187,6 +2203,9 @@ pub fn generational_collect(
             seeds.insert(p as u32);
         }
     }
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
     // Seed class 2: candidates referenced from outside the region.
     for t in store.externally_referenced(&dirty)? {
         seeds.insert(t);
@@ -2196,6 +2215,9 @@ pub fn generational_collect(
     let kept = store.reachable_within(&seed_vec, &dirty)?;
     let dead: Vec<u32> = dirty.into_iter().filter(|p| !kept.contains(p)).collect();
     let freed = session.machine_mut().free_pages(&dead);
+    if !session.machine().is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
     session.gen_dirty.clear();
     Ok(freed)
 }

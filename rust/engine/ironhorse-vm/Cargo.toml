@@ -40,3 +40,6 @@ ironhorse-compile = { path = "../ironhorse-compile" }
 # hot loop is instruction-identical to the pre-instrumentation build.
 default = []
 cost-calibration = []
+# Validate counted bulk roots against a full walk before partial collection,
+# including release builds. The worker enables this integrity boundary.
+store-integrity = []
