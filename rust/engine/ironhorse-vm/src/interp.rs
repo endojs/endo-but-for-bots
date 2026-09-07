@@ -22053,46 +22053,33 @@ impl Interp {
                             let src = self.typed_arrays[&r];
                             (src.length, Some(src))
                         };
-                        // The front-loaded snapshot below models the spec's
-                        // `IteratorToList` (23.2.5.1), which materializes every
-                        // value BEFORE any element coercion — but the spec
-                        // selects it ONLY when `GetMethod(source, @@iterator)`
-                        // is the intact default array iterator. A guest
-                        // @@iterator override that is an OWN property on the
-                        // receiver — INCLUDING `source[Symbol.iterator] =
-                        // undefined`, which makes `GetMethod` undefined — instead
-                        // selects `InitializeTypedArrayFromArrayLike`
-                        // (23.2.5.1.6), whose step 5 INTERLEAVES
-                        // `Get(source, ToString(k))` with `Set`, so an element
-                        // `valueOf` that mutates the source mid-copy is
-                        // observable, which a snapshot taken up front cannot
-                        // reproduce. Skip THAT honestly rather than snapshot the
-                        // wrong semantics.
-                        //
-                        // Detect the override with an OWN-property test on the
-                        // receiver, not a whole-chain `has`: the default
-                        // `Array.prototype[@@iterator]` is boot-installed as an
-                        // ordinary property (aliased to `Array.prototype.values`,
-                        // see `install_well_known_symbol_property`), so a
-                        // chain-walking `instance_has` matches EVERY array and
-                        // would wrongly skip the intrinsic path. This mirrors the
-                        // engine's single iteration model: `IterableToList`
-                        // (the `list_from` array arm below near the `for..of`
-                        // dispatch) treats an array as the intrinsic iterator
-                        // exactly when it carries no own `@@iterator`, reading
-                        // its elements directly; a reassigned
-                        // `Array.prototype[@@iterator]` is not honored for arrays
-                        // there either, so taking the snapshot path here is
-                        // consistent with `for..of`, not a fresh divergence. A
-                        // program that never references `Symbol.iterator` cannot
-                        // express an own override at all.
+                        // A sparse snapshot is valid only with the intrinsic
+                        // array iterator and its intrinsic next method. Check
+                        // the resolved methods across the chain: an inherited
+                        // override is just as observable as an own property.
                         if source_ta.is_none() {
-                            if let Some(iter_id) = self.well_known_symbol_property_id("iterator") {
-                                if self.ordinary_get_own_descriptor(r, iter_id).is_some() {
-                                    return Err(Halt::Unsupported(
-                                        "native-call:TypedArray:from-array-like",
-                                    ));
-                                }
+                            let iterator_id = self
+                                .well_known_symbol_property_id("iterator")
+                                .expect("well-known iterator symbol");
+                            // Unreferenced intrinsic names are linked lazily.
+                            // If no next key exists, guest code cannot yet have
+                            // replaced or deleted the intrinsic next method.
+                            let intrinsic_next = self.symbol_ids.get("next").is_none_or(|&id| {
+                                self.chain_resolves_native_data_method(
+                                    self.array_iterator_proto,
+                                    id,
+                                    NativeMethod::ArrayIteratorNext,
+                                )
+                            });
+                            if !self.chain_resolves_native_data_method(
+                                r,
+                                iterator_id,
+                                NativeMethod::ArrayValues,
+                            ) || !intrinsic_next
+                            {
+                                return Err(Halt::Unsupported(
+                                    "native-call:TypedArray:from-array-like",
+                                ));
                             }
                         }
                         if length > (0x7FFF_FFFFu32 >> shift) {
@@ -22137,8 +22124,8 @@ impl Interp {
                         // guest code, so nothing can mutate it between reads. A
                         // hole reads `undefined` (-> NaN -> 0 for an integer
                         // view), matching the default-iterator result.
-                        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> =
-                            source_ta.map_or_else(
+                        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> = source_ta
+                            .map_or_else(
                                 || self.arrays.get(&r).map(|src| src.items().clone()),
                                 |_| None,
                             );
@@ -33277,7 +33264,9 @@ impl Interp {
                         unreachable!("ToObject returns a reference")
                     };
                     if !self.define_properties_from_object(code, object, descriptors)? {
-                        return Err(self.catchable_type_error_msg("cannot define properties".into()));
+                        return Err(
+                            self.catchable_type_error_msg("cannot define properties".into())
+                        );
                     }
                 }
                 Slot::of(Kind::Reference, Payload::Reference(object))
@@ -36246,7 +36235,11 @@ impl Interp {
             NativeMethod::ReflectIsExtensible => {
                 let object = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error_msg("Reflect.isExtensible target".into())),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("Reflect.isExtensible target".into())
+                        )
+                    }
                 };
                 Ok(Slot::boolean(self.mop_is_extensible(code, object)?))
             }
@@ -41745,11 +41738,24 @@ impl Interp {
         }
         let mut level = o;
         loop {
-            if self.proxies.contains_key(&level)
-                || self.typed_arrays.contains_key(&level)
-                || self.wrapper_data.contains_key(&level)
-            {
+            if self.proxies.contains_key(&level) {
+                // Even an absent index can invoke an observable proxy trap.
                 return Some(self.array_generic_index_id(k));
+            }
+            if let Some(&typed_array) = self.typed_arrays.get(&level) {
+                if self.ta_valid_index(typed_array, k as f64).is_some() {
+                    return Some(self.array_generic_index_id(k));
+                }
+            }
+            if let Some(Slot {
+                kind: Kind::String,
+                value: Payload::String(offset),
+                ..
+            }) = self.wrapper_data.get(&level).copied()
+            {
+                if k < self.str_len(offset) as u64 {
+                    return Some(self.array_generic_index_id(k));
+                }
             }
             if k <= u32::MAX as u64 {
                 if let Some(array) = self.arrays.get(&level) {
@@ -46521,6 +46527,24 @@ impl Interp {
                 }
             }
         }
+    }
+
+    /// As [`Self::catchable_type_error`], carrying a diagnostic message so
+    /// the thrown `TypeError` renders `TypeError: <message>` — XS's
+    /// `mxTypeError("...")` texts (`invalid object`, `invalid descriptor`,
+    /// `cannot coerce null to object`, …), which the oracle's
+    /// `String(exception)` reports verbatim.
+    fn catchable_type_error_msg(&mut self, message: String) -> Halt {
+        let error = self.internal_error("TypeError", message);
+        self.raise_js(error)
+    }
+
+    /// Raise a realm-local TypeError from a native helper. The dispatch loop
+    /// consumes `Resume` and continues at the catch/finally target; an uncaught
+    /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
+    fn catchable_type_error(&mut self) -> Halt {
+        let error = self.build_error("TypeError", 0, 0);
+        self.raise_js(error)
     }
 
     /// Raise a realm-local, catchable `SyntaxError` from a native helper —

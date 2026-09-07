@@ -46,9 +46,7 @@ fn caught_namespace_call_in_function_returns_catch_value() {
 
 #[test]
 fn caught_namespace_construct_in_function_resumes_after_catch() {
-    assert_result_agrees(
-        "function f(){ try { new JSON(); } catch (e) {} return true; } f();",
-    );
+    assert_result_agrees("function f(){ try { new JSON(); } catch (e) {} return true; } f();");
 }
 
 #[test]
@@ -68,9 +66,7 @@ fn caught_member_callee_raises_in_frame() {
 
 #[test]
 fn toplevel_continuation_survives_caught_raise_in_callee() {
-    assert_result_agrees(
-        "function f(){ try { new JSON(); } catch (e) {} } f(); 42;",
-    );
+    assert_result_agrees("function f(){ try { new JSON(); } catch (e) {} } f(); 42;");
 }
 
 #[test]
@@ -135,5 +131,19 @@ fn uncaught_native_validation_type_error_aborts_on_both() {
         "an uncaught native-validation TypeError must abort on both engines \
          (ironhorse halt: {:?})",
         dr.ironhorse_halt,
+    );
+    assert!(
+        dr.error_agrees,
+        "native validation error rendering must agree"
+    );
+}
+
+#[test]
+fn not_callable_raise_reaches_an_outer_frame_handler() {
+    assert_result_agrees(
+        "function g(){Math();} function f(){try{g();}catch(e){return e instanceof TypeError;}} f();",
+    );
+    assert_result_agrees(
+        "function f(){try{eval('Math()');}catch(e){return e instanceof TypeError;}} f();",
     );
 }

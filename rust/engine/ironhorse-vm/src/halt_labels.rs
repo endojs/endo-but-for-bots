@@ -120,6 +120,8 @@ pub const DECLINED_LABELS: &[&str] = &[
     "native-call:ArrayBuffer:resizable",
     "native-call:SharedArrayBuffer:growable",
     "native-call:TypedArray:bad-length",
+    // Custom iterator protocols and array-like interleaving are not yet modeled.
+    "native-call:TypedArray:from-array-like",
     "number:unmodeled",
     "opcode:no-code",
     "ordinary-ownKeys:unknown-key",
