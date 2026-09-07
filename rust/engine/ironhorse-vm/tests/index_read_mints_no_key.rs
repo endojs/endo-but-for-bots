@@ -328,3 +328,83 @@ fn the_index_walk_and_the_id_path_agree_on_every_receiver_shape() {
         assert_result(&at("var o = {}; o[4] = 'v'; String(o[4]) + o.hasOwnProperty(4) + (4 in o)"), "vtruetrue");
     }
 }
+
+/// A Proxy whose TARGET is not an ordinary object must not mint either.
+///
+/// The post-trap invariant check has to name the key back to the target, and
+/// the first attempt at this skipped the naming only for an ORDINARY target —
+/// which is exactly the case where the check is vacuous. Every target for
+/// which it is NOT vacuous still minted, so `new Proxy([], handler)` — the
+/// commonest membrane shape there is — kept killing the engine from an
+/// ordinary `for` loop. The target is asked BY INDEX now, so it answers out
+/// of its side table without a name.
+#[test]
+fn a_proxy_over_an_exotic_target_mints_no_key() {
+    for body in [
+        "var p = new Proxy([], { get: function () { return 1; } }); p[i]",
+        "var p = new Proxy([], { has: function () { return false; } }); i in p",
+        "var p = new Proxy([], { getOwnPropertyDescriptor: function () {} }); \
+         Object.getOwnPropertyDescriptor(p, i)",
+        "var p = new Proxy([], { deleteProperty: function () { return true; } }); delete p[i]",
+        "var p = new Proxy(new Uint8Array(2), { get: function () { return 1; } }); p[i]",
+        // A proxy target that is itself a proxy re-opened it too.
+        "var p = new Proxy(new Proxy({}, {}), { get: function () { return 1; } }); p[i]",
+    ] {
+        let src = format!("var n = 0; for (var i = 0; i < {NOVEL_INDICES}; i++) {{ {body}; }} n");
+        let out = run(&src);
+        assert!(out.completed, "MINTS -> halt {:?}: {body}", out.halt);
+    }
+}
+
+/// Asking the target by index must not weaken the invariants it exists for.
+#[test]
+fn a_lying_trap_over_an_exotic_target_is_still_rejected() {
+    for (setup, expr) in [
+        (
+            "var p = new Proxy(a, { get: function () { return 99; } });",
+            "p[0]",
+        ),
+        (
+            "var p = new Proxy(a, { has: function () { return false; } });",
+            "0 in p",
+        ),
+        (
+            "var p = new Proxy(a, { deleteProperty: function () { return true; } });",
+            "delete p[0]",
+        ),
+    ] {
+        assert_result(
+            &format!(
+                "var a = [7]; Object.freeze(a); {setup} var r = 'no-throw'; \
+                 try {{ r = String({expr}); }} catch (e) {{ \
+                   r = (e instanceof TypeError) ? 'TypeError' : 'other'; }} r"
+            ),
+            "TypeError",
+        );
+    }
+    // An honest trap, and a configurable item, still answer normally.
+    assert_result("String(new Proxy([7], {})[0])", "7");
+    assert_result("String(new Proxy([7], { get: function () { return 5; } })[0])", "5");
+}
+
+/// `Object.prototype.propertyIsEnumerable` is a pure own-property PROBE.
+#[test]
+fn a_property_is_enumerable_probe_mints_no_key() {
+    let src = format!(
+        "var o = {{}}; var n = 0; \
+         for (var i = 0; i < {NOVEL_INDICES}; i++) {{ if (o.propertyIsEnumerable(i)) n++; }} n"
+    );
+    let out = run(&src);
+    assert!(out.completed, "MINTS -> halt {:?}", out.halt);
+    assert_eq!(out.result, "0");
+    for (source, want) in [
+        ("String([1, 2].propertyIsEnumerable(0))", "true"),
+        ("String([1, 2].propertyIsEnumerable(5))", "false"),
+        ("String('ab'.propertyIsEnumerable(1))", "true"),
+        ("String([1].propertyIsEnumerable('length'))", "false"),
+        ("String(new Uint8Array(2).propertyIsEnumerable(1))", "true"),
+        ("var o = {}; o[3] = 1; String(o.propertyIsEnumerable(3))", "true"),
+    ] {
+        assert_result(source, want);
+    }
+}
