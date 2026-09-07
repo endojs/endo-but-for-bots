@@ -14672,12 +14672,16 @@ impl Interp {
                             own_global || self.instance_has(self.object_proto, name).0;
                         if !resolvable && self.strict {
                             // XS's `SET_VARIABLE` strict arm:
-                            // `mxRunDebug(XS_REFERENCE_ERROR, "set %s: undefined
-                            // variable", ...)`, the write-side twin of the
-                            // `GET_VARIABLE` unresolved arm above.
+                            // `mxRunDebugID(XS_REFERENCE_ERROR, "set %s:
+                            // undefined property", ...)`, the write-side twin of
+                            // the `GET_VARIABLE` unresolved arm above. The noun
+                            // differs from the read side on purpose: XS words
+                            // the store-side miss `undefined property` while
+                            // `GET_VARIABLE`'s unresolved arm says `undefined
+                            // variable`, so do not unify the two.
                             let error = self.internal_error(
                                 "ReferenceError",
-                                format!("set {}: undefined variable", self.id_name(name)),
+                                format!("set {}: undefined property", self.id_name(name)),
                             );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }

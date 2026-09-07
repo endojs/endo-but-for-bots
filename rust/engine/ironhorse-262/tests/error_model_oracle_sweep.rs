@@ -47,10 +47,6 @@ const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
         "the oracle shim reports a throwing exception-stringification as its own marker; the port renders `[object Object]` for a symbol (F085-adjacent)",
     ),
     (
-        "var r=0; function f(){ 'use strict'; try { undeclared = 1 } catch(e){ r=e.name+':'+e.message } } f(); r",
-        "strict assignment to an undeclared name does not throw (SET_VARIABLE strict miss; not in finding 3)",
-    ),
-    (
         "var r=0; try { const c = 1; c = 2 } catch(e){ r=e.name } r",
         "XS 8.3.1 does not throw on a top-level const reassignment in a script; the port follows the spec",
     ),
