@@ -63,9 +63,36 @@ export const main = async hostAgent => {
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter'))) {
     /** @type {Record<string, string>} */
     const mounterEnv = {};
-    for (const key of ['NINEP_SUDO', 'NINEP_LAZY_UMOUNT', 'NINEP_SOCKET_DIR']) {
-      if (env[key] !== undefined) {
-        mounterEnv[key] = /** @type {string} */ (env[key]);
+    // A hosted daemon forwards only ENDO_-prefixed variables to its ENDO_EXTRA
+    // subprocesses, so the mount/umount program overrides a rootless deploy
+    // needs are also accepted under their ENDO_ spelling.
+    /** @type {Array<[string, string | undefined]>} */
+    const envSources = [
+      ['NINEP_SUDO', env.NINEP_SUDO ?? process.env.NINEP_SUDO],
+      [
+        'NINEP_LAZY_UMOUNT',
+        env.NINEP_LAZY_UMOUNT ?? process.env.NINEP_LAZY_UMOUNT,
+      ],
+      [
+        'NINEP_SOCKET_DIR',
+        env.NINEP_SOCKET_DIR ?? process.env.NINEP_SOCKET_DIR,
+      ],
+      [
+        'NINEP_MOUNT_PROGRAM',
+        env.NINEP_MOUNT_PROGRAM ??
+          process.env.NINEP_MOUNT_PROGRAM ??
+          process.env.ENDO_NINEP_MOUNT_PROGRAM,
+      ],
+      [
+        'NINEP_UMOUNT_PROGRAM',
+        env.NINEP_UMOUNT_PROGRAM ??
+          process.env.NINEP_UMOUNT_PROGRAM ??
+          process.env.ENDO_NINEP_UMOUNT_PROGRAM,
+      ],
+    ];
+    for (const [key, value] of envSources) {
+      if (value !== undefined) {
+        mounterEnv[key] = /** @type {string} */ (value);
       }
     }
     await E(hostAgent).makeUnconfined('@main', mountCapletSpecifier, {
