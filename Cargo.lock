@@ -4831,6 +4831,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "thixotrope-ironhorse-worker"
+version = "0.1.0"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-snapshot",
+ "ironhorse-store-sqlite",
+ "ironhorse-vm",
+ "serde_json",
+]
+
+[[package]]
 name = "thixotrope-xs-worker"
 version = "0.1.0"
 dependencies = [
