@@ -34,7 +34,12 @@ const waitFor = predicate => waitForDOM(predicate, 10, 2000);
  * @param {number} [count]
  * @param {boolean} [recover]
  */
-const setup = async (t, count = 2, recover = false) => {
+const setup = async (
+  t,
+  count = 2,
+  recover = false,
+  baseline = Promise.resolve(harden([])),
+) => {
   t.timeout(5000);
   const parent = testDocument.createElement('div');
   testDocument.body.appendChild(parent);
@@ -47,6 +52,8 @@ const setup = async (t, count = 2, recover = false) => {
   /** @type {Array<{ id: string, text: string, channel: ReturnType<typeof makeBufferedReader>, ref: object }>} */
   const turns = [];
   const deleted = [];
+  const cancelledTurns = [];
+  let currentOverride;
   let nextId = count;
   let failCreation = false;
   const makeTurn = (id, text) => {
@@ -63,7 +70,9 @@ const setup = async (t, count = 2, recover = false) => {
     const ref = Far('TestFlootTurn', {
       watch: () => channel.reader,
       getStatus: status,
-      cancel: () => undefined,
+      cancel: () => {
+        cancelledTurns.push(ref);
+      },
     });
     turns.push({ id, text, channel, ref });
     channel.push(harden({ type: 'snapshot', status: status() }));
@@ -77,11 +86,12 @@ const setup = async (t, count = 2, recover = false) => {
       getInfo: () => harden(sessions.find(session => session.id === id)),
       getHistory: () => readHistory(),
       getCurrentTurn: () => {
+        if (currentOverride) return currentOverride();
         const turn = turns.find(
           candidate => candidate.id === id && !candidate.channel.isClosed(),
         );
         return turn
-          ? harden({ input: turn.text, turn: turn.ref, history: [] })
+          ? harden({ input: turn.text, turn: turn.ref, history: baseline })
           : null;
       },
       getUsage: () => harden({ inputTokens: 0, outputTokens: 0, turns: 0 }),
@@ -136,10 +146,25 @@ const setup = async (t, count = 2, recover = false) => {
     parent,
     turns,
     deleted,
+    cancelledTurns,
+    makeTurn,
+    setCurrent: reader => {
+      currentOverride = reader;
+    },
     send,
     remove,
     setCreationFailure: value => {
       failCreation = value;
+    },
+    mountSibling: () => {
+      const sibling = testDocument.createElement('div');
+      testDocument.body.appendChild(sibling);
+      const dispose = flootComponent(sibling, factory, [], () => {}, [], []);
+      t.teardown(() => {
+        dispose();
+        sibling.remove();
+      });
+      return sibling;
     },
     remount: () => {
       cleanup();
@@ -361,5 +386,157 @@ test.serial(
     await waitFor(() => parent.querySelector('[aria-label="Stop"]'));
     t.is(parent.textContent.split('one prompt').length - 1, 1);
     t.is(parent.textContent.split('one answer').length - 1, 1);
+  },
+);
+
+test.serial(
+  'queued recovery permits Stop before its history baseline resolves',
+  async t => {
+    let resolveHistory = history => {};
+    const baseline = new Promise(resolve => {
+      resolveHistory = resolve;
+    });
+    t.teardown(() => resolveHistory(harden([])));
+    const { parent, turns, cancelledTurns } = await setup(t, 2, true, baseline);
+    await waitFor(() => parent.querySelector('[aria-label="Stop"]'));
+    parent
+      .querySelector('[aria-label="Stop"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => cancelledTurns.length === 1);
+    t.is(cancelledTurns[0], turns[0].ref);
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => parent.querySelector('[aria-label="Send"]'));
+    resolveHistory(
+      harden([{ role: 'user', content: 'late baseline must not overwrite' }]),
+    );
+    await tick(30);
+    t.false(parent.textContent.includes('late baseline must not overwrite'));
+  },
+);
+
+test.serial(
+  'daemon completion retires a stale cache before loading canonical history',
+  async t => {
+    const { parent, turns, send, remount, setCurrent, setHistoryReader } =
+      await setup(t);
+    await send('saved prompt');
+    await waitFor(() => turns.length === 1);
+    turns[0].channel.push(harden({ type: 'delta', text: 'saved answer' }));
+    await waitFor(() => parent.textContent.includes('saved answer'));
+    setCurrent(() => null);
+    setHistoryReader(() =>
+      harden([
+        { role: 'user', content: 'saved prompt' },
+        { role: 'assistant', content: 'saved answer' },
+      ]),
+    );
+    remount();
+    await waitFor(
+      () =>
+        parent.querySelector('[aria-label="Send"]') &&
+        parent.textContent.includes('saved answer'),
+    );
+    t.is(parent.textContent.split('saved answer').length - 1, 1);
+    t.is(parent.textContent.split('saved prompt').length - 1, 1);
+  },
+);
+
+test.serial(
+  'daemon turn identity replaces an older observation for the same session',
+  async t => {
+    const {
+      parent,
+      turns,
+      send,
+      remount,
+      setCurrent,
+      makeTurn,
+      cancelledTurns,
+    } = await setup(t);
+    await send('older prompt');
+    await waitFor(() => turns.length === 1);
+    const replacement = makeTurn('s0', 'replacement prompt');
+    setCurrent(() =>
+      harden({
+        input: 'replacement prompt',
+        turn: replacement,
+        history: Promise.resolve(harden([])),
+      }),
+    );
+    remount();
+    await waitFor(() => parent.textContent.includes('replacement prompt'));
+    t.false(parent.textContent.includes('older prompt'));
+    parent
+      .querySelector('[aria-label="Stop"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => cancelledTurns.length === 1);
+    t.is(cancelledTurns[0], replacement);
+  },
+);
+
+test.serial(
+  'retiring a shared observation reconciles every mounted view',
+  async t => {
+    const { parent, turns, send, setCurrent, setHistoryReader, mountSibling } =
+      await setup(t);
+    await send('shared prompt');
+    await waitFor(() => turns.length === 1);
+    turns[0].channel.push(harden({ type: 'delta', text: 'shared answer' }));
+    await waitFor(() => parent.textContent.includes('shared answer'));
+    setCurrent(() => null);
+    setHistoryReader(() =>
+      harden([
+        { role: 'user', content: 'shared prompt' },
+        { role: 'assistant', content: 'shared answer' },
+      ]),
+    );
+    const sibling = mountSibling();
+    await waitFor(() => sibling.textContent.includes('shared answer'));
+    await waitFor(
+      () =>
+        parent.textContent.includes('shared answer') &&
+        parent.querySelector('[aria-label="Send"]'),
+    );
+    t.is(parent.textContent.split('shared answer').length - 1, 1);
+    t.is(sibling.textContent.split('shared answer').length - 1, 1);
+  },
+);
+
+test.serial(
+  'a superseded mounted view can cancel the replacement turn',
+  async t => {
+    const {
+      parent,
+      turns,
+      send,
+      setCurrent,
+      makeTurn,
+      mountSibling,
+      cancelledTurns,
+    } = await setup(t);
+    await send('old shared prompt');
+    await waitFor(() => turns.length === 1);
+    await send('queued after replacement');
+    const replacement = makeTurn('s0', 'new shared prompt');
+    setCurrent(() =>
+      harden({
+        input: 'new shared prompt',
+        turn: replacement,
+        history: Promise.resolve(harden([])),
+      }),
+    );
+    const sibling = mountSibling();
+    await waitFor(() => sibling.textContent.includes('new shared prompt'));
+    await waitFor(() => parent.textContent.includes('new shared prompt'));
+    parent
+      .querySelector('[aria-label="Stop"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => cancelledTurns.length === 1);
+    t.is(cancelledTurns[0], replacement);
+    await tick(30);
+    t.is(turns.length, 2, 'queued submission still waits for the replacement');
+    turns[1].channel.push(harden({ type: 'end' }));
+    await waitFor(() => turns.length === 3);
+    t.is(turns[2].text, 'queued after replacement');
   },
 );

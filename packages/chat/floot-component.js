@@ -28,6 +28,8 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
  *   name?: string, args?: string, result?: string | null }} TurnMessage
  * @typedef {{
  *   sessionId: string,
+ *   ref: Promise<any>,
+ *   retire: () => void,
  *   messages: TurnMessage[],
  *   streamingText: string,
  *   phase: string,
@@ -100,6 +102,14 @@ const startFlootTurn = (registry, key, sessionId, turnRef) => {
   /** @type {FlootTurn} */
   const turn = {
     sessionId,
+    ref: Promise.resolve(turnRef),
+    retire() {
+      // Retiring an obsolete observation never cancels daemon execution.
+      if (registry.get(key) === turn) registry.delete(key);
+      emit({ type: 'superseded' });
+      listeners.clear();
+      void repliesP.then(reader => reader.return()).catch(() => {});
+    },
     messages,
     streamingText: '',
     phase: 'thinking',
@@ -505,7 +515,7 @@ export const flootComponent = (
 
   // ── View-model state (read by getState, mutated by the host engine) ─────────
   /**
-   * @typedef {{ role: 'user' | 'assistant', text?: string,
+   * @typedef {{ role: 'user' | 'assistant' | 'tool', text?: string,
    *   meta?: { mail?: { from?: string } },
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
@@ -581,6 +591,20 @@ export const flootComponent = (
     return turn && !turn.done ? turn : null;
   };
 
+  /** @param {any[]} history
+   * @returns {HistoryMessage[]} */
+  const historyMessages = history => {
+    return history.map((/** @type {any} */ m) =>
+      m.role === 'tool'
+        ? { role: 'tool', name: m.name, args: m.args, result: m.result }
+        : {
+            role: m.role === 'user' ? 'user' : 'assistant',
+            text: m.content,
+            ...(m.meta ? { meta: m.meta } : {}),
+          },
+    );
+  };
+
   // Pull the spoken transcript for a session from its guest into the cache.
   const loadHistory = async (
     /** @type {FlootSession} */ session,
@@ -596,15 +620,7 @@ export const flootComponent = (
         session.messages.length !== previousLength
       )
         return;
-      session.messages = history.map((/** @type {any} */ m) =>
-        m.role === 'tool'
-          ? { role: 'tool', name: m.name, args: m.args, result: m.result }
-          : {
-              role: m.role === 'user' ? 'user' : 'assistant',
-              text: m.content,
-              ...(m.meta ? { meta: m.meta } : {}),
-            },
-      );
+      session.messages = historyMessages(history);
     } catch {
       // leave whatever we have; history just won't repaint
     }
@@ -846,6 +862,14 @@ export const flootComponent = (
       /** @param {{ type: string }} ev */
       const onEvent = ev => {
         if (detached) return;
+        if (ev.type === 'superseded') {
+          detach();
+          // Another view may retire our shared observation. Reconcile this
+          // component too, before its released submissions resume.
+          // eslint-disable-next-line no-use-before-define
+          openActiveHistory();
+          return;
+        }
         // Attachment completion is independent of selection and history I/O.
         // Deletion can change selection while the old turn is still unwinding.
         if (ev.type === 'done' && activeSessionId !== turn.sessionId) {
@@ -964,18 +988,27 @@ export const flootComponent = (
     notify();
     const submittedSessionId = activeSessionId;
     submitChain = submitChain.then(async () => {
-      await viewReady;
-      if (
-        cancelled ||
-        (submittedSessionId && activeSessionId !== submittedSessionId)
-      )
-        return;
-      if (turnPromise) await turnPromise;
-      if (
-        cancelled ||
-        (submittedSessionId && activeSessionId !== submittedSessionId)
-      )
-        return;
+      // A shared observation can be superseded while we await its completion.
+      // Join the replacement view and turn too before dispatching queued input.
+      for (;;) {
+        const ready = viewReady;
+        // eslint-disable-next-line no-await-in-loop
+        await ready;
+        if (
+          cancelled ||
+          (submittedSessionId && activeSessionId !== submittedSessionId)
+        )
+          return;
+        const previous = turnPromise;
+        // eslint-disable-next-line no-await-in-loop
+        if (previous) await previous;
+        if (
+          cancelled ||
+          (submittedSessionId && activeSessionId !== submittedSessionId)
+        )
+          return;
+        if (ready === viewReady && previous === turnPromise) break;
+      }
       turnPromise = runConverse(text).catch(error => {
         if (!cancelled) setStatus(`error: ${error.message}`);
       });
@@ -1006,38 +1039,55 @@ export const flootComponent = (
       const current = await E(facetFor(session)).getCurrentTurn();
       if (!stillSelected()) return;
       let turn = liveTurnFor(session.id);
-      if (
-        !session.loaded ||
-        (current && displayedPrompts.get(session) !== turn) ||
-        (current && !turn)
-      )
-        await loadHistory(
-          session,
-          current ? current.history : E(facetFor(session)).getHistory(),
-        );
-      if (!stillSelected()) return;
-      if (!turn && current) {
-        const turnStatus = await E(current.turn).getStatus();
+      if (turn && (!current || (await turn.ref) !== current.turn)) {
         if (!stillSelected()) return;
-        if (!turnStatus.done) {
-          turn = startFlootTurn(
-            turnsForFactory(factory),
-            session.id,
-            session.id,
-            current.turn,
-          );
-        } else {
-          await loadHistory(session);
-        }
+        turn.retire();
+        turn = null;
       }
       if (!stillSelected()) return;
-      if (turn && displayedPrompts.get(session) !== turn && current) {
-        if (typeof current.input === 'string') {
-          session.messages.push({ role: 'user', text: current.input });
-        }
-        displayedPrompts.set(session, turn);
+      if (!current) {
+        await loadHistory(session);
+        if (stillSelected()) notify();
+        return;
       }
-      if (turn && !busy) turnPromise = attachTurnView(turn, session);
+      if (!turn) {
+        turn = startFlootTurn(
+          turnsForFactory(factory),
+          session.id,
+          session.id,
+          current.turn,
+        );
+      }
+      if (displayedPrompts.get(session) !== turn) {
+        const adoptedTurn = turn;
+        const prompt =
+          typeof current.input === 'string'
+            ? [{ role: /** @type {const} */ ('user'), text: current.input }]
+            : [];
+        session.messages = prompt;
+        session.loaded = false;
+        displayedPrompts.set(session, turn);
+        // Discovery exposes the handle before queued mail establishes history.
+        // Observe/cancel now; install only this turn's baseline when it arrives.
+        void Promise.resolve(current.history)
+          .then(history => {
+            if (
+              !stillSelected() ||
+              adoptedTurn.done ||
+              liveTurnFor(session.id) !== adoptedTurn ||
+              displayedPrompts.get(session) !== adoptedTurn
+            )
+              return;
+            session.messages = [...historyMessages(history), ...prompt];
+            session.loaded = true;
+            notify();
+          })
+          .catch(error => {
+            if (stillSelected() && liveTurnFor(session.id) === adoptedTurn)
+              setStatus(`error: ${error.message}`);
+          });
+      }
+      if (!busy) turnPromise = attachTurnView(turn, session);
       notify();
     })().catch(error => {
       if (stillSelected()) setStatus(`error: ${error.message}`);
