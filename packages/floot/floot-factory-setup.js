@@ -29,6 +29,14 @@
 // once older releases are pruned its formula would name a module that no
 // longer exists. Sessions are untouched — the registry lives in the factory
 // profile's pet store and each session's history in its own guest.
+//
+// The `machine-admin` preset draws on three grants this script stores on the
+// factory host (machine-admin-setup.js): the NixOS controller, the Forgejo
+// push credential, and the deploy-workflow connections. Their providers —
+// @endo/workflow/setup.js, @endo/space-nixos-admin/setup.js, and
+// @endo/space-nixos-admin/setup-forgejo-credential.js — belong in ENDO_EXTRA
+// ahead of this script; each grant is a quiet no-op where its provider is
+// absent and is re-derived on every start.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +48,11 @@ import {
   provideAuthSecret,
 } from '@endo/fae/src/credentials.js';
 import { coerceDeclaredProfile } from '@endo/hosted-agent/account.js';
+
+import {
+  isNamePersisted,
+  provisionMachineAdmin,
+} from './machine-admin-setup.js';
 
 const flootFactorySpecifier = new URL('agent.js', import.meta.url).href;
 const accountOracleSpecifier = new URL('account-oracle.js', import.meta.url)
@@ -111,7 +124,11 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
     // namespace at it — otherwise a refresh would read the formula that
     // `remove` just dropped.
     if (profilePath) {
-      const oraclePowers = await E(agent).lookup(powersPath);
+      // A run that died between the oracle's launch and the moves below
+      // left its powers guest top-level; find it wherever it is.
+      const oraclePowers = await E(agent).lookup(
+        (await E(agent).has(...powersPath)) ? powersPath : powersName,
+      );
       await E(oraclePowers).storeLocator(
         'account-profile',
         await E(agent).locate(...profileNamePath),
@@ -121,6 +138,22 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
       'account-oracle',
       await E(agent).locate(...oraclePath),
     );
+    // Finish the moves a run that died after the launch left undone — only
+    // into a destination that is still free, so a stray top-level name can
+    // never displace the guest already tucked away.
+    const handlePath = [dir, 'account-oracle-handle'];
+    if (
+      (await E(agent).has(handleName)) &&
+      !(await E(agent).has(...handlePath))
+    ) {
+      await E(agent).move([handleName], handlePath);
+    }
+    if (
+      (await E(agent).has(powersName)) &&
+      !(await E(agent).has(...powersPath))
+    ) {
+      await E(agent).move([powersName], powersPath);
+    }
     console.log(
       `Floot account oracle at "${dir}/account-oracle" reused${
         profilePath ? ' with the updated profile' : ''
@@ -129,9 +162,25 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
     return;
   }
 
-  const oracleGuest = await E(agent).provideGuest(handleName, {
-    agentName: powersName,
-  });
+  // Adopt the powers guest a run that died before the launch left top-level
+  // when its name is bound to a persisted formula; otherwise clear the strays
+  // and mint. Resolve it by its agent name either way: `provideGuest` against
+  // a handle name that already exists hands back the mail handle, not the
+  // guest.
+  if (
+    !(await E(agent).has(powersName)) ||
+    !(await isNamePersisted(agent, powersName))
+  ) {
+    for (const stray of [handleName, powersName]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(agent).has(stray)) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(agent).remove(stray);
+      }
+    }
+    await E(agent).provideGuest(handleName, { agentName: powersName });
+  }
+  const oracleGuest = await E(agent).lookup(powersName);
   await E(oracleGuest).storeLocator(
     'account-profile',
     await E(agent).locate(...profileNamePath),
@@ -238,10 +287,35 @@ export const main = async agent => {
   // would mint a second host that owns none of the sessions. The pet name
   // `provideHost` is given binds the host's mail handle and `agentName` binds
   // the host itself, so the profile path is the one to look up.
+  // `lookup` takes one name-or-path argument; spreading the path here made
+  // every re-run throw before anything below it ran.
+  //
+  // A first run that died between minting the host and step 6 leaves both
+  // names top-level. `provideHost` against the surviving handle name would
+  // hand back the mail HANDLE rather than the host (packages/daemon/AGENTS.md
+  // § provideGuest idempotency), so the host is adopted by its agent name
+  // when that name is bound to a persisted formula; otherwise the strays (a
+  // handle with no host behind it, or a name the daemon stored before it
+  // wrote the host's formula) are cleared and the host is minted afresh.
   const revived = await E(agent).has(...controllerProfilePath);
-  const factoryHost = revived
-    ? await E(agent).lookup(...controllerProfilePath)
-    : await E(agent).provideHost(guestName, { agentName });
+  if (!revived) {
+    const adoptable =
+      (await E(agent).has(agentName)) &&
+      (await isNamePersisted(agent, agentName));
+    if (!adoptable) {
+      for (const stray of [guestName, agentName]) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await E(agent).has(stray)) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(agent).remove(stray);
+        }
+      }
+      await E(agent).provideHost(guestName, { agentName });
+    }
+  }
+  const factoryHost = await E(agent).lookup(
+    revived ? controllerProfilePath : agentName,
+  );
 
   // 2. Put the auth token in the daemon's secret manager and hand the factory
   // the `SecretBlob`. `@secrets` is carried only by the root host, so a setup
@@ -298,6 +372,13 @@ export const main = async agent => {
   // before the factory so the very first session already has `accountStatus`.
   await provideAccountOracle(agent, { dir, provider, factoryHost });
 
+  // 4b. The machine-admin grants — the NixOS controller, the Forgejo push
+  // credential, and the deploy-workflow connections — when this daemon has
+  // them. Provisioned before the factory caplet so the sessions its first
+  // incarnation revives already find the grants, rather than on the boot
+  // after.
+  await provisionMachineAdmin(agent, { dir, factoryHost });
+
   // 5. Launch the factory caplet straight into floot/controller. On a re-run,
   // replace the caplet — the one formula whose module path is tied to a
   // release checkout — and keep everything it was bound to.
@@ -316,10 +397,16 @@ export const main = async agent => {
   // 6. Tuck the factory host + its profile under floot/ so the top level stays
   // clean. (The factory already resolved its powers in step 5; renaming the
   // pet-names afterward is cosmetic — formulas reference by identity.) A re-run
-  // found them there already.
+  // found them there already, and never moves a top-level name over them;
+  // on a fresh run each move is conditional so a run that died between the
+  // two heals here.
   if (!revived) {
-    await E(agent).move([guestName], controllerHandlePath);
-    await E(agent).move([agentName], controllerProfilePath);
+    if (await E(agent).has(guestName)) {
+      await E(agent).move([guestName], controllerHandlePath);
+    }
+    if (await E(agent).has(agentName)) {
+      await E(agent).move([agentName], controllerProfilePath);
+    }
   }
 
   // 7. Single pin: the factory revives all its sessions on daemon restart.
