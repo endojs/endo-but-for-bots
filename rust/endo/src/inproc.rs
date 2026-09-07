@@ -247,26 +247,7 @@ pub fn spawn_inproc_xs_peer(
         // `extern "C"` frame (design `designs/ironhorse-panic.md` § Scope:
         // "The already-live FFI abort hazard", "the machine-thread run
         // entry").
-        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || run(transport),
-        )) {
-            Ok(run_result) => run_result,
-            Err(payload) => {
-                // Recover the caught panic's message rather than discarding
-                // it: `XsnapError::Panicked` documents that it carries the
-                // message, so a causeless synthetic string would falsify the
-                // variant's own contract. Location stays `None` — this net
-                // catches panics that never crossed the FFI capture hook.
-                let message = format!(
-                    "{label_for_thread}: run entry panicked: {}",
-                    xsnap::worker_io::panic_payload_message(payload.as_ref()),
-                );
-                Err(xsnap::XsnapError::Panicked {
-                    message,
-                    location: None,
-                })
-            }
-        };
+        let result = catch_run_panic(&label_for_thread, || run(transport));
         if let Err(e) = result {
             eprintln!("inproc: {label_for_thread} exited with error: {e}");
         } else {
@@ -282,4 +263,155 @@ pub fn spawn_inproc_xs_peer(
     })?;
 
     Ok(handle)
+}
+
+fn catch_run_panic(
+    label: &str,
+    run: impl FnOnce() -> Result<(), xsnap::XsnapError>,
+) -> Result<(), xsnap::XsnapError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(run_result) => run_result,
+        Err(payload) => {
+            // Recover the caught panic's message rather than discarding
+            // it: `XsnapError::Panicked` documents that it carries the
+            // message, so a causeless synthetic string would falsify the
+            // variant's own contract. Location stays `None` — this net
+            // catches panics that never crossed the FFI capture hook.
+            let message = format!(
+                "{label}: run entry panicked: {}",
+                xsnap::worker_io::panic_payload_message(payload.as_ref()),
+            );
+            Err(xsnap::XsnapError::Panicked {
+                message,
+                location: None,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[test]
+    fn run_entry_panic_preserves_payload_and_label() {
+        for (payload, expected) in [
+            (
+                Box::new("literal failure") as Box<dyn std::any::Any + Send>,
+                "literal failure",
+            ),
+            (Box::new(String::from("owned failure")), "owned failure"),
+            (Box::new(17_u8), "unknown panic"),
+        ] {
+            let error = catch_run_panic("test peer", || std::panic::resume_unwind(payload))
+                .expect_err("run-entry panic must become an error");
+            match error {
+                xsnap::XsnapError::Panicked { message, location } => {
+                    assert_eq!(
+                        message,
+                        format!("test peer: run entry panicked: {expected}")
+                    );
+                    assert_eq!(location, None);
+                }
+                other => panic!("unexpected error: {other}"),
+            }
+        }
+    }
+
+    async fn wait_for_unregister(sup: &Supervisor, handle: Handle) {
+        timeout(Duration::from_secs(5), async {
+            while sup.workers_snapshot().iter().any(|w| w.handle == handle) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("panicked peer must unregister instead of leaking its worker record");
+    }
+
+    #[tokio::test]
+    async fn panicked_manager_unregisters_notifies_and_stops() {
+        let (sup, mut outbox) = Supervisor::new();
+        let shutdown = Arc::new(Notify::new());
+        let handle = spawn_inproc_xs_peer(
+            &sup,
+            "panic cleanup regression".into(),
+            Some(Arc::clone(&shutdown)),
+            Box::new(|_transport| panic!("manager run entry failed")),
+        )
+        .unwrap();
+
+        timeout(Duration::from_secs(5), shutdown.notified())
+            .await
+            .expect("manager panic must notify shutdown");
+        assert!(!sup.workers_snapshot().iter().any(|w| w.handle == handle));
+        assert!(timeout(Duration::from_secs(5), outbox.recv())
+            .await
+            .expect("manager panic must stop the supervisor")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn panicked_worker_unregisters_while_sibling_still_delivers() {
+        xsnap::ensure_shared_cluster();
+        let (sup, mut outbox) = Supervisor::new();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        // Dropping this sender also releases the sibling on a failed assertion.
+        let (commands, receiver) = std_mpsc::channel();
+        let sibling = spawn_inproc_xs_peer(
+            &sup,
+            "surviving sibling".into(),
+            None,
+            Box::new(move |mut transport| {
+                let machine = xsnap::Machine::new(&xsnap::DEFAULT_CREATION, "sibling").unwrap();
+                ready_tx.send(()).unwrap();
+                if receiver.recv_timeout(Duration::from_secs(5)).is_ok() {
+                    assert!(matches!(
+                        machine.eval("6 * 7"),
+                        Some(xsnap::JsValue::Integer(42))
+                    ));
+                    let frame = codec::encode_envelope(&Envelope {
+                        handle: 0,
+                        verb: "sibling-alive".into(),
+                        payload: b"after panic".to_vec(),
+                        nonce: 7,
+                    });
+                    transport.send_raw_frame(&frame).unwrap();
+                }
+                Ok(())
+            }),
+        )
+        .unwrap();
+        timeout(Duration::from_secs(5), ready_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let failed = spawn_inproc_xs_peer(
+            &sup,
+            "panicked worker".into(),
+            None,
+            Box::new(|_transport| {
+                let machine = xsnap::Machine::new(&xsnap::DEFAULT_CREATION, "failed").unwrap();
+                assert!(matches!(
+                    machine.eval("1 + 1"),
+                    Some(xsnap::JsValue::Integer(2))
+                ));
+                std::panic::panic_any(String::from("worker failed"));
+            }),
+        )
+        .unwrap();
+        wait_for_unregister(&sup, failed).await;
+        assert!(sup.workers_snapshot().iter().any(|w| w.handle == sibling));
+        commands.send(()).unwrap();
+        let reply = timeout(Duration::from_secs(5), outbox.recv())
+            .await
+            .expect("sibling must remain able to send after another worker panics")
+            .expect("worker panic must not stop the supervisor");
+        assert_eq!(reply.from, sibling);
+        assert_eq!(reply.envelope.verb, "sibling-alive");
+        assert_eq!(reply.envelope.payload, b"after panic");
+        wait_for_unregister(&sup, sibling).await;
+        sup.stop();
+    }
 }

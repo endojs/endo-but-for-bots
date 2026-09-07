@@ -4164,7 +4164,7 @@ impl Halt {
     /// still the sole definition of "is a panic," not of "must discard the
     /// crank" (a strictly larger set).
     ///
-    /// The settled core is `StackOverflow | MeterAbort | Panic(_)`.
+    /// The settled core is `StackOverflow | MeterAbort | EngineInvariant(_) | Panic(_)`.
     /// `Decode` and the harness-only `StepLimit` are **provisional**
     /// members: they terminate-without-commit like a panic, but their
     /// provenance is supervisor/harness rather than guest behavior, so
@@ -4183,6 +4183,7 @@ impl Halt {
             Halt::StackOverflow(_)
                 | Halt::MeterAbort
                 | Halt::Panic(_)
+                | Halt::EngineInvariant(_)
                 // Provisional (Open Question), may change without a
                 // type-level signal:
                 | Halt::Decode(_)

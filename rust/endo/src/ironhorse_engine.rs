@@ -141,6 +141,7 @@ pub mod engine {
     /// its classifier are the landable interpreter-side half; the seam that
     /// consumes them is a deferred follow-on.
     #[derive(Debug, Clone, PartialEq)]
+    #[non_exhaustive]
     pub enum ExecutionOutcome {
         /// Execution ran the event loop to quiescence (the job queue
         /// emptied). This does **not** claim Slot Machine has committed
@@ -185,7 +186,7 @@ pub mod engine {
                 return ExecutionOutcome::Panicked(halt);
             }
             match halt {
-                Halt::Throw(message) => ExecutionOutcome::Uncaught(message),
+                Halt::Throw { rendered, .. } => ExecutionOutcome::Uncaught(rendered),
                 Halt::Return => ExecutionOutcome::Quiesced,
                 // A named, unlanded engine gap: the run demonstrably did
                 // **not** run the event loop to quiescence, so its crank
@@ -1363,7 +1364,7 @@ pub mod engine {
 
         #[test]
         fn throw_classifies_as_uncaught_not_panicked() {
-            match ExecutionOutcome::classify(Halt::Throw("boom".to_string())) {
+            match ExecutionOutcome::classify(Halt::synthetic_throw("boom".to_string())) {
                 ExecutionOutcome::Uncaught(msg) => assert_eq!(msg, "boom"),
                 other => panic!("expected Uncaught, got {other:?}"),
             }
@@ -1394,6 +1395,7 @@ pub mod engine {
             for halt in [
                 Halt::StackOverflow(7),
                 Halt::MeterAbort,
+                Halt::EngineInvariant("test invariant"),
                 engine_fault(),
                 Halt::Decode("truncated".to_string()),
                 Halt::StepLimit(42),
@@ -1419,9 +1421,10 @@ pub mod engine {
             // contradiction the delegation invariant must not hide.
             for halt in [
                 Halt::Return,
-                Halt::Throw("x".to_string()),
+                Halt::synthetic_throw("x".to_string()),
                 Halt::StackOverflow(1),
                 Halt::MeterAbort,
+                Halt::EngineInvariant("test invariant"),
                 engine_fault(),
                 Halt::Decode("d".to_string()),
                 Halt::StepLimit(1),
@@ -1465,23 +1468,21 @@ pub mod engine {
             // `debug_assert!`; a release build still returns `Panicked`
             // (discard), never `Quiesced` (commit). Pins both halves of the
             // catch-all's contract, which no other test exercises.
-            let classify_resume =
-                || ExecutionOutcome::classify(Halt::Resume(0));
-            if cfg!(debug_assertions) {
-                let caught = std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(classify_resume),
-                );
-                assert!(
-                    caught.is_err(),
-                    "a control-state halt must trip the fail-closed \
-                     debug_assert in a debug build",
-                );
-            } else {
-                assert!(
-                    matches!(classify_resume(), ExecutionOutcome::Panicked(_)),
-                    "a control-state halt must fail closed to Panicked in \
-                     a release build",
-                );
+            for halt in [
+                Halt::Resume(0),
+                Halt::Yield(Slot::undefined()),
+                Halt::Await(Slot::undefined()),
+                Halt::AsyncYield(Slot::undefined()),
+            ] {
+                let classify = || ExecutionOutcome::classify(halt.clone());
+                if cfg!(debug_assertions) {
+                    assert!(std::panic::catch_unwind(
+                        std::panic::AssertUnwindSafe(classify),
+                    ).is_err(), "{halt:?} must trip the debug assertion");
+                } else {
+                    assert!(matches!(classify(), ExecutionOutcome::Panicked(_)),
+                        "{halt:?} must fail closed in release builds");
+                }
             }
         }
 
@@ -1500,7 +1501,7 @@ pub mod engine {
 
         #[test]
         fn non_panic_throw_is_not_panic() {
-            assert!(!Halt::Throw("catchable".to_string()).is_panic());
+            assert!(!Halt::synthetic_throw("catchable".to_string()).is_panic());
             assert!(!Halt::Return.is_panic());
         }
     }

@@ -1077,6 +1077,11 @@ fn eval_wrapped(machine: &Machine, code: &str, label: &str) -> bool {
 /// Flush any pending debug outbound data as a `"debug"` envelope
 /// on the bus transport.  The handle is 0 (daemon/supervisor).
 fn flush_debug_outbound() {
+    // A debugger callback may have poisoned the worker immediately before
+    // this call. Never drain or publish its partially mutated debug state.
+    if worker_io::ffi_panicked() {
+        return;
+    }
     if let Some(data) = powers::debug::debug_drain_outbound() {
         let env = envelope::Envelope {
             handle: 0,
@@ -1091,6 +1096,9 @@ fn flush_debug_outbound() {
 
 /// Send an envelope back to the daemon/supervisor (handle 0).
 fn send_control_response(verb: &str, nonce: i64) {
+    if worker_io::ffi_panicked() {
+        return;
+    }
     let env = envelope::Envelope {
         handle: 0,
         verb: verb.to_string(),
@@ -1160,6 +1168,13 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
 /// sent back to the supervisor — the snapshot never transits the
 /// envelope bus.
 fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeAction {
+    if powers::fs::has_open_handles()
+        || powers::sqlite::has_open_handles()
+        || powers::crypto::has_open_handles()
+    {
+        send_suspend_error(nonce, "suspend: close native file, directory, SQLite, and hasher handles first");
+        return EnvelopeAction::Continue;
+    }
     let cas_path = match std::str::from_utf8(cas_dir) {
         Ok(s) if !s.is_empty() => std::path::PathBuf::from(s),
         _ => {
@@ -2209,14 +2224,8 @@ mod debug_protocol_tests;
 mod tests {
     use super::*;
     use crate::worker_io::WorkerTransport;
-    use std::sync::Once;
-
-    static INIT: Once = Once::new();
-
     fn setup() {
-        INIT.call_once(|| {
-            initialize_shared_cluster();
-        });
+        ensure_shared_cluster();
     }
 
     fn new_machine() -> Machine {
@@ -4283,6 +4292,52 @@ mod tests {
         }
 
         debug::debug_reset();
+        worker_io::clear_transport();
+    }
+
+    #[test]
+    fn poisoned_worker_does_not_publish_debug_or_control_replies() {
+        use powers::debug;
+        debug::debug_reset();
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        worker_io::install_transport(Box::new(MockTransport {
+            sent: std::sync::Arc::clone(&sent),
+        }));
+        // Queue real debugger output before a callback fails, so suppressing
+        // only the ack (or draining the torn buffer) does not pass this test.
+        debug::rust_debug_send(c"partial reply".as_ptr(), 13);
+        assert!(debug::debug_has_outbound());
+        worker_io::guard_ffi(|| panic!("debug callback failed"));
+        flush_debug_outbound();
+        send_control_response("debug-attached", 42);
+        assert!(sent.lock().unwrap().is_empty());
+        assert!(debug::debug_has_outbound(), "do not touch poisoned debug state");
+        assert_eq!(worker_io::take_ffi_panic().unwrap().message, "debug callback failed");
+        debug::debug_reset();
+        worker_io::clear_transport();
+    }
+
+    #[test]
+    fn suspend_rejects_open_native_handles_without_stopping_worker() {
+        let machine = new_machine();
+        machine.define_function("startHash", powers::crypto::host_sha256_init, 0);
+        machine.define_function("finishHash", powers::crypto::host_sha256_finish, 1);
+        machine.eval("var handle = startHash()");
+        assert!(powers::crypto::has_open_handles());
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap().as_bytes();
+        assert!(matches!(handle_suspend(&machine, 123, path), EnvelopeAction::Continue));
+        let frames = sent.lock().unwrap();
+        let reply = envelope::decode_envelope(&frames[0]).unwrap();
+        assert_eq!(reply.verb, "suspend-error");
+        assert_eq!(reply.nonce, 123);
+        drop(frames);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert!(matches!(machine.eval("finishHash(handle)"), Some(JsValue::String(_))));
+        assert!(!powers::crypto::has_open_handles());
+        assert!(matches!(handle_suspend(&machine, 124, path), EnvelopeAction::Suspend));
         worker_io::clear_transport();
     }
 

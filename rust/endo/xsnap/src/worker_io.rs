@@ -393,25 +393,11 @@ where
 // death to one worker: each in-process XS machine runs on its own dedicated
 // `std::thread`, so poisoning one thread cannot touch another.
 //
-// **Scope of the confinement — read this before assuming full isolation.** The
-// thread-local poison confines the *unwind* and the *pending-death marker*, not
-// every piece of state a dying worker touched. Several `host_*` callbacks
-// operate on **process-wide** `static Mutex<..>` handle tables shared by every
-// in-process worker (`powers/fs.rs` `FILE_MAP`/`DIR_MAP`, `powers/sqlite.rs`
-// `DB_MAP`/`STMT_MAP`, `powers/crypto.rs` `HASHER_MAP`). Before this guard
-// existed, a panic while one of those locks was held aborted the whole process,
-// so a poisoned/torn table was never observed by a live sibling. Now the process
-// survives, and those accessors recover a poisoned lock unconditionally
-// (`.lock().unwrap_or_else(|e| e.into_inner())`), so a panic mid-mutation leaves
-// a half-completed logical operation visible to the *next* worker to take that
-// lock, and the dying worker's still-open native handles (fds, `cap_std::fs::Dir`,
-// `rusqlite::Connection`, hasher state) are **never swept** on worker death —
-// `Supervisor::unregister` clears only routing bookkeeping, not these maps — so
-// they leak for the daemon's lifetime. Per-worker scoping (or a per-worker sweep
-// at teardown) of those tables is deliberate **follow-on** work, not something
-// this guard delivers; see `designs/ironhorse-panic.md` § Scope: "The already-live
-// FFI abort hazard" (shared power-table caveat). Callers must not read the
-// thread-local confinement as isolation of shared handle-table state.
+// The filesystem, SQLite, and hasher tables are thread-local too. Their
+// native resources are released when the dedicated worker thread exits, and
+// sibling workers cannot observe entries left in a torn logical state.
+// This catches unwinding Rust panics only: native stack overflow, explicit
+// abort, allocation abort, and a second panic during unwinding remain fatal.
 
 // The entire FFI panic guard rests on `std::panic::catch_unwind` actually
 // catching. Under `panic = "abort"` `catch_unwind` is a documented no-op: the
@@ -495,6 +481,16 @@ pub fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
+/// Stop a guarded Rust callback after an XS coercion reentered another
+/// callback and poisoned the worker. Call only after returning from C: the
+/// unwind must reach this callback's guard without crossing an XS frame.
+/// The original panic remains in FFI_PANIC; this payload is only control flow.
+pub(crate) fn abort_if_ffi_panicked() {
+    if ffi_panicked() {
+        panic::resume_unwind(Box::new(()));
+    }
+}
+
 /// Run one `extern "C"` callback body that returns a value under panic
 /// isolation, returning `on_panic` to the C caller if it panics.
 ///
@@ -526,8 +522,18 @@ pub fn guard_ffi_ret<R, F: FnOnce() -> R>(on_panic: R, f: F) -> R {
     let result = panic::catch_unwind(AssertUnwindSafe(f));
     CAPTURING.with(|c| c.set(was_capturing));
     match result {
-        Ok(value) => value,
+        Ok(value) => {
+            // A reentrant callback can poison us even when this body returns.
+            if ffi_panicked() {
+                on_panic
+            } else {
+                value
+            }
+        }
         Err(payload) => {
+            if ffi_panicked() {
+                return on_panic;
+            }
             let message = panic_payload_message(payload.as_ref());
             let location = PANIC_LOCATION.with(|slot| slot.borrow_mut().take());
             FFI_PANIC.with(|cell| {
@@ -592,6 +598,7 @@ pub fn take_ffi_panic() -> Option<FfiPanic> {
 pub unsafe fn arg_str(the: *mut XsMachine, index: usize) -> String {
     let slot = (*the).frame.sub(1 + index);
     let ptr = fxToString(the, slot);
+    abort_if_ffi_panicked();
     xs_string_to_utf8(ptr)
 }
 
@@ -694,7 +701,9 @@ pub unsafe fn read_typed_array_bytes(the: *mut XsMachine, slot: *mut XsSlot) -> 
     fx_push(the, *slot);
     let byte_length_id = fxID(the, c"byteLength".as_ptr());
     fxGetID(the, byte_length_id);
+    abort_if_ffi_panicked();
     let byte_length = fxToInteger(the, (*the).stack) as usize;
+    abort_if_ffi_panicked();
     fx_pop(the);
 
     if byte_length == 0 {
@@ -704,12 +713,15 @@ pub unsafe fn read_typed_array_bytes(the: *mut XsMachine, slot: *mut XsSlot) -> 
     fx_push(the, *slot);
     let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
     fxGetID(the, byte_offset_id);
+    abort_if_ffi_panicked();
     let byte_offset = fxToInteger(the, (*the).stack) as i32;
+    abort_if_ffi_panicked();
     fx_pop(the);
 
     fx_push(the, *slot);
     let buffer_id = fxID(the, c"buffer".as_ptr());
     fxGetID(the, buffer_id);
+    abort_if_ffi_panicked();
     let buffer_slot = (*the).stack;
 
     let mut buf = vec![0u8; byte_length];
@@ -731,7 +743,9 @@ pub unsafe fn typed_array_byte_length(the: *mut XsMachine, slot: *mut XsSlot) ->
     fx_push(the, *slot);
     let byte_length_id = fxID(the, c"byteLength".as_ptr());
     fxGetID(the, byte_length_id);
+    abort_if_ffi_panicked();
     let byte_length = fxToInteger(the, (*the).stack) as usize;
+    abort_if_ffi_panicked();
     fx_pop(the);
     byte_length
 }
@@ -754,12 +768,15 @@ pub unsafe fn write_typed_array_bytes(
     fx_push(the, *slot);
     let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
     fxGetID(the, byte_offset_id);
+    abort_if_ffi_panicked();
     let byte_offset = fxToInteger(the, (*the).stack) as i32;
+    abort_if_ffi_panicked();
     fx_pop(the);
 
     fx_push(the, *slot);
     let buffer_id = fxID(the, c"buffer".as_ptr());
     fxGetID(the, buffer_id);
+    abort_if_ffi_panicked();
     let buffer_slot = (*the).stack;
 
     fxSetArrayBufferData(
@@ -791,6 +808,9 @@ pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
             Ok(loaded) => {
                 let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
                 let ok = crate::archive::install_archive(&machine, &loaded);
+                if ffi_panicked() {
+                    return;
+                }
                 fxBoolean(the, &mut (*the).scratch, if ok { 1 } else { 0 });
                 *(*the).frame.add(1) = (*the).scratch;
             }
@@ -1157,6 +1177,16 @@ mod tests {
             BufReader::new(tmp_read),
             BufWriter::new(tmp_write),
         )
+    }
+
+    #[test]
+    fn nested_panic_returns_failure_from_enclosing_guard() {
+        let result = guard_ffi_ret(false, || {
+            guard_ffi(|| panic!("nested callback failure"));
+            true
+        });
+        assert!(!result, "a poisoned callback cannot report success");
+        assert_eq!(take_ffi_panic().unwrap().message, "nested callback failure");
     }
 
     #[test]
