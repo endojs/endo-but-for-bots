@@ -295,6 +295,9 @@ static void xs_oracle_delete_machine(txMachine *the)
 int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 {
 	txMachine *the;
+	/* A machine abort skips fxRunScript's ordinary exception cleanup.
+	 * Keep its allocation reachable across the outer mxCatch longjmp. */
+	txScript *volatile script = C_NULL;
 	memset(out, 0, sizeof(*out));
 
 	the = xs_oracle_create_machine("xs-oracle");
@@ -305,7 +308,6 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 	{
 		mxTry(the) {
 			txStringCStream stream;
-			txScript *script;
 			txSlot *module;
 			txSlot *realm;
 			txSlot *result;
@@ -397,6 +399,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			the->meterIndex = 0;
 			fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
 				mxRealmClosures(realm)->value.reference, C_NULL, module);
+			script = C_NULL; /* fxRunScript freed it; jobs may abort too. */
 			/* Pump-loop latch: drain the promise job queue with metering
 			 * still accumulating, modeling the host-driven microtask drain
 			 * the ironhorse embedding performs after a crank (design § promises,
@@ -434,6 +437,10 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 		}
 		mxCatch(the) {
 			out->ok = 0;
+			/* Ordinary JS throws are freed by fxRunScript. fxAbort instead
+			 * sets exitStatus and jumps straight here, bypassing that free. */
+			if (the->exitStatus)
+				fxDeleteScript(script);
 			/* Record the run-only computron count reached at the point of
 			 * an uncaught throw, exactly as the normal-completion path
 			 * does. meterIndex was reset to 0 immediately before
@@ -493,6 +500,7 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 	txU4 crankCount, EndorOracleResult *outs)
 {
 	txMachine *the;
+	txScript *volatile script = C_NULL;
 	/* Survives the mxCatch longjmp, so the catch attributes the throw
 	 * to the crank that raised it. */
 	volatile txU4 crank_i = 0;
@@ -547,7 +555,6 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 			for (crank_i = 0; crank_i < crankCount; crank_i++) {
 				EndorOracleResult *out = &outs[crank_i];
 				txStringCStream stream;
-				txScript *script;
 				txSlot *module;
 				txSlot *realm;
 				txSlot *result;
@@ -580,6 +587,7 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 				the->meterIndex = 0;
 				fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
 					mxRealmClosures(realm)->value.reference, C_NULL, module);
+				script = C_NULL; /* No live parser allocation during jobs. */
 				/* Per-crank microtask drain (the pump-loop latch). */
 				while (the->promiseJobs) {
 					the->promiseJobs = 0;
@@ -603,6 +611,8 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 		}
 		mxCatch(the) {
 			EndorOracleResult *out = &outs[crank_i];
+			if (the->exitStatus)
+				fxDeleteScript(script);
 			out->ok = 0;
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
@@ -643,6 +653,7 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResult *out)
 {
 	txMachine *the;
+	txScript *volatile script = C_NULL;
 	memset(out, 0, sizeof(*out));
 
 	the = xs_oracle_create_machine("xs-oracle-module");
@@ -653,7 +664,6 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 	{
 		mxTry(the) {
 			txStringCStream stream;
-			txScript *script;
 
 			stream.buffer = (txString)source;
 			stream.offset = 0;
@@ -693,6 +703,9 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
+	/* Compile-only never transfers ownership to fxRunScript. The result
+	 * contains independent copies, so release the parser allocation. */
+	fxDeleteScript(script);
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;

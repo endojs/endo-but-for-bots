@@ -17,14 +17,13 @@ jobs:
     uses: $/.github/workflows/ironhorse-changes.yml
 
   oracle-sanitizers:
-    name: ironhorse-oracle-sanitizers (advisory)
+    name: ironhorse-oracle-sanitizers
     needs: ironhorse-changes
     if: needs.ironhorse-changes.outputs.oracle == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # F034 calls for an advisory lane first. The pinned XS interpreter
-    # currently fails UBSAN alignment checks; keep the finding visible
-    # while the independent, unsanitized parity suite remains blocking.
+    # Pinned XS source is excluded only from UBSAN; our bridge keeps both
+    # sanitizers, and ASAN continues to instrument the upstream interpreter.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,10 +43,6 @@ jobs:
 
       - name: Run ASAN and UBSAN over the C oracle
         id: sanitizers
-        # Step-level continuation gives the advisory job a successful check
-        # while retaining the failure outcome and complete sanitizer log.
-        # Checkout, setup, and instrumented compilation remain blocking.
-        continue-on-error: true
         run: bash rust/engine/scripts/test-oracle-sanitizers.sh
 
       - name: Report sanitizer outcome
@@ -55,7 +50,7 @@ jobs:
         env:
           OUTCOME: ${{ steps.sanitizers.outcome }}
         run: |
-          echo "Oracle ASAN/UBSAN result: $OUTCOME (advisory during W0 rollout)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Oracle ASAN/UBSAN result: $OUTCOME." >> "$GITHUB_STEP_SUMMARY"
           if [ "$OUTCOME" != success ]; then
-            echo '::warning::Oracle sanitizer run did not pass. Inspect the sanitizer diagnostics; no suppression is applied.'
+            echo '::error::Oracle sanitizer run did not pass. Inspect the diagnostics; only pinned XS source is excluded from UBSAN.'
           fi

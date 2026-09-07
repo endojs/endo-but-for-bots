@@ -13,7 +13,9 @@ if [[ -n ${CARGO_ENCODED_RUSTFLAGS:-} ]]; then
   exit 1
 fi
 export CC=clang
-export CFLAGS="${CFLAGS:-} -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+# Only pinned upstream XS sources are excluded from UBSAN. AddressSanitizer
+# still instruments them; both sanitizers cover our shim and platform layer.
+export CFLAGS="${CFLAGS:-} -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -fsanitize-ignorelist=$engine_directory/scripts/oracle-sanitizer-ignorelist.txt"
 # Rust's default -nodefaultlibs also suppresses Clang's sanitizer runtimes.
 export RUSTFLAGS="${RUSTFLAGS:-} -C linker=clang -C default-linker-libraries=yes -C link-arg=-fsanitize=address,undefined"
 # Do not inherit runtime suppressions or exitcode=0 from another sanitizer run.
@@ -24,6 +26,7 @@ export RUST_MIN_STACK=33554432
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$engine_directory/target/sanitizers}"
 
 clang --version
+bash scripts/test-oracle-sanitizer-scope.sh
 # An explicit native target keeps these linker flags off host build scripts and
 # proc-macro dylibs; loading ASAN via a proc macro into rustc is too late for its
 # interceptors and can abort the compiler before any oracle test runs.

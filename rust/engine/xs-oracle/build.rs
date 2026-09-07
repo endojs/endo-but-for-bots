@@ -135,6 +135,9 @@ fn main() {
     println!("cargo:rerun-if-changed=csrc/xs_shim.c");
     println!("cargo:rerun-if-changed=csrc/xsoracle-platform.h");
     println!("cargo:rerun-if-changed=build.rs");
+    // CFLAGS carries the ignorelist path, so track its contents as well. A
+    // changed exclusion must rebuild the C objects, including in cached CI.
+    println!("cargo:rerun-if-changed=../scripts/oracle-sanitizer-ignorelist.txt");
     println!("cargo:rerun-if-changed={}", platform_source.display());
     println!("cargo:rustc-link-lib=m");
     println!("cargo:rustc-link-lib=pthread");

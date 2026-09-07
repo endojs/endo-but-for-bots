@@ -179,25 +179,35 @@ bash rust/engine/scripts/test-oracle-sanitizers.sh
 ```
 
 This runs the oracle library, compiler/regexp parity, test262 harness, and portable
-fuzz tests with all XS and shim C objects instrumented by Clang AddressSanitizer and
-UndefinedBehaviorSanitizer.
+fuzz tests with Clang AddressSanitizer and UndefinedBehaviorSanitizer.
+ASAN instruments every XS and shim C object.
+UBSAN instruments our shim and platform layer but excludes the pinned upstream
+`c/moddable/xs/sources/` directory through
+[`oracle-sanitizer-ignorelist.txt`](scripts/oracle-sanitizer-ignorelist.txt).
 The Rust harness links the matching runtimes, and any sanitizer report fails the run.
 The native target is explicit so runtime linkage does not contaminate host proc macros.
 Artifacts live separately under `rust/engine/target/sanitizers` by default.
 This checks the C oracle boundary; it does not instrument Rust code.
-The initial lane is advisory because the pinned XS interpreter currently triggers
-UBSAN's alignment check in `xsRun.c` (`mxRunID` reads an unaligned `txS2`) and
-`xsdtoa.c:1699` (an unaligned `Bigint` member access).
-The first is reproduced at `xsRun.c:2417` by
-`long_completion_value_is_captured_untruncated` on macOS aarch64;
-`unary_number_operators_coerce_strings_and_wrappers` exposes the second.
-No sanitizer checks are suppressed; the runner returns failure and continues across
-test executables so additional findings remain visible.
-CI first requires the instrumented test targets to compile, then treats test-run
-failures as advisory: the check succeeds, with the failure recorded in its warning,
-step outcome, summary, and logs.
-Checkout, toolchain setup, and compilation failures still fail the check.
-Promoting the lane to a merge gate requires resolving the upstream failures.
+The upstream exemption covers the UBSAN findings from the initial macOS/Linux
+runs: unaligned typed loads in `xsRun.c`, an unaligned `Bigint` member access in
+`xsdtoa.c:1699`, and applying a zero offset to a null pointer in `xsMemory.c:751`.
+It does not modify or claim to fix those pinned sources.
+The ignorelist has an `[undefined]` section only: ASAN remains enabled even in XS,
+and our `xs_shim.c` and `xsnap-platform.c` retain both checks.
+Before the suite, real C fault probes verify that XS UB is excluded, our boundary
+UB still fails, and heap overflows in both XS and our shim still fail under ASAN.
+Changes to the ignorelist invalidate cached oracle C objects.
+The runner returns failure and continues across test executables so additional
+findings remain visible.
+CI requires both instrumented compilation and the full test run to pass.
+Checkout, toolchain setup, scope-probe, compilation, and test failures all fail the check.
+The source exemption makes failures outside upstream UBSAN actionable without
+hiding memory errors or our boundary defects.
+Linux ASAN also enables LeakSanitizer; the macOS runtime used locally does not
+support leak detection, so a local pass does not establish that this gate passes.
+The initial Linux run exposed shim-owned script leaks in compile-only modules and
+recoverable host-abort paths; those allocations are now released without
+suppressing leak reports or duplicating XS's ordinary exception cleanup.
 
 The pure-Rust engine crates enforce `forbid(unsafe_code)` and run ordinary unit and fuzz tests.
 There is no Miri CI lane; the previously named `*_is_miri_clean` tests have descriptive

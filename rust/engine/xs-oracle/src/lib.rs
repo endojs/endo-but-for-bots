@@ -838,6 +838,33 @@ mod tests {
     }
 
     #[test]
+    fn script_cleanup_covers_throws_and_host_aborts() {
+        // ASAN catches duplicate cleanup; Linux LeakSanitizer catches missing
+        // cleanup at process exit. fxAbort skips fxRunScript's inner catch,
+        // unlike an ordinary JS throw. Exercise both sides of that ownership
+        // boundary, including failures after fxRunScript has already freed it.
+        let abort = "var d=Object.getOwnPropertyDescriptor(Iterator.prototype,'constructor');\
+var o={};Object.defineProperty(o,'constructor',d);o.constructor=1;";
+        for source in [
+            "throw new Error('ordinary');".to_owned(),
+            abort.to_owned(),
+            format!("Promise.resolve().then(function(){{{abort}}}); 'queued';"),
+            "({toString(){throw new Error('coercion')}})".to_owned(),
+            format!("({{toString(){{{abort}}}}})"),
+        ] {
+            let outcome = run(&source).expect("machine must start");
+            assert!(!outcome.completed, "must fail safely: {source}");
+            let cranks = run_cranks(&["'first'", &source, "'unreachable'"])
+                .expect("crank machine must start");
+            assert!(cranks[0].completed);
+            assert_eq!(cranks[0].result, "first");
+            assert!(!cranks[1].completed, "second crank must fail: {source}");
+            assert!(cranks[2].bytecode.is_empty(), "must stop at failing crank");
+        }
+        assert_eq!(run("1 + 2").expect("fresh machine").result, "3");
+    }
+
+    #[test]
     fn script_goal_still_rejects_top_level_export() {
         // The script entry is UNCHANGED by the module addition: a top-level
         // `export` remains a SyntaxError there (goal separation intact).
