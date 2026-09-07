@@ -209,6 +209,47 @@ fn a_deep_proxy_forwarding_chain_halts_and_a_shallow_one_completes() {
     );
 }
 
+/// The same forwarding families reached by an INDEX key.
+///
+/// An index whose canonical name the key table has never held takes a
+/// separate path through the MOP (it must, or reading it would mint a
+/// property id per novel index and exhaust the shared `u16` key space). That
+/// path forwards down a proxy chain exactly like the named one, so it has to
+/// be charged to the same budget — `[[Get]]` and `[[GetOwnProperty]]` were
+/// not, and ran past the ceiling their named spellings stopped at, which on a
+/// contract-sized stack is the `SIGABRT` this whole file exists to prevent.
+#[test]
+fn every_forwarded_proxy_internal_method_is_bounded_for_an_index_key() {
+    let tails = [
+        ("[[Get]]", "p[0]"),
+        ("[[HasProperty]]", "0 in p"),
+        ("[[Delete]]", "delete p[0]"),
+        ("[[GetOwnProperty]]", "Object.getOwnPropertyDescriptor(p, 0)"),
+        ("[[Get]] via Reflect", "Reflect.get(p, 0)"),
+        ("[[HasProperty]] via Reflect", "Reflect.has(p, 0)"),
+        ("[[Delete]] via Reflect", "Reflect.deleteProperty(p, 0)"),
+        (
+            "[[GetOwnProperty]] via Reflect",
+            "Reflect.getOwnPropertyDescriptor(p, 0)",
+        ),
+    ];
+    for (name, tail) in tails {
+        assert_stack_overflow(
+            &on_contract_stack(proxy_chain(10_000, tail)),
+            &format!("a 10,000-layer proxy {name} index chain"),
+        );
+    }
+    // The within-budget twin: the ceiling is above what real programs do.
+    for (_, tail) in tails {
+        let out = on_contract_stack(proxy_chain(256, tail));
+        assert!(
+            out.completed,
+            "a 256-layer proxy index chain must complete within the budget; halt: {:?}",
+            out.halt
+        );
+    }
+}
+
 #[test]
 fn every_forwarded_proxy_internal_method_is_bounded() {
     // Each of the thirteen internal methods forwards to the target when its
