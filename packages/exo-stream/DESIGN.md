@@ -174,6 +174,31 @@ still pays the credit granted before the close, as it did when the chain was
 walked in lockstep. Within one stream, `iterator.return()` is called at most
 once, and only between pulls, never over a pending `next()`.
 
+A local producer can supply `cancelPending` to `makeReaderPump`,
+`readerFromIterator`, or `bytesReaderFromIterator`.
+The walker invokes this hook once when it observes a close or synchronization
+failure, including while a pull is pending.
+The hook must interrupt the underlying operation so the pull settles without
+another source value; returning a promise also lets the hook report completion
+of its cancellation work.
+The value loop waits for the pull and cancellation before calling `return()`;
+it never overlaps iterator operations or acknowledges cleanup before it completes.
+An observed close takes precedence over the interrupted pull's value or completion,
+and its argument is still passed to `return()`.
+The hook receives a unique cancellation error; if it rejects an interrupted pull,
+it must use that exact error to identify the interruption as a normal close.
+Other pull errors, including errors from a generator's `finally`, remain failures.
+A failure thrown or rejected by the cancellation hook rejects a normal close; a synchronization failure keeps its
+original error even if cancellation or cleanup also fails.
+The same hook is invoked on a local pump failure, before cleanup.
+
+Cancellation is cooperative and local: the wire protocol is unchanged.
+A source without this hook, or one whose hook cannot settle its pending operation,
+still waits for that operation.
+A race against a close promise cannot by itself release the underlying resource.
+As with the iterator itself, the hook belongs to the source wrapped by this reader;
+independently cancellable consumers need independently owned source subscriptions.
+
 ### Writer Flow
 
 For a Writer, the synchronization chain carries `TWrite` (data). When the

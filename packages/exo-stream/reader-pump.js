@@ -55,6 +55,10 @@ const MAX_CREDIT = 2 ** 16;
  * invocation, `iterator.return()` is only ever called between pulls, never
  * over a pending `next()`: an async generator queues `return()` behind the
  * pull, and an arbitrary iterator may not tolerate the overlap at all.
+ * An optional local `cancelPending` hook interrupts the source's pending work
+ * as soon as close or failure is observed. The source must cooperate by
+ * settling its pull; the pump then calls `return()` for cleanup. Completion or
+ * rejection with the supplied cancellation reason does not replace the close.
  *
  * Example: Building a content-addressable bytes reader
  * ```js
@@ -83,7 +87,7 @@ const MAX_CREDIT = 2 ** 16;
  * @returns {(synPromise: ERef<StreamNode<undefined, TReadReturn>>) => Promise<StreamNode<TRead, TReadReturn>>}
  */
 export const makeReaderPump = (iterable, options = {}) => {
-  const { buffer = 0, readPattern, readReturnPattern } = options;
+  const { buffer = 0, readPattern, readReturnPattern, cancelPending } = options;
   const iterator = asyncIterate(iterable);
 
   /**
@@ -133,6 +137,20 @@ export const makeReaderPump = (iterable, options = {}) => {
      */
     let parkedSyn;
 
+    // Observe callback errors immediately, but let the value loop report them
+    // after the pending pull settles. The hook interrupts; return() cleans up.
+    /** @type {Promise<void> | undefined} */
+    let cancellation;
+    /** @type {Error | undefined} */
+    let cancellationReason;
+    const cancel = () => {
+      if (cancellation !== undefined || cancelPending === undefined) return;
+      cancellationReason = harden(Error('Reader pull cancelled'));
+      const reason = cancellationReason;
+      cancellation = Promise.resolve().then(() => cancelPending(reason));
+      cancellation.catch(() => undefined);
+    };
+
     const currentClose = () => close;
     const currentFailure = () => failure;
     const currentPendingSyn = () => pendingSyn;
@@ -146,6 +164,7 @@ export const makeReaderPump = (iterable, options = {}) => {
     const fail = error => {
       if (finished) return;
       failure = { error };
+      cancel();
     };
     /** @param {ERef<StreamNode<undefined, TReadReturn>>} syn */
     const walk = syn => {
@@ -177,6 +196,7 @@ export const makeReaderPump = (iterable, options = {}) => {
             }
             if (synNode.promise === null) {
               close = { value: synNode.value };
+              cancel();
               return;
             }
             if (synNode.promise === syn) {
@@ -220,7 +240,7 @@ export const makeReaderPump = (iterable, options = {}) => {
         // iterator's `return(value)` would.
         /** @param {TReadReturn} value */
         const settleClose = async value => {
-          await null;
+          await cancellation;
           let returnValue = value;
           if (iterator.return) {
             released = true;
@@ -270,15 +290,27 @@ export const makeReaderPump = (iterable, options = {}) => {
           }
 
           // Pull next value from iterator (no sync value for Reader - it's undefined)
-          const result = await iterator.next();
-
-          if (result.done) {
-            if (readReturnPattern !== undefined) {
-              mustMatch(result.value, readReturnPattern);
+          let result;
+          try {
+            result = await iterator.next();
+          } catch (error) {
+            // Only the hook's exact cancellation reason represents a normal
+            // interruption. Other errors, especially generator finally errors,
+            // must still reach the consumer.
+            const failedDuringPull = currentFailure();
+            if (failedDuringPull !== undefined) throw failedDuringPull.error;
+            const closedDuringPull = currentClose();
+            if (
+              closedDuringPull === undefined ||
+              cancellationReason === undefined ||
+              error !== cancellationReason
+            ) {
+              throw error;
             }
-            ackResolve(freeze({ value: result.value, promise: null }));
+            await settleClose(closedDuringPull.value);
             break;
           }
+
           const failedDuringPull = currentFailure();
           if (failedDuringPull !== undefined) {
             throw failedDuringPull.error;
@@ -291,6 +323,13 @@ export const makeReaderPump = (iterable, options = {}) => {
             await settleClose(closedDuringPull.value);
             break;
           }
+          if (result.done) {
+            if (readReturnPattern !== undefined) {
+              mustMatch(result.value, readReturnPattern);
+            }
+            ackResolve(freeze({ value: result.value, promise: null }));
+            break;
+          }
           if (readPattern !== undefined) {
             mustMatch(result.value, readPattern);
           }
@@ -300,6 +339,9 @@ export const makeReaderPump = (iterable, options = {}) => {
           ackResolve = resolve;
         }
       } catch (err) {
+        // On failure, preserve the primary error if cancellation also fails.
+        cancel();
+        await cancellation?.catch(() => undefined);
         if (iterator.return && !released) {
           released = true;
           try {

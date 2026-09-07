@@ -70,6 +70,17 @@ export interface MakeReaderOptions<
   TRead extends Passable = Passable,
   TReadReturn extends Passable = undefined,
 > {
+  /**
+   * Cooperatively interrupt this source when the consumer closes or its
+   * synchronization chain fails. May run during next(); must arrange for that
+   * pull to settle without another input value. To reject an interrupted pull,
+   * use the supplied reason unchanged; other pull errors still fail the stream.
+   * Called at most once per stream.
+   * Its completion is awaited before iterator.return(), which still never
+   * overlaps a pull. Without this hook, closing waits for the pending pull.
+   * This is a local capability, not part of the remote reader interface.
+   */
+  cancelPending?: (reason: Error) => void | Promise<void>;
   /** Number of values to pre-pull before waiting for synchronizes (default 0) */
   buffer?: number;
   /** Pattern for TRead (yielded values) */
@@ -208,6 +219,17 @@ export interface BytesReaderIterator<
  * Options for makeReader pump.
  */
 export interface ReaderPumpOptions {
+  /**
+   * Cooperatively interrupt this source when the consumer closes or its
+   * synchronization chain fails. May run during next(); must arrange for that
+   * pull to settle without another input value. To reject an interrupted pull,
+   * use the supplied reason unchanged; other pull errors still fail the stream.
+   * Called at most once per stream.
+   * Its completion is awaited before iterator.return(), which still never
+   * overlaps a pull. Without this hook, closing waits for the pending pull.
+   * This is a local capability, not part of the remote reader interface.
+   */
+  cancelPending?: (reason: Error) => void | Promise<void>;
   /** Number of values to pre-pull before waiting for synchronizes (default 0) */
   buffer?: number;
   /** Pattern for TRead (yielded values) */
@@ -235,6 +257,17 @@ export interface WriterPumpOptions {
 export interface MakeBytesReaderOptions<
   TReadReturn extends Passable = undefined,
 > {
+  /**
+   * Cooperatively interrupt this source when the consumer closes or its
+   * synchronization chain fails. May run during next(); must arrange for that
+   * pull to settle without another input value. To reject an interrupted pull,
+   * use the supplied reason unchanged; other pull errors still fail the stream.
+   * Called at most once per stream.
+   * Its completion is awaited before iterator.return(), which still never
+   * overlaps a pull. Without this hook, closing waits for the pending pull.
+   * This is a local capability, not part of the remote reader interface.
+   */
+  cancelPending?: (reason: Error) => void | Promise<void>;
   /** Number of values to pre-pull before waiting for synchronizes (default 0) */
   buffer?: number;
   /** Pattern for TReadReturn (return value) */
