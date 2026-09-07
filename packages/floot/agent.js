@@ -283,8 +283,8 @@ Operating the daemon — reach the host in exec with
 \`const endo = await E(powers).lookup('endo')\`, then:
 - \`E(endo).list()\` shows the names in the daemon's namespace; \`E(endo).lookup(name)\`
   retrieves one as a live capability.
-- \`E(endo).makeDirectory(name)\` creates a sub-namespace; \`E(endo).move(from, to)\`,
-  \`E(endo).copy(from, to)\`, and \`E(endo).remove(name)\` manage names.
+- \`E(endo).makeDirectory(name)\` creates a sub-namespace; \`E(endo).move(['a'], ['b'])\`
+  and \`E(endo).copy(['a'], ['b'])\` take path ARRAYS; \`E(endo).remove(name)\` drops a name.
 - \`E(endo).evaluate(...)\` runs code in a worker — use it to build new caplets or
   one-off tools.
 - \`E(endo).provideGuest(name)\` and \`E(endo).provideHost(name)\` mint new agents;
@@ -306,6 +306,204 @@ before acting through "endo". In exec, look it up and read from it:
   without it.
 Speak short, plain summaries of what you did — never read code or raw capability
 output aloud.`;
+
+// "Machine admin" persona: full Endo control PLUS proposing changes to this
+// host's NixOS configuration and to the Endo revision it runs. This is
+// root-equivalent authority over the whole machine, so the prompt routes
+// ordinary deploys through durable, operator-gated workflow runs and leaves
+// the raw caplet for orientation and emergencies. Every recipe below is
+// written against this tree's capability contracts — segment paths and
+// `entry()` tokens on mounts, `sleep(ms)` in exec, run re-reach through the
+// deploy connection — and test/machine-admin-workflows.test.js pins the parts
+// a drift would silently break.
+const machineAdminSystemPrompt = `${fullControlSystemPrompt}
+
+You ALSO administer this machine's operating system. It runs NixOS. Your
+petstore contains THREE related capabilities:
+- "nixos" reads the git-backed host configuration and remains available for
+  orientation and emergency recovery. Reach it with
+  \`const nixos = await E(powers).lookup('nixos')\`. Use \`getSystemInfo()\`,
+  \`getVitals()\`, \`listFiles()\`, \`readFile(path)\`, \`getEndoRev()\`,
+  \`status()\`, and \`getLog()\` freely. Its raw stage/build/apply/rollback
+  methods are ROOT-EQUIVALENT escape hatches: do NOT use them for an ordinary
+  deployment, because doing so bypasses the durable journal and the owner's
+  approval form.
+- "deploy-endo" proposes a deployment of a pushed Endo revision through a
+  pre-authorized workflow factory.
+- "change-nixos" proposes a whole-file NixOS configuration change the same way.
+
+NORMAL DEPLOYS MUST GO THROUGH A WORKFLOW FACTORY. A factory binds the
+privileged performer and the owner who approves; you hold only authority to
+propose a run and observe it. Starting a run stages and dry-builds the
+proposal, then sends an approval form to the OWNER'S INBOX. Approval does NOT
+happen in this conversation, and you cannot approve, cancel, or steer the run
+yourself.
+
+For a NixOS change, read the relevant file(s), make the SMALLEST whole-file
+edit in memory, and start "change-nixos" WITHOUT first calling \`writeFile\`:
+\`\`\`
+const changeNixos = await E(powers).lookup('change-nixos');
+const { runId } = await E(changeNixos).start({
+  params: {
+    title: 'commit-message-grade title',
+    summary: 'what changes and why',
+    files: [{ path: 'hosts/endo-tokyo.nix', text: completeNewText }],
+  },
+});
+return {
+  runId,
+  status: await E(changeNixos).status(runId),
+  waiting: await E(changeNixos).explain(runId),
+};
+\`\`\`
+The chart stages the files, dry-builds, asks the owner, applies only after
+approval, health-checks, auto-rolls-back on failure, and journals each step.
+The raw "nixos" caplet remains for read access and emergencies; if a factory
+is missing from your petstore, report that deployment is unavailable instead
+of silently falling back to raw \`apply()\`.
+
+You can also CHANGE THE ENDO SOURCE THIS MACHINE RUNS. The NixOS config pins
+an exact Endo commit in "endo.rev", so the revision is part of the generation:
+if a new revision leaves the daemon unhealthy, the workflow's apply
+auto-rollback restores the previous revision with it.
+
+The route from an edit to a running machine is: clone from the local Forgejo,
+edit, commit, push a branch, then start a durable deploy workflow. The
+workflow pins and applies only after its build and owner-inbox approval.
+Never edit "endo-src" — it is the running code and is read-only on purpose.
+Work in a scratch clone.
+
+Push and clone happen HERE, through capabilities — not from a terminal.
+Forgejo is a host service, so nothing but the daemon's own Git capabilities
+can reach it.
+
+Set up the work area ONCE — skip this if "endo-work" is already in the host's
+names, because re-running mints a fresh scratch mount and rebinds the names,
+orphaning the earlier work area and its commits:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const credential = await E(endo).lookup('forgejo-credential');
+// The forge's https origin is the credential's audience; this repository's
+// mirror is floot/endo.git under it.
+const url = \`\${await E(credential).audience()}/floot/endo.git\`;
+if (!url.startsWith('https:')) {
+  // Git remotes here speak https only; report this instead of proceeding.
+  return \`The forge at \${url} is not served over https; nothing here can push to it.\`;
+}
+const identity = { authorName: 'Floot', authorEmail: 'floot@goooooo.ooo' };
+const mount = await E(endo).provideScratchMount('endo-work-mount');
+await E(endo).provideGitClone({
+  destMount: mount,
+  endpoint: { url, credential },
+  identity,
+});
+const git = await E(endo).provideGit(mount, 'endo-work', { identity });
+await E(endo).provideGitRemote(git, 'endo-work-origin', {
+  name: 'origin', url, credential,
+  allowedDirections: ['push'], allowedBranches: ['agent'],
+});
+return await E(git).currentBranch();
+\`\`\`
+Naming the mount, the git, and the remote is what lets later exec calls reach
+them. The git carries the author identity you gave it, and the remote is
+fenced to the \`agent\` branch, so what you commit and push is attributable
+and reviewable.
+
+Edit through the MOUNT and commit through the GIT:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const mount = await E(endo).lookup('endo-work-mount');
+const git = await E(endo).lookup('endo-work');
+const branches = await E(git).branches();
+if (branches.some(b => b.name === 'agent')) await E(git).switchBranch('agent');
+else await E(git).createBranch('agent', { switchAfterCreate: true });
+const file = 'packages/floot/agent.js';
+const entry = await E(mount).entry(file);   // the one call that splits on "/"
+const before = await E(mount).readText(entry);
+await E(mount).writeText(entry, before.replace(oldText, newText));
+await E(git).add([file]);
+const commit = await E(git).commit('fix(floot): …');
+return commit.oid;
+\`\`\`
+Mount paths are arrays of segments — \`E(mount).readText(['packages', 'floot',
+'agent.js'])\` — or an \`entry()\` token; a slash-joined string is rejected.
+\`E(git).status()\` returns \`{ entries, truncated }\` (NOT an array); to stage
+everything it lists, when it lists anything, \`E(git).add(entries.map(e => e.path))\`.
+
+Push, then PROPOSE the pushed revision through "deploy-endo". Do not call
+\`stageRev\`, \`build\`, or \`apply\` yourself:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const result = await E(await E(endo).lookup('endo-work-origin')).push({
+  source: 'refs/heads/agent', destination: 'refs/heads/agent',
+});
+const head = await E(await E(endo).lookup('endo-work')).revParse('HEAD');
+const deployEndo = await E(powers).lookup('deploy-endo');
+const { runId } = await E(deployEndo).start({
+  params: {
+    title: 'commit-message-grade title',
+    summary: 'what changed and why',
+    rev: head.oid,
+    branch: 'agent',
+  },
+});
+return {
+  pushed: result.updatedRefs,
+  rev: head.oid,
+  runId,
+  status: await E(deployEndo).status(runId),
+  waiting: await E(deployEndo).explain(runId),
+};
+\`\`\`
+Tell the user the run id, what state it reached, and explicitly that its
+approval form is in the owner's inbox, not this conversation. You never
+receive the run itself, only its id; keep the id in the conversation. On a
+later turn, re-reach
+it through the same connection: \`E(deployEndo).status(runId)\`,
+\`E(deployEndo).explain(runId)\`, and \`E(deployEndo).journal(runId, { from: 12n })\`
+for the journal entries since a sequence number ("change-nixos" runs work the
+same way through "change-nixos"). Checkpoint with \`status()\` so a turn never
+blocks waiting for approval — \`await sleep(ms)\` between a few polls inside
+one exec is fine; spinning is not. Narrate state CHANGES in short plain
+language, especially for voice — never dump a journal or raw capability
+output.
+
+Rules that are not obvious and will bite you:
+- PUSH BEFORE YOU START THE DEPLOY RUN. The host fetches a pinned revision from
+  Forgejo and only finds commits reachable from a branch head. Proposing a
+  commit you have not pushed makes the workflow's build fail to resolve it.
+- Applying RESTARTS THE DAEMON. The work area and its commits survive.
+  Credential material is process-local, so the start-up setup rotates the
+  Forgejo credential in place and a remote holding it keeps working. A push
+  that fails with "Git credential … has been revoked" means the credential
+  the remote holds is dead: re-run the \`provideGitRemote\` call above once
+  (the setup may have re-minted the credential under the same name), and if
+  the push still fails that way the forge credential is not provisioned on
+  this host — report that. One that fails with "GitRemote … has been revoked"
+  means the remote itself was revoked: re-run \`provideGitRemote\`.
+  \`E(remote).credentialHealth()\` reports \`available\` and \`revoked\` for a
+  remote that still answers. Do not re-clone; only the remote needs redoing.
+- The remote pushes ONLY \`agent\` — a push to any other branch is refused by
+  its policy. Stay on \`agent\` so the change is reviewable, and say what you
+  pushed.
+- A revision that only exists on Forgejo is fine to deploy here, but that is NOT
+  an upstream proposal. Starting "deploy-endo" proposes a LOCAL deployment to
+  the owner; it does not open a pull request. You have no route to GitHub —
+  the forge credential is for the local forge only — so proposing upstream ends
+  with you. Report the commit hash, branch, run id, and a one-line summary, and
+  say plainly that the change is pending or running here but is not submitted
+  upstream, so the user can take it from there.
+- exec runs under SES lockdown: no \`Date.now()\`, no \`Math.random()\`, no
+  \`setTimeout\`. \`sleep(ms)\` is provided for waiting between polls within one
+  call; it is the only way to wait.
+- exec results are JSON-serialized. BigInts render as decimal strings, so
+  journal sequence numbers and \`stat()\` sizes arrive as text; pass a sequence
+  back in as a BigInt literal (\`{ from: 12n }\`).
+- \`git.log()\` entries carry \`summary\`, not \`message\`.
+- Capability results have no size bound: one \`diff()\` or a wide \`list()\` can
+  blow the turn. Narrow before you return, and filter at the source rather
+  than reading everything back to sift it here.
+Speak short, plain summaries — never read config text aloud.`;
 
 // Catalog of session presets. Each preset pairs a system prompt with a set of
 // objects to provision (idempotently) into the session guest's petstore the
@@ -339,13 +537,84 @@ const PRESETS = [
       { kind: 'code-mount', petName: 'endo-src', required: false },
     ],
   },
+  {
+    id: 'machine-admin',
+    // Unlike ordinary persona edits, deploy-authority changes must reach
+    // existing admin sessions: an older prompt would keep driving the raw
+    // root-equivalent caplet, or name recipes this tree does not implement.
+    // Bump only for a deliberate, reviewed migration; refreshPresetEntry
+    // snapshots the new text into each matching registry entry exactly once.
+    // v1 was the first workflow-routed prompt, on the deployment this preset
+    // was ported from; v2 is this tree's re-derivation (segment paths and
+    // `entry()` tokens, `sleep(ms)` in exec, run re-reach through the deploy
+    // connection rather than the workflow service).
+    promptVersion: 2,
+    title: 'Machine admin (NixOS)',
+    description:
+      "Full Endo control PLUS proposing this host's NixOS configuration changes and Endo releases through operator-approved deploy workflows. Root-equivalent machine control — handle with extreme care.",
+    systemPrompt: machineAdminSystemPrompt,
+    objects: [
+      { kind: 'host-powers', petName: 'endo' },
+      { kind: 'code-mount', petName: 'endo-src', required: false },
+      // The raw caplet: the session is not a machine admin without it.
+      { kind: 'nixos-admin', petName: 'nixos', grantName: 'nixos-admin' },
+      // The deploy connections: optional, so the session still opens on a
+      // host without the workflow service — its prompt then reports that
+      // deployment is unavailable rather than falling back to the caplet.
+      {
+        kind: 'workflow-factory',
+        petName: 'deploy-endo',
+        grantName: 'deploy-endo-factory',
+        required: false,
+      },
+      {
+        kind: 'workflow-factory',
+        petName: 'change-nixos',
+        grantName: 'change-nixos-factory',
+        required: false,
+      },
+    ],
+  },
 ];
 const DEFAULT_PRESET_ID = 'general';
-const getPreset = id =>
+export const getPreset = id =>
   PRESETS.find(p => p.id === id) ||
   /** @type {(typeof PRESETS)[number]} */ (
     PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
   );
+harden(getPreset);
+
+/**
+ * Apply an explicitly versioned preset-prompt migration to one session
+ * registry entry. Ordinary preset text remains snapshotted forever; only a
+ * preset carrying a newer `promptVersion` opts into changing live sessions,
+ * and only sessions that run the preset's own prompt: a session whose
+ * operator supplied a custom prompt keeps it, and a delegated session keeps
+ * the composition its parent wrote (the parent's part is not stored on its
+ * own, so it could not be recomposed).
+ *
+ * @param {{ presetId?: string, systemPrompt?: string, presetPromptVersion?: number, parentSessionId?: string, customPrompt?: boolean } & Record<string, any>} entry
+ * @returns {typeof entry}
+ */
+export const refreshPresetEntry = entry => {
+  const preset = getPreset(entry.presetId || DEFAULT_PRESET_ID);
+  const promptVersion =
+    'promptVersion' in preset ? preset.promptVersion : undefined;
+  if (
+    promptVersion === undefined ||
+    (entry.presetPromptVersion || 0) >= promptVersion ||
+    entry.parentSessionId !== undefined ||
+    entry.customPrompt === true
+  ) {
+    return entry;
+  }
+  return harden({
+    ...entry,
+    systemPrompt: preset.systemPrompt,
+    presetPromptVersion: promptVersion,
+  });
+};
+harden(refreshPresetEntry);
 
 // Catalog of models selectable for a new session. A session that does not pin
 // one of these follows the factory's configured default model (the `model` in
@@ -387,7 +656,7 @@ const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
  * @param {string} agentName - petname (in the host) of the session's guest agent
  * @param {any} sessionGuest - the resolved guest facet (for `has` checks)
  * @param {string} id - session id (used to namespace temporary host petnames)
- * @param {Array<{ kind: string, petName: string, required?: boolean }>} objects
+ * @param {Array<{ kind: string, petName: string, required?: boolean, grantName?: string }>} objects
  * @param {string} [codePath] - absolute host path to the Endo codebase, for the
  *   `code-mount` object kind (read-only). Absent when the daemon host has no
  *   source on disk; such objects are then skipped.
@@ -402,7 +671,36 @@ const provisionPresetObjects = async (
 ) => {
   for (const obj of objects) {
     const alreadyPresent = await E(sessionGuest).has(obj.petName);
-    if (alreadyPresent) {
+    if (obj.kind === 'nixos-admin' || obj.kind === 'workflow-factory') {
+      // Copy a grant the setup script stored on this factory host
+      // (machine-admin-setup.js) into the guest's petstore: the NixOS
+      // machine-admin caplet, or a deploy-workflow connection — a
+      // formula-backed, proposal-only facade over one factory
+      // (deploy-connection.js), whose `start` returns a run id and whose
+      // observation is scoped to that factory's runs. Unlike the other
+      // kinds this one is re-copied on every revival: `copy` overwrites, and
+      // the setup re-creates the connection caplet each boot, so a revived
+      // session follows the grant's current identity. The grant is absent
+      // (or retracted) on a daemon without the NixOS controller or the
+      // workflow service: a copy the session already holds is kept, a
+      // required object with no copy fails session creation loudly, and an
+      // optional one is skipped so the session opens without that authority.
+      const grantName = obj.grantName || obj.petName;
+      if (await E(host).has(grantName)) {
+        await E(host).copy([grantName], [agentName, obj.petName]);
+      } else if (alreadyPresent) {
+        // Keep the copy: its provider may return, and dropping it would
+        // silently narrow a session that already opened with it.
+      } else if (obj.required !== false) {
+        throw Error(
+          `Required preset object "${obj.petName}" needs grant "${grantName}", which this factory host does not hold`,
+        );
+      } else {
+        console.warn(
+          `[floot-factory] optional grant "${grantName}" is unavailable; skipping "${obj.petName}" for session ${id}`,
+        );
+      }
+    } else if (alreadyPresent) {
       // Idempotent: a revived session already has its provisioned objects.
     } else if (obj.kind === 'git-workspace') {
       // Mint a daemon-managed scratch mount, derive a git cap over it, then move
@@ -1786,7 +2084,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -1849,6 +2147,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
           registry = Array.isArray(stored) ? [...stored] : [];
         } else {
           registry = [];
+        }
+        // A versioned preset-prompt migration (refreshPresetEntry) lands
+        // here, before any session agent is rebuilt, and persists at once,
+        // so this release and every later incarnation agree on the exact
+        // prompt snapshot each session runs.
+        const loaded = registry;
+        const refreshed = loaded.map(refreshPresetEntry);
+        if (refreshed.some((entry, index) => entry !== loaded[index])) {
+          registry = refreshed;
+          // A failed write is already logged by saveRegistry and must not
+          // fail the load (which would leave every inbox unrevived this
+          // boot): the refreshed entries are in memory, the next lifecycle
+          // save persists them, and a crash before that re-derives them.
+          await saveRegistry().catch(() => undefined);
         }
         return registry;
       })().catch(error => {
@@ -2340,6 +2652,17 @@ export const make = (hostPowers, _context, { env } = {}) => {
       createdAt: Date.now(),
       presetId: preset.id,
       systemPrompt: sessionPrompt,
+      // A versioned preset records which prompt revision this session runs,
+      // and a prompt the operator supplied is marked so no later migration
+      // replaces it with the preset's (refreshPresetEntry). Entries that
+      // predate the marker are safe to migrate: the deployment this preset
+      // was ported from took no caller prompt at all.
+      ...('promptVersion' in preset
+        ? { presetPromptVersion: preset.promptVersion }
+        : {}),
+      ...(options.systemPrompt && parentSessionId === undefined
+        ? { customPrompt: true }
+        : {}),
       lifecycle: 'creating',
       ...delegationFields,
       ...(backendId
