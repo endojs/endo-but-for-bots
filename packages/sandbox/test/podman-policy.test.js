@@ -691,3 +691,91 @@ test('two slices cannot both attest a namespace they share', async t => {
     message: /already held by another live slice/,
   });
 });
+
+test('concurrent spawns cannot both slip past the operation ceiling', async t => {
+  const { driver } = makeDriverUnderTest();
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  // Reading the live count and registering the entry are many awaits
+  // apart. Without a synchronous reservation both of these observe an
+  // empty slice, both are admitted, and the slice runs one container
+  // more than every per-container ceiling was computed for.
+  const results = await Promise.allSettled([
+    driver.spawn(slice, ['/bin/sleep', '60'], {}),
+    driver.spawn(slice, ['/bin/sleep', '60'], {}),
+  ]);
+  t.is(results.filter(result => result.status === 'fulfilled').length, 1);
+  const [rejected] = results.filter(result => result.status === 'rejected');
+  t.regex(
+    /** @type {any} */ (rejected).reason.message,
+    /admits 1 concurrent operations/,
+  );
+});
+
+test('a refused operation gives its reservation back', async t => {
+  let inspectCount = 0;
+  const { driver } = makeDriverUnderTest({
+    responses: {
+      'container-inspect': {
+        get stdout() {
+          inspectCount += 1;
+          // Refuse the first operation only: the second must still be
+          // admissible, which it is not if the first kept its slot.
+          const record =
+            inspectCount === 3
+              ? {
+                  ...ANCHOR_INSPECT,
+                  HostConfig: { ...ANCHOR_INSPECT.HostConfig, PidsLimit: 0 },
+                }
+              : ANCHOR_INSPECT;
+          return `${JSON.stringify([record])}\n`;
+        },
+      },
+    },
+  });
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  await t.throwsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}), {
+    message: /resolved this operation's configuration differently/,
+  });
+  await t.notThrowsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}));
+});
+
+test('an operation is refused when the host stopped delegating a controller', async t => {
+  let controllerReads = 0;
+  const procfs = makeProcfs();
+  const narrowing = harden({
+    ...procfs,
+    /** @param {string} path */
+    readFile: async path => {
+      await null;
+      if (path.endsWith('cgroup.controllers')) {
+        controllerReads += 1;
+        // Delegated when the slice was attested, narrowed afterwards.
+        // The runtime still echoes every ceiling back, so the
+        // fingerprint is identical and only this says otherwise.
+        return controllerReads > 1 ? 'cpu io pids\n' : 'cpu io memory pids\n';
+      }
+      return procfs.readFile(path);
+    },
+  });
+  const { driver } = makeDriverUnderTest({ procfs: narrowing });
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  await t.throwsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}), {
+    message: /no longer delegates the cgroup controllers/,
+  });
+});
+
+test('an anchor that will not go away is not a clean teardown', async t => {
+  const { driver, calls } = makeDriverUnderTest({
+    responses: {
+      rm: { code: 125, stdout: 'container is in an unknown state' },
+    },
+  });
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  t.truthy(createCalls(calls)[0]);
+  // The anchor holds the slice's join to the broker's namespace, so a
+  // removal that failed silently would let dispose() report proven
+  // containment over a container still in it.
+  await t.throwsAsync(driver.teardown(slice), {
+    message: /policy anchor removal failed/,
+  });
+});
