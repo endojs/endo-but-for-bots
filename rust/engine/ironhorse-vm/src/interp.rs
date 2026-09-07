@@ -41812,6 +41812,23 @@ impl Interp {
         self.intern_key(&name)
     }
 
+    /// The [`ReadKey`] for integer element index `k`, minting nothing.
+    ///
+    /// An index above `u32::MAX` is not an array index at all — it is an
+    /// ordinary string name that happens to look numeric, and
+    /// [`ReadKey::Index`] cannot hold it — so that one is interned, as XS
+    /// interns it too (`fxAt` takes its name branch there). Every real element
+    /// index resolves to a name only if one already exists.
+    fn array_index_read_key(&mut self, k: u64) -> ReadKey {
+        match u32::try_from(k) {
+            Ok(index) => match self.index_read_key_id(index) {
+                Some(id) => ReadKey::Id(id),
+                None => ReadKey::Index(index),
+            },
+            Err(_) => ReadKey::Id(self.intern_key(&k.to_string())),
+        }
+    }
+
     /// `ToObject(this)` for a generic Array prototype method. Unlike the
     /// lighter array-like boxer used by `Array.fromAsync`, a mutating method
     /// can return the wrapper itself, so its primitive internal data and
@@ -41954,19 +41971,47 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Option<u16> {
-        let name = k.to_string();
-        if let Some(&id) = self.symbol_ids.get(&name) {
-            return Some(id);
+        self.array_generic_index_answerable(o, k)
+            .then(|| self.array_generic_index_id(k))
+    }
+
+    /// [`Self::array_generic_interned_index_id`] as a [`ReadKey`]: same
+    /// decision, but a name is only LOOKED UP, never minted.
+    ///
+    /// The id-returning form still mints for a receiver chain that carries a
+    /// Proxy, because an absent index can invoke an observable trap and the
+    /// trap has to be handed a key. That key does not need to be a minted
+    /// name — `read_key_slot` spells one from the index, as `fxKeyAt` does —
+    /// so every generic Array READ takes this form instead, and
+    /// `Array.prototype.map.call(new Proxy(bigArray, {}), f)` no longer walks
+    /// the `u16` id space into the guard that poisons the machine.
+    fn array_generic_index_read_key(
+        &mut self,
+        o: crate::value::SlotIndex,
+        k: u64,
+    ) -> Option<ReadKey> {
+        self.array_generic_index_answerable(o, k)
+            .then(|| self.array_index_read_key(k))
+    }
+
+    /// Whether resolving index `k` on `o`'s chain genuinely needs the MOP
+    /// walk — the shared decision behind both forms above. `false` means no
+    /// name-keyed property can exist under this index and no level answers it
+    /// dynamically, so `HasProperty` is `false` and `Get` is `undefined`
+    /// without consulting anything further.
+    fn array_generic_index_answerable(&mut self, o: crate::value::SlotIndex, k: u64) -> bool {
+        if self.symbol_ids.contains_key(&k.to_string()) {
+            return true;
         }
         let mut level = o;
         loop {
             if self.proxies.contains_key(&level) {
                 // Even an absent index can invoke an observable proxy trap.
-                return Some(self.array_generic_index_id(k));
+                return true;
             }
             if let Some(&typed_array) = self.typed_arrays.get(&level) {
                 if self.ta_valid_index(typed_array, k as f64).is_some() {
-                    return Some(self.array_generic_index_id(k));
+                    return true;
                 }
             }
             if let Some(Slot {
@@ -41976,19 +42021,19 @@ impl Interp {
             }) = self.wrapper_data.get(&level).copied()
             {
                 if k < self.str_len(offset) as u64 {
-                    return Some(self.array_generic_index_id(k));
+                    return true;
                 }
             }
             if k <= u32::MAX as u64 {
                 if let Some(array) = self.arrays.get(&level) {
                     if array.items().contains_key(&(k as u32)) {
-                        return Some(self.array_generic_index_id(k));
+                        return true;
                     }
                 }
             }
             let prototype = self.instance_prototype(level);
             if prototype.is_null() {
-                return None;
+                return false;
             }
             level = prototype;
         }
@@ -42002,8 +42047,8 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<bool, Halt> {
-        match self.array_generic_interned_index_id(o, k) {
-            Some(id) => self.mop_has(code, o, id),
+        match self.array_generic_index_read_key(o, k) {
+            Some(key) => Ok(self.mop_has_read_with_recursions(code, o, key)?.0),
             None => Ok(false),
         }
     }
@@ -42017,10 +42062,10 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<Slot, Halt> {
-        match self.array_generic_interned_index_id(o, k) {
-            Some(id) => {
+        match self.array_generic_index_read_key(o, k) {
+            Some(key) => {
                 let recv = Slot::of(Kind::Reference, Payload::Reference(o));
-                self.mop_get(code, o, id, recv)
+                self.mop_get_read(code, o, key, recv)
             }
             None => Ok(Slot::undefined()),
         }
@@ -42034,7 +42079,14 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<Slot, Halt> {
-        let id = self.array_generic_index_id(k);
+        // The metered Proxy path needs a real id, so this form keeps the
+        // minting probe — but only reaches it when some chain level can
+        // actually answer `k`. An index nothing answers reads `undefined`
+        // with no name and no trap, which is what lets `Array.from` and
+        // spread walk a 70,000-hole sparse array.
+        let Some(id) = self.array_generic_interned_index_id(o, k) else {
+            return Ok(Slot::undefined());
+        };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         self.mop_get_with_proxy_metering(
             code,
