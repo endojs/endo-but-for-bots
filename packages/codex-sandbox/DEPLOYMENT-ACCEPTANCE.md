@@ -119,10 +119,13 @@ Sources checked 2026-09-07:
 
 Floot no longer advertises or revives the legacy `claude-cli` route, which
 materializes a credential inside a normally networked slice.
-A Claude implementation must be supplied as a verified hosted backend; adding
+A Claude implementation must be supplied as a hosted backend; adding
 `claude-backend` discovery does not itself certify that implementation.
-The standalone legacy `@endo/claude-sandbox` remains separate and is not an
-implementation of this hosted contract.
+`@endo/claude-sandbox` now supplies such a backend
+(`setup-hosted.js` binds it as `claude-backend`), but it materializes the
+credential inside its slice and keeps a `private` network profile, so it
+satisfies Floot's hosted seam and tool isolation without satisfying this
+contract's token-free slice.
 
 ## Non-blocking scope
 
