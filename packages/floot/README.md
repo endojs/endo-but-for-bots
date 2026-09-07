@@ -26,7 +26,9 @@ that make it a hands-free voice assistant.
   - `floot/stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
     (`voice/audio-server-caplet.js`): `transcribe(audioReader) -> textReader`.
   - `floot/tts` — text-to-speech via [piper](https://github.com/rhasspy/piper)
-    (`voice/tts-server-caplet.js`): `synthesize(textReader) -> audioReader`.
+    (`voice/tts-server-caplet.js`): `synthesize(textReader, options?) -> audioReader`;
+    `getConfiguration()` lists its voices, defaults, and the ranges of the
+    Piper controls the options are held to.
 
 The browser UI lives in [`@endo/chat`](../chat); a Chat Space looks these three
 objects up by pet-name and streams to/from them.
