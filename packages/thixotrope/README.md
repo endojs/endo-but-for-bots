@@ -472,6 +472,9 @@ Two internal replay engines (`src/peer-replay-engine.js`) implement
 the same contract deterministically without an XS build; they are test
 doubles for the daemon's persistence logic, deliberately not part of
 the public API.
+These test doubles disable Node import finalization because GC-generated
+protocol frames are not journal inputs and cannot be replayed deterministically.
+Production worker peers retain their normal import collection behavior.
 
 ## Workers creating workers
 
