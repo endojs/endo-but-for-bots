@@ -1395,7 +1395,7 @@ pub mod engine {
             for halt in [
                 Halt::StackOverflow(7),
                 Halt::MeterAbort,
-                Halt::EngineInvariant("test invariant"),
+                Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
                 Halt::Decode("truncated".to_string()),
                 Halt::StepLimit(42),
@@ -1424,7 +1424,7 @@ pub mod engine {
                 Halt::synthetic_throw("x".to_string()),
                 Halt::StackOverflow(1),
                 Halt::MeterAbort,
-                Halt::EngineInvariant("test invariant"),
+                Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
                 Halt::Decode("d".to_string()),
                 Halt::StepLimit(1),
