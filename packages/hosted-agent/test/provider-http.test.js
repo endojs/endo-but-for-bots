@@ -4,6 +4,7 @@ import { Far } from '@endo/far';
 import { request as httpRequest } from 'node:http';
 
 import { makeProviderHttpListener } from '../src/provider-http.js';
+import { readHttpText, requestHttp } from './http-client.js';
 
 /** @import { IncomingMessage } from 'node:http' */
 
@@ -57,19 +58,18 @@ test.serial(
       }),
     });
     t.teardown(() => listener.dispose());
-    const response = await fetch(`${listener.url}/v1/responses`, {
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
       method: 'POST',
       headers: { ...headers, 'x-secret': 'not-forwarded' },
       body,
     });
-    t.is(response.status, 200);
-    t.is(response.headers.get('content-type'), 'text/event-stream');
-    if (!response.body) throw Error('missing response body');
-    const stream = response.body.getReader();
-    const first = await stream.read();
+    t.is(response.statusCode, 200);
+    t.is(response.headers['content-type'], 'text/event-stream');
+    const stream = response[Symbol.asyncIterator]();
+    const first = await stream.next();
     t.is(new TextDecoder().decode(first.value), 'data: first\n\n');
     finish();
-    t.true((await stream.read()).done);
+    t.true((await stream.next()).done);
     t.true(returned);
   },
 );
@@ -97,7 +97,7 @@ test.serial(
       { body: 'x'.repeat(1025) },
     ]) {
       // eslint-disable-next-line no-await-in-loop
-      const response = await fetch(
+      const response = await requestHttp(
         `${listener.url}${change.path || '/v1/responses'}`,
         {
           method: 'POST',
@@ -105,9 +105,9 @@ test.serial(
           body: change.body || body,
         },
       );
-      t.is(response.status, 502);
+      t.is(response.statusCode, 502);
       // eslint-disable-next-line no-await-in-loop
-      t.is(await response.text(), 'Inference request failed');
+      t.is(await readHttpText(response), 'Inference request failed');
     }
     const rejectedHost = await new Promise((resolve, reject) => {
       const request = httpRequest(
@@ -213,7 +213,7 @@ test.serial(
       }),
     });
     t.teardown(() => listener.dispose());
-    const response = fetch(`${listener.url}/v1/responses`, {
+    const response = requestHttp(`${listener.url}/v1/responses`, {
       method: 'POST',
       headers,
       body,
@@ -255,11 +255,11 @@ test.serial('HTTP masks upstream exceptions', async t => {
     }),
   });
   t.teardown(() => listener.dispose());
-  const response = await fetch(`${listener.url}/v1/responses`, {
+  const response = await requestHttp(`${listener.url}/v1/responses`, {
     method: 'POST',
     headers,
     body,
   });
-  t.is(response.status, 502);
-  t.is(await response.text(), 'Inference request failed');
+  t.is(response.statusCode, 502);
+  t.is(await readHttpText(response), 'Inference request failed');
 });

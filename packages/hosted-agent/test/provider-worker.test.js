@@ -5,6 +5,7 @@ import { Far } from '@endo/far';
 import { spawn } from 'node:child_process';
 
 import { makeProviderPipe } from '../src/provider-pipe.js';
+import { readHttpText, requestHttp } from './http-client.js';
 
 test.serial(
   'separate credential-free worker forwards HTTP over private capability pipes',
@@ -75,12 +76,12 @@ test.serial(
     t.teardown(pipe.close);
     const control = await pipe.getBootstrap();
     const ready = await E(control).ready();
-    const response = await fetch(`${ready.endpoint}/v1/responses`, {
+    const response = await requestHttp(`${ready.endpoint}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{"model":"allowed"}',
     });
-    t.is(await response.text(), 'data: hello\n\n');
+    t.is(await readHttpText(response), 'data: hello\n\n');
     t.is(calls, 1);
     await E(control).stop();
     pipe.close();

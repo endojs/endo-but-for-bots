@@ -25,7 +25,7 @@ const policy = harden({
 });
 
 /** @param {any} [options] */
-const fixture = ({ leaseDurationMs = 60_000, startBarrier } = {}) => {
+const fixture = ({ leaseDurationMs = 60_000, startBarrier, now } = {}) => {
   let stops = 0;
   let fails = false;
   let drift = false;
@@ -65,6 +65,7 @@ const fixture = ({ leaseDurationMs = 60_000, startBarrier } = {}) => {
     fetch: async () => new Response('ok'),
     policy,
     leaseDurationMs,
+    now,
     imageDigest: digest,
     accountRef: 'account',
   });
@@ -142,11 +143,26 @@ test('failed lease teardown retains authority and retries the same worker', asyn
 
 test('lease expiry revokes traffic and stops worker', async t => {
   t.timeout(1000);
-  const f = fixture({ leaseDurationMs: 20 });
+  // Setup can exceed the short expiry interval on a loaded CI runner. Keep
+  // admission live, then advance the policy clock and await the real timer.
+  let time = 0;
+  const f = fixture({ leaseDurationMs: 20, now: () => time });
   t.teardown(f.issuer.dispose);
   const lease = await f.issuer(spec);
+  time = 20;
   await f.closed;
   await t.throwsAsync(() => E(lease).attestation(), { message: /inactive/ });
+  await t.throwsAsync(
+    () =>
+      E(f.endpoint()).request(
+        harden({
+          method: 'POST',
+          path: '/v1/responses',
+          body: '{"model":"allowed"}',
+        }),
+      ),
+    { message: /inactive/ },
+  );
   t.is(f.stops(), 1);
 });
 
