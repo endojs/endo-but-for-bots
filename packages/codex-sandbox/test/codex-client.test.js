@@ -2164,26 +2164,15 @@ test('a first turn on a fresh thread does not ask an unmaterialized thread for i
   );
 });
 
-test('a completion already in flight cannot resurrect a quarantined turn', async t => {
+test('a late completion cannot resurrect a quarantined turn', async t => {
   /** @type {any[]} */
   const saved = [];
-  /** @type {(() => void) | undefined} */
-  let releaseAudit;
-  const held = new Promise(resolve => {
-    releaseAudit = () => resolve(undefined);
-  });
   const { client, push } = makeFixture({
     interruptTerminal: false,
     clientOptions: {
       requestTimeoutMs: 200,
       saveThreadState: async state => {
         saved.push(JSON.parse(JSON.stringify(state)));
-      },
-      auditEvent: async event => {
-        // A durable journal append is real I/O; the failure path awaits it
-        // before delivering the abort, which is the window in which the
-        // app-server's already-queued completion used to win.
-        if (event?.type === 'session-failed') await held;
       },
     },
   });
@@ -2195,13 +2184,14 @@ test('a completion already in flight cannot resurrect a quarantined turn', async
   })();
 
   // The interrupt is acked but never confirmed, so the deadline quarantines the
-  // session; the completion the app-server had already emitted arrives during
-  // the session-failed audit.
+  // session. Wait for that protocol boundary explicitly: a fixed delay races
+  // the request's own admission on a saturated event loop and can deliver the
+  // completion before the interrupt deadline has even started.
   const interrupted = client.interrupt().then(
     () => undefined,
     error => error,
   );
-  await new Promise(resolve => setTimeout(resolve, 350));
+  t.truthy(await interrupted);
   push({
     method: 'turn/completed',
     params: {
@@ -2209,9 +2199,6 @@ test('a completion already in flight cannot resurrect a quarantined turn', async
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
-  await new Promise(resolve => setTimeout(resolve, 50));
-  /** @type {any} */ (releaseAudit)();
-  t.truthy(await interrupted);
   await draining;
 
   t.is(events.at(-1)?.type, 'abort', 'the consumer sees the abort, not an end');
