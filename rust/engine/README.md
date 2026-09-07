@@ -34,37 +34,60 @@ recursion the engine performed on a guest's behalf ran on the host's terms.
 prototype cycle), a built-in re-entering a built-in (`join` → `toString` →
 `join` over a self-containing array), `JSON.parse`/`JSON.stringify`, the
 host-boundary renderer, `flat`, an ordinary prototype chain read through the
-MOP, the async-generator drain, and the whole compile front end (parser,
-scoper, coder, regexp compiler) each terminated by overflowing the thread stack
-at a depth that depended on the host stack size and the build profile.
+MOP, the async-generator drain, the bound-function / `call` / `apply`
+redispatch chain, and the whole compile front end (parser, scoper, coder,
+regexp compiler) each terminated by overflowing the thread stack at a depth
+that depended on the host stack size and the build profile.
 
 The invariant, not the sites, is what landed:
 
 - **VM** — one counter, `Interp::native_depth`, charged by every re-entry
-  point and checked against `NATIVE_DEPTH_LIMIT` (512 units). A frame is
+  point and checked against `NATIVE_DEPTH_LIMIT` (2,048 units). A frame is
   charged by size class: a `dispatch_at` re-entry or a `call_native` /
   `call_native_method` activation (the crate's two monolithic dispatch
-  functions, tens to hundreds of KiB unoptimized) costs `HEAVY_FRAME_COST` (4);
-  a `mop_*`/Proxy internal method, a JSON walker level, a `flat` level or a
-  renderer level costs `LIGHT_FRAME_COST` (1). So the budget admits 128 heavy
-  frames — 63 nested callbacks beneath the top-level program, the allowance the
-  old limit gave — or 512 light ones, and a mix is bounded by the heavier
-  corner rather than by their sum. Past the ceiling the crank halts with
-  `Halt::StackOverflow`, the abort-to-host XS raises from `fxCheckCStack`.
-  Ordinary prototype chains are walked in place (XS's `fxGetProperty` loop),
-  the async-generator drain is a loop, and the renderer refuses a
-  self-containing completion or thrown value the way XS's `fxToString` aborts
-  on it.
+  functions, about 100 KiB each unoptimized, 10 KiB optimized) costs
+  `HEAVY_FRAME_COST` (16); a `mop_*`/Proxy internal method, a JSON walker
+  level, a `flat` level or a renderer level (2.5–5.5 KiB unoptimized,
+  0.5–1.2 KiB optimized) costs `LIGHT_FRAME_COST` (1). So the budget admits
+  128 heavy frames — 63 nested callbacks or nested `join`s beneath the
+  top-level program, the allowance the old limit gave — or 2,048 light ones
+  (about 2,000 nested proxies or JSON levels), the two corners costing about
+  the same host stack (13 MiB and 11 MiB unoptimized), and a mix is bounded
+  by the heavier corner rather than by their sum. Past the ceiling the crank
+  halts with
+  `Halt::StackOverflow`, the abort-to-host XS raises from `fxCheckCStack` —
+  at a depth that is this engine's, sized to its own frames, not XS's (the
+  oracle's C stack admits thousands of `JSON.parse` levels and a hundred-odd
+  nested `join`s), which is why the differential harness classifies that halt
+  against an oracle completion as the non-gating `ironhorse-aborted-limit`
+  skip. What loops needs no charge: prototype chains through ordinary and
+  exotic objects are walked in place (XS's `fxGetProperty` loop) and only a
+  Proxy in the chain forwards, the iterative walks (`instanceof`,
+  `isPrototypeOf`) count their Proxy steps so a spec-legal Proxy prototype
+  cycle halts instead of spinning, the async-generator drain is a loop, the
+  callable and constructor checks follow Proxy targets in a loop, and
+  `invoke_value` folds a bound-function / `call` / `apply` redispatch chain of
+  any length in place. The renderer refuses a self-containing *completion*
+  value the way XS's `fxToString` aborts on it; a *thrown* value is rendered
+  before the engine knows whether a native driver (an async body's rejection,
+  a promise reaction, `Array.fromAsync`) will catch it, so that render is a
+  diagnostic that falls back to the `[object Object]` stub and never halts.
 - **Parser** — `PARSER_STACK_BUDGET` (1,024 units) charged by frame class: a
   full expression-cascade re-entry costs `CASCADE_COST` (8) plus the operand
-  charges on the way down (about 100 nested parentheses, brackets, calls,
+  charges on the way down (about 90 nested parentheses, brackets, calls,
   arrow bodies or template substitutions), a nested statement, `new` operand or
   destructuring level `STATEMENT_COST` (2, so 512), an assignment / unary /
-  conditional operand `OPERAND_COST` (1, so about 1,000). Refused with XS's
-  own `fxCheckParserStack` wording, a `SyntaxError` "stack overflow".
-- **Scoper and coder** — `TREE_DEPTH_LIMIT` (2,048 tree levels) for the flat
-  runs the grammar folds into left-nested chains (`a + a + … + a`, `a.b.c…`),
-  which the parser never recursed for. Same `SyntaxError`.
+  exponentiation / conditional operand `OPERAND_COST` (1, so about 1,000).
+  Refused with XS's own `fxCheckParserStack` wording, a `SyntaxError` "stack
+  overflow".
+- **The tree itself** — `TREE_DEPTH_LIMIT` (2,048 levels), enforced by the
+  parser as each node is built, for the flat runs the grammar folds into
+  left-nested chains (`a + a + … + a`, `a.b.c…`) that the parser never
+  recursed for. No deeper tree ever exists, so the scoper's and coder's
+  walks, the cover-grammar conversions and the tree's own drop glue (which
+  aborted a 32 MiB thread on a 100,000-term chain) are bounded by
+  construction; the scoper and coder re-check it as a backstop. Same
+  `SyntaxError`.
 - **Regexp compiler** — `MAX_NESTING_DEPTH` (512 nested groups or `v`-mode
   classes), a `SyntaxError` "too much nesting". Pattern *length* is linear:
   `disjunction_parse`, `measure` and `emit` walk the `Sequence` and
@@ -75,7 +98,7 @@ a property of the program and part of the release-versioned contract; what
 those frames cost in host stack is a property of the build. The engine states
 that requirement in `ironhorse_vm::NATIVE_STACK_BYTES`: **32 MiB for an
 unoptimized build** (the worst corner measures about 13 MiB), **8 MiB for an
-optimized one** (under 2 MiB measured) — the sizes the `rust/endo` worker
+optimized one** (2.5 MiB measured) — the sizes the `rust/endo` worker
 threads and the test262 harness allocate, and a libFuzzer main thread has.
 Run the engine on a thread of at least that size; cargo's 2 MiB test threads
 are below it, which is why the oracle-linked CI lane sets `RUST_MIN_STACK` and
