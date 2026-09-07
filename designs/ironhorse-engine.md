@@ -707,8 +707,12 @@ CI enforcement is `forbid(unsafe_code)`, ordinary arena/GC unit tests, the fuzz
 targets below, and ASAN/UBSAN instrumentation scoped to the C oracle harness.
 The oracle sanitizer runner compiles all XS and shim C objects with Clang and
 links the sanitizer runtimes into the Rust harness; it does not instrument Rust.
-The initial sanitizer lane is advisory while the pinned XS alignment-UB findings
-are unresolved; its runner fails on reports without suppressing checks.
+UBSAN excludes the pinned upstream `c/moddable/xs/sources/` directory, whose
+unaligned loads and pointer arithmetic triggered the initial reports.
+ASAN still checks those sources, and both sanitizers check our shim and platform
+layer; executable C fault probes enforce that exclusion boundary.
+The runner and CI check fail on every remaining report; the sanitizer lane is
+blocking after applying this source-scoped exemption.
 There is no Miri CI lane, and ordinary unit-test names are not Miri evidence.
 This W0 amendment (2026-09-08, F034) replaces the earlier unimplemented Miri gate.
 Logic bugs
