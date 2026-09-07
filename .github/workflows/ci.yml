@@ -674,6 +674,57 @@ jobs:
         # green pass with no error (wave-3 finding).
         run: cargo test -p endo --features ironhorse-engine --test ironhorse_store_worker
 
+  # Keep the complete engine workspace and the daemon-side SQLite
+  # heap-store backend on one pinned rustfmt version. On pull requests,
+  # retain the check name but skip the formatter unless the change is
+  # ironhorse-relevant. Pushes to master always run the full job.
+  format-ironhorse:
+    name: format-ironhorse
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Depth 2 so the pull_request merge commit's parents exist
+          # for the change probe below.
+          fetch-depth: 2
+
+      - name: Detect ironhorse-relevant changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          # The pull_request checkout is a merge commit whose first
+          # parent is the base branch head, so this diff is exactly the
+          # PR's change set. Fail open (run rustfmt) if that shape ever
+          # doesn't hold.
+          if ! git rev-parse -q --verify HEAD^2 >/dev/null; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          # Consume the whole diff. `grep -q` can close the pipe early,
+          # making `git diff` exit on SIGPIPE and the runner's `pipefail`
+          # misclassify a relevant large PR as a miss.
+          elif git diff --name-only HEAD^1 HEAD \
+            | grep -E '^rust/engine/|^rust/endo/ironhorse-store-sqlite/|^Cargo\.toml$|^Cargo\.lock$|^\.github/workflows/ci\.yml$' >/dev/null; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install pinned rustfmt
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
+
+      - name: Check ironhorse engine formatting
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
+
+      - name: Check SQLite heap-store formatting
+        if: github.event_name != 'pull_request' || steps.changes.outputs.hit == 'true'
+        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
+
   # The pure-Rust ironhorse crates: the engine's zero-C members
   # (ironhorse-vm, ironhorse-snapshot — including the store seam's
   # metamorphic determinism and checkpoint acceptance suites) plus the
