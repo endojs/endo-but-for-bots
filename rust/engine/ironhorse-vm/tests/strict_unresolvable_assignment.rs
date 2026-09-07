@@ -210,6 +210,34 @@ fn an_inherited_only_name_is_resolvable_for_both_the_read_and_the_store() {
 }
 
 #[test]
+fn an_inherited_accessor_is_read_with_the_global_as_receiver() {
+    // The read half answers through the same full `[[Get]]` the own-global
+    // read uses, with the global object as receiver — so an inherited getter
+    // sees the `this` XS gives it, and its abrupt completion reaches guest
+    // code rather than being swallowed into an unresolvable `ReferenceError`.
+    assert_eq!(
+        run("Object.defineProperty(Object.prototype, 'g', \
+             { get: function () { return this === globalThis } }); g")
+        .expect("completes"),
+        "true"
+    );
+    assert_eq!(
+        run("Object.defineProperty(Object.prototype, 'boom', \
+             { get: function () { throw new Error('from the getter') } }); \
+             var c = 'no'; try { boom } catch (e) { c = e.message } c")
+        .expect("completes"),
+        "from the getter"
+    );
+    // A setter-only inherited accessor has an undefined `[[Get]]`, so the name
+    // is resolvable and reads as `undefined` — not a `ReferenceError`.
+    assert_eq!(
+        run("Object.defineProperty(Object.prototype, 'so', { set: function (v) {} }); typeof so")
+            .expect("completes"),
+        "undefined"
+    );
+}
+
+#[test]
 fn a_name_in_its_temporal_dead_zone_is_not_an_unresolvable_name() {
     // TDZ is not unresolvability: the name IS bound, so neither the chain walk
     // nor the `typeof` tolerance may rescue it. Both forms throw, including
