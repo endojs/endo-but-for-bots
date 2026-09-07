@@ -8,7 +8,13 @@ that make it a hands-free voice assistant.
   a caller watches through `watch()`, a pull-based stream of reply-token deltas
   (`src/stream.js`).
   The turn belongs to the daemon (`src/session-turn.js`): watching is how a
-  client sees it, and only `cancel()` stops it.
+  client sees it; `cancel()` requests a stop and `whenFinished()` waits for teardown.
+  `getCurrentTurn()` on the session returns `{ input, turn }` or `null`, allowing
+  a reloaded browser to recover the active turn.
+  Each session accepts one outstanding UI turn; a competing `startTurn` rejects.
+  Mail remains serialized through the session's execution queue.
+  Turns survive browser disconnects, but daemon restarts recover committed history
+  rather than live turn handles.
 - **Voice caplets** (`voice/`) — two independent, swappable daemon objects:
   - `floot-stt` — speech-to-text via [Moonshine](https://github.com/moonshine-ai/moonshine)
     (`voice/audio-server-caplet.js`): `transcribe(audioReader) -> textReader`.

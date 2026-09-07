@@ -39,19 +39,30 @@ import { h, renderConfined, unmount } from './setup-preact-container.js';
  *   stop: () => void,
  * }} FlootTurn
  */
-/** @type {Map<string, FlootTurn>} */
-const inFlightTurns = new Map();
+/** @type {WeakMap<object, Map<string, FlootTurn>>} */
+const inFlightTurns = new WeakMap();
+
+/** @param {object} factory */
+const turnsForFactory = factory => {
+  let turns = inFlightTurns.get(factory);
+  if (!turns) {
+    turns = new Map();
+    inFlightTurns.set(factory, turns);
+  }
+  return turns;
+};
 
 /**
  * Watch a daemon-owned turn in the background, accumulating renderable turn
  * state and notifying subscribers as events arrive. Survives component unmount.
  *
- * @param {string} key registry key (factory path + session id)
+ * @param {Map<string, FlootTurn>} registry
+ * @param {string} key session id
  * @param {string} sessionId
  * @param {any} turnRef the FlootTurn returned by session.startTurn()
  * @returns {FlootTurn}
  */
-const startFlootTurn = (key, sessionId, turnRef) => {
+const startFlootTurn = (registry, key, sessionId, turnRef) => {
   // Stream the view over the exo-stream protocol rather than one CapTP round
   // trip per event. `buffer` primes the synchronize chain; the responder is a
   // buffered channel, so it acknowledges eagerly regardless — the pre-resolved
@@ -107,16 +118,19 @@ const startFlootTurn = (key, sessionId, turnRef) => {
       // stream would just detach this viewer and leave it generating.
       E(turnRef)
         .cancel()
-        .catch(() => {});
+        .catch(error => {
+          stopped = false;
+          turn.error = error instanceof Error ? error.message : String(error);
+          emit({ type: 'abort' });
+        });
     },
   };
-  inFlightTurns.set(key, turn);
+  registry.set(key, turn);
 
   (async () => {
     try {
       for await (const raw of await repliesP) {
         const value = /** @type {any} */ (raw);
-        if (stopped) break;
         if (value.type === 'snapshot') {
           // A view opens on the turn's state as of the moment `watch()` ran, so
           // no event is lost to the round trip and a reattaching component
@@ -199,7 +213,7 @@ const startFlootTurn = (key, sessionId, turnRef) => {
       emit({ type: 'abort' });
     } finally {
       turn.done = true;
-      inFlightTurns.delete(key);
+      if (registry.get(key) === turn) registry.delete(key);
       emit({ type: 'done' });
       resolveDone();
     }
@@ -562,20 +576,23 @@ export const flootComponent = (
     return session.facet;
   };
 
-  // Registry key for a session's background turn. Scoped by the factory path so
-  // two Floot spaces pointing at different factories can't collide on a shared
-  // session id.
-  const turnKey = (/** @type {string} */ id) =>
-    `${profilePath.join(' ')} ${id}`;
   const liveTurnFor = (/** @type {string} */ id) => {
-    const turn = inFlightTurns.get(turnKey(id));
+    const turn = turnsForFactory(factory).get(id);
     return turn && !turn.done ? turn : null;
   };
 
   // Pull the spoken transcript for a session from its guest into the cache.
   const loadHistory = async (/** @type {FlootSession} */ session) => {
+    const previousMessages = session.messages;
+    const previousLength = previousMessages.length;
     try {
       const history = await E(facetFor(session)).getHistory();
+      // A new submission or refresh takes precedence over stale history I/O.
+      if (
+        session.messages !== previousMessages ||
+        session.messages.length !== previousLength
+      )
+        return;
       session.messages = history.map((/** @type {any} */ m) =>
         m.role === 'tool'
           ? { role: 'tool', name: m.name, args: m.args, result: m.result }
@@ -736,8 +753,6 @@ export const flootComponent = (
   let turnCancelled = false;
   /** @type {FlootTurn | null} */
   let activeTurn = null;
-  /** @type {(() => void) | null} */
-  let unsubscribeTurn = null;
   // Detaches this component's view from the active turn without stopping it
   // (used on unmount so the turn keeps running in the background).
   /** @type {(() => void) | null} */
@@ -747,6 +762,8 @@ export const flootComponent = (
   let submitChain = Promise.resolve();
   /** @type {Promise<void> | null} */
   let turnPromise = null;
+  let opening = 0;
+  let viewReady = Promise.resolve();
 
   // The text feed driving live spoken replies for the current turn (null when
   // TTS is off or idle). Aborting it ends synthesis; stopTts() halts playback.
@@ -803,23 +820,33 @@ export const flootComponent = (
     notify();
 
     return new Promise(resolve => {
+      let detached = false;
+      let unsubscribe = () => {};
       const detach = () => {
-        if (unsubscribeTurn) {
-          unsubscribeTurn();
-          unsubscribeTurn = null;
+        if (detached) return;
+        detached = true;
+        unsubscribe();
+        if (detachActiveTurnView === detach) {
+          detachActiveTurnView = null;
+          activeTurn = null;
+          busy = false;
+          if (turnTtsFeed) turnTtsFeed.abort();
+          turnTtsFeed = null;
+          notify();
         }
-        detachActiveTurnView = null;
-        if (activeTurn === turn) activeTurn = null;
-        busy = false;
-        notify();
         resolve();
       };
       detachActiveTurnView = detach;
 
       /** @param {{ type: string }} ev */
       const onEvent = ev => {
-        // Ignore events for a session we're no longer viewing (defensive; the
-        // busy guard normally blocks switching mid-turn).
+        if (detached) return;
+        // Attachment completion is independent of selection and history I/O.
+        // Deletion can change selection while the old turn is still unwinding.
+        if (ev.type === 'done' && activeSessionId !== turn.sessionId) {
+          detach();
+          return;
+        }
         if (activeSessionId !== turn.sessionId) return;
         if (ev.type === 'snapshot') {
           // The turn's state as of the moment this view opened. Repaint from
@@ -870,13 +897,13 @@ export const flootComponent = (
           notify();
           // Repaint from the daemon's canonical transcript (now including this
           // turn's persisted reply) so the turn's output is never double-shown.
-          loadHistory(session).then(() => {
-            notify();
-            detach();
+          detach();
+          void loadHistory(session).then(() => {
+            if (!cancelled && activeSessionId === session.id) notify();
           });
         }
       };
-      unsubscribeTurn = turn.subscribe(onEvent);
+      unsubscribe = turn.subscribe(onEvent);
       // Settle immediately if the turn finished between start and subscribe.
       if (turn.done) onEvent({ type: 'done' });
     });
@@ -907,7 +934,12 @@ export const flootComponent = (
     // Start the turn on the daemon — it keeps running if this space is left —
     // then render it through the shared view.
     const turnRef = E(facetFor(session)).startTurn(text);
-    const turn = startFlootTurn(turnKey(session.id), session.id, turnRef);
+    const turn = startFlootTurn(
+      turnsForFactory(factory),
+      session.id,
+      session.id,
+      turnRef,
+    );
     await attachTurnView(turn, session, speakLive);
   };
 
@@ -924,43 +956,73 @@ export const flootComponent = (
     if (!text) return submitChain;
     inputText = '';
     notify();
-    submitChain = submitChain.then(() => {
+    const submittedSessionId = activeSessionId;
+    submitChain = submitChain.then(async () => {
+      await viewReady;
+      if (
+        cancelled ||
+        (submittedSessionId && activeSessionId !== submittedSessionId)
+      )
+        return;
+      if (turnPromise) await turnPromise;
+      if (
+        cancelled ||
+        (submittedSessionId && activeSessionId !== submittedSessionId)
+      )
+        return;
       turnPromise = runConverse(text);
-      return turnPromise.catch(() => {});
+      await turnPromise.catch(() => {});
     });
     return submitChain;
   };
 
   // ── Session actions (controller callbacks) ──────────────────────────────────
   const openActiveHistory = () => {
+    opening += 1;
+    const generation = opening;
     // Opening a session starts at the latest message.
     stick = true;
     const session = getActiveSession();
     if (!session) {
+      viewReady = Promise.resolve();
       usage = null;
       notify();
       return;
     }
     showSessionTokens(session);
-    // If this session has a turn still running in the background (e.g. it was
-    // left mid-reply and we've returned to the space), reattach to its live
-    // stream. The busy guard keeps this from firing during another turn.
-    const reattach = () => {
-      const turn = liveTurnFor(session.id);
-      if (turn && !busy) {
-        turnPromise = attachTurnView(turn, session);
-      }
-    };
-    if (!session.loaded) {
-      loadHistory(session).then(() => {
-        if (activeSessionId === session.id) {
-          notify();
-          reattach();
+    const stillSelected = () =>
+      !cancelled && opening === generation && activeSessionId === session.id;
+    viewReady = (async () => {
+      // Recover the daemon's handle after a reload or transport loss. The
+      // browser registry is only a cache; it is never the source of liveness.
+      const current = await E(facetFor(session)).getCurrentTurn();
+      if (!stillSelected()) return;
+      if (!session.loaded) await loadHistory(session);
+      if (!stillSelected()) return;
+      let turn = liveTurnFor(session.id);
+      if (!turn && current) {
+        const turnStatus = await E(current.turn).getStatus();
+        if (!stillSelected()) return;
+        if (!turnStatus.done) {
+          if (typeof current.input === 'string') {
+            session.messages.push({ role: 'user', text: current.input });
+          }
+          turn = startFlootTurn(
+            turnsForFactory(factory),
+            session.id,
+            session.id,
+            current.turn,
+          );
+        } else {
+          await loadHistory(session);
         }
-      });
-    } else {
-      reattach();
-    }
+      }
+      if (!stillSelected()) return;
+      if (turn && !busy) turnPromise = attachTurnView(turn, session);
+      notify();
+    })().catch(error => {
+      if (stillSelected()) setStatus(`error: ${error.message}`);
+    });
   };
 
   const selectSession = (/** @type {string} */ id) => {
@@ -969,6 +1031,7 @@ export const flootComponent = (
     // keep speaking over the session we're switching to.
     stopTts();
     activeSessionId = id;
+    turnPromise = null;
     setStatus('Ready.');
     openActiveHistory();
   };
@@ -983,7 +1046,12 @@ export const flootComponent = (
     sessions = sessions.filter(s => s.id !== id);
     sessionStatus.delete(id);
     if (activeSessionId === id) {
+      // Deletion owns daemon teardown; the UI need not wait for it to release
+      // its attachment or submission queue. Late events cannot affect a new view.
+      if (detachActiveTurnView) detachActiveTurnView();
       activeSessionId = sessions.length ? sessions[0].id : null;
+      opening += 1;
+      turnPromise = null;
     }
     E(factory)
       .deleteSession(id)
@@ -1594,6 +1662,7 @@ export const flootComponent = (
   let recoveryAttempt = 0;
   const loadInitialSessions = async () => {
     try {
+      factory = await factory;
       const [metas, presetList, modelList] = await Promise.all([
         E(factory).listSessions(),
         E(factory)

@@ -1,6 +1,7 @@
 ---
 '@endo/floot': major
 '@endo/chat': patch
+'@endo/space-floot': patch
 ---
 
 Make a Floot turn belong to the daemon. `FlootSession.converse(input)`, which
@@ -32,3 +33,14 @@ Migration: replace `const reader = E(session).converse(input)` with
 `E(turn).watch()`, and stop work with `E(turn).cancel()` — closing the stream
 no longer aborts anything. `makeReplyChannel()` now also returns `close`, which
 finishes the channel from the producer's side.
+
+Sessions expose `getCurrentTurn() -> { input, turn } | null` so clients can recover
+active work after reload.
+Only one UI turn may be outstanding per session; a competing start is rejected
+until the current turn finishes, including backend cancellation teardown.
+The final view event and `whenFinished()` now include that teardown outcome.
+
+Deleting an active Floot session releases the UI attachment and submission queue
+immediately, independently of daemon teardown or late events.
+Hosted sessions receive the same capability-gated delegation and account tools as
+the provider path.
