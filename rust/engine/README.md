@@ -3202,16 +3202,27 @@ split, confirmed by reproducing them on paths this change does not touch:
   assigns instead of throwing `ReferenceError`. That program declares no
   top-level `var`, so it is outside the deviating class entirely.
 
-A third pre-existing bug surfaced while attributing the `D` change and is worth
-naming here because it is what keeps two cases un-attributable (below):
-**property access on `undefined` does not throw**. `undefined.enumerable`
-answers `undefined` on Ironhorse where the spec, XS and node all raise a
-`TypeError`. The harness's `verifyEnumerable` reads
+A third pre-existing bug surfaced while attributing the `D` change and is
+**fixed here** because it was what kept two cases un-attributable: **property
+access on `undefined`/`null` did not throw**. `undefined.enumerable` answered
+`undefined` where the spec, XS and node all raise a `TypeError` — a member
+access performs `RequireObjectCoercible`, so it must abort rather than yield a
+value. The harness's `verifyEnumerable` reads
 `Object.getOwnPropertyDescriptor(obj, name).enumerable`, so on a missing
-property XS dies with `TypeError: cannot coerce undefined to object` while
-Ironhorse sails on to a different assertion failure. Ironhorse's
-`Object.getOwnPropertyDescriptor` itself is correct — it returns `undefined`
-for a missing property, exactly like XS.
+property XS died with `TypeError: cannot coerce undefined to object` while
+Ironhorse sailed on to a different assertion failure. `XS_CODE_GET_PROPERTY`
+now raises for those two kinds, mirroring what its `delete` neighbour already
+did. (Ironhorse's `Object.getOwnPropertyDescriptor` was never at fault: it
+returns `undefined` for a missing property, exactly like XS.)
+
+Two further gaps in that same match are left alone, each its own fix:
+
+- The symmetric half of the one above — a **write** through a `null`/`undefined`
+  base (`undefined.x = 1`) is silently ignored where it must raise `TypeError`.
+  `XS_CODE_SET_PROPERTY` takes a non-reference base straight to the push.
+- A **boolean** primitive does not box to `%Boolean.prototype%`, so
+  `true.toString()` throws where XS and node answer `"true"`. String, number and
+  bigint bases all box; boolean has no arm.
 
 **Differential-harness expectations (knowingly updated).** The runner executes
 the Script goal, so strict-variant runs of official cases with top-level `var`s
@@ -3267,24 +3278,33 @@ With both corrections the strict-heavy sweep's failure count returns to its
 pre-change value (**1**, `expressions/assignment/S11.13.1_A5_T5.js`, which fails
 identically with the change reverted and is therefore pre-existing).
 
-**Two cases the `D` change leaves un-attributable (open).** Over the nine
-subtrees measured with the `D` fix in place (1594 cases), the failure count is
-**3** against a pre-`D` baseline of **1** — the same run with the `D` write
-disabled — at unchanged coverage (1461 both ways; the seven cases the fix moves
-were previously *skipped* as `shared-test262-failure`, i.e. both engines got the
-attribute wrong together). Five of the seven attribute cleanly. The strict
-variants of `language/global-code/decl-var.js` and `decl-func.js` do not, and
-the exclusion deliberately refuses to excuse them: under the oracle's framing
-the oracle raises `TypeError: cannot coerce undefined to object` while
-re-framed Ironhorse raises `Test262Error: Expected obj[brandNew] to have
-enumerable:true.` — the two engines fail the same case for *different* reasons,
-because of the undefined-property-access bug named above, which is not framing.
-`reframed_abort_matches` is doing its job here: relaxing it to accept any
-abort-vs-abort pair would let a genuine over-acceptance through, so these stay
-visible as failures until the underlying bug is fixed, at which point they
-should attribute on their own. Ironhorse's answer on both cases is the correct
-one (node agrees `verifyNotConfigurable` passes); only the *classification* is
-open.
+**What the `D` change cost, and how the last two cases closed.** Measured over
+nine subtrees (1594 cases), against a baseline that is the identical run with
+the `D` write disabled:
+
+| | failed | covered | skipped |
+| --- | ---: | ---: | ---: |
+| baseline (no `D` fix) | 1 | 1461 | 132 |
+| `D` fix alone | 3 | 1461 | 130 |
+| `D` fix + the undefined-access fix | **1** | **1462** | 131 |
+
+The single remaining failure is `expressions/assignment/S11.13.1_A5_T5.js`,
+which fails identically on the baseline and is therefore pre-existing. Seven
+cases move under the `D` fix; all were previously *skipped* as
+`shared-test262-failure` — both engines got the attribute wrong together — so
+none of them was covered before.
+
+Five attributed immediately. The strict variants of
+`language/global-code/decl-var.js` and `decl-func.js` did not, and the exclusion
+correctly refused to excuse them: under the oracle's framing the oracle raised
+`TypeError: cannot coerce undefined to object` while re-framed Ironhorse raised
+`Test262Error: Expected obj[brandNew] to have enumerable:true.` — the two
+engines failing the same case for *different* reasons, which is not framing.
+Relaxing `reframed_abort_matches` to accept any abort-vs-abort pair would have
+papered over that and let genuine over-acceptances through; fixing the actual
+cause (the undefined-access bug above) made both engines fail identically under
+the oracle's framing, so the two cases now attribute on their own. That fix is
+also why coverage ends one *above* the baseline.
 
 **Ratchet-floor impact (needs maintainer sign-off).** The sweep's covered count
 does drop, 1276 → 1270. Ten per-(case, mode) entries move in
