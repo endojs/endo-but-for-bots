@@ -290,7 +290,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // non-configurable, as `CreateGlobalVarBinding` requires with
         // `D = false`. The only extra byte that moves is that property slot's
         // flag (`XS_DONT_DELETE_FLAG`), which the image has always carried.
-        "7b720e196dc6a6dad35831c1cdfb576b9570797d6c85613acefc6c0c519ca5ab",
+        // Re-pinned 2026-09-07 for a boot-heap CONTENT move: the
+        // `get Symbol.prototype.description` accessor function is now
+        // boot-minted (the symbol's `[[Description]]` became readable when
+        // `Symbol(desc)` started coercing its argument at construction, so
+        // the accessor has something to return). Boot-layout signature
+        // generation 19; format unchanged.
+        "9af19100e0b18e29b033a6c404b2999d40909b068ac51cd4b58b9130c33b71be",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -484,7 +490,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // with boot generation 18, and again at this merge for the same
         // one-byte guest-heap move the blob records (`var x = 5;` now creates
         // a non-configurable global property). Schema and format unchanged.
-        "1e5769a092b1bc519d32b4810f7b11533c2ea731f5d9100483f067f4f8ade41a",
+        // Re-pinned with the blob on 2026-09-07 for the boot-minted
+        // `get Symbol.prototype.description` accessor function, with boot
+        // generation 19. Schema and format remain unchanged.
+        "92a146c1073483f2dc3541de2656ba42205981ada11a826bbff033180e6c98b6",
         "epoch-3 seal chain"
     );
 }

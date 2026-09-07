@@ -2376,6 +2376,13 @@ pub enum NativeMethod {
     /// `Symbol.prototype[Symbol.toPrimitive](hint)`: the symbol primitive
     /// itself, unwrapping a Symbol wrapper object. The hint is ignored.
     SymbolToPrimitive,
+    /// `get Symbol.prototype.description` (`fx_Symbol_prototype_get_
+    /// description`): the accessor **getter** (name `"get description"`,
+    /// length 0) over the receiver's `[[Description]]` — the description slot
+    /// a `Symbol(desc)` call coerced to a String, or `undefined` when the
+    /// symbol was created without one. Brand-checked like its `toString`/
+    /// `valueOf` siblings, so a non-Symbol receiver is a `TypeError`.
+    SymbolDescriptionGetter,
     /// `Date.prototype[Symbol.toPrimitive](hint)`: validate the string hint,
     /// then perform ordinary conversion in string order for `"string"` and
     /// `"default"`, or number order for `"number"`.
@@ -6697,6 +6704,22 @@ impl Interp {
                     "[Symbol.toPrimitive]",
                     1,
                 );
+                // `get Symbol.prototype.description`: a real accessor property
+                // (`{get, set: undefined, enumerable: false, configurable:
+                // true}`), so reflection sees what XS's does and the getter
+                // runs with the reading symbol as its `this`.
+                let description = self.alloc_named_method(
+                    NativeMethod::SymbolDescriptionGetter,
+                    "get description",
+                    0,
+                );
+                self.proto_accessors.push((
+                    p,
+                    ProtoAccessorKey::String("description"),
+                    description,
+                    None,
+                    "Symbol",
+                ));
             }
             let f = self.alloc_method(NativeMethod::SymbolFor);
             self.proto_methods.push((symbol_ctor, "for", f));
@@ -15172,10 +15195,28 @@ impl Interp {
                 XS_CODE_FOR_IN => {
                     let obj = self.pop();
                     let inst = match obj.value {
+                        // A primitive symbol carries `Payload::Reference(desc)`
+                        // — its description slot, NOT an instance — so this
+                        // must precede the generic arm, or the loop enumerates
+                        // an object handed to `Symbol()` and hands the guest
+                        // its keys. XS boxes the primitive (`fxToInstance`) and
+                        // enumerates the wrapper: no own properties, so the
+                        // enumerable set is exactly `%Symbol.prototype%`'s
+                        // chain (empty, since every built-in there is
+                        // `XS_DONT_ENUM` — but a guest-added enumerable
+                        // property on it does show up, as the spec says).
+                        // Enumerating that prototype directly gets the same
+                        // keys without the wrapper allocation XS pre-pays for
+                        // in the enumerator's own cost.
+                        Payload::Reference(_)
+                            if obj.kind == Kind::Symbol && !self.symbol_proto.is_null() =>
+                        {
+                            self.symbol_proto
+                        }
                         // `undefined`/`null` for-in is a legal empty loop, but
                         // its zero-key enumerator setup is a later increment;
                         // an object receiver is the covered case.
-                        Payload::Reference(i) => i,
+                        Payload::Reference(i) if obj.kind != Kind::Symbol => i,
                         _ => return Halt::Unsupported("for_in:non-object-receiver"),
                     };
                     let it = self.make_enumerator(inst);
@@ -15479,7 +15520,19 @@ impl Interp {
                     let id = id!(1);
                     let value = self.pop();
                     let obj = self.pop();
-                    if let Payload::Reference(inst) = obj.value {
+                    // A primitive symbol's `Payload::Reference` is its
+                    // DESCRIPTION slot, not an instance — so it must be
+                    // matched off BEFORE the generic reference arm, or
+                    // `sym.k = v` runs the description's setters and stores on
+                    // it. XS boxes the primitive, finds the fresh wrapper
+                    // non-extensible, and stores nothing: a sloppy no-op, a
+                    // strict TypeError.
+                    if obj.kind == Kind::Symbol {
+                        if self.strict {
+                            let error = self.build_error("TypeError", 0, 0);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        }
+                    } else if let Payload::Reference(inst) = obj.value {
                         if self.proxies.contains_key(&inst) {
                             // `p.k = v` routes through the `set` trap (ECMA-262
                             // 10.5.9); a `false` result throws in strict mode.
@@ -15863,6 +15916,11 @@ impl Interp {
                         // (A symbol value carries `Payload::Reference(desc)`,
                         // so this must precede the generic reference arm and be
                         // gated on `Kind::Symbol`.)
+                        //
+                        // Through the full `[[Get]]`, not a raw chain scan, so
+                        // the `description` accessor runs with the reading
+                        // symbol as its receiver. A data property costs the
+                        // same: the ordinary chain walk meters nothing.
                         Payload::Reference(_)
                             if obj.kind == Kind::Symbol && !self.symbol_proto.is_null() =>
                         {
@@ -15873,6 +15931,9 @@ impl Interp {
                                 return_depth
                             )
                         }
+                        // …and with no `%Symbol.prototype%` linked there is
+                        // nothing to resolve against — never the description.
+                        Payload::Reference(_) if obj.kind == Kind::Symbol => Slot::undefined(),
                         // A proxy `p.k` routes through the `get` trap
                         // (ECMA-262 10.5.8), never the ordinary store.
                         Payload::Reference(inst) if self.proxies.contains_key(&inst) => {
@@ -17843,9 +17904,14 @@ impl Interp {
                     let obj = self.pop();
                     let key = self.pop();
                     let objref = match obj.value {
-                        Payload::Reference(r) => r,
-                        // `k in 5` / `k in null`: `mxRunDebug(XS_TYPE_ERROR, "in:
-                        // not an object")`.
+                        // A primitive symbol is NOT an object, however much its
+                        // `Payload::Reference(desc)` looks like one: the target
+                        // would be the description slot, so `k in sym` answered
+                        // over an object handed to `Symbol()`. It joins the
+                        // other primitives below.
+                        Payload::Reference(r) if obj.kind != Kind::Symbol => r,
+                        // `k in 5` / `k in null` / `k in Symbol()`:
+                        // `mxRunDebug(XS_TYPE_ERROR, "in: not an object")`.
                         _ => dispatch_halt!(
                             self.catchable_type_error_msg("in: not an object".into()),
                             pc,
@@ -20800,9 +20866,9 @@ impl Interp {
         has_target: bool,
         code: &[u8],
     ) -> Result<(), Halt> {
-        // `code` is threaded through for a native constructor that re-enters
-        // user code (the `Promise` executor via `run_callback`); the
-        // value-producing natives ignore it.
+        // `code` is threaded through for a native that re-enters user code —
+        // the `Promise` executor via `run_callback`, and `Symbol`'s
+        // `ToString(description)` — and ignored by the rest.
         let _ = code;
         // `super()` may construct a native heritage with a different
         // `new.target` (the derived constructor). User-function construction
@@ -21457,12 +21523,37 @@ impl Interp {
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             // `Symbol([description])`: a fresh unique symbol. Its descriptor
-            // slot holds the description (or `undefined`), and its identity is
-            // that slot — so `Symbol('a') !== Symbol('a')`. Metering-neutral,
-            // like the other primitive coercions (measured against the pin).
-            // `new Symbol()` throws in JS; a `has_target` call self-names.
+            // slot holds the coerced description (or `undefined`), and its
+            // identity is that slot — so `Symbol('a') !== Symbol('a')`.
+            // [`SYMBOL_CREATE_METERING`] is the whole cost beyond the
+            // description's own coercion (measured against the pin).
+            //
+            // ECMA-262 20.4.1.1 step 3 — and XS's `fx_Symbol`, which calls
+            // `fxToString(the, mxArgv(0))` in place before `fxNewSymbol` —
+            // coerce a non-`undefined` description to a String HERE. Storing
+            // `arg(0)` raw made the symbol carry `Payload::Reference` to a live
+            // guest object, and every reach-through site that matched
+            // `Payload::Reference` without a kind guard then read and wrote
+            // that object THROUGH the symbol: an ocap confinement break, since
+            // a symbol is a value routinely treated as opaque and shared
+            // freely. The coercion runs guest code (`toString`/`valueOf`/
+            // `@@toPrimitive`) and propagates its abrupt completion, exactly
+            // where XS does — before the symbol exists, so a throwing
+            // description creates nothing. `new Symbol()` throws in JS; a
+            // `has_target` call self-names below and never coerces (XS's
+            // `mxTypeError("new Symbol")` precedes its `fxToString`).
             Native::Symbol if !has_target => {
-                let desc = arg(0);
+                let description = arg(0);
+                let mut desc = if description.kind == Kind::Undefined {
+                    Slot::undefined()
+                } else {
+                    self.to_string_slot(code, description)?
+                };
+                // The stored description is a fresh heap slot, not a stack
+                // alias: clear the argument's list linkage as the Array
+                // constructor does for its elements.
+                desc.id = 0;
+                desc.next = crate::value::SlotIndex::NULL;
                 let d = self.slots.alloc(desc);
                 self.meter.tick_raw(SYMBOL_CREATE_METERING);
                 Slot::of(Kind::Symbol, Payload::Reference(d))
@@ -32534,6 +32625,25 @@ impl Interp {
             // `Symbol.prototype.valueOf()`: the symbol primitive itself.
             NativeMethod::SymbolValueOf | NativeMethod::SymbolToPrimitive => {
                 self.symbol_this_value(this)?
+            }
+            // `get Symbol.prototype.description`: the `[[Description]]` the
+            // constructor coerced and stored, or `undefined`. The description
+            // slot is the symbol's identity, so this reads it in place — no
+            // chunk is allocated and nothing beyond the accessor dispatch is
+            // metered (XS's `fx_Symbol_prototype_get_description` calls no
+            // `mxMeter` of its own).
+            NativeMethod::SymbolDescriptionGetter => {
+                let symbol = self.symbol_this_value(this)?;
+                match symbol.value {
+                    Payload::Reference(d) => {
+                        let slot = self.slots.get(d);
+                        match slot.kind {
+                            Kind::String => Slot::of(Kind::String, slot.value),
+                            _ => Slot::undefined(),
+                        }
+                    }
+                    _ => Slot::undefined(),
+                }
             }
             NativeMethod::DateToPrimitive => {
                 if !matches!(
@@ -47022,12 +47132,20 @@ impl Interp {
             // holds `undefined`, so a getter installed on the wrapper
             // prototype would otherwise be invisible to a primitive receiver.
             // `obj` stays the receiver, so `this` inside the getter is the
-            // primitive, as OrdinaryGet requires.
+            // primitive, as OrdinaryGet requires — which is what lets
+            // `%Symbol.prototype%`'s `description` getter see the symbol it
+            // was read from.
             return self.ordinary_get(code, boxed_proto, id, obj);
         }
         // `null[k]` / `undefined[k]`: `fxToInstance` throws (review F007).
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
+        }
+        // A symbol whose realm has no `%Symbol.prototype%` linked falls through
+        // the boxing arm above; there is nothing to resolve against, and the
+        // generic reference arm below would read its DESCRIPTION slot.
+        if obj.kind == Kind::Symbol {
+            return Ok(Slot::undefined());
         }
         let inst = match obj.value {
             Payload::Reference(i) => i,
@@ -47116,6 +47234,18 @@ impl Interp {
         // `null[k] = v` / `undefined[k] = v`: `fxToInstance` throws (review F007).
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
+        }
+        // A primitive symbol carries `Payload::Reference(desc)` — its
+        // description slot, NOT an instance. Without this guard `sym[k] = v`
+        // reached THROUGH the symbol into the description: it ran that
+        // object's setters and stored on it, which let an object handed to
+        // `Symbol()` be written through a value that is routinely treated as
+        // opaque. A symbol joins the other primitive receivers here: the write
+        // stores nothing. (XS additionally throws for the strict form, as it
+        // does for every primitive receiver; that gap is the standing
+        // `property_at_set`-on-primitives divergence, not this one.)
+        if obj.kind == Kind::Symbol {
+            return Ok(());
         }
         let inst = match obj.value {
             Payload::Reference(i) => i,

@@ -39,6 +39,14 @@ const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
         "strict indexed write to a primitive string is a silent no-op; XS throws (property_at_set on primitives, adjacent to F007)",
     ),
     (
+        "function f(){ 'use strict'; var s=Symbol('a'); try { s['x']=1; return 'ok' } catch(e){ return e.name } } f()",
+        "the symbol reach-through is closed (the write stores nothing), but a strict COMPUTED write to any primitive receiver is still a silent no-op where XS throws — the `property_at_set`-on-primitives entry above, of which this is the symbol shape",
+    ),
+    (
+        "var r=0; try { Symbol(Symbol('x')) } catch(e){ r=e.name+':'+e.message } r",
+        "`ToString(symbol)` throws the right catchable TypeError with no message; XS says `cannot coerce symbol to string` (the shared `to_string_slot` message gap, not specific to `Symbol()`)",
+    ),
+    (
         "var o={toString(){ throw 5 }}; throw o",
         "the oracle shim reports a throwing exception-stringification as its own marker; the port renders the fallback stub (F026/F093)",
     ),
@@ -164,6 +172,27 @@ fn error_model_agrees_with_the_oracle() {
         "String(Symbol([1,2,3])[1])",
         "var r=0; class A { m(){ return super.x } } try { new A().m(); r='ok' } catch(e){ r='threw' } r",
         "var r=0; try { null[0] = 1 } catch(e){ r=e.name+':'+e.message } r",
+        // A `Symbol` receiver is the same class of defect one step sharper: it
+        // is not an object, but it CARRIES a `Payload::Reference` (its
+        // description slot), so every site that matched that payload without a
+        // kind guard read and wrote the object handed to `Symbol()` through the
+        // symbol. Fixed at the root by the missing `ToString(description)`
+        // (ECMA-262 20.4.1.1 step 3), and at each receiver site by the guard.
+        "var leak=0; var o={set x(v){leak=v}}; var s=Symbol(o); s['x']=42; leak",
+        "var leak=0; var o={set x(v){leak=v}}; var s=Symbol(o); s.x=42; leak",
+        "var o={x:5}; var s=Symbol(o); var k='x'; String(s[k])",
+        "var o={x:5}; var r=0; try { 'x' in Symbol(o) } catch(e){ r=e.name+':'+e.message } r",
+        "var o={x:5}; var r=''; for (var k in Symbol(o)) { r+=k } r+':done'",
+        "var o={x:5}; var s=Symbol(o); var r=0; try{ delete s['x'] }catch(e){ r=e.name } r+':'+o.x",
+        "Symbol({}).toString()",
+        "String(Symbol('x').description)",
+        "String(Symbol().description)+':'+String(Symbol(undefined).description)",
+        "String(Symbol.for('k').description)+':'+String(Symbol.iterator.description)",
+        "var d=Object.getOwnPropertyDescriptor(Symbol.prototype,'description'); d.get.name+':'+d.get.length+':'+String(d.set)+':'+d.enumerable+':'+d.configurable",
+        "var log=[]; var o={valueOf(){log.push('vo');return 'V'},toString(){log.push('ts');return 'T'}}; var s=Symbol(o); log.join()+':'+s.toString()",
+        "var log=[]; var o={[Symbol.toPrimitive](h){log.push(h);return 'P'}}; Symbol(o).toString()+':'+log.join()",
+        "var m={}; var r=0; try { Symbol({toString(){throw m}}) } catch(e){ r=(e===m) } r",
+        "var r=0; try { Symbol(Symbol('x')) } catch(e){ r=e instanceof TypeError } r",
         // --- cross segment (F024) ---
         "eval('function g(){}'); function f(){ var r=0; var o={}; try { o(); } catch(e){ r = e instanceof TypeError } return r } f()",
         "eval('function g(){}'); function f(){ var r=0; try { (1)(); } catch(e){ r = e instanceof TypeError } return r } f()",
