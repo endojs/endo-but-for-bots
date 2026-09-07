@@ -92,7 +92,7 @@ results="$output/results"
 mkdir -p "$results"
 
 echo "full-run: building the runner + report binaries (release)..." >&2
-cargo build --release --manifest-path "$engine_directory/Cargo.toml" \
+cargo build --locked --release --manifest-path "$engine_directory/Cargo.toml" \
   -p ironhorse-262 --bin endot-ih --bin ironhorse-262-report >&2
 target_directory=${CARGO_TARGET_DIR:-$engine_directory/target}
 target_triple_directory=""
