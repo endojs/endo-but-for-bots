@@ -531,8 +531,11 @@ intern table (a program symbol resolves exactly as its `o.name` static access
 does; a genuinely-novel name interns one `fxNewSlot` key slot and reads bit-exact
 `undefined`; an index-valued string meters XS's two extra code units), and the
 **`in` operator** answers a genuinely-novel key a *sound* `false` (the metered
-`fxOrdinaryHasProperty` chain walk charges one `XS_CODE_METERING` per prototype
-level descended). Both preserve the invariant by self-naming the one case Ironhorse
+`fxOrdinaryHasProperty` chain walk charges half an `XS_CODE_METERING` per
+*frame* — the `mxPushUndefined`/`mxPop` pair it runs at each level that does not
+find the property own. Counting prototype *hops* and charging a whole unit
+instead ran long on a chain and short on a null-prototype receiver;
+`in_operator_chain_metering.rs` gates it at depth now). Both preserve the invariant by self-naming the one case Ironhorse
 cannot decide soundly — a **boot default-key name the program never referenced**
 (e.g. `o["hasOwnProperty"]` / `"toString" in {}`): Ironhorse's `%Object.prototype%`
 carries a method only for program-referenced names, so it cannot tell an absent
