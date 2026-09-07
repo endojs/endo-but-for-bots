@@ -1,0 +1,40 @@
+name: Detect IronHorse changes
+
+on:
+  workflow_call:
+    outputs:
+      engine:
+        description: Engine, embedding, or shared build inputs changed
+        value: ${{ jobs.changes.outputs.engine }}
+      oracle:
+        description: Engine or oracle inputs changed
+        value: ${{ jobs.changes.outputs.oracle }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-ironhorse-changes
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect IronHorse changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      engine: ${{ steps.paths.outputs.engine }}
+      oracle: ${{ steps.paths.outputs.oracle }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full ranges include every commit of a multi-commit push/PR.
+          fetch-depth: 0
+      - name: Select jobs
+        id: paths
+        run: python3 rust/engine/scripts/ci-changes.py
+      - name: Test change-range selection
+        if: steps.paths.outputs.engine == 'true'
+        run: python3 rust/engine/scripts/test-ci-changes.py
