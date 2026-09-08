@@ -31,6 +31,9 @@ fn check(case: Case) -> Result<bool, String> {
         .ok_or_else(|| format!("oracle machine failure for /{}/{}", pattern, flags))?;
 
     match compile(pattern, flags) {
+        Err(CompileError::BudgetExceeded | CompileError::ResourceLimit) => {
+            return Err("regexp compilation resource refusal".into())
+        }
         Err(CompileError::Unsupported(_)) => {
             // Honest named skip — the oracle may well compile it.
             return Ok(false);
@@ -52,12 +55,11 @@ fn check(case: Case) -> Result<bool, String> {
                     pattern, flags, oracle.error
                 ));
             }
-            // `fxCompileRegExp` charges exactly one parse-meter unit per
-            // emitted byte. This pins the Rust program-size accounting even
-            // though the oracle shim's raw compile figure additionally
-            // includes XS GC-chunk allocation charges.
+            // Meter version 2 includes parsing and set construction as well
+            // as emitted bytes. Match costs and the compiled graph remain
+            // comparable to XS; compile work has independent regression tests.
             let expected_compile_meter = program.code.len() as u64 * 4 * 1024;
-            if program.compile_meter_raw != expected_compile_meter {
+            if program.compile_meter_raw <= expected_compile_meter {
                 return Err(format!(
                     "/{}/{}: compile meter ironhorse={} expected={}",
                     pattern, flags, program.compile_meter_raw, expected_compile_meter

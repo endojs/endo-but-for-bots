@@ -1244,10 +1244,24 @@ impl<'a> Lexer<'a> {
         // accepts but whose matcher code ironhorse has not ported yet) is not a
         // syntax error, so the literal stands and accept/reject still agrees
         // with the oracle.
-        match ironhorse_regexp::compile::compile(&body, &flags) {
-            Ok(_) | Err(ironhorse_regexp::compile::CompileError::Unsupported(_)) => {}
-            Err(ironhorse_regexp::compile::CompileError::Syntax(_)) => {
-                return Err(self.err(LexErrorKind::InvalidRegExp));
+        let mut charged = 0;
+        let mut check = |raw: u64| {
+            self.meter.charge(raw - charged);
+            charged = raw;
+            true
+        };
+        let outcome = ironhorse_regexp::compile_checked(&body, &flags, u64::MAX, Some(&mut check));
+        self.meter.charge(outcome.work_meter_raw - charged);
+        match outcome.result {
+            Ok(_) | Err(ironhorse_regexp::CompileError::Unsupported(_)) => {}
+            Err(ironhorse_regexp::CompileError::Syntax(_)) => {
+                return Err(self.err(LexErrorKind::InvalidRegExp))
+            }
+            Err(ironhorse_regexp::CompileError::BudgetExceeded) => {
+                return Err(self.err(LexErrorKind::RegExpBudgetExceeded))
+            }
+            Err(ironhorse_regexp::CompileError::ResourceLimit) => {
+                return Err(self.err(LexErrorKind::RegExpResourceLimit))
             }
         }
         st.modifier = Some(flags);

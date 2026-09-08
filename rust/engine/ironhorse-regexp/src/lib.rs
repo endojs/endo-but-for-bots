@@ -53,12 +53,18 @@ pub mod compile;
 pub mod matcher;
 pub mod unicode;
 
-pub use compile::{compile, CompileError, Program, MAX_NESTING_DEPTH};
+pub use compile::{
+    compile, compile_checked, CompileError, CompileOutcome, Program, COMPILE_CHECK_STRIDE,
+    MAX_NESTING_DEPTH,
+};
 pub use flags::{
     XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_N, XS_REGEXP_S, XS_REGEXP_U,
     XS_REGEXP_V, XS_REGEXP_Y,
 };
-pub use matcher::{match_regexp, match_regexp_checked, MatchOutcome, MATCH_CHECK_STRIDE};
+pub use matcher::{
+    match_regexp, match_regexp_budgeted, match_regexp_checked, MatchOutcome, MATCH_CHECK_STRIDE,
+};
+pub use opcode::{XS_PARSE_REGEXP_METERING, XS_REGEXP_METERING};
 
 /// The result of compiling and running one pattern: a convenience over
 /// [`compile`] + [`match_regexp`] mirroring what the oracle shim returns,
