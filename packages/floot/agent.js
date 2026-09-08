@@ -2440,6 +2440,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
     let declared = harden([]);
     /** @type {{ run: any, admin: any } | undefined} */
     let live;
+    /** The backend session the most recent `send` was issued to. */
+    /** @type {{ run: any, admin: any } | undefined} */
+    let sentOn;
     /** The declaration the live backend session was created with. */
     let liveDeclared = declared;
     // Before `start`, a changed declaration is simply what the first create
@@ -2504,7 +2507,15 @@ export const make = (hostPowers, _context, { env } = {}) => {
       try {
         await createLive();
       } catch (error) {
-        const dropped = declared.map(attach => attach.destination);
+        const shed = declared;
+        if (shed.length === 0) {
+          // A create that declared no attach cannot have failed because of
+          // one: this is the backend refusing outright. Shedding binds that
+          // are not there would report a fiction and create twice against a
+          // backend already failing, so let the failure be what it is.
+          throw error;
+        }
+        const dropped = shed.map(attach => attach.destination);
         console.error(
           `[floot-factory] the sandbox for session ${id} could not be recreated with ${dropped.join(', ')}; dropping the bind(s):`,
           error instanceof Error ? error.message : String(error),
@@ -2515,13 +2526,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
         } finally {
           shedding = false;
         }
-        declared = harden([]);
+        // Drop exactly what was shed, never whatever `declared` holds now.
+        // An attach that landed mid-shed had its recreate suppressed but
+        // its push already recorded as delivered, so wiping it here would
+        // strand a record the registrar can never re-push: the container
+        // would lack a bind that `listContainerMounts` still reports.
+        const shedKeys = new Set(shed.map(attach => attach.key));
+        declared = harden(declared.filter(attach => !shedKeys.has(attach.key)));
         pendingReport = Error(
           `The sandbox could not be recreated with ${dropped.join(', ')} and the bind(s) were dropped: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
         await createLive();
+        // Apply anything that arrived while the shed held the floor.
+        if (!liveIsCurrent()) {
+          enqueue(recreate).catch(recreateError => {
+            console.error(
+              `[floot-factory] container-mount recreate failed for session ${id}:`,
+              recreateError instanceof Error
+                ? recreateError.message
+                : String(recreateError),
+            );
+          });
+        }
       }
     };
     /**
@@ -2592,13 +2620,23 @@ export const make = (hostPowers, _context, { env } = {}) => {
           if (started && !closed && !liveIsCurrent()) {
             await enqueue(recreate);
           }
-          return E(requireLive()).send(prompt, opts);
+          const target = requireLive();
+          sentOn = live;
+          return E(target).send(prompt, opts);
         },
-        // A session being recreated has no turn left to interrupt and no
-        // checkpoint left to acknowledge: the terminate ended them.
-        interrupt: () => (live ? E(live.run).interrupt() : undefined),
+        // Only to the session the current turn was sent to. A recreate ends
+        // the turn in flight, so an interrupt or an acknowledgement raised
+        // for it afterwards belongs to a session that no longer exists —
+        // delivering it to the successor would cancel an unrelated turn, or
+        // hand it a checkpoint minted by its predecessor.
+        interrupt: () =>
+          live !== undefined && live === sentOn
+            ? E(live.run).interrupt()
+            : undefined,
         acknowledge: checkpoint =>
-          live ? E(live.run).acknowledge(checkpoint) : undefined,
+          live !== undefined && live === sentOn
+            ? E(live.run).acknowledge(checkpoint)
+            : undefined,
       }),
     });
   };
@@ -2959,6 +2997,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
                   }
                 },
               });
+              // A previous build for this id that failed after arming would
+              // otherwise be left open and unreachable, still able to create
+              // a successor nothing tracks.
+              const stale = hostedMountClients.get(id);
+              if (stale) {
+                await stale.close().catch(() => undefined);
+              }
               hostedMountClients.set(id, mountClient);
               // Arm first: the replay hands the adapter this session's
               // persisted binds, which the first create then declares —
@@ -3004,6 +3049,15 @@ export const make = (hostPowers, _context, { env } = {}) => {
         return agent;
       })().catch(async error => {
         agents.delete(id);
+        // Close the mount adapter before terminating, or a push arriving in
+        // the window before the retry re-arms would have it create a
+        // successor this rollback does not know about — a live backend
+        // session reachable through nothing.
+        const failedMountClient = hostedMountClients.get(id);
+        if (failedMountClient) {
+          hostedMountClients.delete(id);
+          await failedMountClient.close().catch(() => undefined);
+        }
         const admin = backendAdmins.get(id);
         if (admin) {
           // A stop, not a deletion: the backend keeps the session's durable
