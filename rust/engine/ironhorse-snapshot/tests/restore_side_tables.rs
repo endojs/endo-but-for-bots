@@ -30,7 +30,7 @@ use ironhorse_vm::{parse_symbols, Interp};
 /// halves `Interp::link_intrinsics` + `Interp::run` consume. Panics if the
 /// pure-Rust compiler cannot lower the source (the fixtures below are chosen
 /// to compile cleanly).
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
     (bytecode, parse_symbols(&symbols))
 }

@@ -204,11 +204,13 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// suspended async-function activations (`ASYN`); version 14 adds the
 /// `IDXP` index-property store, which a version-13 reader would skip —
 /// silently dropping every integer-keyed property of every ordinary
-/// object.
+/// object. Version 15 encodes NAME entries as canonical XS CESU-8,
+/// preserving every JavaScript UTF-16 code unit; older NAME entries are
+/// decoded as UTF-8 and converted losslessly on read.
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 14;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 15;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

@@ -43,6 +43,7 @@
 use crate::ast::{flags, node_name, Item, Node};
 use crate::parser::{ParseError, Parser};
 use crate::token::Token;
+use ironhorse_text::SymbolName;
 use std::collections::HashMap;
 
 // ============================ declare flags ============================
@@ -86,7 +87,7 @@ const SCOPE_STRICT: u32 = flags::STRICT;
 /// a source name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sym {
-    Named(String),
+    Named(SymbolName),
     Anon(u32),
 }
 
@@ -103,7 +104,7 @@ pub struct ImportSpec {
     pub from: Vec<u16>,
     /// `specifier->symbol` — the *imported* name (a named import's source
     /// name, or `*default*`), or `None` for a namespace / bare import.
-    pub symbol: Option<String>,
+    pub symbol: Option<SymbolName>,
     /// `specifier->with` — an import-attributes (`with { … }`) form, which
     /// selects `TRANSFER_JSON` over `TRANSFER`.
     pub with: bool,
@@ -117,7 +118,7 @@ pub struct ImportSpec {
 pub struct ExportSpec {
     /// The exported name: `asSymbol ? asSymbol : symbol`, or `None` for an
     /// anonymous (`export *`) slot.
-    pub name: Option<String>,
+    pub name: Option<SymbolName>,
 }
 
 /// One declaration in a scope's declare list — a transliteration of the
@@ -265,7 +266,7 @@ impl Scope {
 /// non-binding.
 #[derive(Clone, Debug)]
 pub struct AccessRecord {
-    pub symbol: String,
+    pub symbol: SymbolName,
     pub line: u32,
     pub resolved: Option<(usize, u32)>,
 }
@@ -599,9 +600,9 @@ fn child_node<'a>(n: &'a Node, i: usize) -> Option<&'a Node> {
         _ => None,
     }
 }
-fn child_sym(n: &Node, i: usize) -> Option<String> {
+fn child_sym(n: &Node, i: usize) -> Option<SymbolName> {
     match n.children.get(i) {
-        Some(Item::Symbol(s)) => Some(s.clone()),
+        Some(Item::Symbol(s)) => Some(SymbolName::from_units(s)),
         _ => None,
     }
 }
@@ -1695,7 +1696,7 @@ impl Scoper {
             let d = self.new_declare(
                 si,
                 Token::Var,
-                Some(Sym::Named("arguments".to_string())),
+                Some(Sym::Named("arguments".into())),
                 node.line,
             );
             self.scope_add_declare(si, d);
@@ -1962,9 +1963,9 @@ impl Scoper {
         self.scope = self.scopes[si].parent;
     }
 
-    fn record_access(&mut self, symbol: &str, line: u32, resolved: Option<(usize, u32)>) {
+    fn record_access(&mut self, symbol: &SymbolName, line: u32, resolved: Option<(usize, u32)>) {
         self.accesses.push(AccessRecord {
-            symbol: symbol.to_string(),
+            symbol: symbol.clone(),
             line,
             resolved,
         });
@@ -2668,7 +2669,7 @@ impl Scoper {
                         .iter()
                         .all(|it| matches!(it, Item::Node(n) if n.token == Token::Arg));
                     if all_arg {
-                        let names: Vec<String> = items
+                        let names: Vec<SymbolName> = items
                             .iter()
                             .filter_map(|it| match it {
                                 Item::Node(arg) => child_sym(arg, 0),
@@ -2765,7 +2766,7 @@ impl Scoper {
         // spec children: [symbol (local name), asSymbol (exported name)].
         // Resolve the local; the exported name (`asSymbol ? asSymbol :
         // symbol`) is linked onto the declaration's export chain.
-        let specs: Vec<(String, Option<String>, u32)> = match child(node, 0) {
+        let specs: Vec<(SymbolName, Option<SymbolName>, u32)> = match child(node, 0) {
             Some(Item::List(v)) => v
                 .iter()
                 .filter_map(|it| match it {
@@ -2860,7 +2861,7 @@ impl ScopeTree {
             }
             for de in &sc.defines {
                 let name = match &de.symbol {
-                    Some(Sym::Named(s)) => s.clone(),
+                    Some(Sym::Named(s)) => s.to_string(),
                     Some(Sym::Anon(n)) => format!("<anon{}>", n),
                     None => "<null>".to_string(),
                 };

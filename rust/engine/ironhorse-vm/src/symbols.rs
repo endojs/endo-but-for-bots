@@ -17,31 +17,74 @@
 //! returned vector is indexed 0-based, so `names[k]` is the name of symbol
 //! id `k + 1`.
 
-/// Decode the symbols atom into `names`, where `names[k]` is the name of
-/// symbol id `k + 1` (id 0 is `XS_NO_ID`, reserved). An empty or too-short
-/// atom (a program that references no named symbols) yields an empty vector.
-pub fn parse_symbols(atom: &[u8]) -> Vec<String> {
-    // The leading 2-byte count is `distinct + 1` (it reserves id 0); we
-    // read strings to the buffer end rather than trusting the count, so a
-    // short or malformed buffer degrades to fewer names rather than panicking.
-    if atom.len() < 2 {
-        return Vec::new();
+pub use ironhorse_text::SymbolName;
+
+#[derive(Default)]
+pub(crate) struct SymbolIds(std::collections::HashMap<SymbolName, u16>);
+impl SymbolIds {
+    pub fn get(&self, name: impl Into<SymbolName>) -> Option<&u16> {
+        self.0.get(&name.into())
     }
+    pub fn contains_key(&self, name: impl Into<SymbolName>) -> bool {
+        self.get(name).is_some()
+    }
+    pub fn insert(&mut self, name: impl Into<SymbolName>, id: u16) -> Option<u16> {
+        self.0.insert(name.into(), id)
+    }
+    pub fn entry(
+        &mut self,
+        name: SymbolName,
+    ) -> std::collections::hash_map::Entry<'_, SymbolName, u16> {
+        self.0.entry(name)
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&SymbolName, &u16)> {
+        self.0.iter()
+    }
+}
+
+/// Decode trusted symbols for tooling. Malformed atoms produce no names.
+/// Use `parse_symbols_checked` at execution boundaries to report malformed input.
+pub fn parse_symbols(atom: &[u8]) -> Vec<SymbolName> {
+    parse_symbols_checked(atom).unwrap_or_default()
+}
+
+/// Decode a complete XS symbol atom without replacing any code unit.
+pub fn parse_symbols_checked(atom: &[u8]) -> Result<Vec<SymbolName>, crate::Halt> {
+    let invalid = || crate::Halt::Decode("invalid CESU-8 symbols atom".into());
+    if atom.is_empty() {
+        return Ok(Vec::new());
+    }
+    let header: [u8; 2] = atom
+        .get(..2)
+        .ok_or_else(invalid)?
+        .try_into()
+        .map_err(|_| invalid())?;
+    let count = u16::from_le_bytes(header)
+        .checked_sub(1)
+        .ok_or_else(invalid)? as usize;
     let mut names = Vec::new();
-    let mut i = 2usize;
-    let mut start = i;
-    while i < atom.len() {
-        if atom[i] == 0 {
-            // Strings are CESU-8; `from_utf8_lossy` matches how the oracle
-            // shim renders names for comparison (see `xs-oracle`).
-            names.push(String::from_utf8_lossy(&atom[start..i]).into_owned());
-            i += 1;
-            start = i;
-        } else {
-            i += 1;
-        }
+    let mut rest = &atom[2..];
+    for _ in 0..count {
+        let end = rest.iter().position(|&b| b == 0).ok_or_else(invalid)?;
+        names.push(SymbolName::from_cesu8(&rest[..end]).ok_or_else(invalid)?);
+        rest = &rest[end + 1..];
     }
-    names
+    if !rest.is_empty() {
+        return Err(invalid());
+    }
+    Ok(names)
+}
+
+pub(crate) fn decode_refusal(halt: crate::Halt) -> crate::RunOutcome {
+    crate::RunOutcome {
+        completed: false,
+        result: String::new(),
+        coercion_error: None,
+        computrons: 0,
+        dispatched: 0,
+        meter_raw: 0,
+        halt,
+    }
 }
 
 #[cfg(test)]
@@ -54,7 +97,7 @@ mod tests {
         // one real symbol), the name "Object" as id 1.
         let atom = [0x02, 0x00, b'O', b'b', b'j', b'e', b'c', b't', 0x00];
         let names = parse_symbols(&atom);
-        assert_eq!(names, vec!["Object".to_string()]);
+        assert_eq!(names, vec![SymbolName::from("Object")]);
         // names[0] is id 1.
     }
 
@@ -65,7 +108,10 @@ mod tests {
             0x03, 0x00, b'f', b'o', b'o', 0x00, b'O', b'b', b'j', b'e', b'c', b't', 0x00,
         ];
         let names = parse_symbols(&atom);
-        assert_eq!(names, vec!["foo".to_string(), "Object".to_string()]);
+        assert_eq!(
+            names,
+            vec![SymbolName::from("foo"), SymbolName::from("Object")]
+        );
     }
 
     #[test]

@@ -30,7 +30,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Intl.NumberFormat:formatRange",
     "Iterator.helper",
     "JSON.parse:lone-surrogate",
-    "JSON.parse:lone-surrogate-key",
     "Number.toString:fractional-non-decimal-radix",
     "String.replace:non-string-receiver",
     "Temporal.Now:method",

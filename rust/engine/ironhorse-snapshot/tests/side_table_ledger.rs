@@ -30,7 +30,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -39,7 +39,8 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
 /// checkpoint/resume split on `store`, and return the two crank-2
 /// completion values (uninterrupted, resumed).
 fn twin(cranks: [&str; 2], store: &mut dyn HeapStore) -> (String, String) {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut cont = Interp::new();
     cont.link_intrinsics(&compiled[0].1);
@@ -164,7 +165,8 @@ fn lazy_resumed_tables_survive_a_full_collect() {
          m.set; \
          t = arr.length + arr[9] + m.get(a); t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut cont = Interp::new();
     cont.link_intrinsics(&compiled[0].1);

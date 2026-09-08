@@ -7,6 +7,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "ironhorse-text",
     "ironhorse-vm",
     "xs-oracle",
     "ironhorse-262",

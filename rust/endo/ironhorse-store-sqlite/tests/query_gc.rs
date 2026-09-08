@@ -22,7 +22,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -47,7 +47,8 @@ fn build_store(store: Rc<RefCell<SqliteHeapStore>>) {
         "var arr; var g; var t; var i; var v; var w; \
          arr[3] = { v: 1, w: 2 }; t + 1",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
@@ -298,7 +299,8 @@ fn generational_collect_equivalent_across_backends() {
          for (i = 0; i < 1200; i = i + 1) { g = { v: i, w: i }; } \
          g = 0; keep = { v: -1, w: -1 }; t = 2; t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let run = |store: &mut dyn HeapStore| -> (u32, usize) {
         let mut m = Interp::new();

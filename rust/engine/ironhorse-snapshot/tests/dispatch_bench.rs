@@ -18,7 +18,7 @@
 use ironhorse_vm::{parse_symbols, Interp};
 use std::time::Instant;
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }

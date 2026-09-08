@@ -12,7 +12,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -23,7 +23,7 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
 /// wrong crank-1 name, and `keep.v` reads a property of `undefined` — which
 /// the engine used to answer silently (a coincidental result this test
 /// then compared against itself) and now refuses with a `TypeError`.
-fn run_crank(m: &mut Interp, crank: &(Vec<u8>, Vec<String>)) -> RunOutcome {
+fn run_crank(m: &mut Interp, crank: &(Vec<u8>, Vec<ironhorse_vm::SymbolName>)) -> RunOutcome {
     let bytecode = m.relink_crank(&crank.0, &crank.1).expect("relink");
     m.run(&bytecode)
 }
@@ -43,7 +43,8 @@ const CRANKS: [&str; 2] = [
 
 #[test]
 fn collected_machine_keeps_executing_and_agrees() {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = CRANKS.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        CRANKS.iter().map(|s| compile(s)).collect();
 
     // Baseline: never collected.
     let mut base = Interp::new();
@@ -81,7 +82,8 @@ fn collected_machine_keeps_executing_and_agrees() {
 
 #[test]
 fn collected_machine_checkpoints_and_resumes_exactly() {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = CRANKS.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        CRANKS.iter().map(|s| compile(s)).collect();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
@@ -130,7 +132,8 @@ fn partial_collect_is_conservative_and_exact() {
          last = { v: -1 }; t = 7;",
         "var last; var i; t + 1",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
@@ -206,7 +209,8 @@ fn partial_collect_keeps_side_table_only_referenced_objects() {
         "var i; var v; var w; var length; var arr; \
          arr[0].v + arr[1999].w",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
@@ -277,7 +281,8 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     use ironhorse_vm::{Slot, SLOTS_PER_PAGE};
 
     let cranks = ["var t = 0; t = 7;", "var t; t + 1"];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut store = MemoryStore::new();
     let mut m = Interp::new();
@@ -349,7 +354,8 @@ fn small_state_stays_small_with_a_large_free_list() {
     let cranks = ["var last = { v: 0 }; var t = 0; var i = 0; \
          for (i = 0; i < 3000; i = i + 1) { last = { v: i }; } \
          last = 0; t = 7;"];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
@@ -415,7 +421,8 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
          last = 0; t = 7;",
         "var last; var v; var t; var i; last = { v: 1 }; t + 1",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
@@ -512,7 +519,8 @@ fn ephemeron_marking_reclaims_dead_keyed_weak_entries() {
          g = wm.get(keep); t = g.k; g = wm.get(g); t = t + g.v; \
          i = 0; i < 1; t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
@@ -548,7 +556,8 @@ fn weak_set_membership_keeps_nothing_alive() {
         "var ws; var keep; var g; var i; var t; g = WeakSet; g = 0; ws.add; keep.k; \
          t = 0; if (ws.has(keep)) { t = 1; } t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
@@ -594,7 +603,8 @@ fn symbol_key_descriptor_survives_collection() {
          g = o.a; g = o.v; g = o.w; sym = Symbol; sym = 0; g = 0; \
          Object.keys(o).length",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
@@ -656,7 +666,8 @@ fn partial_collect_under_bulk_table_churn_stays_parity_clean() {
          arr.unshift; arr.shift; m.clear; m.set; k = { v: 0, w: 0 }; \
          i = 5; t = arr[i].v + 1; arr.length; t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
@@ -701,7 +712,8 @@ fn dead_keyed_symbol_interns_are_reclaimed_precisely() {
         "var o; var g; var i; var sym; \
          o = { a: 2 }; sym = Symbol('key'); o[sym] = 9; i = o[sym]; g.a + i",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
@@ -756,7 +768,8 @@ fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
         // matches the earlier cranks').
         "var keep; var g; var i; var t; keep.w; t = keep.v; t",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let run_twin = |generational: bool| -> (u32, String, u64) {
         let mut store = MemoryStore::new();

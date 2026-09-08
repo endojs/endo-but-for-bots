@@ -34,7 +34,7 @@
 
 use ironhorse_vm::Interp;
 
-fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
     (b, ironhorse_vm::parse_symbols(&s))
 }

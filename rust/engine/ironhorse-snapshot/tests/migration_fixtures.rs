@@ -20,7 +20,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -41,7 +41,8 @@ pub const FIXTURE_RESULTS: [&str; 2] = ["7", "3"];
 #[test]
 #[ignore]
 fn regenerate_file_store_fixture() {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = FIXTURE_CRANKS.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        FIXTURE_CRANKS.iter().map(|s| compile(s)).collect();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     std::fs::create_dir_all(&dir).unwrap();
 

@@ -26,6 +26,9 @@
 //!     `items` list in source order, leaving the init slots null; the
 //!     desugaring moves to the coder.
 
+use crate::ast::str_to_units;
+use ironhorse_text::SymbolName;
+
 use crate::ast::{flags, Item, Node, Value};
 use crate::parser::{ParseError, ParseErrorKind, Parser, STATEMENT_COST};
 use crate::token::{classify_word, Token};
@@ -231,7 +234,7 @@ impl Parser {
     /// identifier that is a strict reserved word must be reclassified.
     fn check_strict_keyword(&mut self) -> PResult<()> {
         if let Some(sym) = self.cur.symbol.clone() {
-            let t = classify_word(&sym, true, false, false);
+            let t = classify_word(sym.as_str().unwrap_or(""), true, false, false);
             if t != Token::Identifier {
                 self.cur.token = t;
             }
@@ -358,7 +361,11 @@ impl Parser {
                 self.look_ahead_once()?;
                 let is_await_using = !self.ahead_crlf()
                     && self.ahead_token() == Token::Identifier
-                    && self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("using")
+                    && self
+                        .ahead
+                        .as_ref()
+                        .and_then(|s| s.symbol.as_ref().and_then(SymbolName::as_str))
+                        == Some("using")
                     && !self.ahead.as_ref().is_some_and(|s| s.escaped);
                 if is_await_using {
                     self.look_ahead_twice()?;
@@ -751,7 +758,7 @@ impl Parser {
             self.cur.token = Token::Let;
             self.variable_statement(Token::Let, 0)?;
         } else if self.cur.token == Token::Identifier
-            && self.cur.symbol.as_deref() == Some("using")
+            && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("using")
             && !self.cur.escaped
             && !self.ahead_crlf()
             && matches!(
@@ -760,7 +767,11 @@ impl Parser {
             )
         {
             self.look_ahead_twice()?;
-            if self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("of")
+            if self
+                .ahead
+                .as_ref()
+                .and_then(|s| s.symbol.as_ref().and_then(SymbolName::as_str))
+                == Some("of")
                 && !self.ahead.as_ref().is_some_and(|s| s.escaped)
                 && self.ahead2_token() != Token::Assign
             {
@@ -774,7 +785,11 @@ impl Parser {
             self.look_ahead_twice()?;
             let is_await_using = !self.ahead_crlf()
                 && self.ahead_token() == Token::Identifier
-                && self.ahead.as_ref().and_then(|s| s.symbol.as_deref()) == Some("using")
+                && self
+                    .ahead
+                    .as_ref()
+                    .and_then(|s| s.symbol.as_ref().and_then(SymbolName::as_str))
+                    == Some("using")
                 && !self.ahead.as_ref().is_some_and(|s| s.escaped)
                 && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
                 && matches!(
@@ -1156,11 +1171,11 @@ impl Parser {
                     Item::Node(node) => {
                         let sym = match node.children.first() {
                             Some(Item::Symbol(s)) => s.clone(),
-                            _ => String::new(),
+                            _ => Vec::new(),
                         };
                         (sym, node.line)
                     }
-                    _ => (String::new(), 0),
+                    _ => (Vec::new(), 0),
                 };
                 Ok(Some(self.new_inherited_node(
                     token,
@@ -1465,7 +1480,7 @@ impl Parser {
     pub(crate) fn function_expression(
         &mut self,
         line: u32,
-        symbol_out: Option<&mut Option<String>>,
+        symbol_out: Option<&mut Option<SymbolName>>,
         flag: u32,
     ) -> PResult<()> {
         let saved = self.flags;
@@ -1501,7 +1516,7 @@ impl Parser {
     pub(crate) fn generator_expression(
         &mut self,
         line: u32,
-        symbol_out: Option<&mut Option<String>>,
+        symbol_out: Option<&mut Option<SymbolName>>,
         flag: u32,
     ) -> PResult<()> {
         let saved = self.flags;
@@ -1541,7 +1556,7 @@ impl Parser {
         &mut self,
         saved: u32,
         want_symbol: bool,
-        symbol_out: Option<&mut Option<String>>,
+        symbol_out: Option<&mut Option<SymbolName>>,
     ) -> PResult<()> {
         let is_name = self.cur.token == Token::Identifier
             || (saved & flags::GENERATOR != 0
@@ -1567,7 +1582,7 @@ impl Parser {
         &mut self,
         _saved: u32,
         want_symbol: bool,
-        symbol_out: Option<&mut Option<String>>,
+        symbol_out: Option<&mut Option<SymbolName>>,
     ) -> PResult<()> {
         let is_name =
             self.cur.token == Token::Identifier || (!want_symbol && self.cur.token == Token::Await);
@@ -1651,7 +1666,7 @@ impl Parser {
     pub(crate) fn class_expression(
         &mut self,
         line: u32,
-        symbol_out: Option<&mut Option<String>>,
+        symbol_out: Option<&mut Option<SymbolName>>,
     ) -> PResult<()> {
         let saved = self.flags;
         let mut heritage_flag = false;
@@ -1731,7 +1746,9 @@ impl Parser {
                 }
                 let (a_symbol, _t0, a_token1, a_token2) = self.property_name()?;
                 let async_flag = self.property_name_async_flag;
-                if !static_flag && a_symbol.as_deref() == Some("constructor") {
+                if !static_flag
+                    && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("constructor")
+                {
                     self.pop(); // the key symbol
                     if constructor.is_some()
                         || a_token2 == Token::Generator
@@ -1746,11 +1763,13 @@ impl Parser {
                 } else if self.cur.token == Token::LeftParenthesis {
                     let mut method_flag = async_flag;
                     if a_token1 == Token::PrivateProperty
-                        && a_symbol.as_deref() == Some("#constructor")
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("#constructor")
                     {
                         return Err(self.error("invalid method: #constructor"));
                     }
-                    if static_flag && a_symbol.as_deref() == Some("prototype") {
+                    if static_flag
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("prototype")
+                    {
                         return Err(self.error("invalid static method: prototype"));
                     }
                     if static_flag {
@@ -1775,14 +1794,14 @@ impl Parser {
                     count += 1;
                 } else {
                     if a_token1 == Token::PrivateProperty
-                        && a_symbol.as_deref() == Some("#constructor")
+                        && a_symbol.as_ref().and_then(SymbolName::as_str) == Some("#constructor")
                     {
                         return Err(self.error("invalid field: #constructor"));
                     }
-                    if a_symbol.as_deref() == Some("constructor") {
+                    if a_symbol.as_ref().and_then(SymbolName::as_str) == Some("constructor") {
                         return Err(self.error("invalid field: constructor"));
                     }
-                    if a_symbol.as_deref() == Some("prototype") {
+                    if a_symbol.as_ref().and_then(SymbolName::as_str) == Some("prototype") {
                         return Err(self.error("invalid field: prototype"));
                     }
                     self.class_field(prop_line, a_token1, static_flag)?;
@@ -1860,7 +1879,7 @@ impl Parser {
                 Token::Arg,
                 line,
                 strict,
-                vec![Item::Symbol("args".to_string()), Item::Null],
+                vec![Item::Symbol(str_to_units("args")), Item::Null],
                 Value::None,
             )));
             let rest = Item::Node(Box::new(Node::new(
@@ -1882,7 +1901,7 @@ impl Parser {
                 Token::Access,
                 line,
                 strict,
-                vec![Item::Symbol("args".to_string())],
+                vec![Item::Symbol(str_to_units("args"))],
                 Value::None,
             )));
             let spread = Item::Node(Box::new(Node::new(
@@ -2060,7 +2079,7 @@ impl Parser {
             }
             _ => {
                 if self.cur.token == Token::Identifier
-                    && self.cur.symbol.as_deref() == Some("async")
+                    && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("async")
                     && !self.cur.escaped
                 {
                     self.look_ahead_once()?;
@@ -2082,10 +2101,10 @@ impl Parser {
             return Err(self.error("invalid default"));
         }
         self.flags |= flags::DEFAULT;
-        let mut symbol: Option<String> = None;
+        let mut symbol: Option<SymbolName> = None;
         if self.cur.token == Token::Class {
             self.class_expression(line, Some(&mut symbol))?;
-            let name = symbol.clone().unwrap_or_else(|| "default".to_string());
+            let name = symbol.clone().unwrap_or_else(|| "default".into());
             self.push_symbol(name);
             self.push_node_struct(1, Token::Let, line)?;
             self.swap_nodes();
@@ -2104,7 +2123,7 @@ impl Parser {
             } else {
                 self.function_expression(line, Some(&mut symbol), flag)?;
             }
-            let name = symbol.clone().unwrap_or_else(|| "default".to_string());
+            let name = symbol.clone().unwrap_or_else(|| "default".into());
             self.push_define(name, line);
         } else {
             self.assignment_expression()?;
@@ -2151,7 +2170,7 @@ impl Parser {
 
     /// Emit the `Export` node wrapping a single local specifier (used by
     /// `export class`/`export function`).
-    fn export_local(&mut self, sym: String, line: u32) -> PResult<()> {
+    fn export_local(&mut self, sym: SymbolName, line: u32) -> PResult<()> {
         self.push_symbol(sym);
         self.push_null();
         self.push_node_struct(2, Token::Specifier, line)?;
@@ -2308,7 +2327,7 @@ impl Parser {
     /// `export default async function` lookahead.
     fn is_async_function_ahead(&mut self) -> PResult<bool> {
         if self.cur.token == Token::Identifier
-            && self.cur.symbol.as_deref() == Some("async")
+            && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("async")
             && !self.cur.escaped
         {
             self.look_ahead_once()?;

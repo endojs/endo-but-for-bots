@@ -2773,6 +2773,17 @@ the parser half as "Already mirrored" (F105).
 
 #### F016 - Lone-surrogate property keys silently alias to U+FFFD [high, high]
 
+**Implementation status (2026-09-08).**
+Implemented with lossless keys, replacing the temporary compiler refusal.
+AST symbol slots carry UTF-16 units; the compiler and VM intern canonical XS
+CESU-8 spellings through `ironhorse-text::SymbolName`.
+Literal, computed, reflective, JSON, and enumeration paths preserve those units.
+Snapshot format 15 and store schema 26 preserve names, with legacy UTF-8 decoding
+and an in-place store migration that retains ids, epochs, and the seal chain.
+The evidence probes, XS bytecode-and-symbol parity fixtures, malformed-input
+checks, and container/store migration tests cover the implementation.
+The original finding below is retained as the review record.
+
 **Claim.**
 An object literal with two distinct lone-surrogate string keys compiles to a
 single property, and a lookup with a different lone surrogate finds it: a silent

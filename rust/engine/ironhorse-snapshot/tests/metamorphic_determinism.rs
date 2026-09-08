@@ -82,7 +82,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
 
     let sig = Signature::new("ironhorse-worker-v1");
     let cranks = ["var x = 5;", "x = x + 1;", "x + 10"];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> = cranks
         .iter()
         .map(|s| {
             let (b, sy) = ironhorse_compile::compile_atoms(s).expect("compiles");
@@ -312,7 +312,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // `IDXP` atom itself is absent (emit-only-when-non-empty); the bytes
         // move because the `VERS` stamp is 14 and the positional small state
         // carries one more (empty) section.
-        "790879dbd7f16fac7d5c1f7c1eaaa9af7653e50055114862a663481388f7d403",
+        // Format 15 stamps lossless CESU-8 NAME encoding.
+        "7a586c977342d0844f9a9282e7a73677d1f9c8969a19a2422a5390dc628de6d9",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -515,7 +516,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Error prototype data. Schema and format remain unchanged.
         // Re-pinned with the blob for format 14 (`IDXP`) and schema 25,
         // which appends the index-props small-state section.
-        "b94ca811729a9f744dce065da1e36b5e3e49a21531d89f6103c966967743ee27",
+        // Format 15 / store schema 26 change the manifest in the seal.
+        "e28a4d3ce2c08b169bf28283990ce9090200fcd31d145830b21decc753f945ee",
         "epoch-3 seal chain"
     );
 }

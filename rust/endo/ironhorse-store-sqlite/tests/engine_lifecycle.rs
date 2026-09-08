@@ -37,7 +37,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -51,7 +51,8 @@ fn tmp_dir(name: &str) -> common::TempDir {
 /// the scenario locks. Returns the baseline's final completion value
 /// so callers can assert their literal expectation.
 fn run_scenario(name: &str, cranks: &[&str]) -> String {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     // Baseline: one machine, never suspended.
     let mut baseline = Interp::new();

@@ -2818,6 +2818,7 @@ name = "ironhorse-compile"
 version = "0.0.1"
 dependencies = [
  "ironhorse-regexp",
+ "ironhorse-text",
 ]
 
 [[package]]
@@ -2843,12 +2844,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-text"
+version = "0.0.1"
+
+[[package]]
 name = "ironhorse-vm"
 version = "0.0.1"
 dependencies = [
  "icu_normalizer",
  "icu_segmenter",
  "ironhorse-regexp",
+ "ironhorse-text",
 ]
 
 [[package]]
