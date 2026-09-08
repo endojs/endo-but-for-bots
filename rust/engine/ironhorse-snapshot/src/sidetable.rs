@@ -814,7 +814,6 @@ mod tests {
             "resume_status",
             "env",
             "direct_eval_hoist",
-            "eval_program_hoist",
             "eval_direct",
             "active_segment",
             "top_level_code",
@@ -842,6 +841,8 @@ mod tests {
             "last_crank_completed",
         ];
         const HOST_WIRING: &[&str] = &[
+            // Embedding policy configured outside each activation.
+            "eval_program_hoist",
             "meter_host",
             "source_compiler",
             "cost",
@@ -981,6 +982,31 @@ mod tests {
             );
         }
 
+        // Every activation transient has an independent persistence gate.
+        // Retained embedding policy belongs in HOST_WIRING, not this set.
+        let quiescence = src
+            .split("pub fn is_quiescent(&self)")
+            .nth(1)
+            .unwrap()
+            .split("\n    }")
+            .next()
+            .unwrap();
+        let quiescence = quiescence
+            .lines()
+            .map(|line| line.split("//").next().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for field in TRANSIENTS {
+            assert!(
+                quiescence.split("self.").skip(1).any(|tail| {
+                    tail.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .next()
+                        == Some(*field)
+                }),
+                "transient {field} has no independent quiescence gate"
+            );
+        }
+
         let mut accounted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for group in [
             LEDGER_ROWS,
@@ -1115,7 +1141,19 @@ mod tests {
         /// The conjuncts of `is_quiescent` that are not `is_empty()`
         /// tests on a ledger row: each is a transient the module docs
         /// classify, and each must stay in the predicate.
+        const EMPTY_TRANSIENTS: &[&str] = &["args", "this_captures", "locals", "id_map"];
         const NON_EMPTINESS_CONJUNCTS: &[&str] = &[
+            "this_val",
+            "env",
+            "result",
+            "cur_func",
+            "target_func",
+            "cur_target",
+            "frame_slots",
+            "strict",
+            "top_level_code",
+            "active_segment",
+            "installing_intrinsics",
             // Counted references need not be empty, but a poisoned
             // projection must never be checkpointed.
             "side_refs",
@@ -1183,6 +1221,12 @@ mod tests {
                 );
             }
         }
+        for field in EMPTY_TRANSIENTS {
+            assert!(
+                body.contains(&format!("self.{field}.is_empty()")),
+                "transient {field} must be empty"
+            );
+        }
         // Forward, the lifecycle half: every documented non-emptiness
         // conjunct is still in the predicate. The latch in particular
         // is what keeps a table-empty halt out of the persist verbs.
@@ -1219,7 +1263,10 @@ mod tests {
             named += 1;
             let is_emptiness = cap[field.len()..].starts_with(".is_empty()");
             let accounted = if is_emptiness {
-                empty_rows.contains(&field) || field == "stack" || field == "async_gen_run_stack"
+                empty_rows.contains(&field)
+                    || EMPTY_TRANSIENTS.contains(&field)
+                    || field == "stack"
+                    || field == "async_gen_run_stack"
             } else {
                 NON_EMPTINESS_CONJUNCTS.contains(&field)
             };

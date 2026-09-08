@@ -4384,7 +4384,7 @@ pub struct RunOutcome {
     /// (see [`Self::coercion_error`]) this is the engine's display
     /// rendering instead: a Symbol's descriptive string
     /// (`Symbol(desc)`), the generic `[object Object]` stub for a
-    /// null-prototype object.
+    /// null-prototype object. Empty when `host_render_halt` is present.
     pub result: String,
     /// The `TypeError` the oracle shim's post-run `String(result)`
     /// throws for this completion value, as the differential harness
@@ -4414,6 +4414,10 @@ pub struct RunOutcome {
     /// reported to the operator as an uncaught `TypeError` and the
     /// managed lifecycle rewound it).
     pub coercion_error: Option<String>,
+    /// Bounded host rendering failed after a successful dispatch. This never
+    /// changes persistence eligibility; only `host_coerced` folds it into the
+    /// oracle harness verdict. The rendered `result` is empty in this case.
+    pub host_render_halt: Option<Halt>,
     /// Whole computrons under Ironhorse's frozen cost-table release.
     /// Oracle counts are advisory; this includes all costs charged to the meter.
     pub computrons: u64,
@@ -4432,7 +4436,9 @@ impl RunOutcome {
     /// The outcome as the ORACLE HARNESS reports it: the xsnap shim
     /// coerces the completion value with `String(result)` after the
     /// run, so a completion that coercion cannot render is an abort on
-    /// the oracle's side. Fold [`Self::coercion_error`] the same way —
+    /// the oracle's side. A [`Self::host_render_halt`] becomes the harness
+    /// halt without changing the original machine's lifecycle. Fold
+    /// [`Self::coercion_error`] the same way —
     /// `completed` becomes `false`, `result` empties, and `halt` becomes
     /// a [`Halt::Throw`] carrying the `TypeError` — so a differential
     /// comparison sees the shape the oracle produces. The post-run
@@ -4441,6 +4447,16 @@ impl RunOutcome {
     /// This is the differential harness's verb; an embedder that runs
     /// guest programs for their own sake keeps the raw completion.
     pub fn host_coerced(self) -> RunOutcome {
+        if let Some(halt) = self.host_render_halt.clone() {
+            return RunOutcome {
+                completed: false,
+                result: String::new(),
+                coercion_error: None,
+                host_render_halt: None,
+                halt,
+                ..self
+            };
+        }
         match self.coercion_error {
             Some(message) => RunOutcome {
                 completed: false,
@@ -13684,6 +13700,21 @@ impl Interp {
     /// ([`RunOutcome::host_coerced`]).
     pub fn is_quiescent(&self) -> bool {
         self.last_crank_completed
+            && self.args.is_empty()
+            && self.this_captures.is_empty()
+            && self.locals.is_empty()
+            && self.id_map.is_empty()
+            && self.this_val.kind == Kind::Undefined
+            && self.env.kind == Kind::Undefined
+            && self.result.kind == Kind::Undefined
+            && self.cur_func == crate::value::SlotIndex::NULL
+            && self.target_func == crate::value::SlotIndex::NULL
+            && !self.cur_target
+            && self.frame_slots == 0
+            && !self.strict
+            && self.top_level_code.is_none()
+            && self.active_segment.is_none()
+            && !self.installing_intrinsics
             && self.call_stack.is_empty()
             && self.stack.is_empty()
             && self.jumps.is_empty()
@@ -14458,7 +14489,7 @@ impl Interp {
             }
             self.result = script_result;
         }
-        let mut halt = self.finish_step(code, step);
+        let halt = self.finish_step(code, step);
         // The ENGINE's verdict on this crank: the dispatch reached `END`
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the
@@ -14470,6 +14501,31 @@ impl Interp {
         // verb accepted, and reported a legal program to the operator as
         // an uncaught error).
         let completed = halt == Halt::Return;
+        let completion = self.result;
+        // Dispatch owns the lifecycle verdict. Clear activation roots before
+        // either host coercion; rendering reads the captured value and cannot
+        // execute guest code or collect the heap.
+        if completed {
+            self.result = Slot::undefined();
+            self.exception = Slot::undefined();
+            self.locals.clear();
+            self.id_map.clear();
+            self.args.clear();
+            self.this_captures.clear();
+            self.this_val = Slot::undefined();
+            self.env = Slot::undefined();
+            self.cur_func = crate::value::SlotIndex::NULL;
+            self.target_func = crate::value::SlotIndex::NULL;
+            self.cur_target = false;
+            self.frame_slots = 0;
+            self.pending_new_target = None;
+            self.resume_status = ResumeStatus::NoStatus;
+            self.eval_direct = false;
+            self.direct_eval_hoist = false;
+            self.strict = false;
+            self.top_level_code = None;
+        }
+
         // The oracle shim coerces the completion with `String(result)`
         // AFTER the run. Two completion values make that coercion throw:
         // a Symbol (`ToString` of a Symbol is a TypeError), and a bare
@@ -14483,10 +14539,10 @@ impl Interp {
         // matches the oracle's run-only count).
         let coercion_error = if !completed {
             None
-        } else if self.result.kind == Kind::Symbol {
+        } else if completion.kind == Kind::Symbol {
             Some("TypeError: cannot coerce symbol to string".to_string())
-        } else if let Payload::Reference(object) = self.result.value {
-            (self.result.kind == Kind::Reference
+        } else if let Payload::Reference(object) = completion.value {
+            (completion.kind == Kind::Reference
                 && self.instance_prototype(object).is_null()
                 && !self.arrays.contains_key(&object)
                 && self.native_of(object).is_none())
@@ -14494,51 +14550,25 @@ impl Interp {
         } else {
             None
         };
+        let mut host_render_halt = None;
         let result = if !completed {
             String::new()
-        } else if self.result.kind == Kind::Symbol {
+        } else if completion.kind == Kind::Symbol {
             // `String(sym)` throws, so the `render` boundary has no
             // `ToString` to mirror; the engine's own display rendering is
             // the descriptive string `Symbol.prototype.toString` gives.
-            String::from_utf8_lossy(&self.symbol_descriptive_bytes(self.result)).into_owned()
+            String::from_utf8_lossy(&self.symbol_descriptive_bytes(completion)).into_owned()
         } else {
-            // The host boundary's `String(result)`: a completion value the
-            // renderer cannot bound (a self-containing or very deep array,
-            // past the native-recursion budget) is the stack-exhaustion
-            // abort XS's own `fxToString` reaches in the shim — a machine
-            // abort, unlike the shim's post-run `TypeError` above, which is
-            // why it does rewrite the verdict: the crank halts with
-            // [`Halt::StackOverflow`] rather than answering with a
-            // truncated text.
-            match self.render(&self.result) {
+            // Host rendering has its own bounded failure channel. The
+            // guest already completed; the harness can fold this afterward.
+            match self.render(&completion) {
                 Ok(text) => text,
                 Err(render_halt) => {
-                    halt = self.finish_step(code, render_halt);
+                    host_render_halt = Some(self.finish_step(code, render_halt));
                     String::new()
                 }
             }
         };
-        let completed = halt == Halt::Return;
-        // Boundary-register hygiene (wave-6 W6-11): on a COMPLETED
-        // crank, the host has its rendered completion above and the
-        // next crank's prologue rebuilds locals — but between here and
-        // there these registers were live GC ROOTS the restore path
-        // never reinstates, so an uninterrupted machine's boundary
-        // collection retained pages its resumed twin freed (free-list
-        // divergence, which feeds replica-visible allocation order).
-        // Clear them at the boundary so both twins root the same set.
-        // A HALTED crank keeps everything: the lifecycle latch below
-        // keeps the quiescence gate refusing it and the managed
-        // lifecycle rewinds it whole.
-        if completed {
-            self.result = Slot::undefined();
-            self.locals.clear();
-            self.id_map.clear();
-            self.pending_new_target = None;
-            self.resume_status = ResumeStatus::NoStatus;
-            self.eval_direct = false;
-            self.direct_eval_hoist = false;
-        }
         self.last_crank_completed = completed;
         // `active_segment` identifies only the buffer of the dispatch in
         // progress. Every surviving function has its own `func_segments`
@@ -14548,6 +14578,7 @@ impl Interp {
             completed,
             result,
             coercion_error,
+            host_render_halt,
             // The meter now accrues everything XS's `meterIndex` does:
             // the per-opcode dispatch metering, the program-frame +
             // eval-environment setup overhead (at `BEGIN_*`, folding in
@@ -62036,6 +62067,36 @@ mod tests {
                     "collection at dispatch {at}: {source}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn each_activation_register_independently_refuses_quiescence() {
+        let checks: &[fn(&mut Interp)] = &[
+            |m| m.args.push(Slot::undefined()),
+            |m| m.this_captures.push(crate::value::SlotIndex::NULL),
+            |m| m.locals.push(Slot::undefined()),
+            |m| {
+                m.id_map.insert(1, 0);
+            },
+            |m| m.this_val = Slot::integer(1),
+            |m| m.env = Slot::integer(1),
+            |m| m.result = Slot::integer(1),
+            |m| m.exception = Slot::integer(1),
+            |m| m.cur_func = crate::value::SlotIndex(1),
+            |m| m.target_func = crate::value::SlotIndex(1),
+            |m| m.cur_target = true,
+            |m| m.frame_slots = 1,
+            |m| m.strict = true,
+            |m| m.top_level_code = Some(std::rc::Rc::new(Vec::new())),
+            |m| m.active_segment = Some(0),
+            |m| m.installing_intrinsics = true,
+        ];
+        for (index, dirty) in checks.iter().enumerate() {
+            let mut machine = Interp::new();
+            assert!(machine.is_quiescent());
+            dirty(&mut machine);
+            assert!(!machine.is_quiescent(), "register case {index}");
         }
     }
 

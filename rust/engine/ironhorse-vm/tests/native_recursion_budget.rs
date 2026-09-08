@@ -322,12 +322,12 @@ fn a_self_containing_completion_value_is_refused_at_the_render_boundary() {
     // no meter and no step limit applied: three lines killed the daemon on its
     // only result path.
     assert_stack_overflow(
-        &on_contract_stack("var a = []; a[0] = a; a".into()),
+        &on_contract_stack("var a = []; a[0] = a; a".into()).host_coerced(),
         "rendering a self-containing completion value",
     );
     // The mutual-cycle form.
     assert_stack_overflow(
-        &on_contract_stack("var a = []; var b = [a]; a[0] = b; a".into()),
+        &on_contract_stack("var a = []; var b = [a]; a[0] = b; a".into()).host_coerced(),
         "rendering a mutually cyclic completion value",
     );
 }
