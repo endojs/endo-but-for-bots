@@ -572,6 +572,7 @@ impl Slot {
 /// a kind-checked logic bug, not undefined behavior.
 pub struct SlotArena {
     ceiling: u32,
+    pub(crate) snapshot_dirt: Rc<crate::snapshot_dirty::ArenaDirt>,
     property_index: RefCell<crate::property_index::PropertyIndex>,
     /// The DENSE record storage of an eagerly built machine. `Cell`
     /// (identical layout to `Slot`, zero runtime bookkeeping) is what
@@ -640,6 +641,7 @@ impl SlotArena {
     pub fn new() -> SlotArena {
         SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
+            snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
             free: Vec::new(),
@@ -673,6 +675,7 @@ impl SlotArena {
         }
         SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
+            snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
             free,
@@ -927,6 +930,8 @@ impl SlotArena {
         {
             heap_exhausted();
         }
+        self.snapshot_dirt.content();
+        self.snapshot_dirt.liveness();
         self.live += 1;
         if let Some(i) = self.free.pop() {
             self.property_index.get_mut().free(SlotIndex(i));
@@ -961,6 +966,7 @@ impl SlotArena {
 
     /// Return a slot to the free list.
     pub fn free(&mut self, index: SlotIndex) {
+        self.snapshot_dirt.liveness();
         debug_assert!(!index.is_null());
         self.property_index.get_mut().free(index);
         self.free.push(index.0);
@@ -982,6 +988,7 @@ impl SlotArena {
     }
     #[inline]
     pub fn get_mut(&mut self, index: SlotIndex) -> &mut Slot {
+        self.snapshot_dirt.content();
         self.property_index.get_mut().will_mutate(index);
         // Fault before handing out `&mut`: a partial overwrite of a
         // non-resident page must not be clobbered by a later fault.
@@ -1088,6 +1095,7 @@ impl SlotArena {
         for i in 0..self.capacity() {
             if !self.marks[i as usize] && !self.is_free(i) {
                 self.property_index.get_mut().free(SlotIndex(i));
+                self.snapshot_dirt.liveness();
                 self.free.push(i);
                 self.free_marks[i as usize] = true;
                 self.live -= 1;
@@ -1192,6 +1200,7 @@ impl SlotArena {
         }
         SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
+            snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
             free,

@@ -23,9 +23,15 @@ Full and sparse batches share the canonical manifest seal, whose authenticated r
 binds the resulting section contents and identities.
 SQLite and MemoryStore write only supplied sections; FileStore merges them for its
 whole-file rewrite.
-This increment does **not** close F043: checkpoints still extract and hash all
-sections to discover the changes.
-VM dirty tracking must select sections before extraction to remove that work.
+The VM now selects dirty sections before extraction, encoding, and hashing (F043).
+Mutable side-table access marks the affected sections, including cross-section dependencies.
+Session-owned baseline tokens detect interpreter replacement and unrelated acknowledgements.
+Only a successful durable checkpoint clears dirt; failed writes retain it for retry.
+Resume preserves normalization dirt until its first successful checkpoint.
+Subsequent unchanged checkpoints skip clean bulk sections.
+The retained-array scaling instrument now passes, and mixed array/collection/name
+counter tests verify skipped extraction and encoding with restored-image parity.
+These guarantees concern incremental section work; FileStore still rewrites its file.
 
 Investigation of a seam in the Ironhorse engine's snapshot subsystem
 that lets the whole-heap snapshot artifact be replaced by a database

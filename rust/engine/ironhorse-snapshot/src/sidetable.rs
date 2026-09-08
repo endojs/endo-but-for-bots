@@ -798,6 +798,7 @@ mod tests {
             // Derived membership/refinement bits rebuilt by ClassMap inserts
             // when the authoritative side-table rows are restored.
             "classes",
+            "snapshot_baseline_identity",
         ];
         const TRANSIENTS: &[&str] = &[
             // Intrinsic linking is synchronous and restores this guard before

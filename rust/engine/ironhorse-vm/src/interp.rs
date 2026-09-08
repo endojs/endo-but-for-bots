@@ -52,6 +52,7 @@ use crate::bulk::{ArrayData, CollKey, CollKind, CollectionData, SideRefCounts};
 use crate::classification::{ClassIndex, ClassMap, ExoticKind};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
+use crate::snapshot_dirty::{SnapshotSection, Tracked};
 use crate::symbols::{SymbolIds, SymbolName};
 use crate::value::{
     canonicalize_nan, number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena,
@@ -4539,6 +4540,7 @@ pub type CollectionSnapshot = (u32, u8, u32, Vec<(Slot, Slot)>);
 pub struct Interp {
     /// Derived membership; never persisted or traced as a guest root.
     classes: ClassIndex,
+    snapshot_baseline_identity: std::rc::Rc<()>,
     stack: Vec<Slot>,
     /// The program frame's scope slots. `NEW_LOCAL`/`NEW_TEMPORARY`
     /// append (XS's `--mxScope`); a `*_LOCAL` opcode's 1-based index `k`
@@ -4673,7 +4675,7 @@ pub struct Interp {
     /// buffer must live as long as the realm, not just the eval call. Held
     /// behind [`std::rc::Rc`] so a cross-segment dispatch can borrow the
     /// buffer locally without aliasing `&mut self`.
-    code_segments: Vec<std::rc::Rc<[u8]>>,
+    code_segments: Tracked<Vec<std::rc::Rc<[u8]>>>,
     /// The segment index the current dispatch loop is running over, or `None`
     /// for the top-level program's external `code` buffer. A function call
     /// whose callee lives in a *different* segment must dispatch over that
@@ -4691,7 +4693,7 @@ pub struct Interp {
     /// Which retained [`Self::code_segments`] buffer a guest function's body
     /// lives in. Top-level crank buffers are promoted lazily at their first
     /// function definition; eval/`Function` buffers enter directly.
-    func_segments: std::collections::HashMap<crate::value::SlotIndex, usize>,
+    func_segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, usize>>,
     /// Set by the `XS_CODE_EVAL` (direct-eval) dispatch site for the duration
     /// of the `eval` native call, so the bridge can tell a **direct** eval
     /// (whose scope is the caller's) from an **indirect** one (whose scope is
@@ -4717,7 +4719,8 @@ pub struct Interp {
     array_iterator_proxy_get_context: Option<ArrayIteratorProxyGetContext>,
     /// Maps a `revoke` function slot (returned by `Proxy.revocable`) to the
     /// proxy instance it revokes (`fx_Proxy_revoke`'s bound `[[RevocableProxy]]`).
-    proxy_revokers: std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
+    proxy_revokers:
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     /// The saved caller states of the active call chain (design §
     /// Interpreter and dispatch: "frames are stack slots ... fixed offsets
     /// for result/function/this"). The top-level program is the base
@@ -4815,13 +4818,15 @@ pub struct Interp {
     number_format_proto: crate::value::SlotIndex,
     locales: ClassMap<LocaleData>,
     collators: ClassMap<CollatorData>,
-    list_formats: std::collections::HashMap<crate::value::SlotIndex, ListFormatData>,
-    plural_rules: std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>,
-    number_formats: std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>,
-    segmenters: std::collections::HashMap<crate::value::SlotIndex, SegmenterData>,
-    segments: std::collections::HashMap<crate::value::SlotIndex, SegmentsData>,
-    segment_iterators: std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>,
-    date_time_formats: std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData>,
+    list_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, ListFormatData>>,
+    plural_rules: Tracked<std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>>,
+    number_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>>,
+    segmenters: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmenterData>>,
+    segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentsData>>,
+    segment_iterators:
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>>,
+    date_time_formats:
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData>>,
     temporal_object: crate::value::SlotIndex,
     temporal_instant_proto: crate::value::SlotIndex,
     temporal_duration_proto: crate::value::SlotIndex,
@@ -4834,7 +4839,7 @@ pub struct Interp {
     temporal_plains: ClassMap<TemporalPlainRecord>,
     temporal_zoneds: ClassMap<TemporalZonedRecord>,
     collator_compare_functions:
-        std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     /// The cached `[[BoundFormat]]` functions of `Intl.NumberFormat`, keyed by
     /// the bound function's own slot → the owning NumberFormat instance (the
     /// reverse of [`NumberFormatData::bound_format`]). The `format` accessor
@@ -4843,7 +4848,7 @@ pub struct Interp {
     /// handler can recover its NumberFormat — the same "native function slot +
     /// owner side table" shape as `collator_compare_functions`.
     number_format_bound_functions:
-        std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     /// Tombstones for a function's exotic `length`/`name` own data properties
     /// that the guest has `delete`d. XS carries these as real slots that
     /// `delete` unlinks; ironhorse synthesizes them from the [`FuncInfo`]
@@ -4854,7 +4859,7 @@ pub struct Interp {
     /// Keyed by the resolved property id (`length_id`/`name_id`), which
     /// `intern_key` makes identical for the static `.length` access and the
     /// string-literal `'length'` key.
-    deleted_fn_meta: std::collections::HashSet<(crate::value::SlotIndex, u16)>,
+    deleted_fn_meta: Tracked<std::collections::HashSet<(crate::value::SlotIndex, u16)>>,
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
     /// of every ordinary object's prototype chain. A boot object; ordinary
     /// objects ([`Self::new_object`]) and constructed `this` instances point
@@ -4882,15 +4887,18 @@ pub struct Interp {
     /// `this`'s prototype, and `instanceof` reads it as the right-hand test
     /// object — so `(new F()) instanceof F` and `err instanceof TypeError`
     /// are prototype-chain identity checks (`fxOrdinaryHasInstance`).
-    ctor_prototype: std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
+    ctor_prototype:
+        Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     /// Private elements are keyed by the receiver and the closure cell that
     /// represents the lexically-scoped private name. The cell identity is the
     /// brand; it cannot collide across class evaluations even when the source
     /// spelling is the same.
-    private_values:
+    private_values: Tracked<
         std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), Slot>,
-    private_accessors:
+    >,
+    private_accessors: Tracked<
         std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), AccessorData>,
+    >,
     /// Native prototype methods to bind at link time: `(prototype instance,
     /// method name, method function)`. Populated once at boot; a method is
     /// installed as an own property of its prototype only when the program
@@ -5000,14 +5008,14 @@ pub struct Interp {
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
-    symbol_names: Vec<SymbolName>,
+    symbol_names: Tracked<Vec<SymbolName>>,
     /// Per-instance Error metadata (name + message), keyed by the error
     /// instance's slot index. An Error object's completion/abort value
     /// stringifies as `name` (no/empty message) or `name: message` — XS's
     /// `Error.prototype.toString`. Kept here so [`Self::render`] produces the
     /// exact abort value without a symbol-id lookup, graduating abort-value
     /// parity from primitive throws to real Error objects.
-    error_data: std::collections::HashMap<crate::value::SlotIndex, ErrorInfo>,
+    error_data: Tracked<std::collections::HashMap<crate::value::SlotIndex, ErrorInfo>>,
     /// Per-instance primitive-wrapper data (`new Boolean`/`Number`/`String`),
     /// keyed by the wrapper instance's slot: the wrapped primitive slot
     /// (XS's `[[BooleanData]]`/`[[NumberData]]`/`[[StringData]]`). A wrapper's
@@ -5049,7 +5057,7 @@ pub struct Interp {
     /// side-referenced (and therefore GC-live) exactly as an array's are; the
     /// `length` field is unused here and stays 0, because an ordinary object
     /// has no array `length` semantics.
-    index_props: std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
+    index_props: Tracked<std::collections::HashMap<crate::value::SlotIndex, ArrayData>>,
     /// The subset of [`Self::arrays`] instances that are **`arguments`
     /// objects** (materialized by `XS_CODE_ARGUMENTS_SLOPPY`/`_STRICT`). XS
     /// stores the mapped/unmapped arguments exotic like an indexed object, and
@@ -5059,7 +5067,7 @@ pub struct Interp {
     /// `Array.prototype.join`. This marker lets [`Self::render`] distinguish the
     /// two without changing the element storage (the `.length`/indexed reads
     /// stay the array side table).
-    arguments_objects: std::collections::HashSet<crate::value::SlotIndex>,
+    arguments_objects: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
@@ -5089,13 +5097,13 @@ pub struct Interp {
     /// remain allocated so existing views keep stable identities, while every
     /// operation that performs `ValidateTypedArray` rejects the detached
     /// buffer with a realm-local TypeError.
-    detached_buffers: std::collections::HashSet<crate::value::SlotIndex>,
+    detached_buffers: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
     /// The subset of [`Self::array_buffers`] instances that are
     /// `SharedArrayBuffer`s (XS's `XS_ARRAY_BUFFER_KIND` with the shared flag).
     /// ironhorse is single-agent, so a shared buffer is byte-identical to a
     /// plain one; this set only gates the `Atomics.wait`/`notify` shared
     /// requirement and the `SharedArrayBuffer` brand.
-    shared_buffers: std::collections::HashSet<crate::value::SlotIndex>,
+    shared_buffers: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
     /// The realm's `%ArrayBuffer.prototype%` (a boot object), so a
     /// `new ArrayBuffer()` instance chains to it and its methods resolve.
     arraybuffer_proto: crate::value::SlotIndex,
@@ -5175,7 +5183,7 @@ pub struct Interp {
     /// Boot-minted function identity for the lazily materialized
     /// `%Date.prototype%[Symbol.toPrimitive]` property.
     date_to_primitive_method: crate::value::SlotIndex,
-    dates: std::collections::HashMap<crate::value::SlotIndex, f64>,
+    dates: Tracked<std::collections::HashMap<crate::value::SlotIndex, f64>>,
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
@@ -5188,7 +5196,7 @@ pub struct Interp {
     /// The global symbol registry (`Symbol.for`/`keyFor`, XS's `symbolTable`):
     /// the registry key → the canonical symbol-description slot that is the
     /// registered symbol's identity, so `Symbol.for(k) === Symbol.for(k)`.
-    symbol_registry: std::collections::HashMap<Vec<u8>, crate::value::SlotIndex>,
+    symbol_registry: Tracked<std::collections::HashMap<Vec<u8>, crate::value::SlotIndex>>,
     /// The reverse of [`Self::symbol_registry`]: a registered symbol's
     /// identity slot → its registry key, so `Symbol.keyFor(sym)` recovers it.
     symbol_registry_keys: std::collections::HashMap<crate::value::SlotIndex, Vec<u8>>,
@@ -5203,11 +5211,11 @@ pub struct Interp {
     /// program-symbol-name range, so `Object.keys`/`Reflect.ownKeys` (the
     /// string-key enumerations) skip it — matching the spec's string/symbol key
     /// partition (and the boot-key soundness gate).
-    symbol_key_ids: std::collections::HashMap<crate::value::SlotIndex, u16>,
+    symbol_key_ids: Tracked<std::collections::HashMap<crate::value::SlotIndex, u16>>,
     /// Getter/setter pairs for ordinary accessor properties. The key is the
     /// owner and property id; the owner's normal property chain remains the
     /// source of truth for presence, attributes, and creation order.
-    accessors: std::collections::HashMap<(crate::value::SlotIndex, u16), AccessorData>,
+    accessors: Tracked<std::collections::HashMap<(crate::value::SlotIndex, u16), AccessorData>>,
     /// Native prototype/namespace **numeric** data properties to bind at link
     /// time: `(owner instance, property name, value)`. Used for `Math.PI` &co.
     /// (the `Math` constants) and `Number.MAX_VALUE` &co.; bound only when the
@@ -5218,7 +5226,7 @@ pub struct Interp {
     /// the iteration `kind` (0 = values, 1 = keys, 2 = entries), and the
     /// **reused** result object (`{value, done}`) `next()` mutates and returns
     /// — XS allocates it once at iterator creation, not per `next()`.
-    iterators: std::collections::HashMap<crate::value::SlotIndex, IterState>,
+    iterators: Tracked<std::collections::HashMap<crate::value::SlotIndex, IterState>>,
     /// The program-local symbol ids of `value`/`done`, resolved at
     /// [`Self::link_intrinsics`], so `next()` sets them on the result object
     /// under the ids the program reads them by.
@@ -5227,7 +5235,7 @@ pub struct Interp {
     /// Per-instance promise settlement state (XS's `XS_PROMISE_KIND` STATUS/
     /// RESULT/THENS internal slots). Keyed by the promise instance's slot,
     /// like [`Self::collections`]. See [`PromiseData`].
-    promises: std::collections::HashMap<crate::value::SlotIndex, PromiseData>,
+    promises: Tracked<std::collections::HashMap<crate::value::SlotIndex, PromiseData>>,
     /// The realm's `%Promise.prototype%` (a boot object), so a `new Promise`
     /// instance chains to it and `then`/`catch`/`finally` resolve.
     promise_proto: crate::value::SlotIndex,
@@ -5235,7 +5243,7 @@ pub struct Interp {
     /// activation and lifecycle state a generator's `next`/`return`/`throw`
     /// resume. Keyed by the generator instance's slot index, modeled on
     /// `promises`.
-    generators: std::collections::HashMap<crate::value::SlotIndex, GeneratorData>,
+    generators: Tracked<std::collections::HashMap<crate::value::SlotIndex, GeneratorData>>,
     /// The realm's `%GeneratorPrototype%` (a boot object carrying
     /// `next`/`return`/`throw`); a generator function's `.prototype` chains
     /// to it, so a generator instance resolves those methods by the ordinary
@@ -5258,7 +5266,7 @@ pub struct Interp {
     /// promise + resolving functions a `START_ASYNC` created, keyed by the
     /// async instance's slot index. Modeled on [`Self::generators`]. The
     /// suspended `frame` and the promise/function slots join the GC root set.
-    async_instances: std::collections::HashMap<crate::value::SlotIndex, AsyncData>,
+    async_instances: Tracked<std::collections::HashMap<crate::value::SlotIndex, AsyncData>>,
     /// The realm's `%AsyncFunction.prototype%` (XS's `mxAsyncFunctionPrototype`
     /// — a plain object off `%Function.prototype%`). An async function's
     /// instance `[[Prototype]]` chains to it (see [`Self::new_async_function`]).
@@ -5297,7 +5305,7 @@ pub struct Interp {
     /// one index; the first of resolve/reject to fire trips it, the second is a
     /// metered no-op. A thenable-resolved promise acquires a *second* pair with
     /// its own guard, which is why the guard is per-pair, not per-promise.
-    promise_guards: Vec<bool>,
+    promise_guards: Tracked<Vec<bool>>,
     /// The pending promise-job queue (XS's `mxPendingJobs` list): the
     /// microtasks queued by settling a promise with registered reactions,
     /// drained FIFO by [`Self::run_promise_jobs`] after the script settles —
@@ -5309,7 +5317,7 @@ pub struct Interp {
     /// Array its element-resolve closures share). Indexed by a
     /// [`ReactionKind::Combine`]'s combinator index; append-only within a run,
     /// consumed as its element reactions drain. See [`CombinatorState`].
-    combinators: Vec<CombinatorState>,
+    combinators: Tracked<Vec<CombinatorState>>,
     /// In-flight `Array.fromAsync` native async state machines. Append-only
     /// within a run; indexed by the [`ReactionKind::FromAsyncNext`]/… payload.
     /// See [`FromAsyncData`].
@@ -6223,6 +6231,7 @@ impl Interp {
         let classes = ClassIndex::default();
         let mut interp = Interp {
             classes: classes.clone(),
+            snapshot_baseline_identity: std::rc::Rc::new(()),
             stack: Vec::with_capacity(64),
             locals: Vec::new(),
             id_map: std::collections::HashMap::new(),
@@ -6244,10 +6253,18 @@ impl Interp {
             native_depth: 0,
             source_compiler: None,
             eval_direct: false,
-            code_segments: Vec::new(),
+            code_segments: Tracked::new(
+                Vec::new(),
+                classes.1.clone(),
+                SnapshotSection::Functions.mask(),
+            ),
             active_segment: None,
             top_level_code: None,
-            func_segments: std::collections::HashMap::new(),
+            func_segments: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Functions.mask(),
+            ),
             functions: ClassMap::new_refined(
                 ExoticKind::FUNCTIONS,
                 ExoticKind::NATIVE.union(ExoticKind::METHOD),
@@ -6269,7 +6286,11 @@ impl Interp {
             bound_functions: ClassMap::new(ExoticKind::BOUND_FUNCTIONS, classes.clone()),
             proxies: ClassMap::new(ExoticKind::PROXIES, classes.clone()),
             array_iterator_proxy_get_context: None,
-            proxy_revokers: std::collections::HashMap::new(),
+            proxy_revokers: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Proxies.mask(),
+            ),
             call_stack: Vec::new(),
             args: Vec::new(),
             this_val: Slot::undefined(),
@@ -6296,13 +6317,41 @@ impl Interp {
             number_format_proto: crate::value::SlotIndex::NULL,
             locales: ClassMap::new(ExoticKind::LOCALES, classes.clone()),
             collators: ClassMap::new(ExoticKind::COLLATORS, classes.clone()),
-            list_formats: std::collections::HashMap::new(),
-            plural_rules: std::collections::HashMap::new(),
-            number_formats: std::collections::HashMap::new(),
-            segmenters: std::collections::HashMap::new(),
-            segments: std::collections::HashMap::new(),
-            segment_iterators: std::collections::HashMap::new(),
-            date_time_formats: std::collections::HashMap::new(),
+            list_formats: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Intl.mask(),
+            ),
+            plural_rules: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Intl.mask(),
+            ),
+            number_formats: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Intl.mask(),
+            ),
+            segmenters: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Intl.mask(),
+            ),
+            segments: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Intl.mask(),
+            ),
+            segment_iterators: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Intl.mask(),
+            ),
+            date_time_formats: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Intl.mask(),
+            ),
             temporal_object: crate::value::SlotIndex::NULL,
             temporal_instant_proto: crate::value::SlotIndex::NULL,
             temporal_duration_proto: crate::value::SlotIndex::NULL,
@@ -6313,16 +6362,40 @@ impl Interp {
             temporal_durations: ClassMap::new(ExoticKind::TEMPORAL_DURATIONS, classes.clone()),
             temporal_plains: ClassMap::new(ExoticKind::TEMPORAL_PLAINS, classes.clone()),
             temporal_zoneds: ClassMap::new(ExoticKind::TEMPORAL_ZONEDS, classes.clone()),
-            collator_compare_functions: std::collections::HashMap::new(),
-            number_format_bound_functions: std::collections::HashMap::new(),
-            deleted_fn_meta: std::collections::HashSet::new(),
+            collator_compare_functions: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::IntlBoundFunctions.mask(),
+            ),
+            number_format_bound_functions: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::IntlBoundFunctions.mask(),
+            ),
+            deleted_fn_meta: Tracked::new(
+                std::collections::HashSet::new(),
+                classes.1.clone(),
+                SnapshotSection::Functions.mask(),
+            ),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
             function_has_instance_method: crate::value::SlotIndex::NULL,
             template_cache: crate::value::SlotIndex::NULL,
-            ctor_prototype: std::collections::HashMap::new(),
-            private_values: std::collections::HashMap::new(),
-            private_accessors: std::collections::HashMap::new(),
+            ctor_prototype: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Functions.mask(),
+            ),
+            private_values: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::PrivateElements.mask(),
+            ),
+            private_accessors: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::PrivateElements.mask(),
+            ),
             proto_methods: Vec::new(),
             proto_data: Vec::new(),
             proto_accessors: Vec::new(),
@@ -6334,13 +6407,31 @@ impl Interp {
             installing_intrinsics: false,
             id_space_exhausted: false,
             last_crank_completed: true,
-            symbol_names: Vec::new(),
-            error_data: std::collections::HashMap::new(),
+            symbol_names: Tracked::new(
+                Vec::new(),
+                classes.1.clone(),
+                SnapshotSection::Names.mask()
+                    | SnapshotSection::NameFloor.mask()
+                    | SnapshotSection::Accessors.mask(),
+            ),
+            error_data: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Errors.mask() | SnapshotSection::ErrorFrames.mask(),
+            ),
             wrapper_data: ClassMap::new(ExoticKind::WRAPPER_DATA, classes.clone()),
             array_proto: crate::value::SlotIndex::NULL,
             arrays: ClassMap::new(ExoticKind::ARRAYS, classes.clone()),
-            index_props: std::collections::HashMap::new(),
-            arguments_objects: std::collections::HashSet::new(),
+            index_props: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::IndexProperties.mask(),
+            ),
+            arguments_objects: Tracked::new(
+                std::collections::HashSet::new(),
+                classes.1.clone(),
+                SnapshotSection::ArgumentsBrands.mask(),
+            ),
             disposable_stacks: ClassMap::new(ExoticKind::DISPOSABLE_STACKS, classes.clone()),
             collections: ClassMap::new(ExoticKind::COLLECTIONS, classes.clone()),
             side_refs: SideRefCounts::new(),
@@ -6349,8 +6440,16 @@ impl Interp {
             weakmap_proto: crate::value::SlotIndex::NULL,
             weakset_proto: crate::value::SlotIndex::NULL,
             array_buffers: ClassMap::new(ExoticKind::ARRAY_BUFFERS, classes.clone()),
-            detached_buffers: std::collections::HashSet::new(),
-            shared_buffers: std::collections::HashSet::new(),
+            detached_buffers: Tracked::new(
+                std::collections::HashSet::new(),
+                classes.1.clone(),
+                SnapshotSection::Buffers.mask(),
+            ),
+            shared_buffers: Tracked::new(
+                std::collections::HashSet::new(),
+                classes.1.clone(),
+                SnapshotSection::Buffers.mask(),
+            ),
             arraybuffer_proto: crate::value::SlotIndex::NULL,
             byte_length_id: None,
             typed_arrays: ClassMap::new(ExoticKind::TYPED_ARRAYS, classes.clone()),
@@ -6374,25 +6473,57 @@ impl Interp {
             boolean_proto: crate::value::SlotIndex::NULL,
             date_proto: crate::value::SlotIndex::NULL,
             date_to_primitive_method: crate::value::SlotIndex::NULL,
-            dates: std::collections::HashMap::new(),
+            dates: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Dates.mask(),
+            ),
             symbol_proto: crate::value::SlotIndex::NULL,
             symbol_to_primitive_method: crate::value::SlotIndex::NULL,
             bigint_proto: crate::value::SlotIndex::NULL,
-            symbol_registry: std::collections::HashMap::new(),
+            symbol_registry: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Registry.mask(),
+            ),
             symbol_registry_keys: std::collections::HashMap::new(),
-            symbol_key_ids: std::collections::HashMap::new(),
-            accessors: std::collections::HashMap::new(),
+            symbol_key_ids: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Symbols.mask() | SnapshotSection::Accessors.mask(),
+            ),
+            accessors: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Accessors.mask(),
+            ),
             proto_value_data: Vec::new(),
-            iterators: std::collections::HashMap::new(),
+            iterators: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Iterators.mask(),
+            ),
             value_id: None,
             done_id: None,
-            promises: std::collections::HashMap::new(),
+            promises: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+            ),
             promise_proto: crate::value::SlotIndex::NULL,
-            generators: std::collections::HashMap::new(),
+            generators: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Generators.mask(),
+            ),
             generator_proto: crate::value::SlotIndex::NULL,
             generator_function_proto: crate::value::SlotIndex::NULL,
             gen_run_stack: Vec::new(),
-            async_instances: std::collections::HashMap::new(),
+            async_instances: Tracked::new(
+                std::collections::HashMap::new(),
+                classes.1.clone(),
+                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+            ),
             async_function_proto: crate::value::SlotIndex::NULL,
             async_run_stack: Vec::new(),
             async_generators: std::collections::HashMap::new(),
@@ -6403,9 +6534,17 @@ impl Interp {
             async_gen_run_stack: Vec::new(),
             resume_status: ResumeStatus::NoStatus,
             promise_functions: ClassMap::new(ExoticKind::PROMISE_FUNCTIONS, classes.clone()),
-            promise_guards: Vec::new(),
+            promise_guards: Tracked::new(
+                Vec::new(),
+                classes.1.clone(),
+                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+            ),
             promise_jobs: std::collections::VecDeque::new(),
-            combinators: Vec::new(),
+            combinators: Tracked::new(
+                Vec::new(),
+                classes.1.clone(),
+                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+            ),
             from_async: Vec::new(),
             then_id: None,
             constructor_id: None,
@@ -9082,7 +9221,7 @@ impl Interp {
     /// the derivation that makes the SymbolTables ledger row's "rebuilt at
     /// restore" claim true, and it keeps the two callers from drifting.
     fn bind_program_symbols(&mut self, names: &[SymbolName]) {
-        self.symbol_names = names.to_vec();
+        *self.symbol_names = names.to_vec();
         // String keys interned at runtime APPEND to `symbol_names` (see
         // `intern_key`), so `names` here — a restored NAME row included —
         // already carries every string key the heap stores, and ids are
@@ -12004,7 +12143,7 @@ impl Interp {
             return false;
         }
 
-        self.code_segments = state.segments.into_iter().map(std::rc::Rc::from).collect();
+        *self.code_segments = state.segments.into_iter().map(std::rc::Rc::from).collect();
         self.func_segments.clear();
         for row in state.functions {
             let owner = crate::value::SlotIndex(row.owner);
@@ -12922,8 +13061,8 @@ impl Interp {
                 },
             );
         }
-        self.promise_guards = snap.guards;
-        self.combinators = snap
+        *self.promise_guards = snap.guards;
+        *self.combinators = snap
             .combinators
             .iter()
             .map(|c| CombinatorState {
@@ -13398,6 +13537,7 @@ impl Interp {
             self.symbol_key_ids
                 .insert(crate::value::SlotIndex(desc), id);
         }
+        self.classes.1.mark(SnapshotSection::Symbols.mask());
         self.next_symbol_key_id = next;
         // `restore_snapshot_state` can rebuild only string-keyed boot
         // accessors because this table is restored afterwards. Re-run the
@@ -30843,12 +30983,13 @@ impl Interp {
         {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
+        let frames = self.capture_error_frames();
         self.error_data.insert(
             inst,
             ErrorInfo {
                 name: "AggregateError",
                 message: None,
-                frames: self.capture_error_frames(),
+                frames,
             },
         );
         let n = errors.len() as u64;
@@ -30935,12 +31076,13 @@ impl Interp {
         } else {
             None
         };
+        let frames = self.capture_error_frames();
         self.error_data.insert(
             inst,
             ErrorInfo {
                 name,
                 message: message.clone(),
-                frames: self.capture_error_frames(),
+                frames,
             },
         );
         // An own `message` property only when a message argument was given
@@ -31023,6 +31165,7 @@ impl Interp {
         } else {
             None
         };
+        let frames = self.capture_error_frames();
         self.error_data.insert(
             inst,
             ErrorInfo {
@@ -31030,7 +31173,7 @@ impl Interp {
                 message: message_units
                     .as_ref()
                     .map(|units| String::from_utf16_lossy(units)),
-                frames: self.capture_error_frames(),
+                frames,
             },
         );
         if let Some(units) = message_units {
@@ -31147,6 +31290,7 @@ impl Interp {
             }
             _ => None,
         };
+        let frames = self.capture_error_frames();
         self.error_data.insert(
             inst,
             ErrorInfo {
@@ -31155,7 +31299,7 @@ impl Interp {
                 // dropped) composes with the base's new stack frames:
                 // both fields are wanted.
                 message: message.clone(),
-                frames: self.capture_error_frames(),
+                frames,
             },
         );
         if let Some(text) = message {
@@ -31220,6 +31364,7 @@ impl Interp {
         } else {
             None
         };
+        let frames = self.capture_error_frames();
         self.error_data.insert(
             inst,
             ErrorInfo {
@@ -31227,7 +31372,7 @@ impl Interp {
                 message: message_units
                     .as_ref()
                     .map(|units| String::from_utf16_lossy(units)),
-                frames: self.capture_error_frames(),
+                frames,
             },
         );
         if let Some(units) = message_units {
@@ -50589,6 +50734,7 @@ impl Interp {
             (id, true)
         } else {
             let id = self.next_symbol_key_id;
+            self.classes.1.mark(SnapshotSection::Symbols.mask());
             self.next_symbol_key_id -= 1;
             self.symbol_key_ids.insert(desc, id);
             (id, true)
@@ -65790,6 +65936,7 @@ impl Interp {
     /// worklist order from a fixed (sorted) root sequence, sweep is
     /// index order.
     pub fn collect_garbage(&mut self) -> crate::gc::GcStats {
+        self.classes.1.mark_all();
         use crate::value::{ChunkOffset, SlotIndex};
 
         let roots = self.gc_roots();
@@ -66599,8 +66746,8 @@ impl Interp {
             }
         }
 
-        let old = std::mem::take(&mut self.combinators);
-        self.combinators = old
+        let old = self.combinators.take();
+        *self.combinators = old
             .into_iter()
             .enumerate()
             .filter(|(i, _)| live_comb.contains(&(*i as u32)))
@@ -66613,8 +66760,8 @@ impl Interp {
             .filter(|(i, _)| live_fa.contains(&(*i as u32)))
             .map(|(_, e)| e)
             .collect();
-        let old = std::mem::take(&mut self.promise_guards);
-        self.promise_guards = old
+        let old = self.promise_guards.take();
+        *self.promise_guards = old
             .into_iter()
             .enumerate()
             .filter(|(i, _)| live_guards.contains(i))
@@ -66637,8 +66784,8 @@ impl Interp {
             .enumerate()
             .map(|(new, old)| (*old, new))
             .collect();
-        let old = std::mem::take(&mut self.code_segments);
-        self.code_segments = old
+        let old = self.code_segments.take();
+        *self.code_segments = old
             .into_iter()
             .enumerate()
             .filter_map(|(index, segment)| live.contains(&index).then_some(segment))
@@ -66692,7 +66839,7 @@ impl Interp {
             }
         }
         let dead: std::collections::HashSet<SlotIndex> = freed.iter().copied().collect();
-        self.functions.retain(|k, _| !dead.contains(k));
+        self.functions.retain_keys(|k| !dead.contains(k));
         self.bound_functions.retain(|k, _| !dead.contains(k));
         self.func_segments.retain(|k, _| !dead.contains(k));
         self.ctor_prototype.retain(|k, _| !dead.contains(k));
@@ -67098,4 +67245,44 @@ mod string_decode_instrumentation {
 mod string_decode_instrumentation {
     #[inline(always)]
     pub(super) fn record() {}
+}
+
+impl Interp {
+    /// Sections changed relative to this session's durable acknowledgement.
+    pub fn snapshot_dirty_sections(
+        &self,
+        baseline: &crate::SnapshotBaseline,
+    ) -> crate::SnapshotDirty {
+        if !std::rc::Rc::ptr_eq(&baseline.identity, &self.snapshot_baseline_identity) {
+            return crate::SnapshotDirty::all();
+        }
+        let same = std::rc::Rc::ptr_eq(&baseline.arena, &self.slots.snapshot_dirt);
+        self.classes.1.mark(
+            self.slots.snapshot_dirt.sections(same)
+                | SnapshotSection::Stack.mask()
+                | SnapshotSection::Meter.mask()
+                | SnapshotSection::NameFloor.mask(),
+        );
+        self.classes.1.snapshot()
+    }
+
+    /// Observe the current identity without acknowledging restore-time changes.
+    pub fn snapshot_baseline(&self) -> crate::SnapshotBaseline {
+        crate::SnapshotBaseline {
+            identity: self.snapshot_baseline_identity.clone(),
+            arena: self.slots.snapshot_dirt.clone(),
+        }
+    }
+
+    /// Call after durable commit. Invalidates older tokens
+    /// so an unrelated caller cannot clear another session's outstanding dirt.
+    pub fn acknowledge_snapshot(&mut self) -> crate::SnapshotBaseline {
+        self.snapshot_baseline_identity = std::rc::Rc::new(());
+        self.classes.1.clear();
+        self.slots.snapshot_dirt.clear();
+        crate::SnapshotBaseline {
+            identity: self.snapshot_baseline_identity.clone(),
+            arena: self.slots.snapshot_dirt.clone(),
+        }
+    }
 }

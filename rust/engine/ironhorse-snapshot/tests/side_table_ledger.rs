@@ -612,3 +612,50 @@ fn relink_binds_newly_referenced_intrinsics() {
         );
     }
 }
+
+#[test]
+fn checkpoint_baseline_belongs_to_session_after_interpreter_swap() {
+    let signature = sig();
+    let make = |n| {
+        let (code, names) = compile(&format!("var a = [{n}]; a[0]"));
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&names);
+        assert!(interp.run(&code).completed);
+        let mut store = MemoryStore::new();
+        let session = begin_store_session(interp, &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        (session, store)
+    };
+    let (mut left, mut left_store) = make(11);
+    let (mut right, mut right_store) = make(22);
+    std::mem::swap(left.machine_mut(), right.machine_mut());
+    for (session, store) in [(&mut left, &mut left_store), (&mut right, &mut right_store)] {
+        let expected = session.machine().snapshot_image(&signature).unwrap();
+        checkpoint_to_store(session, &signature, store).unwrap();
+        let restored = resume_from_store(store, &signature).unwrap();
+        assert_eq!(
+            restored.machine().snapshot_image(&signature).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn external_acknowledgement_cannot_hide_changes_from_session() {
+    let (code, names) = compile("var a = [11]; a[0]");
+    let mut interp = Interp::new();
+    interp.link_intrinsics(&names);
+    assert!(interp.run(&code).completed);
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(interp, &sig(), &mut store)
+        .map_err(|(_, error)| error)
+        .unwrap();
+    let (change, _) = compile("var a; a[0] = 22; a[0]");
+    assert!(session.machine_mut().run(&change).completed);
+    let _unrelated_baseline = session.machine_mut().acknowledge_snapshot();
+    let expected = session.machine().snapshot_image(&sig()).unwrap();
+    checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+    let restored = resume_from_store(&store, &sig()).unwrap();
+    assert_eq!(restored.machine().snapshot_image(&sig()).unwrap(), expected);
+}

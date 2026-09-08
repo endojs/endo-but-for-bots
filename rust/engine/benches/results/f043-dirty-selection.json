@@ -1,0 +1,1260 @@
+{
+  "finding": "F043",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M3 Max",
+  "fixtures_sha256": {
+    "rust/engine/ironhorse-snapshot/tests/checkpoint_scaling_bench.rs": "a71564d318b83a80dd65f9b54597c15161bd39e3c116188d3782d1f19030a291",
+    "rust/engine/ironhorse-snapshot/tests/classification_bench.rs": "eb541b49ad4ec557a4d2c357668ca1f3c4cc77228a092eb7ef40e6c62656f788",
+    "rust/engine/ironhorse-snapshot/tests/scaling_bench.rs": "1d4240ef1ffcb6ee2c808f6b46351cecc04c9b2669ac4e0e565b97ffb4ee065c"
+  },
+  "samples": "Same-host serial release runs, no simultaneous builds or tests. One warmup plus seven measured checkpoints per size; median. Construction, compilation, initial store creation, guest execution, and full restored-image comparison excluded from timer. Raw charge is for each 1 + 1 crank.",
+  "baseline_setup": "Archived before_revision to a separate source and target directory. Identical fixture, toolchain, and lockfile. Built and ran serially on the same host without concurrent tests or builds during timing.",
+  "increment": "Select dirty snapshot sections before extraction and encoding",
+  "before_revision": "fd0da9e23",
+  "after": "source files in this commit",
+  "status": "Array checkpoint scaling fails before and passes after",
+  "command": "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test checkpoint_scaling_bench -- --ignored --nocapture --test-threads=1",
+  "limitations": "MemoryStore retained-array timing on one host; medians are not statistical-significance claims. Mixed arrays, collections, and names have separate extraction/encoding counters and full-image parity tests. First checkpoint after restore conservatively considers restore-time normalization; subsequent unchanged checkpoints skip clean bulk sections. FileStore still rewrites its whole-file framing. All paired control charges are identical; controls report medians without significance claims.",
+  "measurements": [
+    {
+      "elements": 1000,
+      "before": {
+        "seconds": 0.0001095,
+        "raw": 673048,
+        "stored_small_bytes": 24622
+      },
+      "after": {
+        "seconds": 2.3375e-05,
+        "raw": 673048,
+        "stored_small_bytes": 24622
+      },
+      "speedup": 4.684491978609626
+    },
+    {
+      "elements": 10000,
+      "before": {
+        "seconds": 0.000770292,
+        "raw": 673048,
+        "stored_small_bytes": 240622
+      },
+      "after": {
+        "seconds": 1.85e-05,
+        "raw": 673048,
+        "stored_small_bytes": 240622
+      },
+      "speedup": 41.63740540540541
+    },
+    {
+      "elements": 50000,
+      "before": {
+        "seconds": 0.004744708,
+        "raw": 673048,
+        "stored_small_bytes": 1200622
+      },
+      "after": {
+        "seconds": 1.825e-05,
+        "raw": 673048,
+        "stored_small_bytes": 1200622
+      },
+      "speedup": 259.98400000000004
+    }
+  ],
+  "controls": [
+    {
+      "shape": "CLASSIFICATION small_ordinary_get",
+      "before": {
+        "seconds": 0.253078708,
+        "raw": 704515247736,
+        "dispatched": 10500045
+      },
+      "after": {
+        "seconds": 0.340048125,
+        "raw": 704515247736,
+        "dispatched": 10500045
+      },
+      "time_ratio": 1.3436457285849586
+    },
+    {
+      "shape": "CLASSIFICATION small_plain_call",
+      "before": {
+        "seconds": 0.3511455,
+        "raw": 1097731332000,
+        "dispatched": 16500045
+      },
+      "after": {
+        "seconds": 0.35964425,
+        "raw": 1097731332000,
+        "dispatched": 16500045
+      },
+      "time_ratio": 1.024202930124407
+    },
+    {
+      "shape": "CLASSIFICATION small_array_length",
+      "before": {
+        "seconds": 0.267302083,
+        "raw": 704516329040,
+        "dispatched": 10500061
+      },
+      "after": {
+        "seconds": 0.264788417,
+        "raw": 704516329040,
+        "dispatched": 10500061
+      },
+      "time_ratio": 0.9905961600755651
+    },
+    {
+      "shape": "CLASSIFICATION small_native_call",
+      "before": {
+        "seconds": 0.300527,
+        "raw": 868354279752,
+        "dispatched": 13000031
+      },
+      "after": {
+        "seconds": 0.295516917,
+        "raw": 868354279752,
+        "dispatched": 13000031
+      },
+      "time_ratio": 0.9833290087080362
+    },
+    {
+      "shape": "CLASSIFICATION populated_ordinary_get",
+      "before": {
+        "seconds": 0.314970959,
+        "raw": 704524250024,
+        "dispatched": 10500161
+      },
+      "after": {
+        "seconds": 0.31422275,
+        "raw": 704524250024,
+        "dispatched": 10500161
+      },
+      "time_ratio": 0.9976245143286369
+    },
+    {
+      "shape": "CLASSIFICATION populated_plain_call",
+      "before": {
+        "seconds": 0.414396583,
+        "raw": 1097740334288,
+        "dispatched": 16500161
+      },
+      "after": {
+        "seconds": 0.424165375,
+        "raw": 1097740334288,
+        "dispatched": 16500161
+      },
+      "time_ratio": 1.0235735341476018
+    },
+    {
+      "shape": "CLASSIFICATION populated_array_length",
+      "before": {
+        "seconds": 0.301914667,
+        "raw": 704525331328,
+        "dispatched": 10500177
+      },
+      "after": {
+        "seconds": 0.313178625,
+        "raw": 704525331328,
+        "dispatched": 10500177
+      },
+      "time_ratio": 1.0373084160233923
+    },
+    {
+      "shape": "CLASSIFICATION populated_native_call",
+      "before": {
+        "seconds": 0.352248875,
+        "raw": 868363282040,
+        "dispatched": 13000147
+      },
+      "after": {
+        "seconds": 0.359515291,
+        "raw": 868363282040,
+        "dispatched": 13000147
+      },
+      "time_ratio": 1.0206286421780624
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_cold n=32768",
+      "before": {
+        "seconds": 0.000665583,
+        "raw": 2459879472
+      },
+      "after": {
+        "seconds": 0.000678167,
+        "raw": 2459879472
+      },
+      "time_ratio": 1.0189067328943198
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_resident n=32768",
+      "before": {
+        "seconds": 0.000660083,
+        "raw": 2459878680
+      },
+      "after": {
+        "seconds": 0.000675417,
+        "raw": 2459878680
+      },
+      "time_ratio": 1.0232304119330449
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_cold n=65536",
+      "before": {
+        "seconds": 0.000658208,
+        "raw": 2459879472
+      },
+      "after": {
+        "seconds": 0.000677,
+        "raw": 2459879472
+      },
+      "time_ratio": 1.0285502455150954
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_resident n=65536",
+      "before": {
+        "seconds": 0.000656333,
+        "raw": 2459878680
+      },
+      "after": {
+        "seconds": 0.000678916,
+        "raw": 2459878680
+      },
+      "time_ratio": 1.0344078387038287
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_cold n=262144",
+      "before": {
+        "seconds": 0.000661584,
+        "raw": 2459879472
+      },
+      "after": {
+        "seconds": 0.000688,
+        "raw": 2459879472
+      },
+      "time_ratio": 1.0399284142300902
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_resident n=262144",
+      "before": {
+        "seconds": 0.00064775,
+        "raw": 2459878680
+      },
+      "after": {
+        "seconds": 0.000678,
+        "raw": 2459878680
+      },
+      "time_ratio": 1.046700115785411
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_cold n=1048576",
+      "before": {
+        "seconds": 0.000661084,
+        "raw": 2459879472
+      },
+      "after": {
+        "seconds": 0.00068375,
+        "raw": 2459879472
+      },
+      "time_ratio": 1.0342861119010593
+    },
+    {
+      "shape": "LAZY_STRING_METRIC char_code_at_resident n=1048576",
+      "before": {
+        "seconds": 0.000655833,
+        "raw": 2459878680
+      },
+      "after": {
+        "seconds": 0.000682333,
+        "raw": 2459878680
+      },
+      "time_ratio": 1.0404066279067996
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_cold n=32768",
+      "before": {
+        "seconds": 0.000678459,
+        "raw": 2328855472
+      },
+      "after": {
+        "seconds": 0.000716459,
+        "raw": 2328855472
+      },
+      "time_ratio": 1.0560092798533147
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_resident n=32768",
+      "before": {
+        "seconds": 0.00067125,
+        "raw": 2328854680
+      },
+      "after": {
+        "seconds": 0.00070275,
+        "raw": 2328854680
+      },
+      "time_ratio": 1.046927374301676
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_cold n=65536",
+      "before": {
+        "seconds": 0.000675209,
+        "raw": 2328855472
+      },
+      "after": {
+        "seconds": 0.00070825,
+        "raw": 2328855472
+      },
+      "time_ratio": 1.0489344780653103
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_resident n=65536",
+      "before": {
+        "seconds": 0.000672125,
+        "raw": 2328854680
+      },
+      "after": {
+        "seconds": 0.000703083,
+        "raw": 2328854680
+      },
+      "time_ratio": 1.0460598846940674
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_cold n=262144",
+      "before": {
+        "seconds": 0.000679291,
+        "raw": 2328855472
+      },
+      "after": {
+        "seconds": 0.000709792,
+        "raw": 2328855472
+      },
+      "time_ratio": 1.044901227897911
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_resident n=262144",
+      "before": {
+        "seconds": 0.000671458,
+        "raw": 2328854680
+      },
+      "after": {
+        "seconds": 0.000703209,
+        "raw": 2328854680
+      },
+      "time_ratio": 1.04728665084041
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_cold n=1048576",
+      "before": {
+        "seconds": 0.000689708,
+        "raw": 2328855472
+      },
+      "after": {
+        "seconds": 0.000724916,
+        "raw": 2328855472
+      },
+      "time_ratio": 1.0510476897469654
+    },
+    {
+      "shape": "LAZY_STRING_METRIC property_resident n=1048576",
+      "before": {
+        "seconds": 0.000675541,
+        "raw": 2328854680
+      },
+      "after": {
+        "seconds": 0.000709459,
+        "raw": 2328854680
+      },
+      "time_ratio": 1.050208647587637
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_code_at n=16",
+      "before": {
+        "seconds": 0.064304417,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.066309166,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.031175914401028
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_code_at n=256",
+      "before": {
+        "seconds": 0.064465792,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.066435417,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0305530257039268
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_code_at n=1024",
+      "before": {
+        "seconds": 0.064656667,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.066158542,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.023228463044654
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_code_at n=4096",
+      "before": {
+        "seconds": 0.0644525,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.06469675,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0037896125053334
+    },
+    {
+      "shape": "STRING_INDEX_METRIC code_point_at n=16",
+      "before": {
+        "seconds": 0.064654,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.064806416,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.002357410214372
+    },
+    {
+      "shape": "STRING_INDEX_METRIC code_point_at n=256",
+      "before": {
+        "seconds": 0.064418583,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.065548791,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0175447510231634
+    },
+    {
+      "shape": "STRING_INDEX_METRIC code_point_at n=1024",
+      "before": {
+        "seconds": 0.064480958,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.066802083,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0359970613339833
+    },
+    {
+      "shape": "STRING_INDEX_METRIC code_point_at n=4096",
+      "before": {
+        "seconds": 0.064584209,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.066287792,
+        "raw": 245762279472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0263777017072393
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_at n=16",
+      "before": {
+        "seconds": 0.074123833,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.07535125,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0165590060621932
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_at n=256",
+      "before": {
+        "seconds": 0.074017084,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.076281917,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0305987871664872
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_at n=1024",
+      "before": {
+        "seconds": 0.074464292,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.075932041,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0197107762738147
+    },
+    {
+      "shape": "STRING_INDEX_METRIC char_at n=4096",
+      "before": {
+        "seconds": 0.07373275,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.076294917,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0347493752776074
+    },
+    {
+      "shape": "STRING_INDEX_METRIC at n=16",
+      "before": {
+        "seconds": 0.102855792,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.075389167,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 0.7329598609283958
+    },
+    {
+      "shape": "STRING_INDEX_METRIC at n=256",
+      "before": {
+        "seconds": 0.09565675,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.076323542,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 0.7978897673190861
+    },
+    {
+      "shape": "STRING_INDEX_METRIC at n=1024",
+      "before": {
+        "seconds": 0.09963125,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.07455725,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 0.7483319741546954
+    },
+    {
+      "shape": "STRING_INDEX_METRIC at n=4096",
+      "before": {
+        "seconds": 0.086914375,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.075100583,
+        "raw": 245767079472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 0.8640755110992859
+    },
+    {
+      "shape": "STRING_INDEX_METRIC starts_with n=16",
+      "before": {
+        "seconds": 0.071651833,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.072284333,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0088274085046787
+    },
+    {
+      "shape": "STRING_INDEX_METRIC starts_with n=256",
+      "before": {
+        "seconds": 0.071813042,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.072457125,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0089688861808694
+    },
+    {
+      "shape": "STRING_INDEX_METRIC starts_with n=1024",
+      "before": {
+        "seconds": 0.071560625,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.071973167,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0057649300855045
+    },
+    {
+      "shape": "STRING_INDEX_METRIC starts_with n=4096",
+      "before": {
+        "seconds": 0.071750417,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.071784,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0004680530288765
+    },
+    {
+      "shape": "STRING_INDEX_METRIC ends_with n=16",
+      "before": {
+        "seconds": 0.071310666,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.0712455,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 0.9990861675587213
+    },
+    {
+      "shape": "STRING_INDEX_METRIC ends_with n=256",
+      "before": {
+        "seconds": 0.070472375,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.073241833,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0392984910754037
+    },
+    {
+      "shape": "STRING_INDEX_METRIC ends_with n=1024",
+      "before": {
+        "seconds": 0.070284042,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.0714595,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0167243938531594
+    },
+    {
+      "shape": "STRING_INDEX_METRIC ends_with n=4096",
+      "before": {
+        "seconds": 0.070468459,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.071436666,
+        "raw": 237623879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0137395795755941
+    },
+    {
+      "shape": "STRING_INDEX_METRIC includes n=16",
+      "before": {
+        "seconds": 0.069909834,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.071519167,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0230201233205616
+    },
+    {
+      "shape": "STRING_INDEX_METRIC includes n=256",
+      "before": {
+        "seconds": 0.069737458,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.072025833,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.032814144157649
+    },
+    {
+      "shape": "STRING_INDEX_METRIC includes n=1024",
+      "before": {
+        "seconds": 0.070231833,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.073002959,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.039456837186636
+    },
+    {
+      "shape": "STRING_INDEX_METRIC includes n=4096",
+      "before": {
+        "seconds": 0.069244375,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.071895209,
+        "raw": 235985479472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0382823009089186
+    },
+    {
+      "shape": "STRING_INDEX_METRIC index_of n=16",
+      "before": {
+        "seconds": 0.070625417,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.0717675,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0161709912452623
+    },
+    {
+      "shape": "STRING_INDEX_METRIC index_of n=256",
+      "before": {
+        "seconds": 0.070319375,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.072621291,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0327351601176773
+    },
+    {
+      "shape": "STRING_INDEX_METRIC index_of n=1024",
+      "before": {
+        "seconds": 0.070354709,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.073250167,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0411551414419182
+    },
+    {
+      "shape": "STRING_INDEX_METRIC index_of n=4096",
+      "before": {
+        "seconds": 0.070645792,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "after": {
+        "seconds": 0.072863584,
+        "raw": 249092779472,
+        "dispatched": 3700031
+      },
+      "time_ratio": 1.0313931224665158
+    },
+    {
+      "shape": "STRING_INDEX_METRIC last_index_of n=16",
+      "before": {
+        "seconds": 0.073508208,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "after": {
+        "seconds": 0.074542875,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "time_ratio": 1.0140755301775277
+    },
+    {
+      "shape": "STRING_INDEX_METRIC last_index_of n=256",
+      "before": {
+        "seconds": 0.075425625,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "after": {
+        "seconds": 0.074818334,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "time_ratio": 0.9919484790480689
+    },
+    {
+      "shape": "STRING_INDEX_METRIC last_index_of n=1024",
+      "before": {
+        "seconds": 0.075156875,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "after": {
+        "seconds": 0.075255,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "time_ratio": 1.0013056024482125
+    },
+    {
+      "shape": "STRING_INDEX_METRIC last_index_of n=4096",
+      "before": {
+        "seconds": 0.073978875,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "after": {
+        "seconds": 0.074782417,
+        "raw": 255646379472,
+        "dispatched": 3800031
+      },
+      "time_ratio": 1.010861776419282
+    },
+    {
+      "shape": "STRING_INDEX_METRIC property n=16",
+      "before": {
+        "seconds": 0.062597083,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.06491625,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0370491225605512
+    },
+    {
+      "shape": "STRING_INDEX_METRIC property n=256",
+      "before": {
+        "seconds": 0.062782708,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.065329875,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0405711553569812
+    },
+    {
+      "shape": "STRING_INDEX_METRIC property n=1024",
+      "before": {
+        "seconds": 0.062831833,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.065167958,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0371805960204916
+    },
+    {
+      "shape": "STRING_INDEX_METRIC property n=4096",
+      "before": {
+        "seconds": 0.062972833,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "after": {
+        "seconds": 0.065350416,
+        "raw": 232659879472,
+        "dispatched": 3500031
+      },
+      "time_ratio": 1.0377556937925914
+    },
+    {
+      "shape": "SCALING char_code_at n=4096",
+      "before": {
+        "seconds": 0.002700084,
+        "computrons": 109616
+      },
+      "after": {
+        "seconds": 0.002790375,
+        "computrons": 109616
+      },
+      "time_ratio": 1.0334400707533542
+    },
+    {
+      "shape": "SCALING char_code_at n=8192",
+      "before": {
+        "seconds": 0.005470708,
+        "computrons": 219184
+      },
+      "after": {
+        "seconds": 0.005527125,
+        "computrons": 219184
+      },
+      "time_ratio": 1.0103125591788118
+    },
+    {
+      "shape": "SCALING char_code_at n=16384",
+      "before": {
+        "seconds": 0.010858208,
+        "computrons": 438320
+      },
+      "after": {
+        "seconds": 0.011066666,
+        "computrons": 438320
+      },
+      "time_ratio": 1.0191981955033464
+    },
+    {
+      "shape": "SCALING char_code_at n=32768",
+      "before": {
+        "seconds": 0.021831083,
+        "computrons": 876593
+      },
+      "after": {
+        "seconds": 0.021798167,
+        "computrons": 876593
+      },
+      "time_ratio": 0.9984922415438574
+    },
+    {
+      "shape": "SCALING map_set n=1000",
+      "before": {
+        "seconds": 0.000666416,
+        "computrons": 24302
+      },
+      "after": {
+        "seconds": 0.000646083,
+        "computrons": 24302
+      },
+      "time_ratio": 0.9694890278744809
+    },
+    {
+      "shape": "SCALING map_set n=2000",
+      "before": {
+        "seconds": 0.00131575,
+        "computrons": 48564
+      },
+      "after": {
+        "seconds": 0.001283083,
+        "computrons": 48564
+      },
+      "time_ratio": 0.975172335170055
+    },
+    {
+      "shape": "SCALING map_set n=4000",
+      "before": {
+        "seconds": 0.002603917,
+        "computrons": 97089
+      },
+      "after": {
+        "seconds": 0.002574542,
+        "computrons": 97089
+      },
+      "time_ratio": 0.9887189184601507
+    },
+    {
+      "shape": "SCALING map_set n=8000",
+      "before": {
+        "seconds": 0.005266459,
+        "computrons": 194138
+      },
+      "after": {
+        "seconds": 0.005163,
+        "computrons": 194138
+      },
+      "time_ratio": 0.9803551114705346
+    },
+    {
+      "shape": "SCALING for_in n=2000",
+      "before": {
+        "seconds": 0.022017209,
+        "computrons": 115124
+      },
+      "after": {
+        "seconds": 0.02265425,
+        "computrons": 115124
+      },
+      "time_ratio": 1.0289337763019828
+    },
+    {
+      "shape": "SCALING for_in n=4000",
+      "before": {
+        "seconds": 0.044495958,
+        "computrons": 230158
+      },
+      "after": {
+        "seconds": 0.044565084,
+        "computrons": 230158
+      },
+      "time_ratio": 1.0015535343682227
+    },
+    {
+      "shape": "SCALING for_in n=8000",
+      "before": {
+        "seconds": 0.089400958,
+        "computrons": 460227
+      },
+      "after": {
+        "seconds": 0.089791042,
+        "computrons": 460227
+      },
+      "time_ratio": 1.0043633089479869
+    },
+    {
+      "shape": "SCALING for_in n=16000",
+      "before": {
+        "seconds": 0.178307125,
+        "computrons": 920363
+      },
+      "after": {
+        "seconds": 0.1757355,
+        "computrons": 920363
+      },
+      "time_ratio": 0.9855775533366935
+    },
+    {
+      "shape": "SCALING string_for_of n=16384",
+      "before": {
+        "seconds": 0.009188791,
+        "computrons": 553044
+      },
+      "after": {
+        "seconds": 0.009488958,
+        "computrons": 553044
+      },
+      "time_ratio": 1.0326666478756563
+    },
+    {
+      "shape": "SCALING string_for_of n=32768",
+      "before": {
+        "seconds": 0.018303708,
+        "computrons": 1106010
+      },
+      "after": {
+        "seconds": 0.018886042,
+        "computrons": 1106010
+      },
+      "time_ratio": 1.0318150835885276
+    },
+    {
+      "shape": "SCALING string_for_of n=65536",
+      "before": {
+        "seconds": 0.03673525,
+        "computrons": 2211942
+      },
+      "after": {
+        "seconds": 0.038212292,
+        "computrons": 2211942
+      },
+      "time_ratio": 1.0402077568547923
+    },
+    {
+      "shape": "SCALING string_for_of n=131072",
+      "before": {
+        "seconds": 0.073477709,
+        "computrons": 4423807
+      },
+      "after": {
+        "seconds": 0.077751958,
+        "computrons": 4423807
+      },
+      "time_ratio": 1.058170689562463
+    }
+  ],
+  "control_commands": [
+    "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test classification_bench --test scaling_bench -- --ignored --nocapture --test-threads=1"
+  ],
+  "control_samples": "Identical fixtures in separate source/target directories. Runs serial, no simultaneous tests/builds. Classification: one warmup plus five evaluations per shape, median. Scaling sample discipline is specified in the fixture.",
+  "dispatch_repeat": [
+    {
+      "shape": "small_ordinary_get",
+      "before": {
+        "seconds": 0.257389833,
+        "raw": 704515247736,
+        "dispatched": 10500045
+      },
+      "after": {
+        "seconds": 0.263532375,
+        "raw": 704515247736,
+        "dispatched": 10500045
+      },
+      "time_ratio": 1.0238647421633005
+    },
+    {
+      "shape": "small_plain_call",
+      "before": {
+        "seconds": 0.454510333,
+        "raw": 1097731332000,
+        "dispatched": 16500045
+      },
+      "after": {
+        "seconds": 0.370226667,
+        "raw": 1097731332000,
+        "dispatched": 16500045
+      },
+      "time_ratio": 0.8145616064574709
+    },
+    {
+      "shape": "small_array_length",
+      "before": {
+        "seconds": 0.3274325,
+        "raw": 704516329040,
+        "dispatched": 10500061
+      },
+      "after": {
+        "seconds": 0.272043625,
+        "raw": 704516329040,
+        "dispatched": 10500061
+      },
+      "time_ratio": 0.8308387988364014
+    },
+    {
+      "shape": "small_native_call",
+      "before": {
+        "seconds": 0.306202,
+        "raw": 868354279752,
+        "dispatched": 13000031
+      },
+      "after": {
+        "seconds": 0.304006542,
+        "raw": 868354279752,
+        "dispatched": 13000031
+      },
+      "time_ratio": 0.992830033768558
+    },
+    {
+      "shape": "populated_ordinary_get",
+      "before": {
+        "seconds": 0.314362708,
+        "raw": 704524250024,
+        "dispatched": 10500161
+      },
+      "after": {
+        "seconds": 0.336717209,
+        "raw": 704524250024,
+        "dispatched": 10500161
+      },
+      "time_ratio": 1.071110537067902
+    },
+    {
+      "shape": "populated_plain_call",
+      "before": {
+        "seconds": 0.415391292,
+        "raw": 1097740334288,
+        "dispatched": 16500161
+      },
+      "after": {
+        "seconds": 0.432443167,
+        "raw": 1097740334288,
+        "dispatched": 16500161
+      },
+      "time_ratio": 1.0410501503724348
+    },
+    {
+      "shape": "populated_array_length",
+      "before": {
+        "seconds": 0.304508666,
+        "raw": 704525331328,
+        "dispatched": 10500177
+      },
+      "after": {
+        "seconds": 0.31373775,
+        "raw": 704525331328,
+        "dispatched": 10500177
+      },
+      "time_ratio": 1.0303081160915137
+    },
+    {
+      "shape": "populated_native_call",
+      "before": {
+        "seconds": 0.356454125,
+        "raw": 868363282040,
+        "dispatched": 13000147
+      },
+      "after": {
+        "seconds": 0.356709833,
+        "raw": 868363282040,
+        "dispatched": 13000147
+      },
+      "time_ratio": 1.0007173658040849
+    }
+  ],
+  "repeat_reason": "Original small_ordinary_get control was 34.4% slower while other dispatch cases were close. Repeat the full paired classification suite to test reproducibility; retain original and repeat evidence. The repeated small_ordinary_get ratio was 1.0238647421633005. Single-host medians do not establish statistical significance.",
+  "final_source_checkpoint_recheck": [
+    {
+      "elements": 1000,
+      "seconds": 4.5666e-05,
+      "raw": 673048,
+      "stored_small_bytes": 24622
+    },
+    {
+      "elements": 10000,
+      "seconds": 1.925e-05,
+      "raw": 673048,
+      "stored_small_bytes": 240622
+    },
+    {
+      "elements": 50000,
+      "seconds": 1.85e-05,
+      "raw": 673048,
+      "stored_small_bytes": 1200622
+    }
+  ]
+}
