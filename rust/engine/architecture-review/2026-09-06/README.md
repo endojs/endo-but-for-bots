@@ -28,6 +28,19 @@ All 191 findings were re-verified again: 37 are fixed, 32 are partially fixed,
 and 122 still stand; 55 are now pinned by a regression test that did not exist
 at review time.
 All six critical findings are closed.
+
+**Revised a third time 2026-09-08 against
+[`c14706d3`](https://github.com/endojs/endo-but-for-bots/commit/c14706d3).**
+109 further commits landed, 32 of them touching the reviewed paths, including a
+repo-wide `cargo fmt --all` that moved every line in the reviewed crates, so
+each finding was located afresh by content rather than by any recorded line
+number.
+Workstreams W0 (the mechanical floor) and W1 (the `Halt` split) both landed.
+All 191 findings were re-verified again: 51 are fixed, 39 are partially fixed,
+and 101 still stand; 80 are pinned by a regression test that did not exist at
+review time, and no finding regressed.
+Appendix A now carries four locations and three statuses per finding.
+
 The earlier revision's per-finding statuses were **not** overwritten: a finding
 resolved since carries an additional Status line, and Appendix A carries a
 location and a status column per revision.

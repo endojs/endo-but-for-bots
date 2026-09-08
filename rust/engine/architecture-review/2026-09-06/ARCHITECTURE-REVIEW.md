@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-06 |
+| **Revised** | 2026-09-08, against [`c14706d3`](https://github.com/endojs/endo-but-for-bots/commit/c14706d3). See [Revision history](#revision-history). Findings were re-verified against that commit; 51 are fixed, 39 partially fixed, 101 still open. |
 | **Revised** | 2026-09-07, against [`6c1e1d6b`](https://github.com/endojs/endo-but-for-bots/commit/6c1e1d6b). See [Revision history](#revision-history). Findings were re-verified against that commit; 37 are fixed, 32 partially fixed, 122 still open. |
 | **Revised** | 2026-09-06, against [`f109e8f4`](https://github.com/endojs/endo-but-for-bots/commit/f109e8f4). See [Revision history](#revision-history). Findings were re-verified against that commit; 10 are fixed, 11 partially fixed, 170 still open. |
 | **Reviewed commit** | [`97d8de25`](https://github.com/endojs/endo-but-for-bots/commit/97d8de25) (`design+feat(test262): fixture consolidation and parameterized expectation lists (rollout step 1) (#946)`). Every line number and quotation in this review and in its companion documents refers to that commit. |
@@ -97,6 +98,100 @@ human in the loop: formatting, lints, a second platform, a release lane.
 ---
 
 ## Revision history
+
+### 2026-09-08 revision, against `c14706d3`
+
+109 further commits landed after the previous revision, 32 of them touching the
+reviewed paths, for 133,285 lines added against 10,111 removed, and
+`ironhorse-vm/src/interp.rs` grew from 61,104 to 64,553 lines.
+Two changes in that window alter how this document must be read.
+A repo-wide `cargo fmt --all` moved every line in the reviewed crates, so every
+location recorded at `97d8de25`, `f109e8f4` and `6c1e1d6b` is now stale; each
+finding was located afresh by content, never by line number.
+And workstreams W0 and W1 both landed, which closes a large part of the program
+in §4.
+All 191 findings were re-verified against `c14706d3` on the same basis as before.
+
+**Outcome: 51 fixed (14 of them newly resolved since the
+previous revision), 39 partially fixed, 101 still open.**
+No finding regressed.
+80 findings are now pinned by a regression test that did not exist at review
+time.
+The six critical findings closed at `6c1e1d6b` are all still closed.
+
+**W0, the mechanical floor, is essentially complete.**
+It was the largest untouched recommendation at both prior revisions and is the
+prerequisite the rest of the program is ordered behind.
+The deny-level clippy bug is fixed; CI now runs pinned-rustfmt `fmt --check`
+and `clippy --locked --workspace --no-deps -- -D warnings`; the engine
+workspace carries `overflow-checks = true` and `[workspace.lints.clippy]`;
+a `test-ironhorse-macos` lane runs the canonical suites on a second host; and
+ASAN and UBSAN run over the C oracle in a dedicated workflow.
+F034, F055, F112, F114, F137, F182 and F190 close on that work.
+Three gaps remain inside W0: there is no `rustfmt.toml` pinning the style
+against a toolchain bump, `rust/endo` still has no `rust-toolchain.toml`
+(the repository root and `rust/engine` do), and there is still no Miri lane,
+though F034 closed honestly: the design and README now state that there is no
+Miri gate rather than implying one.
+
+**W1, the `Halt` split, landed, and went further than the recommendation.**
+`Halt::Unsupported` is gone, replaced by `NotImplemented`, `Refused` and
+`EngineInvariant` (W1.3).
+More consequentially, `Halt::Resume` was deleted outright rather than merely
+demoted: a private `Step` enum now carries the dispatcher's control transfers,
+the public `Halt` documents that a nested catch or suspension transfer cannot
+be returned in it, and `finish_step` is the single crossing point.
+That closes this review's third headline cluster by construction rather than by
+discipline, since the shape the defects took is no longer representable, and the
+source locks in `dispatch_loop_control_transfer.rs` now reject a renamed
+return, a `break` out of the loop, and any raw return outside a whitelist.
+F028, F096, F101, F117 and F140 close on that work.
+
+**What has not moved.** The determinism lane gained a second host but is
+otherwise unchanged: nothing passes `--repeat`, and the golden computron
+corpus still does not exist, so a weight edit outside the 14 scattered inline
+assertions still passes CI under an unchanged `COST_TABLE_VERSION`.
+The compiler's lone-surrogate key aliasing (F016) is untouched, and the
+byte-identity fixture that would catch it still exercises surrogates only as
+string values, never as property keys.
+W2's allocation half, W3, W4, W5 and W6 are substantially open.
+
+**Newly fixed since the previous revision (14).**
+F028, F034, F036, F055, F096, F101, F103, F112, F114, F117, F137, F140,
+F182, F190.
+Each is annotated in place and should not be acted on.
+
+**Partially fixed at `c14706d3` (39).**
+F021, F025, F029, F032, F033, F038, F047, F054, F059, F061, F062, F067,
+F069, F070, F071, F073, F074, F077, F079, F082, F083, F085, F086, F092,
+F093, F098, F099, F115, F123, F125, F127, F133, F146, F149, F152, F155,
+F162, F165, F173.
+Each carries a Status line stating what remains.
+
+**Nothing in this document was deleted.** Every original claim, its evidence and
+both prior revisions' Status lines are kept as the record of what was true at
+the commit each was written against.
+Appendix A now carries four locations and three statuses per finding, one pair
+per revision.
+
+**Severity policy, unchanged.** The severities are still the ones the original
+two-verifier pass and its tiebreakers settled on, left alone except where a
+finding is now fixed.
+This pass proposed raising 41 findings and lowering 15, which is a re-rating
+against a different calibration rather than a considered set of changes, so none
+of it is applied.
+Two are worth naming because they repeat a signal the f109e8f4 revision also
+raised, and their companions from that earlier list have since been fixed:
+**F010** (nothing reclaims the chunk arena) and **F016** (lone-surrogate key
+aliasing), both proposed high to critical at two independent revisions.
+Read that as a recommendation to re-examine those two first, not as a severity
+change.
+
+**What this revision did not do.** It is a re-verification, not a re-review: no
+new findings were sought, so the surfaces added in those 32 commits are
+unreviewed, and this gap is now three revisions deep.
+The XS oracle still could not be built, so there is still no differential run
+against XS.
 
 ### 2026-09-07 revision, against `6c1e1d6b`
 
@@ -246,6 +341,20 @@ against XS.
 > Read the [Revision history](#revision-history) for the outcome across all 191
 > findings.
 
+> **Revision note (2026-09-08, `c14706d3`).** W0 and W1, the two workstreams
+> ordered first in §4, have both landed since the previous revision, so the
+> third headline cluster below is now closed by construction as well as in
+> practice: `Halt::Resume` was deleted, and the dispatcher's control transfers
+> live in a private type the public `Halt` cannot carry.
+> The verdict in the opening paragraphs remains the one this review reached at
+> `97d8de25`.
+> What it said about the *pattern*, an invariant diagnosed once and left as a
+> convention elsewhere, is the part the fixes have most directly answered: the
+> enforcement points now exist, several are locked by source-parsing tests, and
+> the mechanical floor those tests sit on is finally in CI.
+> Read the [Revision history](#revision-history) for the outcome across all 191
+> findings.
+
 **IronHorse is not yet the engine its design describes.**
 The two properties it exists to have, deterministically bounded execution and
 cross-host reproducibility, are each broken by a small number of structural
@@ -270,6 +379,7 @@ defects, and it is why this review could be specific.
 |---|---|---|---|---|---|
 | Findings at `97d8de25` | 6 | 57 | 73 | 55 | 191 |
 | Still open or partial at `6c1e1d6b` | 0 | 35 | 68 | 51 | 154 |
+| Still open or partial at `c14706d3` | 0 | 34 | 59 | 47 | 140 |
 
 101 of the 191 match a record that already existed, in the project's prior-wave
 ledger, in a design document, or in this review's own region maps; Appendix B
@@ -302,6 +412,10 @@ closed at `:2058`), **F022** (W6-10 and W6-11, recorded FIXED at `:2623`) and
    `native_recursion_budget.rs` plus `recursion_bounds.rs` pinning the
    boundaries. See the individual findings for what remains.
 
+   **Status at c14706d3 (revision of 2026-09-08).** Unchanged and not regressed. The
+   allocation half of this cluster (F073, F010/F076, F021) is still open; only
+   the recursion half is closed.
+
 2. **The meter bounds nothing in the shipped configuration** (F014/F020, F012,
    F073, F010/F076, F051; critical to high in aggregate).
    No path in `rust/endo` arms a meter, `check_meter` returns `Continue` when no
@@ -321,6 +435,11 @@ closed at `:2058`), **F022** (W6-10 and W6-11, recorded FIXED at `:2623`) and
    in the source) so a backtracking match can be interrupted. The check-point
    placement findings inside the dispatch loop are individually annotated.
 
+   **Status at c14706d3 (revision of 2026-09-08).** Unchanged and not regressed.
+   Metering remains armed and fail-closed; the cost table W4 asks for still does
+   not exist, and the golden computron corpus that would detect a weight edit
+   still does not either.
+
 3. **The error and control-transfer model leaks into results** (F004, F005,
    F006, F007, F001, F023, F024; high).
    29 engine-raised `TypeError`s are uncatchable by guest `try`/`catch`; promise
@@ -336,6 +455,13 @@ closed at `:2058`), **F022** (W6-10 and W6-11, recorded FIXED at `:2623`) and
    routes through the dispatch loop's one depth test, and
    `throw_construction_sites.rs` locks the set of places a throw may be
    constructed. See the individual findings for the sites that remain.
+
+   **Status at c14706d3 (revision of 2026-09-08).** NOW CLOSED BY CONSTRUCTION.
+   W1 landed: `Halt::Resume` was deleted, the dispatcher's transfers moved to a
+   private `Step` enum, and `Halt::Unsupported` split three ways. The shape
+   these defects took is no longer representable in the public type, and the
+   source locks reject a renamed return, a `break` out of the loop, and any raw
+   return outside a whitelist.
 
 4. **Valid JavaScript produces silent wrong answers at four seams** (F016, F085,
    F084, F087, F062; high).
@@ -883,6 +1009,18 @@ Now F002 at `rust/engine/ironhorse-vm/src/interp.rs:20357`, F018 at
 `rust/engine/ironhorse-vm/src/interp.rs:13967`, F019 at
 `rust/engine/ironhorse-vm/src/interp.rs:50378`.
 
+**Status at c14706d3 (revision of 2026-09-08).** F002, F018, F019: STILL
+FIXED.
+Resolved by `f028ab1f fix(ironhorse-vm): bound every native recursion by one
+budget; 56b186a1 fix(ironhorse-vm): close the uncharged redispatch chains and
+size the light budget; 55ab0303 test(ironhorse-vm): pin the index-key
+recursion bound where that contract lives (all pre-6c1e1d6b; verified
+unregressed at c14706d3)`.
+Pinned by `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`.
+Now F002 at `rust/engine/ironhorse-vm/src/interp.rs:20854`, F018 at
+`rust/engine/ironhorse-vm/src/interp.rs:14276`, F019 at
+`rust/engine/ironhorse-vm/src/interp.rs:53419`.
+
 **Claim.**
 `DISPATCH_REENTRY_LIMIT` bounds only recursion that passes through
 `dispatch_at`, so at least seven other guest-reachable native recursions have no
@@ -957,6 +1095,28 @@ Independently reproduced by two region maps in this wave.
 
 #### F073 - Guest-sized allocations are made before any bound or charge [high, high]
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The padStart/padEnd half is closed; the repeat half is not.
+`"abcdefgh".repeat(2**30)` still reserves a 16 GiB Vec<u16> with no bound on
+the PRODUCT: interp.rs:41063 caps only the repetition count (`if n >
+0x7FFF_FFFF as f64 { … RangeError }`, a bound that already existed at
+6c1e1d6b), and interp.rs:41079 then does `Vec::with_capacity(content.len() *
+count as usize)` with no check on `content.len() * count`, so the reservation
+failure still reaches handle_alloc_error and aborts the process.
+`alloc_array_buffer` (interp.rs:48540-48542) likewise does
+`self.chunks.alloc(&vec![0u8; byte_length as usize])` for a guest u32 byte
+length with no cap.
+There is still no `Interp::reserve_units(n)` chokepoint and no test-time audit
+forbidding raw `Vec::with_capacity` on guest-derived lengths; the caps that
+exist are 24 independent per-built-in constants.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (added STRING_PAD_UNIT_CAP and the pad Refused; also messaged
+repeat's count RangeError without bounding its product)`.
+Pinned by `rust/engine/ironhorse-262/tests/error_messages_numeric_string.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:41079`.
+
 **Claim.**
 `"abcdefgh".repeat(2**30)` reserves a 16 GiB `Vec<u16>` and `"".padStart(2**40)`
 reserves roughly 2 TiB with no maximum-string-length check and no `RangeError`,
@@ -1022,6 +1182,37 @@ Changed by `f0898833 fix(ironhorse-vm): fail closed on an armed meter and
 interrupt regexp matches (match side only)`.
 Pinned by `rust/engine/ironhorse-vm/tests/meter_bounds.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:24519`.
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The MATCH side is interruptible (unchanged since 6c1e1d6b),
+but regexp COMPILE is still unmetered and unbounded in the dimension the
+finding names: `ironhorse_regexp::compile` runs to completion at
+interp.rs:25059 before `self.meter.tick_raw(program.compile_meter_raw)` at
+interp.rs:25082 charges anything, and that charge is still
+`parser->size`-proportional (interp.rs:25092 recovers the code-buffer size by
+dividing it back out), i.e. proportional to emitted code, not to work done.
+Under the `i` flag `Compiler::charset_range`
+(ironhorse-regexp/src/compile.rs:917-935) still performs one loop iteration,
+one retained `add_node` allocation and one `charset_combine` per code point of
+the range, 65,536 for `/[\0-￿]/i`, 1,114,112 for `/[\u{0}-\u{10FFFF}]/iu`,
+with no step budget, no node ceiling and no abort point, and a pattern whose
+fold collapses to a small charset pays almost nothing for it.
+`MAX_NESTING_DEPTH` (compile.rs:167) bounds nesting only and does not bound
+this loop.
+Reachable from `new RegExp(untrusted)` (interp.rs:25059) and, unchanged, from
+any regexp literal in eval'd source (ironhorse-compile/src/lexer.rs:1237,
+which calls `ironhorse_regexp::compile::compile` from the lexer with no meter
+in scope).
+Changed by `f0898833 fix(ironhorse-vm): fail closed on an armed meter and
+interrupt regexp matches (match side only, pre-6c1e1d6b); nothing in
+6c1e1d6b..c14706d3 changes the compile side, the only commits touching
+ironhorse-regexp in the window are 1b785e30 (format), 10de8791 (CI clippy
+gate), ff94ead4 (run the suites without the oracle) and c14706d3 (Step/Halt
+taxonomy)`.
+Pinned by `rust/engine/ironhorse-vm/tests/meter_bounds.rs`, `meter_bounds.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:25082`.
 
 **Claim.**
 The meter is charged only after `match_regexp` and `compile` return, so
@@ -1160,6 +1351,47 @@ Changed by `88969339 fix(ironhorse): harden Date coercion and migration (Date
 half only; predates f109e8f4, no further change in this window)`.
 Now at `rust/engine/Cargo.toml:7`.
 
+**Status at c14706d3 (revision of 2026-09-08).** F055, F114: RESOLVED since
+the previous revision.
+These findings no longer describe the tree; do not act on them.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `7565ad64 ci(ironhorse): exercise checked arithmetic and store
+integrity in release`.
+Pinned by .github/workflows/ci.yml, the `test-ironhorse-release` matrix leg is
+the enforcement point (the full engine suite plus ironhorse-store-sqlite now
+run under --re.
+Now F055 at `rust/engine/Cargo.toml:26`, F114 at `rust/engine/Cargo.toml:26`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F079: PARTIALLY RESOLVED
+since the previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The determinism half of this finding is CLOSED and should be
+dropped from the claim: `[profile.release] overflow-checks = true` now exists
+in BOTH manifests (rust/engine/Cargo.toml:26-27 and the repo-root
+Cargo.toml:9-10), and CI gained a release matrix leg that runs the whole
+engine suite under it, so the two profiles no longer disagree about arithmetic
+and the consensus-split framing no longer applies.
+The `new Date(1e17, 0)` instance was already closed (days_from_civil computes
+in i128 end-to-end, interp.rs:59505-59527).
+What remains is one guest-reachable unchecked-arithmetic site with a changed
+failure mode: `apply_rounding_increment` (ironhorse-vm/src/intl_number.rs:510)
+still accumulates into an unbounded u128 at :532 and multiplies it by 10 once
+per implied trailing zero at :538-540, so `new
+Intl.NumberFormat('en',{roundingIncrement:5,minimumFractionDigits:2,maximumFractionDigits:2}).format(1e300)`
+now PANICS IN BOTH PROFILES instead of wrapping silently in release, a
+deterministic crashed crank rather than a silent divergence, but still a panic
+where the recommendation asked for a deterministic refusal, and nothing in
+ironhorse-vm or rust/endo wraps the interpreter in catch_unwind.
+Changed by `7565ad64 ci(ironhorse): exercise checked arithmetic and store
+integrity in release (adds [profile.release] overflow-checks = true to both
+manifests and the release CI lane); 88969339 fix(ironhorse): harden Date
+coercion and migration closed the Date instance pre-f109e8f4`.
+Pinned by .github/workflows/ci.yml, the `test-ironhorse-release` matrix leg
+(cargo test --locked --release -p ironhorse-vm -p ironhorse-snapshot -p
+ironhorse-compile -p i.
+Now at `rust/engine/ironhorse-vm/src/intl_number.rs:532`.
+
 Severities per id: F079 high, F114 medium, F055 medium.
 
 **Claim.**
@@ -1263,6 +1495,26 @@ Changed by `not identified for the fraction guard (the parser was rewritten
 across several pre-f109e8f4 Date commits, e.g. 6378dde0, 2d02ed92); no commit
 in f109e8f4..6c1e1d6b touches either remaining slicing site`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:54872`.
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: `Temporal.Duration.from("P1é")` still panics with 'byte
+index 2 is not a char boundary' (parse_temporal_duration advances `rest =
+&rest[end + 1..]` past a designator byte read out of `rest.as_bytes()`);
+parse_iso_date_string and parse_xs_legacy_iso_string still panic on
+`&date[..year_width]`/`&date[year_width..]` with a 4-or-7 width taken against
+a byte length (`Date.parse("aéé")`); and both still panic on
+`zone[..2]`/`zone[2..]` under a `zone.len() == 4` byte test
+(`Date.parse("2020-01-01T00:00:00+aéb")`).
+Only the fractional-second slice is fixed, both clock parsers reject a
+non-ASCII-digit fraction before slicing.
+No fuzz target covers non-ASCII input to these parsers.
+Changed by `Not identified for the fraction guard (rewritten across
+pre-f109e8f4 Date commits, e.g. 6378dde0, 2d02ed92); no commit in
+6c1e1d6b..c14706d3 changes any remaining slicing site, the only diff there is
+the rustfmt pass 1b785e30 chore(ironhorse): format Rust sources`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:59437`.
 
 **Claim.**
 `Date.parse("2020-01-01T00:00:00.éé")` panics with "byte index 3 is not a char
@@ -1381,6 +1633,29 @@ underflow is now an engine fault with the same standing as a Decode halt,
 which is what the recommendation asked for.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:13396`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: `pop()` is still the fail-open default: it returns undefined
+on an empty value stack at 81 call sites in interp.rs (79 at review time, 81
+at f109e8f4, 81 at 6c1e1d6b, the class has not shrunk), so malformed or
+mis-compiled bytecode can still execute with fabricated operands and complete
+with a rendered result at any opcode not covered by an explicit guard.
+What is fixed is the guarded subset and its severity classification:
+opcode-specific value-stack underflow guards now number 13 sites across 11
+distinct opcode labels (8 sites at review time, 12 at 6c1e1d6b;
+`dub_at:stack-underflow` is the one added in this window), and every one halts
+`Halt::EngineInvariant`, never skip-eligible, in `is_panic`'s
+terminate-do-not-commit set, so where a guard exists an underflow already has
+the standing of a Decode halt.
+The recommendation's second half is also still open: no pure-Rust
+malformed-bytecode totality test exists in ironhorse-vm/tests, so the surface
+has no oracle-free PR-CI regression.
+Changed by `49123bc0 feat(ironhorse): persist async activations and complete
+SES intrinsics (adds only the `dub_at:stack-underflow` guard; the class is
+otherwise unchanged)`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13640`.
+
 **Claim.** `pop()` on an empty stack returns `undefined` instead of halting, so
 malformed or mis-compiled bytecode keeps executing with fabricated operands and
 can complete with a rendered result.
@@ -1457,6 +1732,13 @@ chains and size the light budget)`.
 Pinned by `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:13461`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `f028ab1f fix(ironhorse-vm): bound every native recursion by one
+budget (refined by 56b186a1 fix(ironhorse-vm): close the uncharged redispatch
+chains and size the light budget), unchanged in this window`.
+Pinned by `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13721`.
+
 **Claim.**
 A guest program whose completion value or thrown value is a self-containing array
 kills the host process with a native stack overflow on the host-boundary render
@@ -1527,6 +1809,15 @@ value`.
 Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
 `rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:36391`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `d1e66f6a fix(ironhorse-vm)!: make Halt::Throw carry the thrown
+value (fixed at 6c1e1d6b); c14706d3 fix(ironhorse): separate dispatch
+transfers from host outcomes extended the source lock across the vm's
+production consumers in this window`.
+Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
+`interp.rs`, `rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:14226`.
 
 **Claim.**
 Twenty-nine engine-raised `TypeError`s are constructed as inline
@@ -1602,6 +1893,14 @@ Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
 `rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:20035`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `d1e66f6a fix(ironhorse-vm)!: make Halt::Throw carry the thrown
+value (fixed at 6c1e1d6b); further hardened in-window by c14706d3
+fix(ironhorse): separate dispatch transfers from host outcomes`.
+Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
+`rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:20526`.
+
 **Claim.**
 All three native-try boundaries recover the thrown value from the
 `self.exception` register rather than from the `Halt` they match on, so any
@@ -1676,6 +1975,16 @@ Pinned by `rust/engine/ironhorse-vm/tests/dispatch_resume_is_consumed.rs`,
 `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:17959`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `35a205c9 fix(ironhorse-vm): consume a native's Resume at every
+dispatch re-entry (pre-6c1e1d6b); c14706d3 fix(ironhorse): separate dispatch
+transfers from host outcomes, deleted Halt::Resume outright and introduced the
+private `Step` enum, so the defect class is now closed by construction rather
+than by discipline`.
+Pinned by `rust/engine/ironhorse-vm/tests/dispatch_resume_is_consumed.rs`,
+`rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:16161`.
+
 **Claim.**
 Five dispatch-loop sites propagate a native result with a raw
 `Err(halt) => return halt` instead of `dispatch_result!`, so a `Halt::Resume`
@@ -1726,6 +2035,13 @@ null/undefined; bb9b2acd fix(ironhorse-vm): coerce the base before the key at
 AT; tighten the loop locks`.
 Pinned by `rust/engine/ironhorse-vm/tests/nullish_member_access_throws.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:16175`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `0fe31b29 fix(ironhorse-vm): throw TypeError for member access on
+null/undefined; bb9b2acd fix(ironhorse-vm): coerce the base before the key at
+AT; tighten the loop locks (both pre-6c1e1d6b, untouched since)`.
+Pinned by `rust/engine/ironhorse-vm/tests/nullish_member_access_throws.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:16634`.
 
 **Claim.**
 `null.f` and `undefined.f` evaluate to `undefined` and `null.f = 1` silently
@@ -1780,6 +2096,14 @@ since`.
 Pinned by `rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`,
 `rust/engine/ironhorse-vm/tests/nullish_member_access_throws.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:8789`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `3634c9c8 feat(ironhorse): complete String argument coercion
+(unconditional toString/valueOf/join intern); 7b6ff208 fix(ironhorse): observe
+error stringification (error_to_string), both pre-f109e8f4 and unchanged
+since`.
+Pinned by `rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:8907`.
 
 **Claim.**
 `ToPrimitive` resolves `toString`/`valueOf` through the per-crank compiled symbol
@@ -1864,6 +2188,48 @@ Pinned by `rust/engine/ironhorse-vm/tests/halt_label_registry.rs`,
 `ironhorse-fuzz/src/lib.rs`.
 Now F071 at `rust/engine/ironhorse-vm/src/interp.rs:4049`, F140 at
 `rust/engine/ironhorse-vm/src/interp.rs:4083`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F027: STILL FIXED.
+Resolved by `78cca624 feat(ironhorse-vm): split engine-invariant halts out of
+Halt::Unsupported (landed before 6c1e1d6b); completed in this window by
+c14706d3 fix(ironhorse): separate dispatch transfers from host outcomes`.
+Pinned by `rust/engine/ironhorse-vm/tests/halt_label_registry.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4102`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F071: PARTIALLY RESOLVED
+since the previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: Only the Decode half of the finding's secondary impact claim
+survives: `Halt::Decode(String)` (interp.rs:4122) still carries a formatted,
+unstructured reason rather than a `DecodeError`, so a host cannot act on a
+decode failure programmatically and every consumer matches `Decode(_)` and
+throws the string away.
+The primary claim, that Halt conflates completion, internal control transfer,
+engine gaps, hostile-input refusals and internal invariant violations, so the
+differential instruments read an engine bug as a coverage gap, no longer
+holds: transfers now live in the crate-private `Step` enum, the three-way
+NotImplemented/Refused/EngineInvariant split is registered and label-pinned,
+Throw carries the thrown value, and both instruments fail hard on
+EngineInvariant.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes ("Complete the W1 halt taxonomy, preserve guest error values and XS
+diagnostics"); building on 78cca624 feat(ironhorse-vm): split engine-invariant
+halts out of Halt::Unsupported, 3cfd5c53 (halt-label allowlist), d1e66f6a
+fix(ironhorse-vm)!: make Halt::Throw carry the thrown value`.
+Pinned by `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`,
+`rust/engine/ironhorse-vm/tests/program_return_boundary.rs`,
+`tests/halt_label_registry.rs` and 2 more.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4084`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F140: RESOLVED since the
+previous revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (completing 78cca624 and 3cfd5c53)`.
+Pinned by `rust/engine/ironhorse-vm/tests/halt_label_registry.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4084`.
 
 Severities per id: F027 high, F071 high, F140 medium.
 
@@ -1951,6 +2317,16 @@ Pinned by `rust/engine/ironhorse-262/src/xst.rs`,
 `rust/engine/ironhorse-vm/tests/halt_label_registry.rs`.
 Now at `rust/engine/ironhorse-262/src/xst.rs:562`.
 
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (the only non-format commit touching xst.rs in 6c1e1d6b..c14706d3)`.
+Pinned by `rust/engine/ironhorse-262/src/xst.rs`.
+Now at `rust/engine/ironhorse-262/src/xst.rs:462`.
+
 **Claim.**
 In `evaluate_positive`, an Ironhorse-only abort is an unconditional skip
 regardless of halt kind and a both-abort with a differing thrown value is a skip,
@@ -2016,6 +2392,28 @@ Pinned by `rust/engine/ironhorse-vm/tests/nullish_member_access_throws.rs`,
 `rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:46732`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The class is now largely, but not fully, closed. 131
+`catchable_type_error()` call sites (down from 514 at 6c1e1d6b) and 157
+`catchable_range_error()` call sites (down from 202) still build with
+`build_error(name, 0, 0)` and carry an empty message; 386 TypeError sites and
+40 RangeError sites now carry XS-ported text.
+So 288 engine-raised TypeErrors/RangeErrors still reach the guest with
+`e.message === ''`, concentrated in the Intl/Temporal region
+(interp.rs:21600-23800) but not confined to it (72 empty TypeError sites in
+30000-45000 and 21 above 45000; 126 empty RangeError sites in 30000-45000).
+The finding's own reproducer is fixed and pinned.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (a large squashed commit; it introduces catchable_range_error_msg and
+messages ~360 further TypeError sites, including the non-callable
+call/construct path)`.
+Pinned by `rust/engine/ironhorse-vm/tests/uncaught_native_error_rendering.rs`,
+`rust/engine/ironhorse-vm/tests/nullish_member_access_throws.rs`,
+`engine_throws_are_catchable.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:48813`.
+
 **Claim.** All 263 `catchable_type_error` and 181 `catchable_range_error` call
 sites build the error with `argc = 0`, so every engine `TypeError` and
 `RangeError` has an empty message where XS's `fxThrowMessage` carries a
@@ -2063,6 +2461,36 @@ size the light budget`.
 Pinned by `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:233`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: `Halt::StackOverflow(usize)` still conflates two different
+limits in one variant with one payload, its own doc (interp.rs:4136-4143)
+reads "The value stack was exhausted (XS's `fxOverflow` ...), or the
+native-recursion budget was exhausted ([`NATIVE_DEPTH_LIMIT`], XS's
+`fxCheckCStack`)", so a host still cannot programmatically distinguish a
+consensus-relevant fixed-geometry abort from an ironhorse implementation
+artifact; rust/endo's `describe_halt` still has to hedge as "stack overflow
+(value stack or native-recursion budget; {n} slots in use)" precisely because
+it cannot tell, and the new `Halt::Panic(PanicKind)` category added no variant
+for the recursion budget (PanicKind has exactly one arm, `EngineFault`).
+And ordinary callback recursion still aborts at 64 levels: NATIVE_DEPTH_LIMIT
+is 2048, a forEach level costs two HEAVY_FRAME_COST (16) frames = 32 units, so
+63 nested callbacks complete and the 64th overflows, roughly a third of what
+the 4096-slot value stack would admit, where XS would not abort.
+What no longer holds: the payload's meaning is correct and documented on both
+the variant and in describe_halt; the "far above any real program's nesting"
+doc claim is gone; the budget is charged uniformly by every native re-entry
+family rather than covering callbacks alone; and it is a deliberate, measured
+(stack-bytes-per-frame-class), test-pinned engine limit rather than an
+undocumented second stack budget.
+Changed by `f028ab1f fix(ironhorse-vm): bound every native recursion by one
+budget; 56b186a1 fix(ironhorse-vm): close the uncharged redispatch chains and
+size the light budget (both pre-6c1e1d6b).
+No commit in this window touches the conflation.`.
+Pinned by `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:233`.
+
 **Claim.** A Rust-implementation re-entry budget of 64 shares the
 `Halt::StackOverflow` variant with XS's value-stack `fxOverflow`, so a host
 cannot distinguish a consensus-relevant geometry limit from a porting artifact,
@@ -2083,6 +2511,35 @@ engine limit with a test pinning the exact depth.
 **Known.** The `interp-06` region map; not in the ledger or designs.
 
 #### F099 - `render` reads a write-once shadow while `e.stack` reads live properties [medium, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The UNCAUGHT-THROW half is closed: `render_uncaught` no
+longer excludes engine-built native errors from the guest coercion, so the
+host-boundary text of a thrown error now comes from `to_primitive` ->
+`Error.prototype.toString` (`error_to_string`, interp.rs:31237), which reads
+`name`/`message` live through `mop_get` and honours a subclass `toString`.
+What remains is the COMPLETION-VALUE renderer: `render`/`render_at` is `&self`
+(interp.rs:13721/13736) and still answers an error instance from the
+write-once `error_data` shadow (interp.rs:13857-13861, `format!("{}: {}",
+info.name, m)`).
+`error_data.message` is written only at construction (`internal_error`,
+interp.rs:30277, and the `error_data.insert` sites at
+30029/30121/30209/30333/30406) and never by a later `e.message = ...`, so `var
+e = new Error('a'); e.message = 'b'; e` still yields `RunOutcome.result ==
+"Error: a"` while the oracle's `String(result)` and the engine's own
+`ErrorStackGetter` (interp.rs:37703-37721, whose comment still says
+name/message "are read live off the instance ... so a post-construction rename
+shows") give "Error: b".
+The same shadow is used for an error nested inside a rendered array and for a
+wrapper's rendered payload.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (partial - drops the `&& !self.error_data.contains_key(&r)` guard in
+`render_uncaught` and rewrites its doc to "Native errors also use their
+observable name, message, and coercion hooks")`.
+Pinned by `rust/engine/ironhorse-vm/tests/uncaught_native_error_rendering.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13857`.
 
 **Claim.** The host-visible text of an error is computed from write-once
 `error_data` rather than the object's live `name`/`message`, so `String(e)` and
@@ -2122,6 +2579,18 @@ That assertion alone would have caught F024.
 on the missing capability.
 
 #### F101 - Internal control transfers are host-visible [medium, medium]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (the HEAD commit; `git log -S'enum Step'` and
+`-S'callback_return_depth'` on interp.rs both point here)`.
+Pinned by `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`,
+`interp.rs`, `tests/dispatch_resume_is_consumed.rs` and 1 more.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4258`.
 
 **Claim.** `Resume`/`Yield`/`Await`/`AsyncYield` are arms of the public enum the
 daemon re-exports, and whether `Err(Halt::Return)` means success is decided by a
@@ -2167,6 +2636,17 @@ keeping the predicate for the harness that depends on it.
 **Known.** No.
 
 #### F103 - `self.exception` is never cleared after an uncaught throw [medium, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes`.
+Pinned by `rust/engine/ironhorse-vm/tests/uncaught_throw_hygiene.rs`,
+`rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13375`.
 
 **Claim.** After any uncaught throw the exception register stays populated for
 the machine's lifetime, so `is_quiescent()` returns false forever and no persist
@@ -2237,6 +2717,16 @@ and walk pattern spines iteratively`.
 Pinned by `rust/engine/ironhorse-compile/tests/recursion_bounds.rs`,
 `ironhorse-regexp/src/compile.rs`.
 Now at `rust/engine/ironhorse-compile/src/coder.rs:1117`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `aebbab91 fix(ironhorse-compile): budget parser recursion and
+bound tree depth; 9af3dbe6 fix(ironhorse-compile): bound the tree depth at
+construction, not after; 7956149e fix(ironhorse-regexp): bound group nesting
+and walk pattern spines iteratively (all pre-6c1e1d6b; nothing in
+6c1e1d6b..c14706d3 regressed them)`.
+Pinned by `rust/engine/ironhorse-compile/tests/recursion_bounds.rs`,
+`rust/engine/ironhorse-regexp/src/compile.rs`.
+Now at `rust/engine/ironhorse-compile/src/coder.rs:1185`.
 
 **Claim.**
 There is no depth or stack guard anywhere in `ironhorse-compile`, so
@@ -2537,6 +3027,24 @@ Changed by `3cea11a9 fix(ironhorse-262,ironhorse-fuzz): stop skipping wrong
 answers at the oracle discard sites (verification half only)`.
 Now at `rust/engine/ironhorse-compile/src/parser/stmt.rs:732`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: Unchanged from 6c1e1d6b.
+Both compiler defects are intact, `for (/a/;;) {}` is still rejected because
+`self.match_token(Token::LeftParenthesis)?; self.look_ahead_once()?;`
+(stmt.rs:741-742) runs unconditionally before the header dispatch, and `try {}
+catch (e) { var e; }` is still rejected because hoist_var's intermediate-scope
+walk (scoper.rs:1556-1568) treats the catch parameter's `Let` declare as a
+conflict with no Annex B.3.4 exemption, and the compile crate's own corpus
+smoke test still asserts nothing on over-acceptance.
+What remains fixed is the other half of the verification claim: the 262
+positive arm FAILS on an over-rejection rather than skipping it.
+Changed by `none new in this window; the verification half was fixed earlier
+by 3cea11a9 fix(ironhorse-262,ironhorse-fuzz): stop skipping wrong answers at
+the oracle discard sites, and that fix survived the Halt split in c14706d3`.
+Now at `rust/engine/ironhorse-compile/src/parser/stmt.rs:742`.
+
 **Claim.** `for (/a/;;) {}` (parser) and `try {} catch (e) { var e; }` (scoper,
 Annex B.3.4) are both valid ECMAScript and are deterministically rejected.
 **Evidence.** `rust/engine/ironhorse-compile/src/parser/stmt.rs:704` runs
@@ -2633,6 +3141,36 @@ Script's global var bindings non-configurable`.
 Pinned by `rust/engine/ironhorse-compile/tests/goal_contract.rs`.
 Now at `rust/engine/ironhorse-compile/src/coder.rs:1040`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The Goal parameter exists and the Script/eval SEMANTIC split
+is implemented, but three of the finding's four elements still hold.
+(a) The frame SHAPE is still the eval program's for both program goals:
+coder.rs:1109-1111 unconditionally ORs `flags::EVAL` onto the program node and
+coder.rs:1120 unconditionally sets `coder.eval_flag = true`, for every goal,
+so free references still code as EVAL_REFERENCE (coder.rs:2631-2635) and no
+code path anywhere emits XS_CODE_PROGRAM_ENVIRONMENT, grep across
+ironhorse-compile/src finds only the unused constant at opcodes.rs:155 and a
+doc mention at coder.rs:1391.
+(b) The production embedder still rides the eval goal:
+rust/endo/src/ironhorse_engine.rs:448 (Machine::evaluate) and :891
+(PersistentMachine::eval) both call `compile_atoms_with`, which is
+`compile_atoms_goal(source, Goal::Eval, strict)` (coder.rs:1071-1076), so
+`endor -e ironhorse` and PersistentMachine still do not compile a real Script.
+(c) The scoper fixtures still never build an Eval root: scope_program
+(scoper.rs:381-385) parses and calls `run(&root)` without setting
+`flags::EVAL` on the node, only compile_atoms_goal does, at coder.rs:1110, and
+hoist_program (scoper.rs:1297-1302) picks Token::Eval solely from that flag,
+so all 24 tests in scoper/tests.rs still go through the Program root.
+Changed by `a2b63071 refactor(ironhorse-compile): make the compilation goal
+three-valued; c8227f57 fix(ironhorse-compile): hoist a strict Script's
+top-level vars to the global object; ffc94981 fix(ironhorse-vm): create a
+Script's global var bindings non-configurable (all pre-6c1e1d6b; nothing in
+this window advanced it further)`.
+Pinned by `rust/engine/ironhorse-compile/tests/goal_contract.rs`.
+Now at `rust/engine/ironhorse-compile/src/coder.rs:1110`.
+
 **Claim.** `compile_atoms_with` unconditionally ORs `flags::EVAL` onto the
 program node and sets `eval_flag = true`, no path emits
 `XS_CODE_PROGRAM_ENVIRONMENT`, and the public API has no goal parameter, so the
@@ -2696,6 +3234,29 @@ pattern spines iteratively; 33c335fd fix(ironhorse-regexp): walk class-string
 disjunctions without recursion`.
 Pinned by `rust/engine/ironhorse-regexp/src/compile.rs`.
 Now at `rust/engine/ironhorse-compile/src/lexer.rs:1223`.
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The layering and the duplicated work remain, exactly as
+restated at 6c1e1d6b.
+Every regexp literal still runs the full ironhorse-regexp *compiler* at lex
+time and throws the program away (lexer.rs:1237-1240), no `validate(pattern,
+flags)` entry was added to ironhorse-regexp, the same pattern is compiled a
+second time at run time (interp.rs:11317 on snapshot restore, interp.rs:25059
+for `new RegExp`/the literal path, and ironhorse-vm/src/lib.rs:135 for a
+validity probe), and ironhorse-compile still takes ironhorse-regexp as a
+runtime dependency partly just for the Unicode identifier tables
+(Cargo.toml:21 `ironhorse-regexp = { path = "../ironhorse-regexp" }`;
+lib.rs:32 `pub use ironhorse_regexp::unicode;`).
+The recursion half stays fixed: nothing in this window regressed the
+group-nesting bound.
+Changed by `none in this window, the recursion half was already fixed by
+7956149e fix(ironhorse-regexp): bound group nesting and walk pattern spines
+iteratively and 33c335fd fix(ironhorse-regexp): walk class-string disjunctions
+without recursion, and both bounds are still in place`.
+Pinned by `rust/engine/ironhorse-regexp/src/compile.rs`, `compile.rs`.
+Now at `rust/engine/ironhorse-compile/src/lexer.rs:1237`.
 
 **Claim.** The lexer runs the full `ironhorse-regexp` compiler on every regexp
 literal and discards the program, and the same pattern is compiled again at
@@ -2822,6 +3383,15 @@ Pinned by `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`,
 `rust/engine/ironhorse-vm/tests/nested_raise_reaches_outer_handler.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:4265`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `202ace5e fix(ironhorse-vm): route every engine raise through the
+loop's depth test (pre-6c1e1d6b); further hardened by c14706d3 fix(ironhorse):
+separate dispatch transfers from host outcomes, which made raise_js return the
+private `Step` instead of a `Result``.
+Pinned by `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`,
+`rust/engine/ironhorse-vm/tests/nested_raise_reaches_outer_handler.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4289`.
+
 **Claim.**
 `raise_js` returns `Ok(target)` on the caught path and no dispatch site applies
 the `call_stack.len() < return_depth` re-entry test to it, neither the eleven
@@ -2877,6 +3447,14 @@ native try`.
 Pinned by
 `rust/engine/ironhorse-vm/tests/native_try_fences_caller_handlers.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:20055`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `e2ece824 fix(ironhorse-vm): fence the caller's handlers under a
+native try; hardened by c14706d3 fix(ironhorse): separate dispatch transfers
+from host outcomes`.
+Pinned by
+`rust/engine/ironhorse-vm/tests/native_try_fences_caller_handlers.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:20517`.
 
 **Claim.**
 The function records a `jump_depth` it never enforces and catches only
@@ -2935,6 +3513,14 @@ cross-segment callee (completing a9dc1475)`.
 Pinned by
 `rust/engine/ironhorse-vm/tests/cross_segment_callee_callability.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:19640`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `21ecaf09 fix(ironhorse-vm): test callability before claiming a
+cross-segment callee (completing a9dc1475); reaffirmed by c14706d3
+fix(ironhorse): separate dispatch transfers from host outcomes`.
+Pinned by
+`rust/engine/ironhorse-vm/tests/cross_segment_callee_callability.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:20125`.
 
 **Claim.**
 `enter_call`'s non-callable branch returns `raise_js`'s handler pc as if it were
@@ -3007,6 +3593,34 @@ f109e8f4..6c1e1d6b addresses the five non-throw halts`.
 Pinned by `rust/engine/ironhorse-vm/tests/uncaught_throw_hygiene.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:16680`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The finding's reproduction, crank 1 halting with StepLimit
+while `pending_new_target` is armed, crank 2's first `new` consuming it as a
+stale `new.target`, no longer occurs: `Interp::run` clears the register at
+entry, and every crank entry (including `run_bounded`) goes through it.
+What remains is the unverified invariant, not a reachable wrong answer.
+The five non-throw halts (StepLimit, MeterAbort,
+NotImplemented/Refused/EngineInvariant, StackOverflow, Decode) still exit
+dispatch_at_inner without disarming the register, so a machine sitting at such
+a halt holds an armed `pending_new_target` that is neither a GC root (absent
+from `gc_roots`) nor a conjunct of `is_quiescent`.
+The registry entry and the snapshot side-table prose still assert
+"consumed/disarmed before every boundary" as `Req::DocumentedOnly`, a claim
+satisfied by fiat rather than by a behavioural twin that arms the register,
+halts by each Halt variant, and asserts the next crank's `new.target`.
+The residual is defence-in-depth: the run-entry clear masks the stale index
+before any consumer reads it, and `is_quiescent`'s `last_crank_completed`
+conjunct already refuses a snapshot of a halted crank, so no wrong value or
+dangling-slot read is currently reachable.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes, added `self.pending_new_target = None;` (with resume_status /
+eval_direct / direct_eval_hoist) to the top of `Interp::run`, and removed
+`callback_return_depth` altogether`.
+Pinned by `rust/engine/ironhorse-vm/tests/uncaught_throw_hygiene.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:17158`.
+
 **Claim.**
 `StepLimit`, `MeterAbort`, `Unsupported`, `StackOverflow` and `Decode` return out
 of the dispatch loop without passing through `unwind_to_jump`, so an armed
@@ -3069,6 +3683,39 @@ Pinned by
 `rust/engine/ironhorse-vm/tests/native_try_fences_caller_handlers.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:20026`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: A shared `native_try` primitive (interp.rs:20517) now covers
+the great majority of native-runs-guest boundaries, 75 call sites through its
+three wrappers (`array_from_try` 62, `call_any_catching_throw` 9,
+`run_callback_catching_throw` 3), and it alone fences, classifies
+`Step::Threw`, unwinds the stack/call/jump floors and clears `self.exception`.
+But three patterns still coexist and a new native still picks among them.
+(1) Ten sites hand-roll the fence as `let saved = mem::take(&mut self.jumps);
+… self.jumps = saved;` around an `_inner` that classifies for itself:
+step_async_generator (:21024), step_async (:21247), which must, because they
+install a suspended frame rather than call a closure, plus eight ordinary
+built-in seams that need not: array_from (:27726), array_of (:27743), the
+array_from_async prologue (:28536), promise_combinator (:29544),
+iterable_to_list (:38291), populate_collection_from_iterable_with_adder
+(:38773), iterator_terminal_helper (:41648) and object_from_entries (:52562).
+Unlike `native_try`, none of those ten turns an escaping `Step::Unwound` into
+an invariant failure; they pass it out through `Err(halt) => Err(halt)`.
+(2) The second classifier `from_async_try` (:28287, 13 call sites) still does
+NOT fence and is correct only where a caller already took the chain, its own
+doc says so.
+(3) The deliberately-unfenced sync-generator resume (`resume_generator`
+:20611, which rebases onto `jumps_base` instead) is still a separate code path
+rather than a flag on the primitive.
+Changed by `e2ece824 fix(ironhorse-vm): fence the caller's handlers under a
+native try (partial); c14706d3 fix(ironhorse): separate dispatch transfers
+from host outcomes (added the resume-escaped-fence invariant to the
+primitive)`.
+Pinned by
+`rust/engine/ironhorse-vm/tests/native_try_fences_caller_handlers.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:20517`.
+
 **Claim.** Whether a native that runs guest code isolates the caller's handler
 chain, which `Halt` variants it treats as "the guest threw", and whether it
 clears `self.exception` are decided independently at five sites with no shared
@@ -3128,6 +3775,49 @@ Pinned by
 `rust/engine/ironhorse-vm/tests/native_try_fences_caller_handlers.rs`.
 Now F093 at `rust/engine/ironhorse-vm/src/interp.rs:13676`, F146 at
 `rust/engine/ironhorse-vm/src/interp.rs:13688`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F093, F146: PARTIALLY
+RESOLVED since the previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds for F093: `render_uncaught` still re-enters guest code from
+the host boundary after the crank's outcome is already decided: `Interp::run`
+calls `finish_step` (interp.rs:14122/14223), whose `Step::Threw { value }` arm
+builds `Halt::Throw { value, rendered: self.render_uncaught(code, value) }`
+(interp.rs:14226-14229), and `render_uncaught` runs `to_primitive` -> the
+thrown object's `toString`/`valueOf` -> `run_callback` -> `dispatch_at`.
+Whatever `Step` that nested dispatch returns is still discarded by the bare
+`Err(_)` arm (interp.rs:13961).
+Slots and chunks the coercion allocated, and any promise job it queued, remain
+in the halted machine: `run_promise_jobs` runs only for `Step::Returned`
+(interp.rs:14136-14141), decided BEFORE `finish_step`, and the next `run`'s
+entry sweep (interp.rs:14061-14079) explicitly keeps queued jobs unchanged.
+The metering half stays closed and is now stronger - the whole `Meter` is
+cloned on entry and restored on BOTH the Ok and Err arms (13942/13951/13967),
+so the rendering is entirely unmetered.
+The guest-re-entry surface actually WIDENED in this window: c14706d3 removed
+the `error_data` exclusion, so engine-built native errors now run guest
+coercion at this boundary too.
+What still holds for F146: `render_uncaught` still invokes the guest's
+`toString`/`valueOf` at the host boundary after `meter_host_escape()` has
+already accounted for the escape (`raise_js`, interp.rs:48794-48795, the sole
+`Step::Threw` construction site), and still swallows the nested outcome -
+including `Step::Host(Halt::MeterAbort)` and
+`Step::Host(Halt::StackOverflow(..))` - through the bare `Err(_)` arm at
+interp.rs:13961, so a crank whose armed meter host refuses DURING the
+rendering is still reported as `Halt::Throw`.
+The tick-leak half is fully closed and now locked by a test: the entire
+`Meter` is cloned at entry and restored on both arms, so the rendering
+contributes nothing to `RunOutcome.computrons` on either path.
+The misclassification therefore carries no metering or determinism consequence
+left - it is a diagnostic-text/typing hole only, and the engine now documents
+it as deliberate.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (consolidates the render to the single `finish_step` site and adds
+the unwind/no-charge locks; the metering half was closed earlier by
+58b2b6ca)`.
+Pinned by `rust/engine/ironhorse-vm/tests/uncaught_native_error_rendering.rs`.
+Now F093 at `rust/engine/ironhorse-vm/src/interp.rs:13936`, F146 at
+`rust/engine/ironhorse-vm/src/interp.rs:13948`.
 
 Severities per id: F093 medium, F146 low.
 
@@ -3193,6 +3883,12 @@ Resolved by `a84132a5 fix(ironhorse): raise builtin brand errors (verified
 unregressed at 6c1e1d6b)`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:20129`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `a84132a5 fix(ironhorse): raise builtin brand errors (verified
+unregressed at c14706d3)`.
+Pinned by `rust/engine/ironhorse-262/tests/error_messages_calls.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:20625`.
+
 **Claim.** The one path the `GeneratorState::Executing` state exists to guard
 answers with a crank halt instead of a realm-local `TypeError`.
 **Evidence.** `interp.rs:16681`
@@ -3231,6 +3927,18 @@ first since `frame.take()` has already happened.
 **Known.** No.
 
 #### F096 - `callback_return_depth` gives `Halt::Return` two meanings [low, medium]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes`.
+Pinned by `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`,
+`rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
+`rust/engine/ironhorse-vm/tests/engine_unwind_boundaries.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4258`.
 
 **Claim.** Whether a nested `Halt::Return` means "the callback returned" or "a
 throw unwound past me" is decided by one machine-global `Option<usize>` compared
@@ -3322,6 +4030,14 @@ interrupt regexp matches`.
 Pinned by `rust/engine/ironhorse-vm/tests/meter_bounds.rs`.
 Now at `rust/engine/ironhorse-regexp/src/matcher.rs:121`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `f0898833 fix(ironhorse-vm): fail closed on an armed meter and
+interrupt regexp matches (pre-6c1e1d6b; matcher.rs saw no behavioural change
+in the window - the -w diff is confined to charcase/unicode table growth and
+comments on the CX_CAPTURE_REFERENCE arms)`.
+Pinned by `rust/engine/ironhorse-vm/tests/meter_bounds.rs`.
+Now at `rust/engine/ironhorse-regexp/src/matcher.rs:194`.
+
 **Claim.**
 An armed crank limit cannot interrupt a catastrophic regexp match, because the
 matcher accumulates into a function-local `u64` and the VM charges the meter only
@@ -3390,6 +4106,24 @@ crank so refusals ignore history`.
 Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`,
 `rust/engine/ironhorse-vm/tests/meter_bounds.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:13169`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F014: STILL FIXED.
+Resolved by `f0898833 fix(ironhorse-vm): fail closed on an armed meter and
+interrupt regexp matches; 2df18132 feat(endo): arm the Ironhorse meter by
+default through MeterBounds (unchanged in this window)`.
+Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`,
+`rust/engine/ironhorse-snapshot/tests/meter_fail_closed.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13403`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F020: STILL FIXED.
+Resolved by `2df18132 feat(endo): arm the Ironhorse meter by default through
+MeterBounds; f0898833 fix(ironhorse-vm): fail closed on an armed meter and
+interrupt regexp matches; 128df365 fix(endo): re-base the meter window per
+crank so refusals ignore history (all pre-6c1e1d6b; nothing in
+6c1e1d6b..c14706d3 regresses them)`.
+Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`,
+`rust/engine/ironhorse-vm/tests/meter_bounds.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13403`.
 
 **Claim.**
 A machine whose meter carries a non-zero interval but whose host callback was
@@ -3597,6 +4331,23 @@ getPrototypeOf); 52a9ee1e fix(ironhorse): close proxy and iterator review gaps
 (proxy apply), both pre-f109e8f4; nothing further in the window`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:51520`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: Metering exists for the getPrototypeOf and apply traps (and
+context-specific residuals for get), but ten of the thirteen Proxy internal
+methods, setPrototypeOf (interp.rs:54097), isExtensible (54128),
+preventExtensions (54157), getOwnPropertyDescriptor (54180/54199),
+defineProperty (54269), has (54321), set (54498), deleteProperty
+(54543/54561), ownKeys (54600) and construct (54754/54766), still carry zero
+meter ticks, as do the invariant checks and the 5-slot descriptor objects the
+traps materialize, so proxied property traffic remains substantially
+unmetered.
+Changed by `919b875b fix(ironhorse): close iterator and metering gaps (proxy
+getPrototypeOf); 52a9ee1e fix(ironhorse): close proxy and iterator review gaps
+(proxy apply), both pre-f109e8f4; nothing further in 6c1e1d6b..c14706d3.`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:54097`.
+
 **Claim.** Across the roughly 1,700 lines implementing the thirteen proxy traps,
 their invariant checks, descriptor materialisation and argument-array
 construction, exactly one meter tick exists.
@@ -3624,6 +4375,13 @@ Resolved by `202ace5e fix(ironhorse-vm): route every engine raise through the
 loop's depth test`.
 Pinned by `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:4271`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `202ace5e fix(ironhorse-vm): route every engine raise through the
+loop's depth test (landed before 6c1e1d6b); preserved through c14706d3
+fix(ironhorse): separate dispatch transfers from host outcomes`.
+Pinned by `rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4297`.
 
 **Claim.** Whether the meter is consulted at a catch landing depends on which
 internal arm raised the error: `dispatch_result!`'s `Resume` arm jumps and
@@ -3670,6 +4428,13 @@ was true at `97d8de25`.
 Resolved by `f0898833 fix(ironhorse-vm): fail closed on an armed meter and
 interrupt regexp matches (doc-hardened by ef13c0c5 fix(ironhorse-vm): scope
 the cost-table gate and harden the meter tests)`.
+Pinned by `rust/engine/ironhorse-vm/src/meter.rs`, `meter.rs`.
+Now at `rust/engine/ironhorse-vm/src/meter.rs:149`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `f0898833 fix(ironhorse-vm): fail closed on an armed meter and
+interrupt regexp matches (unchanged since; doc-hardened by ef13c0c5
+fix(ironhorse-vm): scope the cost-table gate and harden the meter tests)`.
 Pinned by `rust/engine/ironhorse-vm/src/meter.rs`, `meter.rs`.
 Now at `rust/engine/ironhorse-vm/src/meter.rs:149`.
 
@@ -3842,6 +4607,28 @@ to diagnostics as recommended, and the design's fuzz target 4 (UTF-8/UTF-16
 boundary incl. unpaired surrogates) still does not exist.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:13433`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The value-producing paths the finding's original evidence
+named remain lossless (Error `message`, Error.prototype.toString, string `+`,
+Array.prototype.join, split/replace/match, RegExp source/flags).
+What still holds is the same residual the 6c1e1d6b revision stated, unchanged
+in this window: property-key IDENTITY still passes through `str_text` on its
+way to `intern_key` at 7 sites, `property_key_repr` (:42803),
+`property_key_id` (:49494), `resolve_at_key` (:49599), `to_read_key` (:49903),
+`to_property_id` (:55128), `Object.groupBy`'s key coercion (:42866) and
+`defineProperty`'s string-key branch (:35092), so two distinct lone-surrogate
+keys collapse to one U+FFFD name and collide, while `property_key_repr`'s own
+doc still claims it is "SameValue-distinguishing".
+Alongside it, `new Function(source)` still round-trips its source text through
+the lossy `value_to_string`, and `to_string_bytes_metered`'s String arm
+(:56530) is still `str_text`.
+`str_text` is neither renamed nor restricted to diagnostics, and the design's
+fuzz target 4 (UTF-8/UTF-16 boundary including unpaired surrogates) still does
+not exist.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13693`.
+
 **Claim.** Values that pass through `str_text` (`String::from_utf16_lossy`) lose
 lone surrogates, contradicting the 2026-07-06 UTF-16 storage decision, even though
 the lossless `to_string_units` exists in the same file and documents exactly this
@@ -3881,6 +4668,14 @@ fix(ironhorse): support Unicode regexp indices`. Now at
 Resolved by `608e95ed fix(ironhorse): support Unicode regexp indices (verified
 unregressed at 6c1e1d6b)`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:25164`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `608e95ed fix(ironhorse): support Unicode regexp indices (verified
+unregressed at c14706d3)`.
+Pinned by none added in this window; the fix is structural at the
+regexp_match_drive seam and the pre-existing Unicode-indices coverage from
+608e95ed still applies.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:25185`.
 
 **Claim.** The matcher runs over UTF-8 bytes derived from a lossy `str_text` and
 the only offset correction applied is for the `C0 80` NUL spelling, so any
@@ -3938,6 +4733,25 @@ Changed by `41d0ca0f fix(ironhorse): gate snapshots by boot layout
 98122484 and 72c3cd68, both BOOT_LAYOUT_VERSION bumps)`.
 Now at `rust/engine/ironhorse-snapshot/src/format.rs:358`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: Snapshot boot-layout compatibility still carries only a
+hand-maintained engine-owned generation (`BOOT_LAYOUT_VERSION`, appended by
+`Signature::new`), with no derivation from `create_intrinsics` and no
+build-time check.
+`boot_slot_count` and the ordered boot native list remain unserialized, so a
+boot-layout change landed without bumping the constant still attaches this
+build's boot metadata to an image's unrelated slots, silently and with no
+refusal.
+Changed by `41d0ca0f fix(ironhorse): gate snapshots by boot layout
+(pre-f109e8f4).
+In 6c1e1d6b..c14706d3 format.rs saw only two further hand bumps of the
+constant, 19 -> 21, riding 49123bc0 feat(ironhorse): persist async activations
+and complete SES intrinsics and c5fccbf7 fix(ironhorse): address adversarial
+persistence and accessor findings - the mechanism is untouched.`.
+Now at `rust/engine/ironhorse-snapshot/src/format.rs:325`.
+
 **Claim.** Adoption boots a fresh machine and replaces its arenas, so every
 boot-derived map keyed by `SlotIndex` survives from the current build, and the
 only guard is a `Signature` string the host passes in, with no derivation from
@@ -3979,6 +4793,12 @@ Resolved by `cb0a17f0 feat(ironhorse): generalize array push and pop; 58c8c9b3
 feat(ironhorse): implement array define property semantics (both landed before
 f109e8f4; untouched in f109e8f4..6c1e1d6b)`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:15806`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `cb0a17f0 feat(ironhorse): generalize array push and pop; 58c8c9b3
+feat(ironhorse): implement array define property semantics (both landed before
+f109e8f4; untouched in 6c1e1d6b..c14706d3)`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:16215`.
 
 **Claim.** `ArrayData.length` is a `u32` rendered to the guest with `as i32`, and
 the length setter's fallback arm silently stores 0 instead of throwing
@@ -4025,6 +4845,36 @@ Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`,
 `rust/engine/ironhorse-vm/tests/meter_bounds.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:39257`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: There is still no meter check point inside any built-in.
+All 28 `check_meter()` call sites are in the bytecode dispatch loop
+(interp.rs:17196-19324) plus the one inside the `dispatch_halt!` macro
+(interp.rs:4297) that expands only within it; none is in
+call_string/call_math/call_native/call_json/call_collection.
+`Meter` still has no `charge_and_check(n)` admission call, its public surface
+(meter.rs:133-340) is
+begin/rearm/is_armed/interval_raw/reset/tick_*/untick_*/raw/state/restore/computrons/check,
+so built-ins still use bare `tick_*`.
+`'x'.repeat(2**31-1)` therefore still charges `tick_builtin_some(count)`
+(interp.rs:41071) and then reaches `Vec::with_capacity(content.len() * count
+as usize)` (interp.rs:41079) before any admission decision, so the reservation
+failure still calls handle_alloc_error and aborts the process, an abort no
+catch_unwind contains and the per-crank limit cannot pre-empt, because the
+limit is only consulted at a loop-closing opcode.
+The unarmed-meter half stays fixed.
+New since 6c1e1d6b: padStart/padEnd is the one named site of this class that
+gained a bound.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (bounded padStart/padEnd only).
+The arming half remains fixed by 2df18132 feat(endo): arm the Ironhorse meter
+by default through MeterBounds, unregressed.`.
+Pinned by `rust/engine/ironhorse-262/tests/error_messages_numeric_string.rs`,
+`rust/endo/tests/ironhorse_meter_bounds.rs`,
+`rust/engine/ironhorse-vm/tests/meter_bounds.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:41079`.
+
 **Claim.** All 43 `check_meter()` calls sit in the dispatch loop, so a built-in
 that charges a guest-chosen quantity accrues the cost and then does the work, with
 the limit consulted only at the next instruction, by which time the allocation has
@@ -4046,6 +4896,43 @@ the `rust/endo` `Machine` API; there is none today.
 **Known.** Partially; the allocation half is the same class as the wave-5 fix.
 
 #### F082 / F115 - No cross-platform, cross-build or repeat determinism lane [medium, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** F082, F115: PARTIALLY
+RESOLVED since the previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds for F082: Recommendation (a) has landed and (b) and (c) have
+not.
+A second OS/architecture lane now exists (test-ironhorse-macos on
+macos-latest, i.e. arm64) and runs the same
+ironhorse-vm/-snapshot/-compile/-regexp suites including the golden
+canonical-blob pin, so the cross-platform half of the determinism claim is now
+instrumented.
+But no workflow or script passes `--repeat N` (xst.rs's determinism gate still
+defaults to `repeat: 1` and is invoked by nothing), and there is still no
+checked-in golden corpus of (program -> result, computrons): the only
+absolute-computron assertions are 14 scattered inline unit pins, unchanged in
+number since 97d8de25, so a weight edit outside those opcodes that keeps
+COST_TABLE_VERSION = "ironhorse-meter-1" still passes CI.
+The snapshot *_carry.rs suites still compare snapshot-vs-continuous
+computrons, never a frozen number.
+What still holds for F115: The cross-host lane recommendation has landed; the
+golden-vector and --repeat recommendations have not.
+A macos-latest (arm64) leg now runs cargo test -p ironhorse-vm -p
+ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp, so the golden
+canonical-blob hash and seal are compared across two hosts.
+What remains: (a) the golden vector still pins a machine built from ["var x =
+5;", "x = x + 1;", "x + 10"] with no row from any side-table family, so
+encoder determinism for the interesting machines is still unpinned; (b)
+nothing anywhere passes --repeat, so xst.rs's determinism gate never runs; (c)
+determinism_violation still compares computrons only, not result, error string
+or halt kind.
+Changed by `c03f399f ci(ironhorse): run canonical snapshot suites on macOS
+(partial; also ff94ead4 test(ironhorse): run compiler and regexp suites
+without the oracle, which put ironhorse-compile/-regexp on the same matrix,
+and 7565ad64 ci(ironhorse): exercise checked arithmetic and store integrity in
+release)`.
+Now F082 at `.github/workflows/ci.yml:729`, F115 at
+`.github/workflows/ci.yml:729`.
 
 **Claim.** No workflow runs any Ironhorse job on a second OS or architecture and
 no workflow passes `--repeat N`, so the design's cross-host determinism claim is
@@ -4078,6 +4965,50 @@ change forces both a golden re-pin and an explicit version bump in one commit.
 **Known.** The CI region map, and ledger L14 for the libm half.
 
 #### F083 / F070 - Two workspaces, two lockfiles, no toolchain pin [medium, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** F070, F083: PARTIALLY
+RESOLVED since the previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds for F070: The measurement and the free-drift mechanism are
+fixed; the untested-root-build residue is not.
+Shared-crate disagreement is down from 22 of 48 to 5 of 48, none of them in
+the IronHorse dependency walk, and a CI gate
+(rust/engine/scripts/check-lockfile-agreement.py, run in ci.yml's
+format-ironhorse job) now fails the build on any version, source, checksum or
+edge disagreement reachable from the shared IronHorse path crates, so the
+whole icu/zerovec stack behind String.prototype.normalize and Intl.Segmenter
+provably agrees.
+Both workspaces are pinned to Rust 1.91.1, every CI cargo call passes
+--locked, and both have [profile.release] overflow-checks = true.
+What remains: ironhorse-vm's and ironhorse-snapshot's own test suites still
+run only under rust/engine/Cargo.lock; the root-workspace resolution, the one
+the shipped endor binary links, is exercised only through
+ironhorse-store-sqlite's suite (now in both debug and release) and the single
+endo ironhorse_store_worker integration test.
+What still holds for F083: Two of the three recommendations landed; the
+INTL_DATA_VERSION one did not. rust-toolchain.toml now pins 1.91.1 at both
+workspace roots, and a CI step asserts the two lockfiles agree on every
+package reachable from the shared IronHorse crates, so `cargo build` at the
+repo root and `cd rust/engine && cargo test` no longer resolve different ICU
+graphs.
+What remains is the fail-open half: INTL_DATA_VERSION is still a hand-stamped
+string at interp.rs:5307, derived from nothing, folded into no snapshot
+signature or resume gate, and merely published to guests as
+`Intl.__ironhorseDataVersion`.
+A snapshot written under one ICU data set still resumes silently under another
+with different segmentation/normalisation results, whereas COST_TABLE_VERSION
+fails closed.
+Changed by `4847ef0c ci(ironhorse): pin toolchains and enforce shared
+dependency agreement (adds both rust-toolchain.toml files,
+check-lockfile-agreement.py, its self-test, the CI step, and re-resolves
+rust/engine/Cargo.lock); 7565ad64 ci(ironhorse): exercise checked arithmetic
+and store integrity in release (adds [profile.release] overflow-checks = true
+to both workspaces and the release matrix leg)`.
+Pinned by rust/engine/scripts/test-lockfile-agreement.py,
+`test_unrelated_root_versions_are_not_ironhorse_dependencies`,
+`test_transitive_version_drift_is_rejected`, `tes.
+Now F070 at `Cargo.toml:6`, F083 at
+`rust/engine/ironhorse-vm/src/interp.rs:5307`.
 
 **Claim.** `cargo build` at the repo root resolves a different dependency closure
 than the engine workspace for 22 of 48 shared crates, including `icu_provider`
@@ -4163,6 +5094,14 @@ probes (in window)`.
 Pinned by `rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:48967`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `11546085 fix(ironhorse): harden exotic object graphs
+(pre-f109e8f4); 9d4f4689 test(ironhorse): pin the hardened JavaScript boundary
+probes (pre-6c1e1d6b).
+Nothing behavioural in 6c1e1d6b..c14706d3.`.
+Pinned by `rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:51351`.
+
 **Claim.** Because the visited mark is stamped at enqueue and the harden walk can
 abort part-way on an exotic object, objects reached but not yet frozen stay
 marked, and a later `harden(x)` short-circuits on that mark and returns `x`
@@ -4206,6 +5145,14 @@ bare-assignment integrity bypasses (deleted the residual dead global arm)`.
 Pinned by `rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:53130`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `1494c755 fix(ironhorse): honor global property descriptors
+(original); f5bab7e3 fix(ironhorse): close the with-statement and
+bare-assignment integrity bypasses (deleted the residual dead global arm),
+both pre-6c1e1d6b, unchanged since`.
+Pinned by `rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:55824`.
+
 **Claim.** `resolve_set` writes the global property slot's kind and value
 directly with no `XS_DONT_SET_FLAG` or accessor check, so a frozen global is
 writable by bare name even though the same property is correctly protected
@@ -4243,6 +5190,14 @@ Resolved by `11546085 fix(ironhorse): harden exotic object graphs
 probes (in window)`.
 Pinned by `rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:48919`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `11546085 fix(ironhorse): harden exotic object graphs
+(pre-f109e8f4); 9d4f4689 test(ironhorse): pin the hardened JavaScript boundary
+probes (pre-6c1e1d6b).
+Nothing behavioural in 6c1e1d6b..c14706d3.`.
+Pinned by `rust/engine/ironhorse-vm/tests/hardened_js_boundary.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:51287`.
 
 **Claim.** `is_ordinary_object` excludes arrays, collections, typed arrays,
 buffers, views, wrappers, regexps and proxies, and every integrity operation
@@ -4291,6 +5246,33 @@ Changed by `7b9af8b2 fix(ironhorse): refuse heap endowments and record the
 realm decision`.
 Pinned by `rust/engine/ironhorse-vm/src/compartment.rs`.
 Now at `rust/engine/ironhorse-vm/src/compartment.rs:455`.
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The seam still does not exist: every
+`Compartment::evaluate*` still constructs a fresh `Interp` (compartment.rs:432
+in `evaluate`, :455 in `evaluate_with_symbols`, :472 in
+`evaluate_with_symbols_metered`), `Intrinsics` still carries no intrinsic
+graph, the name-keyed endowment map (`globals: options.endowments`,
+compartment.rs:235) is still never read by any evaluator, and no primordial
+object is shared between compartments or between two evaluations of one
+compartment.
+What no longer holds is the whole misleading-marker half: the module doc
+(compartment.rs:1-92), rust/engine/README.md and designs/ironhorse-engine.md
+§608-645 all state the realm decision of record explicitly; `Rc::ptr_eq` is
+documented as marker identity; a heap-backed endowment is refused as
+`compartment:heap-endowment` rather than seeded as a dangling slot; and, new
+in this window, the `locked_down: bool` field the finding cited as "a marker
+that documents a property the code lacks" has been deleted outright, leaving
+`pub struct Intrinsics {}` with the shape-to-come recorded in prose instead of
+in a dead field.
+Changed by `7b9af8b2 fix(ironhorse): refuse heap endowments and record the
+realm decision (pre-window); in this window c14706d3 fix(ironhorse): separate
+dispatch transfers from host outcomes removed the vestigial `locked_down`
+field`.
+Pinned by `rust/engine/ironhorse-vm/src/compartment.rs`.
+Now at `rust/engine/ironhorse-vm/src/compartment.rs:432`.
 
 **Claim.** Every `Compartment::evaluate*` constructs a fresh `Interp`,
 `Intrinsics` carries no intrinsics and has no writer, name-keyed endowments are
@@ -4359,6 +5341,31 @@ Pinned by
 `rust/engine/ironhorse-vm/tests/strict_with_environment_refused_set.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:29605`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The mop_* seam now covers every site the finding originally
+cited (with/@@unscopables, ToPropertyDescriptor, primitive-string named reads,
+the with-body [[Set]], trap-less-proxy ownKeys forwarding) and, new in this
+window, the DisposableStack/AsyncDisposableStack `use()`
+@@dispose/@@asyncDispose lookup.
+What remains of the class is that instance_get/instance_has/instance_put are
+still ordinary Interp methods rather than boot/restore-only, and 5
+guest-reachable built-in paths (13 call sites) still read guest-supplied or
+guest-mutable objects through them, so a Proxy trap or accessor is bypassed
+for: `new Error(m, options)`'s cause HasProperty+Get, Intl option-bag reads,
+the Temporal roundingIncrement read, the Error `stack` getter's name/message
+reads, and the XS_CODE_GET_PROPERTY fallback for engine exotic instances
+(Temporal, RegExp, Intl.Locale).
+The recommended membrane-equivalence test is still absent.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (routes the DisposableStack/AsyncDisposableStack use() disposer
+lookup through mop_get and adds ToObject on the resource); earlier partial
+fixes 394616be, f5bab7e3, ff76825a remain in place`.
+Pinned by
+`rust/engine/ironhorse-vm/tests/strict_with_environment_refused_set.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:30161`.
+
 **Claim.** The documented contract that all property operations route through
 `mop_*` so a trap cannot be bypassed is false at four sites, and a trapless proxy
 does not forward `ownKeys` identically to its target.
@@ -4411,6 +5418,25 @@ Changed by `58c8c9b3 feat(ironhorse): implement array define property
 semantics; fd9ada08 / 91fb95bf / 21a0e44f / a69b8cea (Intl currency + unit
 styles), all pre-f109e8f4; nothing further in the window`.
 Now at `rust/engine/ironhorse-vm/src/intl_number.rs:890`.
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: `Intl.NumberFormat` still accepts `notation: 'compact'`
+(interp.rs:24251-24258, 24400) while `compute_notation_exponent`
+(intl_number.rs:891-897) folds Compact into Standard's zero exponent and
+`PartType::Compact` (intl_number.rs:175) is declared but never constructed, so
+compact formatting silently produces an ungrouped standard-notation string
+instead of refusing, a guest-observable wrong value at an oracle-blind surface
+(XS ships no Intl).
+The array-length `_ => 0` and detached-typed-array cases remain closed.
+Changed by `58c8c9b3 feat(ironhorse): implement array define property
+semantics; fd9ada08 / 91fb95bf / 21a0e44f / a69b8cea (Intl currency + unit
+styles), all pre-f109e8f4.
+Nothing in 6c1e1d6b..c14706d3 addresses compact (6d914a57 fix(ironhorse):
+remove redundant Intl grouping condition is the only intl_number.rs change and
+is unrelated).`.
+Now at `rust/engine/ironhorse-vm/src/intl_number.rs:893`.
 
 **Claim.** The engine's "an honest named skip, never a wrong value" rule is
 broken at three guest-observable seams: `array_set_length` coerces through
@@ -4489,6 +5515,13 @@ enforce the two `$262` host invariants F143 left in prose)`.
 Pinned by `rust/engine/ironhorse-vm/tests/test262_host_gate.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:8120`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `98122484 fix(ironhorse): keep the test262 $262 host out of
+production machines (invariants hardened by 9a3c8a60 fix(ironhorse-vm):
+enforce the two `$262` host invariants F143 left in prose)`.
+Pinned by `rust/engine/ironhorse-vm/tests/test262_host_gate.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:8214`.
+
 **Claim.** `create_test262_host` runs unconditionally inside `create_intrinsics`,
 so any guest program naming `$262` receives a working `ArrayBuffer`-detach
 capability in the shipped engine.
@@ -4536,6 +5569,16 @@ boundary, not the escape site)`.
 Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
 `rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:4112`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `d1e66f6a fix(ironhorse-vm)!: make Halt::Throw carry the thrown
+value; 58b2b6ca fix(ironhorse-vm): render an uncaught throw at the host
+boundary, not the escape site (both pre-6c1e1d6b); c14706d3 fix(ironhorse):
+separate dispatch transfers from host outcomes preserved the discipline under
+the new Step enum`.
+Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
+`rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:55068`.
 
 **Claim.** `descriptor_from_object`, `to_property_id` and
 `define_properties_from_object` return `Err(Halt::Throw(String))` instead of
@@ -4589,6 +5632,12 @@ Resolved by `6378dde0 feat(ironhorse): complete single-realm Date
 compatibility`.
 Pinned by `rust/engine/ironhorse-262/tests/date_core.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:8907`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `6378dde0 feat(ironhorse): complete single-realm Date
+compatibility`.
+Pinned by `rust/engine/ironhorse-262/tests/date_core.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:9035`.
 
 **Claim.** Intrinsic global bindings are created with flag 0, so `Object`,
 `Math`, `globalThis` and every other intrinsic global is enumerable, where XS's
@@ -4644,6 +5693,16 @@ Pinned by `rust/engine/ironhorse-vm/tests/halt_label_registry.rs`,
 `ironhorse-fuzz/src/lib.rs`, `ironhorse-262/src/xst.rs`.
 Now at `rust/engine/ironhorse-fuzz/src/lib.rs:1710`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `78cca624 feat(ironhorse-vm): split engine-invariant halts out of
+Halt::Unsupported (pre-6c1e1d6b; no behavioural change in 6c1e1d6b..c14706d3 -
+fuzz/src/lib.rs and xst.rs saw only 1b785e30 chore(ironhorse): format Rust
+sources and c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes)`.
+Pinned by `rust/engine/ironhorse-vm/tests/halt_label_registry.rs`,
+`ironhorse-fuzz/src/lib.rs`, `lib.rs`.
+Now at `rust/engine/ironhorse-fuzz/src/lib.rs:1710`.
+
 **Claim.** Every differential comparator returns "no finding" for any run ending
 in `Halt::Unsupported`, and at least 23 of the 269 distinct labels are
 interpreter-invariant refusals rather than unported features.
@@ -4686,6 +5745,13 @@ answers at the oracle discard sites`.
 Pinned by `rust/engine/ironhorse-262/src/xst.rs`.
 Now at `rust/engine/ironhorse-262/src/xst.rs:677`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `3cea11a9 fix(ironhorse-262,ironhorse-fuzz): stop skipping wrong
+answers at the oracle discard sites (landed before 6c1e1d6b; further hardened
+by c14706d3 fix(ironhorse): separate dispatch transfers from host outcomes)`.
+Pinned by `rust/engine/ironhorse-262/src/xst.rs`.
+Now at `rust/engine/ironhorse-262/src/xst.rs:635`.
+
 **Claim.** `evaluate_positive` maps `Agreement::OracleOnlyComplete` to
 `RunSkip("ironhorse-aborted")` without inspecting `run.ironhorse_halt`, so a
 positive case where Ironhorse computes a wrong value, trips a harness assertion
@@ -4727,6 +5793,16 @@ Pinned by `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`,
 `rust/engine/ironhorse-fuzz/fuzz/fuzz_targets/guest_no_abort.rs`.
 Now at `.github/workflows/ci.yml:835`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `resolved before 6c1e1d6b (f028ab1f, aebbab91, 7956149e,
+05981323); not regressed in 6c1e1d6b..c14706d3, the only change here is
+RUST_MIN_STACK also being set on the oracle-free test-ironhorse matrix
+(ci.yml:753)`.
+Pinned by `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`,
+`rust/engine/ironhorse-compile/tests/recursion_bounds.rs`,
+`recursion_bounds.rs`.
+Now at `.github/workflows/ci.yml:829`.
+
 **Claim.** The only lane that runs the compiler and regexp suites sets
 `RUST_MIN_STACK` to 16 MiB specifically because the ported recursive compile and
 match overflow the default, which makes CI structurally incapable of observing
@@ -4744,6 +5820,20 @@ That test is the enforcement point the workaround currently substitutes for.
 **Known.** No.
 
 #### F036 - The expectation ratchet exists only as code [medium, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (adds expectations/ironhorse.txt, try.txt and the whole-tree shards,
+the two ci.yml gates, the nightly whole-tree ratchet, Outcome::Fail(String),
+and Ratchet::FailureSkipped/FailureReasonChanged)`.
+Pinned by `rust/engine/ironhorse-262/src/expectations.rs`,
+`rust/engine/ironhorse-262/tests/expectation_cli.rs`,
+`rust/engine/ironhorse-262/tests/expectation_shards.rs`.
+Now at `rust/engine/ironhorse-262/src/bin/endot_ih.rs:348`.
 
 **Claim.** No expectation list exists anywhere in the repository and no workflow
 or script passes `--expectations`, so the only anti-regression gate is
@@ -4908,6 +5998,16 @@ Pair it with the one-line truth fix it should catch:
 
 #### F117 - The Temporal host exclusion is a source-substring heuristic [medium, high]
 
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes`.
+Pinned by `rust/engine/ironhorse-262/src/xst.rs`.
+Now at `rust/engine/ironhorse-262/src/xst.rs:977`.
+
 **Claim.** `oracle_missing_temporal` skips any case whose source merely contains
 the substring "Temporal" and whose results disagree, and it is checked before the
 agreement match, so it also swallows over-acceptance and wrong-value divergences
@@ -4928,6 +6028,26 @@ word "Temporal" and a divergent result asserting a failure.
 **Known.** No.
 
 #### F038 - The GC counted-ref parity net is self-referential and debug-only [low, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The parity net still derives BOTH sides of the comparison
+from the same `each_side_table_ref_tail` walk: `bits` is tail +
+`side_refs.or_into_bits`, and `walked` is `each_side_table_ref` = the
+identical tail + the two bulk tables.
+The tail therefore cancels, so the net can still only detect drift in the two
+bulk tables (arrays' items, collections' entries), and a side table omitted
+from the tail walk remains invisible to both the projection and its check,
+caught only by the separate, source-parsing tests/gc_visitation_registry.rs,
+never by the runtime net.
+The release-build half of the finding is fixed.
+Changed by `097133c5 fix(ironhorse): refuse collection and persistence after
+bulk count corruption (release gate wired by 7565ad64 ci(ironhorse): exercise
+checked arithmetic and store integrity in release)`.
+Pinned by `rust/engine/ironhorse-vm/src/interp.rs`,
+`rust/engine/ironhorse-vm/src/bulk.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:64316`.
 
 **Claim.** The parity net's tail term appears on both sides of the comparison and
 cancels, and the net is `#[cfg(debug_assertions)]`.
@@ -4956,6 +6076,21 @@ it holds in whatever profile CI runs.
 missed findings.
 
 #### F112 - No oracle-free test target for `ironhorse-compile` or `ironhorse-regexp` [low, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `ff94ead4 test(ironhorse): run compiler and regexp suites without
+the oracle (moved xs-oracle to an optional dep behind `parity`, gated the
+oracle test targets, and added -p ironhorse-compile -p ironhorse-regexp to the
+fast lane); 10de8791 ci(ironhorse): enforce build and Clippy warning gates
+(added the [lints] workspace stanzas to both manifests)`.
+Pinned by No new test fn; the enforcement point is the CI job itself,
+.github/workflows/ci.yml job `test-ironhorse` step "Test ironhorse engine
+crates (rust/engine worksp.
+Now at `rust/engine/ironhorse-compile/Cargo.toml:25`.
 
 **Claim.** `xs-oracle` is an unconditional dev-dependency of both crates, so no
 test target of either builds without the `c/moddable` submodule and the C build,
@@ -4990,6 +6125,12 @@ Resolved by `a1d69d42 fix(ironhorse): close shared runtime compatibility gaps
 (refined by acba9509); no commit in f109e8f4..6c1e1d6b regresses it`.
 Pinned by `rust/engine/ironhorse-262/src/xst.rs`.
 Now at `rust/engine/ironhorse-262/src/xst.rs:2084`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `a1d69d42 fix(ironhorse): close shared runtime compatibility gaps
+(refined by acba9509); no commit in 6c1e1d6b..c14706d3 regresses it`.
+Pinned by `rust/engine/ironhorse-262/src/xst.rs`.
+Now at `rust/engine/ironhorse-262/src/xst.rs:1966`.
 
 **Claim.** `record_case` inserts a `Mode::Strict` entry only when strict was
 skipped, so for every case that runs both modes the ratchet stores one `Sloppy`
@@ -5050,6 +6191,12 @@ at the persist gate`.
 Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:13132`.
 
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `d06abcff fix(ironhorse-vm): make quiescence a lifecycle property
+at the persist gate (unchanged in this window)`.
+Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13365`.
+
 **Claim.** A crank that halts with `MeterAbort` or `StepLimit` at a top-level
 loop-closing check passes `is_quiescent()` and every persist verb, and the
 resulting snapshot's resumed twin permanently diverges from the uninterrupted
@@ -5094,6 +6241,15 @@ and the coercion fold after review)`.
 Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
 Now F022 at `rust/engine/ironhorse-vm/src/interp.rs:13915`, F030 at
 `rust/engine/ironhorse-vm/src/interp.rs:13866`.
+
+**Status at c14706d3 (revision of 2026-09-08).** F022, F030: STILL FIXED.
+Resolved by `dda72b18 fix(ironhorse)!: gate the image data path and report raw
+completions (twin lock added by 65ac97f3; further hardened by c14706d3's
+crank-entry sweep)`.
+Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`,
+`persist_gates.rs`.
+Now F022 at `rust/engine/ironhorse-vm/src/interp.rs:14194`, F030 at
+`rust/engine/ironhorse-vm/src/interp.rs:14145`.
 
 **Claim.** For a crank whose completion value is a `Symbol` or a null-prototype
 object, `run()` rewrites a clean `Halt::Return` into a synthetic `Halt::Throw`
@@ -5216,6 +6372,32 @@ after review")`.
 Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
 Now at `rust/engine/ironhorse-snapshot/src/machine.rs:239`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The gate half stays fixed and is not regressed:
+`MachineSnapshot::persist_gate` is a required trait method with no body
+(machine.rs:142), `snapshot_image` is a required method (machine.rs:173) whose
+only implementation runs the gate first (machine.rs:243-259:
+`self.persist_gate()?` then the stored-unregistered-key-id audit), and the
+image-building body is the private `ungated_image` (machine.rs:266,
+doc-commented "Private on purpose (architecture review F047): nothing in this
+crate hands out an image of a machine the gate has not seen").
+What remains is the constructor half, unchanged: `MachineImage::from_arenas`
+(image.rs:444) and all fifteen `with_*` builders (image.rs:544-673) are `pub`,
+as are `Interp::slots`/`Interp::chunks` (interp.rs:4554, 4556),
+`stack_slots()` (10170), `program_symbol_names()` (10177), `meter_state()`
+(10183) and `symbol_key_table()` (13011), so an out-of-crate caller can still
+hand-assemble an image of a halted or Pending-row-bearing machine and persist
+it through the public `image_to_batch` (store.rs:2876) + `commit`, or
+`write_machine` (image.rs:4509), knowingly retained as an encoder input for
+the fuzz targets and exercised by tests/store_hardening.rs:83, 532, 692.
+Changed by `dda72b18 fix(ironhorse)!: gate the image data path and report raw
+completions (unchanged since; no commit in 6c1e1d6b..c14706d3 touches the
+gate)`.
+Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
+Now at `rust/engine/ironhorse-snapshot/src/machine.rs:243`.
+
 **Claim.** The gate guards `write_snapshot`, `write_snapshot_to_file`,
 `suspend_to_cas` and the two store verbs, while `MachineSnapshot::snapshot_image`,
 `image::write_machine`, `store::image_to_batch` and `HeapStore::commit` are all
@@ -5249,6 +6431,14 @@ default through MeterBounds`.
 Pinned by `rust/engine/ironhorse-snapshot/tests/meter_fail_closed.rs`,
 `rust/endo/tests/ironhorse_meter_bounds.rs`.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:13031`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `f0898833 fix(ironhorse-vm): fail closed on an armed meter and
+interrupt regexp matches; 2df18132 feat(endo): arm the Ironhorse meter by
+default through MeterBounds (unchanged in this window)`.
+Pinned by `rust/engine/ironhorse-snapshot/tests/meter_fail_closed.rs`,
+`rust/endo/tests/ironhorse_meter_bounds.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:13264`.
 
 **Claim.** The meter *state* does survive (index, interval and count ride in the
 `METR` atom and are reinstated by `Meter::restore`, locked by tests); what cannot
@@ -5398,6 +6588,30 @@ uncoercible-completion scenario)`.
 Pinned by `rust/engine/ironhorse-snapshot/tests/metamorphic_determinism.rs`.
 Now at `rust/engine/ironhorse-snapshot/src/store_suite.rs:88`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: Unchanged from 6c1e1d6b: the suspend SCHEDULE is still the
+unsampled axis.
+`metamorphic` (store_suite.rs:316-341) runs the same seven ways,
+uninterrupted, blob-every-boundary, store-eager, store-lazy,
+lazy-adversarial-prefetch, lazy-adversarial-evict, checkpoint-every-crank,
+which vary BACKEND and RESIDENCY while the suspend point takes only the three
+values never / every boundary / once at the end; there is no arbitrary-subset
+(2^k) parameterization, and no scenario in `metamorphic_suite` contains a
+halted crank because `run_baseline` asserts `m.is_quiescent()` after every
+crank (store_suite.rs:89-94).
+The impact clause is still withdrawn: boundary-register state is covered by
+the sibling `boundary_collection_twins` runner (store_suite.rs:593) and
+halted-crank persist refusal is pinned by tests/persist_gates.rs and
+tests/meter_fail_closed.rs.
+Changed by `d06abcff fix(ironhorse-vm): make quiescence a lifecycle property
+at the persist gate; dda72b18 fix(ironhorse)!: gate the image data path and
+report raw completions (both pre-6c1e1d6b; nothing in 6c1e1d6b..c14706d3
+changes this file except the format pass)`.
+Pinned by `rust/engine/ironhorse-snapshot/tests/metamorphic_determinism.rs`.
+Now at `rust/engine/ironhorse-snapshot/src/store_suite.rs:89`.
+
 **Claim.** The suite samples the suspend schedule at only three points, never, at
 every crank boundary, and once at the end, and `run_baseline` asserts every crank
 completes.
@@ -5417,6 +6631,33 @@ assertion instead of the blanket completion assertion.
 deferral.
 
 #### F127 - Three Pending rows make every await-bearing machine un-checkpointable [low, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The await half is fixed and the row count is now two, not
+three.
+`async_instances` graduated to `Serialized` (sidetable.rs:575) with its own
+`ASYN` atom (format.rs:128, image.rs:2335 `encode_async_instances`, store
+schema 24), and `ReactionKind::AsyncAwait(_)` joined the persist-gate
+whitelist (interp.rs:10758-10767), so a vat suspended mid-`await`, the
+daemon's central pattern the impact clause named, now checkpoints and resumes.
+What remains: `checkpoint_to_store`/`write_snapshot` still refuse by name
+whenever a live promise carries a reaction of one of the seven
+still-unwhitelisted kinds (`AsyncGeneratorAwait`/`Yield`/`Return` and
+`FromAsyncNext`/`Elem`/`Map`/`Close`, interp.rs:3382-3384 and 3426-3429), "a
+promise reaction that would resume a non-persisted async frame", or when any
+non-free `async_generators` owner exists, "an async generator whose state does
+not yet persist".
+The two remaining Pending ledger rows are
+`async_generators/async_gen_run_stack` and `module::ModuleGraph`.
+Changed by `49123bc0 feat(ironhorse): persist async activations and complete
+SES intrinsics (adds the ASYN atom, flips AsyncInstances to Serialized, and
+adds `| ReactionKind::AsyncAwait(_)` to the gate whitelist)`.
+Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`,
+`rust/engine/ironhorse-snapshot/tests/async_carry.rs`,
+`rust/engine/ironhorse-snapshot/src/sidetable.rs`.
+Now at `rust/engine/ironhorse-snapshot/src/sidetable.rs:587`.
 
 **Claim.** `checkpoint_to_store` and `write_snapshot` refuse by name whenever any
 live promise carries a reaction whose kind is not `User`/`FinallyReturn`/
@@ -5662,6 +6903,38 @@ restore is already copy-on-write), so `CATCH` becomes a refcount bump.
 
 #### F123 - The only chunk-space compactor destroys lazy residency [medium, high]
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: `collect_full` still compacts unconditionally, gc.rs:183
+`let remap = chunks.compact(&live_offsets);` sits on the straight-line path
+with no fragmentation threshold and no residency-preserving branch, and
+`ChunkArena::compact` still begins with `self.ensure_all_resident();`
+(value.rs:1565, comment: "Compaction reads every live block, so it is the
+amortized full reifier on a lazy arena") and still ends by downgrading the
+arena to plain fully-resident storage (value.rs:1668 `self.bytes =
+ChunkBytes::Plain(fresh);`).
+So the one operation that reclaims strings still destroys a lazily resumed
+machine's O(working set) residency property, on top of the two
+O(slots.capacity()) arena scans in gc.rs (the live-offset gather at :172-181
+and the offset-rewrite pass at :184-200) and a HashMap remap entry per live
+chunk.
+What no longer holds is the checkpoint clause: the post-compaction checkpoint
+is no longer unconditionally a full chunk write.
+`compact` now recomputes the dirty bitmap per extent by comparing the fresh
+bytes against the pre-compaction bytes at the same positions
+(value.rs:1634-1667), ORed with uncommitted pre-compaction dirt and a
+shrunk-final-extent test, so a compaction that moves nothing (or only trailing
+garbage) leaves the leading extents clean.
+The relief is best-case only: because compaction slides everything down, the
+first moved block dirties every extent after it, so scattered garbage still
+re-commits nearly the whole space.
+Changed by `d8a2191e fix(ironhorse-snapshot)!: make the persistence boundary
+fail closed (pre-6c1e1d6b; addressed the checkpoint clause only).
+No commit in 6c1e1d6b..c14706d3 changes this code behaviourally.`.
+Pinned by `rust/engine/ironhorse-vm/src/gc.rs`.
+Now at `rust/engine/ironhorse-vm/src/gc.rs:183`.
+
 **Claim.** The only chunk-space reclaimer is unreachable from the production path,
 and when it is reached it fully faults in a lazily resumed arena and permanently
 downgrades it to fully-resident storage.
@@ -5844,6 +7117,24 @@ gate and harden the meter tests)`.
 Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`.
 Now at `designs/ironhorse-engine.md:499`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The documentary half only, unchanged from 6c1e1d6b.
+designs/ironhorse-engine.md:499-506 still asserts the seven-method `Machine`
+metering API is "preserved verbatim … without supervisor changes", and the
+reconciliation row at :848 still declares the daemon-xs-worker-metering
+design's `Machine` metering API "unchanged".
+The seam that actually landed is a different API, a `MeterBounds` policy on
+the machine, armed by default through arm_meter/rearm_meter, so the
+reconciliation table's "without supervisor changes" claim remains unverified.
+Changed by `2df18132 feat(endo): arm the Ironhorse meter by default through
+MeterBounds (landed before 6c1e1d6b); nothing in 6c1e1d6b..c14706d3 touches
+the documentary half, the only design-doc edits in this window (763558c6,
+6a201ca2) are the Miri/sanitizer corrections at :702-718`.
+Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`.
+Now at `designs/ironhorse-engine.md:499`.
+
 **Claim.** None of the seven `Machine` metering methods the design says are
 preserved verbatim exists on the Ironhorse seam, and no code path under
 `rust/endo/src` calls `arm_meter`, `rearm_meter`, or any crank limit.
@@ -5883,6 +7174,25 @@ Changed by `7b9af8b2 fix(ironhorse): refuse heap endowments and record the
 realm decision`.
 Now at `designs/ironhorse-engine.md:6`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The approved design still has no `## Status` section and no
+per-stage landed/partial/not-started ledger, its top-level headings remain
+Feasibility Verdict / What Is the Problem / Ground Truth / Build Approach /
+Architecture / Staged Roadmap / Dependencies / Design Decisions / Resolved
+Questions / Prompt.
+There is still no rust/engine/ARCHITECTURE.md, no per-crate architecture doc,
+and no CHANGELOG split, so the current architecture is reconstructable only
+from the 4,510-line store-seam changelog-design plus the 3,521-line
+rust/engine/README.md, both of which grew again this window.
+What is fixed is the metadata surface plus a growing set of dated in-section
+status-of-record amendments: the design now carries `Updated 2026-09-08`,
+designs/README.md's Updated column is filled, and three sections carry dated
+amendments (§ Hardened JavaScript realm decision 2026-09-06, § Memory-safety
+confidence W0/F034 2026-09-08, § Metering).
+Now at `designs/ironhorse-engine.md:8`.
+
 **Claim.** No document in the repository describes IronHorse as it exists today.
 **Evidence.** `designs/README.md:355` leaves the `Updated` cell empty despite two revisions
 recorded inside the design; the design's headings contain no `## Status` although
@@ -5907,6 +7217,20 @@ blockquotes as the record, to point at the new Status section.
 unmet convention.
 
 #### F034 - Design-promised Miri and sanitizer CI does not exist [medium, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `763558c6 ci(ironhorse): expose oracle sanitizer findings and
+correct Miri claims (hardened by 6a201ca2 ci(ironhorse): gate sanitizer
+failures outside pinned XS UB; 63065f6f ci(ironhorse): gate jobs on relevant
+PR and push changes)`.
+Pinned by rust/engine/scripts/test-oracle-sanitizer-scope.sh, executable C
+fault probes pinning the UBSAN exclusion boundary, run by the blocking
+`oracle-sanitizers` job .
+Now at `designs/ironhorse-engine.md:706`.
 
 **Claim.** The design's "CI enforcement: Miri on the arena and GC test suites,
 ASAN/UBSAN on the oracle harness" is entirely unimplemented: no workflow mentions
@@ -5982,6 +7306,15 @@ added § Native recursion budget and stack contract)`.
 Pinned by `rust/engine/ironhorse-compile/tests/recursion_bounds.rs`,
 `rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`.
 Now at `rust/engine/README.md:204`.
+
+**Status at c14706d3 (revision of 2026-09-08).** STILL FIXED.
+Resolved by `aebbab91 fix(ironhorse-compile): budget parser recursion and
+bound tree depth; 05981323 chore(ironhorse): document the native stack
+contract and add a no-abort fuzz target; later hardened by 9af3dbe6
+fix(ironhorse-compile): bound the tree depth at construction, not after`.
+Pinned by `rust/engine/ironhorse-compile/tests/recursion_bounds.rs`,
+`rust/engine/ironhorse-vm/tests/native_recursion_budget.rs`.
+Now at `rust/engine/README.md:260`.
 
 **Claim.** The upstream-delta table marks XS's parser stack-margin fix as already
 mirrored on the grounds that "the parser carries its own stack checks", and no
@@ -6187,6 +7520,30 @@ off $HOME (the only commit touching this file in the window; TMPDIR half
 only)`.
 Now at `rust/engine/ASYNC-AWAIT-HANDOFF.md:34`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The child-to-child handoff note still sits at the engine
+workspace root (10,856 bytes) citing the superseded oracle pin `48ee02d8cfe0`
+at :34 (the live pin is `23b4d6b0a65f` = moddable 8.3.1, per
+rust/engine/README.md:115 and ironhorse-262/baseline/README.md:45), an
+orchestration time budget at :27-32 ('does not co-fit with the keystone in one
+2400s handler.
+Give it a fresh, full-budget child.'), and a 'Still folded' list at :16-24
+every item of which has now landed, including `await` inside a live `try`,
+which was the one item the 6c1e1d6b restatement did not yet cover.
+Its GC-roots contract (:163-170) is still a third independent formulation of
+design:910-923 and still cites no executable ground truth (no reference to
+ironhorse-vm/tests/gc_visitation_registry.rs anywhere in the file).
+Fixed so far, in two separate commits and both incidental: the personal TMPDIR
+was parameterized off $HOME (ada788ac), and the false Miri claims at :13 and
+:139 were corrected to name the ordinary unit test (763558c6).
+Changed by `763558c6 ci(ironhorse): expose oracle sanitizer findings and
+correct Miri claims (the only commit touching this file in 6c1e1d6b..c14706d3;
+Miri-claim half only), after ada788ac docs(ironhorse): parameterize the
+async-handoff TMPDIR off $HOME (pre-6c1e1d6b)`.
+Now at `rust/engine/ASYNC-AWAIT-HANDOFF.md:34`.
+
 **Claim.** `rust/engine/ASYNC-AWAIT-HANDOFF.md` is a child-to-child note citing
 the superseded oracle pin, a personal `TMPDIR`, an orchestration time budget, and
 a "Still folded" list every item of which has since landed.
@@ -6369,6 +7726,26 @@ blocks.
 
 #### F165 - Neither collector checks quiescence [low, high]
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: `Interp::collect_garbage` (interp.rs:63295) and
+`Interp::free_pages` (interp.rs:64155) are still `pub` with no
+`is_quiescent()` guard or `debug_assert` of their own, `free_pages` checks
+only `side_refs.is_poisoned()`, `collect_garbage` checks nothing, and
+`pending_new_target` is still absent from `gc_roots` (registry row unchanged
+at `Req::DocumentedOnly` with the same unenforced-convention justification).
+What no longer holds is the exploit path: `run()` now disarms
+`pending_new_target` at crank entry, so a sweep of the register's slot while
+the machine sits at a StepLimit/MeterAbort halt can no longer be consumed as a
+later crank's `new.target`; and every store-side collector now refuses a
+non-quiescent machine.
+Changed by `c14706d3 fix(ironhorse): separate dispatch transfers from host
+outcomes (run()-entry disarm of pending_new_target); 097133c5 fix(ironhorse):
+refuse collection and persistence after bulk count corruption (is_quiescent
+gates on partial_collect/generational_collect)`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:4698`.
+
 **Claim.** `collect_garbage` and `free_pages` are `pub` with no `is_quiescent()`
 guard, and `pending_new_target` is a `SlotIndex` register absent from `gc_roots`
 that `run()` never resets, so the registry's justification is an unenforced
@@ -6455,6 +7832,17 @@ symbol as a key, and correct the comment.
 **Known.** The constants region map recorded the collision.
 
 #### F190 - The partial collector's soundness net exists only in debug builds [low, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `097133c5 fix(ironhorse): refuse collection and persistence after
+bulk count corruption`.
+Pinned by `rust/engine/ironhorse-vm/src/bulk.rs`,
+`rust/engine/ironhorse-vm/src/interp.rs`.
+Now at `rust/engine/ironhorse-vm/src/bulk.rs:91`.
 
 **Claim.** `SideRefCounts` undercounts saturate silently in release and the
 enumeration parity net is `#[cfg(debug_assertions)]`, so a missed counted mutation
@@ -6556,6 +7944,33 @@ meter)`.
 Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`.
 Now at `rust/endo/src/ironhorse_engine.rs:1004`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: The DoS is closed and the dead code is gone; what remains is
+only a design promise with no implementation.
+The meter is armed on every production path and re-armed per crank
+(ironhorse_engine.rs: boot.arm_meter at :753, .rearm_meter at :996 immediately
+before session.machine_mut().run(&bytecode) at :998, reattach_meter_host at
+:836, Machine::evaluate's evaluate_with_symbols_metered at :454-461), and
+rust/endo/tests/ironhorse_meter_bounds.rs still pins nine refusal cases.
+`Interp::has_pending_jobs` was DELETED in 10de8791 rather than exposed, so the
+per-machine pending-jobs query that designs/ironhorse-engine.md:847 promises
+as the replacement for xsnap's global `fxHasPendingJobs` latch now exists in
+no form at all, public or private; `Interp::run_promise_jobs`
+(interp.rs:27545) is still a private `fn` (though no longer dead, `run` calls
+it), and neither verb is on any public trait.
+The public `is_quiescent()` (interp.rs:13365) covers the latch conjunct
+(`promise_jobs.is_empty()`) for an embedder that needs one.
+Two design documents now cite a function that no longer exists:
+designs/ironhorse-snapshot-store-seam.md:2415 ('exists, `has_pending_jobs`
+(interp.rs:17962), is dead code') and :2566.
+Changed by `10de8791 ci(ironhorse): enforce build and Clippy warning gates
+(deleted the dead has_pending_jobs); the meter half was fixed pre-6c1e1d6b by
+2df18132 feat(endo): arm the Ironhorse meter by default through MeterBounds`.
+Pinned by `rust/endo/tests/ironhorse_meter_bounds.rs`.
+Now at `rust/engine/ironhorse-vm/src/interp.rs:27545`.
+
 **Claim.** No code path in `rust/endo` arms the meter or bounds a run, and the
 design's per-machine pending-jobs query and microtask drain are private with
 `#[allow(dead_code)]`.
@@ -6629,6 +8044,24 @@ Changed by `dda72b18 fix(ironhorse)!: gate the image data path and report raw
 completions (persist_gate half only)`.
 Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
 Now at `rust/engine/ironhorse-snapshot/src/store.rs:1777`.
+
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: HeapStore::commit still states its admission obligation only
+in a doc comment (store.rs:1784-1787) while three independently hand-written
+production implementations, MemoryStore (store.rs:3709/3710), FileStore
+(store_file.rs:551/566) and SqliteHeapStore
+(rust/endo/ironhorse-store-sqlite/src/lib.rs:865/883), each remember to call
+check_succession + apply_batch/check_batch themselves; a fourth backend, or
+one refactor of one copy, silently drops the succession and geometry gate.
+The persist_gate half no longer holds: MachineSnapshot::persist_gate
+(machine.rs:142) is a required trait method with no permissive default.
+Changed by `dda72b18 fix(ironhorse)!: gate the image data path and report raw
+completions (persist_gate half only; nothing in 6c1e1d6b..c14706d3 touches the
+commit half)`.
+Pinned by `rust/engine/ironhorse-snapshot/tests/persist_gates.rs`.
+Now at `rust/engine/ironhorse-snapshot/src/store.rs:1787`.
 
 **Claim.** `HeapStore::commit` states the store's most consensus-critical
 admission obligation, succession plus geometry plus leaf and summary maintenance,
@@ -6960,6 +8393,42 @@ decision`.
 Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`.
 Now at `rust/engine/ironhorse-vm/src/compartment.rs:111`.
 
+**Status at c14706d3 (revision of 2026-09-08).** PARTIALLY RESOLVED since the
+previous revision.
+Part of the claim is now closed; what remains is stated here.
+What still holds: Two of the three named next stages still have no abstraction
+to land on.
+SES lockdown: `Intrinsics` is now literally `pub struct Intrinsics {}`
+(compartment.rs:110), the `locked_down` marker bool was deleted rather than
+given a writer, so the type carries no primordial graph and no lockdown state
+at all, and every `Compartment::evaluate*` still builds a fresh `Interp`
+(compartment.rs:432, :455, :472).
+Host functions: there is still no registration surface, no `HostCallable`
+trait and no host table anywhere in rust/engine (the only
+`register_host_powers` in the workspace is rust/endo/xsnap's C-oracle FFI
+glue, not the VM); `meter_host: Option<Box<dyn FnMut(u64) -> bool>>`
+(interp.rs:4543) is still the only host-installable closure in the VM;
+`Native` and `NativeMethod` are still closed enums with no host arm (now 48
+and 344 variants, up from 46/280 at the review and 48/343 at 6c1e1d6b); and
+`run_user_callback` still refuses everything else with
+`Halt::NotImplemented("callback:non-user-function")` (interp.rs:20245), so a
+host function still could not be passed to map/then/forEach or a Proxy trap.
+What no longer holds: the debugger's stated prerequisite (a centralized raise)
+is met and has been strengthened again, the inline `Halt::Throw` sites are
+gone, `Step` is a private crate-internal enum and the public `Halt` cannot
+carry a catch or suspension transfer, and two source locks pin it; and
+designs/ironhorse-engine.md no longer asserts that stage 1 carved these seams
+(it now records the realm decision and the split still to come at §608-645).
+Changed by `No new resolving commit in this window for the two open stages.
+The debugger half was resolved before 6c1e1d6b (d1e66f6a fix(ironhorse-vm)!:
+make Halt::Throw carry the thrown value) and further hardened in this window
+by c14706d3 fix(ironhorse): separate dispatch transfers from host outcomes,
+which made the dispatcher's control-transfer type private.`.
+Pinned by `rust/engine/ironhorse-vm/tests/throw_construction_sites.rs`,
+`rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs`,
+`interp.rs`.
+Now at `rust/engine/ironhorse-vm/src/compartment.rs:110`.
+
 **Claim.** Two of the three named next stages have no abstraction to land on, and
 `designs/ironhorse-engine.md:566` asserts otherwise.
 **Evidence.** SES: `Intrinsics` holds one `locked_down: bool` with no reader or
@@ -6985,6 +8454,20 @@ Correct `designs/ironhorse-engine.md:570`, which states the seams as carved.
 **Known.** The debugger leg is tracked; the SES leg overlaps F059.
 
 #### F137 - No mechanical style or lint floor [medium, high]
+
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `6d914a57 fix(ironhorse): remove redundant Intl grouping
+condition; 1b785e30 chore(ironhorse): format Rust sources; 0031a071
+ci(ironhorse): require rustfmt for changes; 10de8791 ci(ironhorse): enforce
+build and Clippy warning gates`.
+Pinned by CI gates rather than a unit test: .github/workflows/ci.yml job
+format-ironhorse (`cargo +1.88.0 fmt --all -- --check`) and the
+clippy/build-warning steps in tes.
+Now at `rust/engine/ironhorse-vm/src/intl_number.rs:795`.
 
 **Claim.** `cargo clippy -p ironhorse-vm` fails with 92 warnings and one
 deny-by-default error, `cargo fmt --check` reports 469 diff hunks, and no
@@ -7110,6 +8593,13 @@ writer anywhere in the workspace, grep over all of rust/ finds only its
 declaration, three doc mentions, and a test that asserts nobody writes it.
 Now at `rust/engine/ironhorse-vm/src/interp.rs:27035`.
 
+**Status at c14706d3 (revision of 2026-09-08).** RESOLVED since the previous
+revision.
+This finding no longer describes the tree; do not act on it.
+The claim above, and any earlier Status line, are kept as the record of what
+was true at `97d8de25`.
+Resolved by `10de8791 ci(ironhorse): enforce build and Clippy warning gates`.
+
 **Claim.** `cargo build -p ironhorse-vm` is never warning-clean, which normalises
 warning-blindness in the crate where clippy also has 92 findings.
 **Evidence.** `warning: method 'accessor_function_persists' is never used`
@@ -7177,6 +8667,20 @@ source.
 > the rest of this program is ordered behind: still no `overflow-checks`
 > profile, no clippy gate, no sanitizer or Miri lane, and no second platform.
 > Read the workstream prose below with each finding's Status line beside it.
+
+> **Revision note (2026-09-08, `c14706d3`).** W0 and W1 have now landed, which
+> retires the two items this program ordered first.
+> W0's floor is in CI: pinned-rustfmt `fmt --check`, `clippy -D warnings`,
+> `overflow-checks = true`, a second-host lane, and ASAN/UBSAN over the C
+> oracle. What W0 still lacks is a `rustfmt.toml`, a toolchain pin for
+> `rust/endo`, and a Miri lane, though F034 closed honestly by retracting the
+> promise rather than faking it.
+> W1 landed past its own recommendation: `Halt::Resume` was deleted rather
+> than demoted, so W1.1's "no host-visible arms" is now enforced by the type.
+> Of the remaining streams, W2's recursion half is closed and its allocation
+> half is not; W3, W4, W5 and W6 are substantially open.
+> 51 of the findings this program schedules are now fixed and 39 partially
+> fixed; check a finding's Status line before starting work on it.
 
 The findings above are not a to-do list of 191 items.
 131 of them cluster into six workstreams, and the order matters: two of them are
@@ -7496,10 +9000,10 @@ already touching the code.
 
 | Id | What | Disposition |
 |---|---|---|
-| F007 | `null.f` evaluates to `undefined` instead of throwing | **RESOLVED at 6c1e1d6b; no action needed.** standalone; two match arms, do it inside W1 while the raise paths are open |
-| F024 | `enter_call` returns a handler pc through its success channel | **FIXED at f109e8f4; no action needed.** standalone; the callability test is one line, pairs with W1.4 |
-| F026 | `String(err)` aborts the crank unless the source mentions `toString` | **FIXED at f109e8f4; no action needed.** standalone; route well-known method names through the machine-global key table |
-| F028 | Every error-model divergence direction is a non-gating harness skip | fold into W1.5, which is already reworking the same three arms |
+| F007 | `null.f` evaluates to `undefined` instead of throwing | **RESOLVED at c14706d3; no action needed.** **RESOLVED at 6c1e1d6b; no action needed.** standalone; two match arms, do it inside W1 while the raise paths are open |
+| F024 | `enter_call` returns a handler pc through its success channel | **RESOLVED at c14706d3; no action needed.** **FIXED at f109e8f4; no action needed.** standalone; the callability test is one line, pairs with W1.4 |
+| F026 | `String(err)` aborts the crank unless the source mentions `toString` | **RESOLVED at c14706d3; no action needed.** **FIXED at f109e8f4; no action needed.** standalone; route well-known method names through the machine-global key table |
+| F028 | Every error-model divergence direction is a non-gating harness skip | **RESOLVED at c14706d3; no action needed.** fold into W1.5, which is already reworking the same three arms |
 | F043 | Per-crank checkpoint is O(live side-table state), not O(dirty) | standalone; per-section leaf hashing, inside the W3 seam work |
 | F044 | Every `String.prototype` method decodes the whole receiver | standalone |
 | F045 | Meter is not a wall-clock proxy on collection and iteration paths | standalone; index beside `entries`, stop cloning `IterState` |
@@ -7508,8 +9012,8 @@ already touching the code.
 | F064 | Symbol ids silently wrap at 65,536 | standalone; `checked_add` plus a refusal |
 | F065 | Compilation is quadratic in source size | standalone; pairs with W4.3, which charges the compile |
 | F078 | Wrapped numeric backreference indexes `names[usize::MAX]` | standalone; three one-liners |
-| F084 | `RegExp.exec().index` returns UTF-8 byte offsets on non-ASCII | **FIXED at f109e8f4; no action needed.** standalone |
-| F087 | Array length above 2^31 reported as a negative number | **FIXED at f109e8f4; no action needed.** standalone; wire the existing `checked_array_length` |
+| F084 | `RegExp.exec().index` returns UTF-8 byte offsets on non-ASCII | **RESOLVED at c14706d3; no action needed.** **FIXED at f109e8f4; no action needed.** standalone |
+| F087 | Array length above 2^31 reported as a negative number | **RESOLVED at c14706d3; no action needed.** **FIXED at f109e8f4; no action needed.** standalone; wire the existing `checked_array_length` |
 | F090 | The exact collector has no production caller | standalone; a scheduling decision, and the root-set holes must close first |
 
 **Medium (21).**
@@ -7558,199 +9062,206 @@ pair says where it had moved to and how it stood at that commit.
 A row's severity is the one the original verification settled on and is not
 re-rated by a revision, so read it together with the rightmost status.
 
-| Id | Sev | Conf | § | Location @ 97d8de25 | Location @ f109e8f4 | Status @ f109e8f4 | Location @ 6c1e1d6b | Status @ 6c1e1d6b | Title | Known |
-|---|---|---|---|---|---|---|---|---|---|---|
-| F002 | critical | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:16971` | `rust/engine/ironhorse-vm/src/interp.rs:19504` | open | `rust/engine/ironhorse-vm/src/interp.rs:20357` | fixed | Guest-reachable native-to-native recursion cycles bypass DISPATCH_REENTRY_LIMIT entirely (discussed under F018) | no |
-| F003 | critical | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:10939` | `rust/engine/ironhorse-vm/src/interp.rs:12826` | open | `rust/engine/ironhorse-vm/src/interp.rs:13461` | fixed | render() recurses over guest arrays with no cycle guard: a cyclic completion or exception | yes |
-| F012 | critical | high | 3.5 | `rust/engine/ironhorse-regexp/src/matcher.rs:130` | `rust/engine/ironhorse-regexp/src/matcher.rs:131` | open | `rust/engine/ironhorse-regexp/src/matcher.rs:121` | fixed | Regexp backtracking runs outside every meter check point; a metered crank cannot abort | no |
-| F017 | critical | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:934` | `rust/engine/ironhorse-compile/src/coder.rs:934` | open | `rust/engine/ironhorse-compile/src/coder.rs:1117` | fixed | Unbounded recursion in the compile pipeline: a few KB of source aborts the process | yes |
-| F018 | critical | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:11281` | `rust/engine/ironhorse-vm/src/interp.rs:13203` | open | `rust/engine/ironhorse-vm/src/interp.rs:13967` | fixed | No engine-wide native recursion budget; Halt::StackOverflow covers one recursion family | no |
-| F019 | critical | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:36623` | `rust/engine/ironhorse-vm/src/interp.rs:48215` | open | `rust/engine/ironhorse-vm/src/interp.rs:50378` | fixed | A spec-legal proxy prototype cycle drives unbounded MOP recursion with zero JS frames (discussed under F018) | yes |
-| F001 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:34637` | `rust/engine/ironhorse-vm/src/interp.rs:13863` | open | `rust/engine/ironhorse-vm/src/interp.rs:4265` | fixed | The `return_depth` protocol is enforced by a macro that eleven hand-expanded raise arms | no |
-| F004 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:29003` | `rust/engine/ironhorse-vm/src/interp.rs:32188` | partial | `rust/engine/ironhorse-vm/src/interp.rs:36391` | fixed | 29 engine error sites bypass raise_js: uncatchable by guest try/catch, and the tree's own | yes |
-| F005 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:16606` | `rust/engine/ironhorse-vm/src/interp.rs:19120` | open | `rust/engine/ironhorse-vm/src/interp.rs:20035` | fixed | The thrown value travels in self.exception, which those 29 sites never set , promise | yes |
-| F006 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:12652` | `rust/engine/ironhorse-vm/src/interp.rs:17102` | partial | `rust/engine/ironhorse-vm/src/interp.rs:17959` | fixed | A throwing accessor setter (and toString in a template literal) returns Halt::Resume(pc) | no |
-| F007 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:13032` | `rust/engine/ironhorse-vm/src/interp.rs:15233` | open | `rust/engine/ironhorse-vm/src/interp.rs:16175` | fixed | Member access and assignment on null/undefined raise no error at all | no |
-| F008 | high | high | 3.8 | `rust/engine/ironhorse-fuzz/src/lib.rs:1699` | `rust/engine/ironhorse-fuzz/src/lib.rs:1699` | open | `rust/engine/ironhorse-fuzz/src/lib.rs:1710` | fixed | Halt::Unsupported is an engine-controlled escape hatch from every oracle comparison, and 14 | no |
-| F009 | high | high | 3.8 | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:107` | `rust/engine/ironhorse-262/src/xst.rs:619` | open | `rust/engine/ironhorse-262/src/xst.rs:677` | fixed | One divergence direction can never redden the build: OracleOnlyComplete is an unconditional | yes |
-| F010 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:43707` | `rust/engine/ironhorse-vm/src/interp.rs:57354` | open | `rust/engine/ironhorse-vm/src/interp.rs:59856` | open | Nothing in any wired configuration reclaims the chunk arena; guest JS OOM-kills the worker | no |
-| F011 | high | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:10733` | `rust/engine/ironhorse-vm/src/interp.rs:12522` | open | `rust/engine/ironhorse-vm/src/interp.rs:13132` | fixed | `is_quiescent` admits a meter/step-aborted top-level crank; persisting it forks | no |
-| F014 | high | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:10749` | `rust/engine/ironhorse-vm/src/interp.rs:12539` | open | `rust/engine/ironhorse-vm/src/interp.rs:13169` | fixed | Metering is fail-open and the production embedder never arms | yes |
-| F015 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:35754` | `rust/engine/ironhorse-vm/src/interp.rs:46925` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:48967` | fixed | harden() can return successfully while leaving the object unhardened | no |
-| F016 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/ast.rs:442` | `rust/engine/ironhorse-compile/src/ast.rs:442` | open | `rust/engine/ironhorse-compile/src/ast.rs:490` | open | Lone-surrogate property keys silently alias to U+FFFD , distinct keys collapse into one | no |
-| F020 | high | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:11328` | `rust/engine/ironhorse-vm/src/interp.rs:13250` | open | `rust/engine/ironhorse-vm/src/interp.rs:13169` | fixed | Metering is fail-open at the deployment seam; the guard that would bound memory documents (discussed under F014) | yes |
-| F021 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:11741` | `rust/engine/ironhorse-vm/src/interp.rs:37915` | open | `rust/engine/ironhorse-vm/src/interp.rs:39257` | partial | Guest-triggerable unbounded allocation inside a built-in aborts the process | yes |
-| F022 | high | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:11218` | `rust/engine/ironhorse-vm/src/interp.rs:13156` | open | `rust/engine/ironhorse-vm/src/interp.rs:13915` | fixed | Quiescent machine with uncleared boundary registers forks the durable heap between (discussed under F030) | no |
-| F023 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16588` | `rust/engine/ironhorse-vm/src/interp.rs:19102` | open | `rust/engine/ironhorse-vm/src/interp.rs:20055` | fixed | `run_callback_catching_throw` does not fence the caller's handler chain: a promise | no |
-| F024 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16222` | `rust/engine/ironhorse-vm/src/interp.rs:18733` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:19640` | fixed | `enter_call` returns a catch-handler pc through its `Ok(usize)` success channel | yes |
-| F025 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:13496` | `rust/engine/ironhorse-vm/src/interp.rs:15729` | open | `rust/engine/ironhorse-vm/src/interp.rs:16680` | partial | `pending_new_target` is a hidden control latch that survives every non-throw halt | yes |
-| F026 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:38834` | `rust/engine/ironhorse-vm/src/interp.rs:51161` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:8789` | fixed | String(err) and '' + err abort the crank unless the source text happens to mention toString | yes |
-| F027 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:3535` | `rust/engine/ironhorse-vm/src/interp.rs:3907` | open | `rust/engine/ironhorse-vm/src/interp.rs:4083` | fixed | Halt::Unsupported is a 269-label channel conflating unimplemented features, guest-value | no |
-| F028 | high | high | 3.2 | `rust/engine/ironhorse-262/src/xst.rs:516` | `rust/engine/ironhorse-262/src/xst.rs:464` | open | `rust/engine/ironhorse-262/src/xst.rs:562` | partial | Every direction of error-model divergence is a non-gating skip in the differential harness | yes |
-| F030 | high | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:11199` | `rust/engine/ironhorse-vm/src/interp.rs:13121` | open | `rust/engine/ironhorse-vm/src/interp.rs:13866` | fixed | run() mints two synthetic Halt::Throws from the oracle shim's post-run coercion , the only | no |
-| F031 | high | high | 3.11 | `rust/engine/ironhorse-vm/src/meter.rs:3` | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | Metering doctrine inverted, and `ironhorse-meter-1` names a cost table with no reified form | yes |
-| F033 | high | high | 3.11 | `designs/ironhorse-engine.md:460` | `designs/ironhorse-engine.md:460` | open | `designs/ironhorse-engine.md:499` | partial | Requirement 8: the `Machine` API the design says is "preserved verbatim" does not exist | yes |
-| F043 | high | high | 3.10 | `rust/engine/ironhorse-snapshot/src/machine.rs:902` | `rust/engine/ironhorse-snapshot/src/machine.rs:912` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:965` | open | The per-crank checkpoint is O(live side-table state), not O(dirty): the whole small state | yes |
-| F044 | high | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:31025` | `rust/engine/ironhorse-vm/src/interp.rs:37753` | open | `rust/engine/ironhorse-vm/src/interp.rs:39095` | open | Every String.prototype method decodes the whole receiver into a fresh Vec<u16>, defeating | no |
-| F045 | high | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:34435` | `rust/engine/ironhorse-vm/src/interp.rs:45060` | open | `rust/engine/ironhorse-vm/src/interp.rs:46487` | open | The meter is not a wall-clock proxy on the collection and iteration paths: quadratic host | no |
-| F046 | high | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:3528` | `rust/engine/ironhorse-snapshot/src/image.rs:3613` | open | `rust/engine/ironhorse-snapshot/src/image.rs:3613` | open | A live heap edge into a free record bypasses the bounds gate; the collector then walks | no |
-| F048 | high | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:807` | `rust/engine/ironhorse-snapshot/src/image.rs:808` | open | `rust/engine/ironhorse-snapshot/src/image.rs:808` | open | Core atom payloads accept trailing slack, so one machine has many valid containers | yes |
-| F051 | high | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:8005` | `rust/engine/ironhorse-vm/src/interp.rs:55` | open | `rust/engine/ironhorse-vm/src/interp.rs:55` | open | Runtime compilation is entirely unmetered, and straight-line bytecode has no check points | yes |
-| F056 | high | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:36348` | `rust/engine/ironhorse-vm/src/interp.rs:47612` | open | `rust/engine/ironhorse-vm/src/interp.rs:49738` | open | Several property seams, not one; 47 call sites bypass the seam the code declares | yes |
-| F057 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:38498` | `rust/engine/ironhorse-vm/src/interp.rs:50676` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:53130` | fixed | Frozen and hardened global bindings remain writable through bare assignment | yes |
-| F058 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:35673` | `rust/engine/ironhorse-vm/src/interp.rs:46856` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:48919` | fixed | Integrity model covers only slot-chain properties, so nothing exotic can be frozen | yes |
-| F059 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/compartment.rs:320` | `rust/engine/ironhorse-vm/src/compartment.rs:320` | open | `rust/engine/ironhorse-vm/src/compartment.rs:455` | partial | Compartment is a stateless per-call evaluator; the shared-frozen-intrinsics seam | yes |
-| F061 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:37847` | `rust/engine/ironhorse-vm/src/interp.rs:50381` | partial | `rust/engine/ironhorse-vm/src/interp.rs:29605` | partial | Property operations outside the mop_* seam bypass proxy traps and accessors | yes |
-| F062 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:35493` | `rust/engine/ironhorse-vm/src/intl_number.rs:890` | partial | `rust/engine/ironhorse-vm/src/intl_number.rs:890` | partial | Silent wrong values at confinement-relevant seams contradict the named-skip doctrine | yes |
-| F063 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:2997` | `rust/engine/ironhorse-compile/src/coder.rs:2997` | open | `rust/engine/ironhorse-compile/src/coder.rs:3129` | open | Panic-as-control-flow: coder and scoper are not total, and the only panic firewall lives | yes |
-| F064 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:298` | `rust/engine/ironhorse-compile/src/coder.rs:298` | open | `rust/engine/ironhorse-compile/src/coder.rs:298` | open | Symbol ids silently wrap at 65,536; the SYMB count wraps too and the VM's decoder ignores | yes |
-| F065 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:5440` | `rust/engine/ironhorse-compile/src/coder.rs:5440` | open | `rust/engine/ironhorse-compile/src/coder.rs:5572` | open | Compilation is quadratic in source size and entirely unmetered , 1 MB of ordinary JS takes | yes |
-| F066 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/meter.rs:22` | `rust/engine/ironhorse-compile/src/meter.rs:22` | open | `rust/engine/ironhorse-compile/src/meter.rs:22` | open | The parse meter is a dead instrument, separately versioned from the VM's, and its "frozen | no |
-| F071 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:3517` | `rust/engine/ironhorse-vm/src/interp.rs:3886` | open | `rust/engine/ironhorse-vm/src/interp.rs:4049` | partial | `Halt` conflates completion, internal control transfer, engine gaps, hostile-input refusals (discussed under F027) | yes |
-| F073 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:31218` | `rust/engine/ironhorse-vm/src/interp.rs:37915` | open | `rust/engine/ironhorse-vm/src/interp.rs:39257` | open | Guest-sized allocations are made before any bound or charge; handle_alloc_error aborts | yes |
-| F074 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:20191` | `rust/engine/ironhorse-vm/src/interp.rs:23542` | open | `rust/engine/ironhorse-vm/src/interp.rs:24519` | partial | Regexp compile and match are unmetered until after they finish; catastrophic backtracking | yes |
-| F076 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:11338` | `rust/engine/ironhorse-vm/src/value.rs:1479` | open | `rust/engine/ironhorse-vm/src/value.rs:1470` | open | No allocation-pressure GC and no heap ceiling anywhere in the VM; chunk offsets narrow (discussed under F010) | yes |
-| F077 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:39624` | `rust/engine/ironhorse-vm/src/interp.rs:53803` | partial | `rust/engine/ironhorse-vm/src/interp.rs:54872` | partial | Guest-triggerable panics from &str slicing at non-char boundaries in the date and duration | no |
-| F078 | high | high | 3.1 | `rust/engine/ironhorse-regexp/src/compile.rs:385` | `rust/engine/ironhorse-regexp/src/compile.rs:1678` | open | `rust/engine/ironhorse-regexp/src/compile.rs:1735` | open | A wrapped numeric backreference yields a negative capture index that indexes | no |
-| F079 | high | high | 3.1 | `rust/engine/Cargo.toml:1` | `rust/engine/Cargo.toml:1` | partial | `rust/engine/Cargo.toml:7` | partial | No overflow-checks profile: guest-reachable integer overflows are debug panics and release | yes |
-| F080 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:29829` | `rust/engine/ironhorse-vm/src/interp.rs:35906` | open | `rust/engine/ironhorse-vm/src/interp.rs:37248` | open | Platform libm in 22 Math built-ins defeats cross-host consensus; the narrowed scope | yes |
-| F081 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/value.rs:332` | `rust/engine/ironhorse-vm/src/value.rs:332` | open | `rust/engine/ironhorse-vm/src/value.rs:332` | open | No NaN canonicalization: the host CPU's default-NaN sign/payload is guest-observable | no |
-| F084 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:20284` | `rust/engine/ironhorse-vm/src/interp.rs:24076` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:25164` | fixed | RegExp exec().index and String.prototype.search return UTF-8 byte offsets for non-ASCII | no |
-| F085 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:10892` | `rust/engine/ironhorse-vm/src/interp.rs:12772` | open | `rust/engine/ironhorse-vm/src/interp.rs:13433` | partial | A lossy Rust-String ToString seam turns lone surrogates into U+FFFD in guest-observable | yes |
-| F086 | high | high | 3.6 | `rust/engine/ironhorse-snapshot/src/format.rs:326` | `rust/engine/ironhorse-snapshot/src/format.rs:358` | partial | `rust/engine/ironhorse-snapshot/src/format.rs:358` | partial | Snapshot boot-layout compatibility rests on a caller-supplied opaque string; nothing | yes |
-| F087 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:36967` | `rust/engine/ironhorse-vm/src/interp.rs:14895` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:15806` | fixed | Array length above 2^31 is reported to the guest as a negative number, and above 2^32-1 | no |
-| F088 | high | high | 3.12 | `rust/engine/ironhorse-vm/src/interp.rs:6264` | `rust/engine/ironhorse-vm/src/interp.rs:6975` | open | `rust/engine/ironhorse-vm/src/interp.rs:7454` | open | Confirmed GC-root omission: %Error.prototype%.stack accessor pair is root-less until | no |
-| F090 | high | high | 3.12 | `rust/endo/src/ironhorse_engine.rs:680` | `rust/endo/src/ironhorse_engine.rs:682` | open | `rust/endo/src/ironhorse_engine.rs:1127` | open | The exact collector has no production caller: WeakMap/WeakSet are strong and chunk space | no |
-| F113 | high | high | 3.8 | `.github/workflows/ci.yml:832` | `.github/workflows/ci.yml:830` | open | `.github/workflows/ci.yml:835` | fixed | The oracle lane raises the test-thread stack to 16 MiB, configuring CI so the recursive | no |
-| F132 | high | high | 3.5 | `rust/engine/ironhorse-regexp/src/compile.rs:889` | `rust/engine/ironhorse-regexp/src/compile.rs:880` | open | `rust/engine/ironhorse-regexp/src/compile.rs:915` | open | Regexp compile is metered by output program size, not by parse work, and case-folded ranges | no |
-| F029 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:34654` | `rust/engine/ironhorse-vm/src/interp.rs:45283` | open | `rust/engine/ironhorse-vm/src/interp.rs:46732` | partial | Engine-raised TypeError/RangeError never carry a message; the uncatchable sites carry | no |
-| F032 | medium | high | 3.11 | `designs/ironhorse-engine.md:1111` | `designs/ironhorse-engine.md:1111` | open | `designs/ironhorse-engine.md:6` | partial | The approved design is content-frozen at 2026-07-29; no document describes the current | yes |
-| F034 | medium | high | 3.11 | `designs/ironhorse-engine.md:612` | `designs/ironhorse-engine.md:612` | open | `designs/ironhorse-engine.md:706` | open | Design-promised Miri and ASAN/UBSAN CI enforcement does not exist; four tests are named | yes |
-| F035 | medium | high | 3.11 | `rust/engine/ironhorse-vm/src/interp.rs:6409` | `rust/engine/ironhorse-vm/src/interp.rs:7152` | open | `rust/engine/ironhorse-vm/src/interp.rs:7640` | open | Resolved question 10 (Intl omitted, no seam) is violated with no amendment; Temporal landed | yes |
-| F036 | medium | high | 3.8 | `rust/engine/ironhorse-262/src/bin/endot_ih.rs:352` | `rust/engine/ironhorse-262/src/bin/endot_ih.rs:352` | open | `rust/engine/ironhorse-262/src/bin/endot_ih.rs:352` | open | The two-directional expectation ratchet exists only as code: no committed list, no CI | yes |
-| F037 | medium | high | 3.8 | `rust/engine/ironhorse-snapshot/tests/crafted_row_refusals.rs:1` | `rust/engine/ironhorse-snapshot/tests/crafted_row_refusals.rs:1` | open | `rust/engine/ironhorse-snapshot/tests/crafted_row_refusals.rs:1` | open | 204 of 213 named Corrupt refusals in the snapshot decoder are asserted by no test | yes |
-| F039 | medium | high | 3.8 | `.github/workflows/ironhorse-deep-fuzz.yml:129` | `.github/workflows/ironhorse-deep-fuzz.yml:129` | open | `.github/workflows/ironhorse-deep-fuzz.yml:129` | open | Differential fuzzing , the design's flagship instrument , runs in no in-repo automation | yes |
-| F040 | medium | high | 3.8 | `rust/engine/ironhorse-fuzz/src/regexp.rs:44` | `rust/engine/ironhorse-fuzz/src/lib.rs:57` | open | `rust/engine/ironhorse-fuzz/src/lib.rs:71` | open | Fuzz generator bias is measurable in the trophy ledger: 24 regressions, four root classes | no |
-| F041 | medium | high | 3.8 | `rust/engine/ironhorse-262/tests/multi_crank_oracle.rs:13` | `rust/engine/ironhorse-262/tests/multi_crank_oracle.rs:13` | open | `rust/engine/ironhorse-262/tests/multi_crank_oracle.rs:13` | open | The multi-crank oracle , the ledger's own named antidote , is seven hand-written tests | yes |
-| F042 | medium | high | 3.8 | `rust/engine/ironhorse-vm/tests/gc_side_tables.rs:36` | `rust/engine/ironhorse-vm/tests/gc_side_tables.rs:36` | open | `rust/engine/ironhorse-vm/tests/gc_side_tables.rs:36` | open | No mid-crank collection anywhere, so the frame-register GC root classification | yes |
-| F047 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/machine.rs:209` | `rust/engine/ironhorse-snapshot/src/machine.rs:209` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:239` | partial | The persist gate is attached to three convenience verbs, not to the data path; every | yes |
-| F049 | medium | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:10667` | `rust/engine/ironhorse-vm/src/interp.rs:12456` | open | `rust/engine/ironhorse-vm/src/interp.rs:13031` | fixed | Metering does not survive a resume in the shipped path; `arm_meter` zeroes the restored | no |
-| F050 | medium | high | 3.5 | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64` | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64` | open | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64` | open | The doctrine's recalibration mechanism is blocked by ~1,600 XS-parity CI gates | yes |
-| F052 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:43711` | `rust/engine/ironhorse-vm/src/interp.rs:57357` | open | `rust/engine/ironhorse-vm/src/interp.rs:59859` | open | No seam layer: ~44 side tables hand-mirrored across ~10 enumerations in 2 crates | yes |
-| F053 | medium | high | 3.14 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:34` | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:34` | open | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:34` | open | Both mechanical safety nets parse interp.rs as source text, making the monolith load-bearing | yes |
-| F054 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/compartment.rs:64` | `rust/engine/ironhorse-vm/src/compartment.rs:64` | open | `rust/engine/ironhorse-vm/src/compartment.rs:111` | partial | The next-stage seams the design says are already carved do not exist | yes |
-| F055 | medium | high | 3.1 | `rust/engine/Cargo.toml:7` | `rust/engine/Cargo.toml:7` | open | `rust/engine/Cargo.toml:7` | open | No [profile] section: CI tests only the profile where overflow panics; production ships (discussed under F079) | yes |
-| F060 | medium | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:7683` | `rust/engine/ironhorse-vm/src/interp.rs:8743` | open | `rust/engine/ironhorse-vm/src/interp.rs:9257` | open | Relink re-installs %Error.prototype%.stack on every partial pass, silently reverting | yes |
-| F067 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/parser/stmt.rs:704` | `rust/engine/ironhorse-compile/src/parser/stmt.rs:704` | open | `rust/engine/ironhorse-compile/src/parser/stmt.rs:732` | partial | Two valid programs are rejected, and over-rejection is structurally invisible | no |
-| F068 | medium | high | 3.13 | `rust/endo/src/ironhorse_engine.rs:137` | `rust/endo/src/ironhorse_engine.rs:137` | open | `rust/endo/src/ironhorse_engine.rs:409` | open | No engine abstraction: the Ironhorse `Machine` is a parallel type, not an implementation | yes |
-| F069 | medium | high | 3.13 | `rust/endo/src/ironhorse_engine.rs:572` | `rust/endo/src/ironhorse_engine.rs:574` | open | `rust/endo/src/ironhorse_engine.rs:1004` | partial | The daemon never arms the meter, and the pump/quiesce verbs the design names are private | no |
-| F070 | medium | high | 3.6 | `Cargo.toml:6` | `Cargo.lock:1` | open | `Cargo.lock:1` | open | Two workspaces, two lockfiles: 22 of 48 shared dependencies resolve differently (discussed under F083) | yes |
-| F072 | medium | high | 3.13 | `rust/engine/ironhorse-vm/src/interp.rs:8273` | `rust/engine/ironhorse-vm/src/interp.rs:9518` | open | `rust/engine/ironhorse-vm/src/interp.rs:10070` | open | The restore seam is 21 public, inconsistently-validating mutators on `Interp` | yes |
-| F075 | medium | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:35006` | `rust/engine/ironhorse-vm/src/interp.rs:45736` | open | `rust/engine/ironhorse-vm/src/interp.rs:47175` | open | The u16 property-key id space is a monotone machine-lifetime budget; untrusted JSON | yes |
-| F082 | medium | high | 3.6 | `.github/workflows/ci.yml:698` | `.github/workflows/ci.yml:698` | open | `.github/workflows/ci.yml:698` | open | The design's cross-platform / repeat determinism CI does not exist, and no golden computron | yes |
-| F083 | medium | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:4422` | `Cargo.toml:6` | open | `Cargo.toml:6` | open | The shipped build and the CI-tested build are different dependency graphs | yes |
-| F089 | medium | high | 3.12 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:458` | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:472` | open | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:473` | open | The GC ground-truth registry's escape hatches are unconditionally satisfied; its 'checked | yes |
-| F091 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store.rs:3106` | `rust/engine/ironhorse-snapshot/src/store.rs:3106` | open | `rust/engine/ironhorse-snapshot/src/store.rs:3106` | open | The GC schedule is consensus state and its only input, manifest.cranks, is unauthenticated (discussed under F126) | yes |
-| F092 | medium | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16588` | `rust/engine/ironhorse-vm/src/interp.rs:19102` | open | `rust/engine/ironhorse-vm/src/interp.rs:20026` | partial | Three incompatible 'native try' boundaries and no shared primitive | no |
-| F093 | medium | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:11072` | `rust/engine/ironhorse-vm/src/interp.rs:12971` | partial | `rust/engine/ironhorse-vm/src/interp.rs:13676` | partial | `render_uncaught` executes guest code after the halt is decided and silently discards any | no |
-| F097 | medium | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:43565` | `rust/engine/ironhorse-vm/src/interp.rs:57194` | open | `rust/engine/ironhorse-vm/src/interp.rs:59632` | open | GC-root coverage of the re-entrancy registers is convention, not mechanism: `target_func` | yes |
-| F098 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:205` | `rust/engine/ironhorse-vm/src/interp.rs:205` | open | `rust/engine/ironhorse-vm/src/interp.rs:233` | partial | DISPATCH_REENTRY_LIMIT = 64 reuses Halt::StackOverflow, aborting ordinary callback nesting | yes |
-| F099 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:11011` | `rust/engine/ironhorse-vm/src/interp.rs:12910` | open | `rust/engine/ironhorse-vm/src/interp.rs:13597` | open | render reads a write-once shadow (error_data) while e.stack reads live properties | no |
-| F100 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:4971` | `rust/engine/ironhorse-vm/src/interp.rs:5385` | open | `rust/engine/ironhorse-vm/src/interp.rs:5845` | open | CatchJump records a bare target_pc with no code-segment identity | no |
-| F101 | medium | medium | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:3517` | `rust/engine/ironhorse-vm/src/interp.rs:3886` | open | `rust/engine/ironhorse-vm/src/interp.rs:4049` | open | Internal control transfers are host-visible Halt variants, and Halt::Return doubles | yes |
-| F102 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:5419` | `rust/engine/ironhorse-vm/src/interp.rs:5846` | open | `rust/engine/ironhorse-vm/src/interp.rs:6311` | open | Uncaught-rejection tracking is a whole-heap scan available only to the test harness | no |
-| F103 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:10741` | `rust/engine/ironhorse-vm/src/interp.rs:12531` | open | `rust/engine/ironhorse-vm/src/interp.rs:13142` | open | self.exception is never cleared after an uncaught throw: a live machine is permanently | yes |
-| F105 | medium | high | 3.11 | `rust/engine/README.md:118` | `rust/engine/README.md:118` | open | `rust/engine/README.md:204` | fixed | README:118 records the parser stack-margin gap as "Already mirrored"; no such check exists | yes |
-| F110 | medium | high | 3.11 | `designs/ironhorse-snapshot-store-seam.md:4066` | `designs/ironhorse-snapshot-store-seam.md:4078` | open | `designs/ironhorse-snapshot-store-seam.md:4101` | open | The store-seam design claims three ironhorse-fuzz store targets that do not exist | no |
-| F111 | medium | high | 3.11 | `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` | `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` | open | `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` | open | The instrumentation design's Status is "Not Started" while its stage C1 has landed | yes |
-| F114 | medium | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:44716` | `rust/engine/Cargo.toml:7` | open | `rust/engine/Cargo.toml:7` | open | Release-profile arithmetic semantics are never tested: no overflow-checks profile, so (discussed under F079) | no |
-| F115 | medium | high | 3.6 | `.github/workflows/ci.yml:698` | `.github/workflows/ci.yml:698` | open | `.github/workflows/ci.yml:698` | open | No cross-platform or cross-build determinism lane, and the --repeat determinism gate (discussed under F082) | yes |
-| F117 | medium | high | 3.8 | `rust/engine/ironhorse-262/src/xst.rs:602` | `rust/engine/ironhorse-262/src/xst.rs:661` | open | `rust/engine/ironhorse-262/src/xst.rs:477` | open | The Temporal host exclusion is a source-substring heuristic evaluated before the agreement | no |
-| F119 | medium | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:12687` | `rust/engine/ironhorse-vm/src/interp.rs:14883` | open | `rust/engine/ironhorse-vm/src/interp.rs:15793` | open | Exotic-object dispatch by side-table membership puts 14 hash probes on the hottest opcode | no |
-| F120 | medium | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:15671` | `rust/engine/ironhorse-vm/src/interp.rs:18074` | open | `rust/engine/ironhorse-vm/src/interp.rs:18972` | open | CATCH clones the frame's id_map HashMap on every try entry: wall cost scales with frame | no |
-| F123 | medium | high | 3.10 | `rust/engine/ironhorse-vm/src/value.rs:1613` | `rust/engine/ironhorse-vm/src/gc.rs:183` | open | `rust/engine/ironhorse-vm/src/gc.rs:183` | open | The only chunk-space compactor fully reifies a lazily resumed arena and dirties the whole | yes |
-| F124 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store_suite.rs:346` | `rust/engine/ironhorse-snapshot/src/store_suite.rs:346` | open | `rust/engine/ironhorse-snapshot/src/store_suite.rs:375` | open | The shared backend acceptance suite cannot observe durability or any refused commit | no |
-| F126 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store.rs:201` | `rust/engine/ironhorse-snapshot/src/store.rs:201` | open | `rust/engine/ironhorse-snapshot/src/store.rs:201` | open | `cranks` and `epoch` sit outside the Merkle root, and the seal is never verified at open | no |
-| F129 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/machine.rs:712` | `rust/engine/ironhorse-snapshot/src/machine.rs:722` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:780` | open | The CAS identity contract is enforced on neither side: `resume_from_cas` never re-hashes | no |
-| F130 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:510` | `rust/engine/ironhorse-snapshot/src/image.rs:511` | open | `rust/engine/ironhorse-snapshot/src/image.rs:511` | open | Two divergent, hand-maintained stored-reference traversals with no mechanical net | yes |
-| F131 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:30905` | `rust/engine/ironhorse-vm/src/interp.rs:37507` | open | `rust/engine/ironhorse-vm/src/interp.rs:38852` | open | The string-op cost unit is inconsistent within one release: code units on one path, UTF-8 | no |
-| F133 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:36736` | `rust/engine/ironhorse-vm/src/interp.rs:48422` | partial | `rust/engine/ironhorse-vm/src/interp.rs:51520` | partial | The Proxy/MOP seam is effectively unmetered (one meter tick in ~1,700 lines) | yes |
-| F134 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:3580` | `rust/engine/ironhorse-vm/src/interp.rs:3949` | open | `rust/engine/ironhorse-vm/src/interp.rs:4271` | fixed | Check-point placement is not uniform: a catch landing reached through dispatch_result! | no |
-| F135 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:35099` | `rust/engine/ironhorse-vm/src/interp.rs:45920` | open | `rust/engine/ironhorse-vm/src/interp.rs:47386` | open | Unmetered O(n) reverse-lookup scans on hot property paths | yes |
-| F137 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/intl_number.rs:779` | `rust/engine/ironhorse-vm/src/intl_number.rs:792` | open | `rust/engine/ironhorse-vm/src/intl_number.rs:792` | open | No mechanical style or lint floor, and a deny-level clippy error makes a clippy gate | yes |
-| F140 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:16310` | `rust/engine/ironhorse-vm/src/interp.rs:18849` | open | `rust/engine/ironhorse-vm/src/interp.rs:4083` | partial | Halt::Unsupported(&'static str) is the universal bail: 376 sites in one file (discussed under F027) | no |
-| F141 | medium | high | 3.14 | `rust/engine/ironhorse-snapshot/src/store.rs:2487` | `rust/engine/ironhorse-snapshot/src/store.rs:2487` | open | `rust/engine/ironhorse-snapshot/src/store.rs:2487` | open | Copy-paste as the structuring principle in the persistence ladder and its test suite | no |
-| F142 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:5184` | `rust/engine/ironhorse-vm/src/interp.rs:5598` | open | `rust/engine/ironhorse-vm/src/interp.rs:6058` | open | The 44,942-line file: one 33,986-line impl, three functions over 900 lines, 42 tests | no |
-| F143 | medium | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:6339` | `rust/engine/ironhorse-vm/src/interp.rs:7082` | open | `rust/engine/ironhorse-vm/src/interp.rs:8120` | fixed | The test262 host object ($262 with a live detachArrayBuffer) is built into every production | no |
-| F145 | medium | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:37861` | `rust/engine/ironhorse-vm/src/interp.rs:32217` | partial | `rust/engine/ironhorse-vm/src/interp.rs:4112` | fixed | Descriptor helpers throw uncatchable host escapes where the spec throws a catchable | yes |
-| F147 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:5794` | `rust/engine/ironhorse-compile/src/coder.rs:5794` | open | `rust/engine/ironhorse-compile/src/coder.rs:5917` | open | Operand widths are defined twice with no cross-check, and emit_step's default arm silently | yes |
-| F148 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/scoper.rs:361` | `rust/engine/ironhorse-compile/src/scoper.rs:361` | open | `rust/engine/ironhorse-compile/src/scoper.rs:366` | open | The scoper->coder contract is raw-address hash maps with three inconsistent miss | no |
-| F149 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:942` | `rust/engine/ironhorse-compile/src/coder.rs:942` | open | `rust/engine/ironhorse-compile/src/coder.rs:1040` | partial | The compiler has exactly one Script shape , the oracle shim's eval program , and production | yes |
-| F151 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/parser.rs:76` | `rust/engine/ironhorse-compile/src/parser.rs:76` | open | `rust/engine/ironhorse-compile/src/parser.rs:76` | open | Lex-originating error messages carry a `line N:` prefix into the guest-observable | no |
-| F152 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/lexer.rs:1223` | `rust/engine/ironhorse-compile/src/lexer.rs:1223` | open | `rust/engine/ironhorse-compile/src/lexer.rs:1223` | partial | Eager regexp compilation inside the lexer: work discarded, duplicated at runtime | no |
-| F153 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:5996` | `rust/engine/ironhorse-compile/src/coder.rs:5996` | open | `rust/engine/ironhorse-compile/src/coder.rs:6128` | open | node_code_name is a hard-coded false stub with a stale comment; `x //= function(){}` emits | no |
-| F155 | medium | high | 3.13 | `rust/engine/ironhorse-snapshot/src/store.rs:1776` | `rust/engine/ironhorse-snapshot/src/store.rs:1777` | open | `rust/engine/ironhorse-snapshot/src/store.rs:1777` | partial | Persistence safety obligations are prose on a public trait, or default-open | no |
-| F156 | medium | high | 3.13 | `rust/engine/ironhorse-vm/src/meter.rs:26` | `rust/engine/ironhorse-vm/src/meter.rs:26` | open | `rust/engine/ironhorse-vm/src/meter.rs:34` | open | Five independent version identifiers, no compatibility document, and the one the doctrine | yes |
-| F157 | medium | high | 3.13 | `rust/endo/src/ironhorse_engine.rs:381` | `rust/endo/src/ironhorse_engine.rs:383` | open | `rust/endo/src/ironhorse_engine.rs:725` | open | Structured engine errors are collapsed to `String` at the daemon seam, erasing | no |
-| F160 | medium | high | 3.13 | `rust/engine/ironhorse-vm/src/interp.rs:89` | `rust/engine/ironhorse-vm/src/interp.rs:89` | open | `rust/engine/ironhorse-vm/src/interp.rs:89` | open | The compiler seam is correctly inverted, never wired in production, and carries no cost | no |
-| F162 | medium | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:10853` | `rust/engine/ironhorse-vm/src/interp.rs:12735` | open | `rust/engine/ironhorse-vm/src/interp.rs:13396` | partial | The bytecode dispatch loop is fail-open on value-stack underflow | yes |
-| F163 | medium | high | 3.1 | `rust/engine/ironhorse-snapshot/src/image.rs:3589` | `rust/engine/ironhorse-snapshot/src/image.rs:3671` | open | `rust/engine/ironhorse-snapshot/src/image.rs:3671` | open | Snapshot ABUF length is validated against the arena, not the chunk header, and slice_mut | no |
-| F167 | medium | high | 3.12 | `rust/engine/ironhorse-vm/src/interp.rs:9036` | `rust/engine/ironhorse-vm/src/interp.rs:10450` | open | `rust/engine/ironhorse-vm/src/interp.rs:11027` | open | ArrayBuffer restore validates the declared length against the arena, not the chunk header | yes |
-| F013 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/meter.rs:120` | `rust/engine/ironhorse-vm/src/meter.rs:120` | open | `rust/engine/ironhorse-vm/src/meter.rs:149` | fixed | arm_meter silently disables metering for large budgets: interval << 16 drops the high bits | no |
-| F038 | low | high | 3.8 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:26` | `rust/engine/ironhorse-vm/src/interp.rs:58369` | open | `rust/engine/ironhorse-vm/src/interp.rs:60871` | open | The GC counted-ref parity net is self-referential and debug-only , the exact pattern | yes |
-| F094 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16681` | `rust/engine/ironhorse-vm/src/interp.rs:19198` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:20129` | fixed | Re-entrant resume of an executing generator is an uncatchable `Halt::Unsupported` | yes |
-| F095 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16248` | `rust/engine/ironhorse-vm/src/interp.rs:18762` | open | `rust/engine/ironhorse-vm/src/interp.rs:19666` | open | The single value-stack overflow check is in `enter_call`; the three resume paths reinstall | no |
-| F096 | low | medium | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16443` | `rust/engine/ironhorse-vm/src/interp.rs:18957` | open | `rust/engine/ironhorse-vm/src/interp.rs:19861` | open | `callback_return_depth` gives `Halt::Return` two meanings through a machine-global register | no |
-| F104 | low | high | 3.11 | `designs/ironhorse-engine.md:270` | `designs/ironhorse-engine.md:270` | open | `designs/ironhorse-engine.md:271` | open | Architecture diagram and unsafe roster name phantom crates and invert the integration | yes |
-| F106 | low | high | 3.11 | `designs/ironhorse-engine.md:753` | `designs/ironhorse-engine.md:756` | open | `designs/ironhorse-engine.md:849` | open | The performance envelope has no instrument: no benchmark harness, no fourth benchmark | no |
-| F107 | low | high | 3.11 | `rust/engine/ironhorse-vm/src/lib.rs:6` | `rust/engine/ironhorse-vm/src/lib.rs:6` | open | `rust/engine/ironhorse-vm/src/lib.rs:6` | open | Crate-root rustdoc is stage-frozen; the snapshot crate root lists 9 atoms where the code | no |
-| F108 | low | high | 3.11 | `rust/engine/README.md:981` | `rust/engine/README.md:991` | open | `rust/engine/README.md:1169` | open | Stage-4 "acceptance evidence" records an unmet bar as evidence, and README stage numbering | no |
-| F109 | low | high | 3.11 | `designs/ironhorse-engine.md:1152` | `rust/engine/README.md:1689` | open | `rust/engine/README.md:1867` | open | README stage-5 verdict record carries eleven MET/NOT-MET verdicts out of chronological | yes |
-| F112 | low | high | 3.8 | `rust/engine/ironhorse-compile/Cargo.toml:22` | `rust/engine/ironhorse-compile/Cargo.toml:23` | open | `rust/engine/ironhorse-compile/Cargo.toml:23` | open | PR CI has no oracle-free test target for ironhorse-compile and ironhorse-regexp: xs-oracle | no |
-| F116 | low | high | 3.8 | `rust/engine/ironhorse-262/src/xst.rs:1252` | `rust/engine/ironhorse-262/src/xst.rs:1625` | fixed | `rust/engine/ironhorse-262/src/xst.rs:2084` | fixed | Expectation-list Mode axis is vestigial: strict-mode outcomes are folded into the sloppy | no |
-| F118 | low | high | 3.10 | `designs/ironhorse-engine.md:346` | `rust/engine/ironhorse-vm/src/interp.rs:13216` | open | `rust/engine/ironhorse-vm/src/interp.rs:14036` | open | The design's "small register struct threaded through the loop" does not exist; interpreter | no |
-| F121 | low | high | 3.10 | `rust/engine/ironhorse-vm/src/value.rs:967` | `rust/engine/ironhorse-vm/src/value.rs:298` | open | `rust/engine/ironhorse-vm/src/value.rs:298` | open | Slot is 24 bytes, not the documented 32; the footprint envelope is measured against | no |
-| F122 | low | high | 3.10 | `rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs:51` | `rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs:51` | open | `rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs:51` | open | The performance envelope has no machine-checked expression: six ignored benches, no CI | no |
-| F125 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store_suite.rs:60` | `rust/engine/ironhorse-snapshot/src/store_suite.rs:60` | open | `rust/engine/ironhorse-snapshot/src/store_suite.rs:88` | partial | The metamorphic suite varies the suspend backend but barely varies the suspend point | no |
-| F127 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/sidetable.rs:558` | `rust/engine/ironhorse-snapshot/src/sidetable.rs:554` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:574` | open | Three Pending rows make every await-bearing or async-generator-bearing machine | yes |
-| F128 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:4346` | `rust/engine/ironhorse-snapshot/src/image.rs:4463` | open | `rust/engine/ironhorse-snapshot/src/image.rs:4463` | open | Two container grammars over one row set, with divergent emptiness rules and two | no |
-| F136 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/meter.rs:3` | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | meter.rs's own doc comment states the opposite doctrine from the paragraph 19 lines below | yes |
-| F138 | low | high | 3.13 | `rust/engine/ironhorse-vm/src/lib.rs:28` | `rust/engine/ironhorse-vm/src/lib.rs:28` | open | `rust/engine/ironhorse-vm/src/lib.rs:29` | open | A 45,000-line file is the crate's public API surface (discussed under F154) | no |
-| F139 | low | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:15359` | `rust/engine/ironhorse-vm/src/interp.rs:17762` | open | `rust/engine/ironhorse-vm/src/interp.rs:18659` | open | Activation-record suspend is copy-pasted at 8 sites, 4 with an identical jump-rebase block | no |
-| F144 | low | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:7427` | `rust/engine/ironhorse-vm/src/interp.rs:8367` | open | `rust/engine/ironhorse-vm/src/interp.rs:8842` | open | No attenuation seam: a program receives every intrinsic it names, and endowments can only | no |
-| F146 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:11075` | `rust/engine/ironhorse-vm/src/interp.rs:12985` | open | `rust/engine/ironhorse-vm/src/interp.rs:13688` | partial | Guest code runs at the host boundary after the halt is decided, and a meter abort there (discussed under F093) | no |
-| F150 | low | high | 3.3 | `rust/engine/ironhorse-compile/tests/corpus_parse_smoke.rs:63` | `rust/engine/ironhorse-compile/tests/corpus_parse_smoke.rs:63` | open | `rust/engine/ironhorse-compile/tests/corpus_parse_smoke.rs:63` | open | Over-acceptance vs the oracle is recorded but never asserted in the compile crate's own | no |
-| F154 | low | high | 3.13 | `rust/engine/ironhorse-vm/src/lib.rs:28` | `rust/engine/ironhorse-vm/src/lib.rs:28` | open | `rust/engine/ironhorse-vm/src/lib.rs:29` | open | `pub mod interp` publishes 241 metering constants and the raw arenas as external API | no |
-| F158 | low | high | 3.14 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:127` | `rust/engine/ironhorse-snapshot/src/sidetable.rs:661` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:681` | open | The vm/snapshot coverage contract is enforced by parsing the upstream crate's source text (discussed under F053) | yes |
-| F159 | low | high | 3.13 | `rust/engine/ironhorse-vm/src/compartment.rs:342` | `rust/engine/ironhorse-vm/src/compartment.rs:342` | open | `rust/engine/ironhorse-vm/src/compartment.rs:503` | open | `ironhorse_vm::Machine` occupies the design's Machine name with a stateless compartment | no |
-| F161 | low | high | 3.13 | `rust/engine/ironhorse-vm/Cargo.toml:39` | `rust/engine/ironhorse-vm/Cargo.toml:39` | open | `rust/engine/ironhorse-vm/Cargo.toml:39` | open | `cost-calibration` is a determinism-relevant, workspace-unifiable feature with no CI job | yes |
-| F164 | low | high | 3.11 | `rust/engine/ironhorse-262/tests/intl_core.rs:14` | `rust/engine/ironhorse-vm/src/interp.rs:7152` | open | `rust/engine/ironhorse-vm/src/interp.rs:7640` | open | Intl and Temporal ship inside the consensus engine against a resolved design decision, (discussed under F035) | yes |
-| F165 | low | high | 3.12 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:362` | `rust/engine/ironhorse-vm/src/interp.rs:4230` | open | `rust/engine/ironhorse-vm/src/interp.rs:4675` | open | Neither collector checks quiescence; pending_new_target is an unrooted register kept safe | yes |
-| F166 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/value.rs:853` | `rust/engine/ironhorse-vm/src/value.rs:853` | open | `rust/engine/ironhorse-vm/src/value.rs:853` | open | Arena accessors never consult the free bit, and free() has no double-free guard | yes |
-| F168 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/value.rs:1541` | `rust/engine/ironhorse-vm/src/value.rs:1541` | open | `rust/engine/ironhorse-vm/src/value.rs:1541` | open | ChunkArena::compact silently resurrects a stale in-range offset, contradicting its own doc | yes |
-| F169 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16252` | `rust/engine/ironhorse-vm/src/interp.rs:18766` | open | `rust/engine/ironhorse-vm/src/interp.rs:19670` | open | `enter_call`'s four early `Err` returns leave the frame quartet and arguments on the shared | no |
-| F170 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:17155` | `rust/engine/ironhorse-vm/src/interp.rs:19701` | open | `rust/engine/ironhorse-vm/src/interp.rs:20677` | open | The async fence's own invariant is a `debug_assert!`, so a release build would silently | yes |
-| F171 | low | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:23014` | `rust/engine/ironhorse-vm/src/interp.rs:28352` | open | `rust/engine/ironhorse-vm/src/interp.rs:29493` | open | AggregateError.errors is enumerable on the Promise.any path and non-enumerable | yes |
-| F172 | low | high | 3.11 | `rust/engine/README.md:70` | `rust/engine/README.md:70` | open | `rust/engine/README.md:157` | open | Stale oracle-provisioning prose: the gitlink the docs call unfetchable and "deliberately | yes |
-| F173 | low | high | 3.11 | `rust/engine/ASYNC-AWAIT-HANDOFF.md:34` | `rust/engine/ASYNC-AWAIT-HANDOFF.md:34` | open | `rust/engine/ASYNC-AWAIT-HANDOFF.md:34` | partial | ASYNC-AWAIT-HANDOFF.md is an orchestration artifact shipped at the workspace root | no |
-| F174 | low | high | 3.11 | `designs/README.md:1274` | `designs/README.md:1382` | open | `designs/README.md:1383` | open | designs/README.md's index entry for the store-seam design is a 23 KB single table cell | no |
-| F175 | low | high | 3.8 | `rust/engine/ironhorse-vm/src/interp.rs:43173` | `rust/engine/ironhorse-vm/src/interp.rs:55092` | open | `rust/engine/ironhorse-vm/src/interp.rs:57568` | open | About 2,970 lines of tests live inside interp.rs, and regexp regressions are filed under | yes |
-| F176 | low | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:11162` | `rust/engine/ironhorse-vm/src/interp.rs:13084` | open | `rust/engine/ironhorse-vm/src/interp.rs:13796` | open | Per-crank whole-bytecode copy and per-eval full intrinsics boot | no |
-| F177 | low | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:8606` | `rust/engine/ironhorse-vm/src/interp.rs:9977` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:204` | open | The seam's own correctness argument is carried by doc comments that now assert the opposite | no |
-| F178 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store.rs:1441` | `rust/engine/ironhorse-snapshot/src/store.rs:1441` | open | `rust/engine/ironhorse-snapshot/src/store.rs:1441` | open | `SmallState::decode` and `peek_cost_table_version` use unchecked `i + len` where every | yes |
-| F179 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/atom.rs:40` | `rust/engine/ironhorse-snapshot/src/atom.rs:40` | open | `rust/engine/ironhorse-snapshot/src/atom.rs:40` | open | `AtomWriter` silently wraps atom sizes past u32::MAX | no |
-| F180 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:3597` | `rust/engine/ironhorse-vm/src/interp.rs:3966` | open | `rust/engine/ironhorse-vm/src/interp.rs:4352` | open | RunOutcome.computrons is a machine-lifetime counter documented as a run-only count | yes |
-| F181 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/default_keys.rs:9` | `rust/engine/ironhorse-vm/src/default_keys.rs:9` | open | `rust/engine/ironhorse-vm/src/default_keys.rs:9` | open | DEFAULT_KEYS is an unversioned, untested input to the cost table | yes |
-| F182 | low | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:9473` | `rust/engine/ironhorse-vm/src/interp.rs:9473` | partial | `rust/engine/ironhorse-vm/src/interp.rs:27035` | partial | Every build of the VM emits a dead-code warning, and dead API persists behind | yes |
-| F183 | low | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:44605` | `rust/engine/ironhorse-vm/src/interp.rs:58262` | open | `rust/engine/ironhorse-vm/src/interp.rs:60764` | open | In-source comments record the authoring process rather than the invariant | no |
-| F184 | low | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:7442` | `rust/engine/ironhorse-vm/src/interp.rs:8377` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:8907` | fixed | Intrinsic globals are enumerable, configurable and writable | yes |
-| F185 | low | high | 3.3 | `rust/engine/ironhorse-262/src/compile_diff.rs:324` | `rust/engine/ironhorse-262/src/compile_diff.rs:324` | open | `rust/engine/ironhorse-262/src/compile_diff.rs:340` | open | panic::set_hook is replaced process-wide from library functions in the 262 compile-diff | no |
-| F186 | low | medium | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:221` | `rust/engine/ironhorse-compile/src/coder.rs:221` | open | `rust/engine/ironhorse-compile/src/coder.rs:221` | open | Byte identity with the oracle is platform-conditional for non-ASCII identifiers | yes |
-| F187 | low | high | 3.13 | `rust/engine/ironhorse-compile/src/lib.rs:32` | `rust/engine/ironhorse-compile/src/lib.rs:32` | open | `rust/engine/ironhorse-compile/src/lib.rs:32` | open | `ironhorse-compile` re-exports a leaf crate's module as its own public API and publishes | no |
-| F188 | low | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:29746` | `rust/engine/ironhorse-vm/src/interp.rs:35602` | open | `rust/engine/ironhorse-vm/src/interp.rs:36901` | open | HashMap::iter().find() scans whose determinism relies on an un-asserted uniqueness invariant | no |
-| F189 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/interp.rs:44098` | `rust/engine/ironhorse-vm/src/interp.rs:57751` | open | `rust/engine/ironhorse-vm/src/interp.rs:60253` | open | Ephemeron symbol-key retention is a bare u16 equality over an unpartitioned id space | yes |
-| F190 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/bulk.rs:84` | `rust/engine/ironhorse-vm/src/bulk.rs:84` | open | `rust/engine/ironhorse-vm/src/bulk.rs:84` | open | The partial collector's soundness net exists only in debug builds | yes |
-| F191 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/value.rs:1039` | `rust/engine/ironhorse-vm/src/value.rs:1039` | open | `rust/engine/ironhorse-vm/src/value.rs:1039` | open | Free-list validity is enforced two crates away from the type that depends | yes |
+There is one location and one status column per revision, left to right in time:
+the location at `97d8de25` is where the reviewer read the construct, and each later
+pair says where it had moved to and how it stood at that commit.
+`n/a` in a location column means the construct no longer exists.
+A row's severity is the one the original verification settled on and is not
+re-rated by a revision, so read it together with the rightmost status.
+
+| Id | Sev | Conf | § | Location @ 97d8de25 | Location @ f109e8f4 | Status @ f109e8f4 | Location @ 6c1e1d6b | Status @ 6c1e1d6b | Location @ c14706d3 | Status @ c14706d3 | Title | Known |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| F002 | critical | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:16971` | `rust/engine/ironhorse-vm/src/interp.rs:19504` | open | `rust/engine/ironhorse-vm/src/interp.rs:20357` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:20854` | fixed | Guest-reachable native-to-native recursion cycles bypass DISPATCH_REENTRY_LIMIT entirely (discussed under F018) | no |
+| F003 | critical | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:10939` | `rust/engine/ironhorse-vm/src/interp.rs:12826` | open | `rust/engine/ironhorse-vm/src/interp.rs:13461` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:13721` | fixed | render() recurses over guest arrays with no cycle guard: a cyclic completion or exception | yes |
+| F012 | critical | high | 3.5 | `rust/engine/ironhorse-regexp/src/matcher.rs:130` | `rust/engine/ironhorse-regexp/src/matcher.rs:131` | open | `rust/engine/ironhorse-regexp/src/matcher.rs:121` | fixed | `rust/engine/ironhorse-regexp/src/matcher.rs:194` | fixed | Regexp backtracking runs outside every meter check point; a metered crank cannot abort | no |
+| F017 | critical | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:934` | `rust/engine/ironhorse-compile/src/coder.rs:934` | open | `rust/engine/ironhorse-compile/src/coder.rs:1117` | fixed | `rust/engine/ironhorse-compile/src/coder.rs:1185` | fixed | Unbounded recursion in the compile pipeline: a few KB of source aborts the process | yes |
+| F018 | critical | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:11281` | `rust/engine/ironhorse-vm/src/interp.rs:13203` | open | `rust/engine/ironhorse-vm/src/interp.rs:13967` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:14276` | fixed | No engine-wide native recursion budget; Halt::StackOverflow covers one recursion family | no |
+| F019 | critical | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:36623` | `rust/engine/ironhorse-vm/src/interp.rs:48215` | open | `rust/engine/ironhorse-vm/src/interp.rs:50378` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:53419` | fixed | A spec-legal proxy prototype cycle drives unbounded MOP recursion with zero JS frames (discussed under F018) | yes |
+| F001 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:34637` | `rust/engine/ironhorse-vm/src/interp.rs:13863` | open | `rust/engine/ironhorse-vm/src/interp.rs:4265` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:4289` | fixed | The `return_depth` protocol is enforced by a macro that eleven hand-expanded raise arms | no |
+| F004 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:29003` | `rust/engine/ironhorse-vm/src/interp.rs:32188` | partial | `rust/engine/ironhorse-vm/src/interp.rs:36391` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:14226` | fixed | 29 engine error sites bypass raise_js: uncatchable by guest try/catch, and the tree's own | yes |
+| F005 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:16606` | `rust/engine/ironhorse-vm/src/interp.rs:19120` | open | `rust/engine/ironhorse-vm/src/interp.rs:20035` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:20526` | fixed | The thrown value travels in self.exception, which those 29 sites never set , promise | yes |
+| F006 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:12652` | `rust/engine/ironhorse-vm/src/interp.rs:17102` | partial | `rust/engine/ironhorse-vm/src/interp.rs:17959` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:16161` | fixed | A throwing accessor setter (and toString in a template literal) returns Halt::Resume(pc) | no |
+| F007 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:13032` | `rust/engine/ironhorse-vm/src/interp.rs:15233` | open | `rust/engine/ironhorse-vm/src/interp.rs:16175` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:16634` | fixed | Member access and assignment on null/undefined raise no error at all | no |
+| F008 | high | high | 3.8 | `rust/engine/ironhorse-fuzz/src/lib.rs:1699` | `rust/engine/ironhorse-fuzz/src/lib.rs:1699` | open | `rust/engine/ironhorse-fuzz/src/lib.rs:1710` | fixed | `rust/engine/ironhorse-fuzz/src/lib.rs:1710` | fixed | Halt::Unsupported is an engine-controlled escape hatch from every oracle comparison, and 14 | no |
+| F009 | high | high | 3.8 | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:107` | `rust/engine/ironhorse-262/src/xst.rs:619` | open | `rust/engine/ironhorse-262/src/xst.rs:677` | fixed | `rust/engine/ironhorse-262/src/xst.rs:635` | fixed | One divergence direction can never redden the build: OracleOnlyComplete is an unconditional | yes |
+| F010 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:43707` | `rust/engine/ironhorse-vm/src/interp.rs:57354` | open | `rust/engine/ironhorse-vm/src/interp.rs:59856` | open | `rust/engine/ironhorse-vm/src/interp.rs:63295` | open | Nothing in any wired configuration reclaims the chunk arena; guest JS OOM-kills the worker | no |
+| F011 | high | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:10733` | `rust/engine/ironhorse-vm/src/interp.rs:12522` | open | `rust/engine/ironhorse-vm/src/interp.rs:13132` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:13365` | fixed | `is_quiescent` admits a meter/step-aborted top-level crank; persisting it forks | no |
+| F014 | high | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:10749` | `rust/engine/ironhorse-vm/src/interp.rs:12539` | open | `rust/engine/ironhorse-vm/src/interp.rs:13169` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:13403` | fixed | Metering is fail-open and the production embedder never arms | yes |
+| F015 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:35754` | `rust/engine/ironhorse-vm/src/interp.rs:46925` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:48967` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:51351` | fixed | harden() can return successfully while leaving the object unhardened | no |
+| F016 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/ast.rs:442` | `rust/engine/ironhorse-compile/src/ast.rs:442` | open | `rust/engine/ironhorse-compile/src/ast.rs:490` | open | `rust/engine/ironhorse-compile/src/ast.rs:494` | open | Lone-surrogate property keys silently alias to U+FFFD , distinct keys collapse into one | no |
+| F020 | high | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:11328` | `rust/engine/ironhorse-vm/src/interp.rs:13250` | open | `rust/engine/ironhorse-vm/src/interp.rs:13169` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:13403` | fixed | Metering is fail-open at the deployment seam; the guard that would bound memory documents (discussed under F014) | yes |
+| F021 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:11741` | `rust/engine/ironhorse-vm/src/interp.rs:37915` | open | `rust/engine/ironhorse-vm/src/interp.rs:39257` | partial | `rust/engine/ironhorse-vm/src/interp.rs:41079` | partial | Guest-triggerable unbounded allocation inside a built-in aborts the process | yes |
+| F022 | high | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:11218` | `rust/engine/ironhorse-vm/src/interp.rs:13156` | open | `rust/engine/ironhorse-vm/src/interp.rs:13915` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:14194` | fixed | Quiescent machine with uncleared boundary registers forks the durable heap between (discussed under F030) | no |
+| F023 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16588` | `rust/engine/ironhorse-vm/src/interp.rs:19102` | open | `rust/engine/ironhorse-vm/src/interp.rs:20055` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:20517` | fixed | `run_callback_catching_throw` does not fence the caller's handler chain: a promise | no |
+| F024 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16222` | `rust/engine/ironhorse-vm/src/interp.rs:18733` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:19640` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:20125` | fixed | `enter_call` returns a catch-handler pc through its `Ok(usize)` success channel | yes |
+| F025 | high | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:13496` | `rust/engine/ironhorse-vm/src/interp.rs:15729` | open | `rust/engine/ironhorse-vm/src/interp.rs:16680` | partial | `rust/engine/ironhorse-vm/src/interp.rs:17158` | partial | `pending_new_target` is a hidden control latch that survives every non-throw halt | yes |
+| F026 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:38834` | `rust/engine/ironhorse-vm/src/interp.rs:51161` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:8789` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:8907` | fixed | String(err) and '' + err abort the crank unless the source text happens to mention toString | yes |
+| F027 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:3535` | `rust/engine/ironhorse-vm/src/interp.rs:3907` | open | `rust/engine/ironhorse-vm/src/interp.rs:4083` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:4102` | fixed | Halt::Unsupported is a 269-label channel conflating unimplemented features, guest-value | no |
+| F028 | high | high | 3.2 | `rust/engine/ironhorse-262/src/xst.rs:516` | `rust/engine/ironhorse-262/src/xst.rs:464` | open | `rust/engine/ironhorse-262/src/xst.rs:562` | partial | `rust/engine/ironhorse-262/src/xst.rs:462` | fixed | Every direction of error-model divergence is a non-gating skip in the differential harness | yes |
+| F030 | high | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:11199` | `rust/engine/ironhorse-vm/src/interp.rs:13121` | open | `rust/engine/ironhorse-vm/src/interp.rs:13866` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:14145` | fixed | run() mints two synthetic Halt::Throws from the oracle shim's post-run coercion , the only | no |
+| F031 | high | high | 3.11 | `rust/engine/ironhorse-vm/src/meter.rs:3` | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | Metering doctrine inverted, and `ironhorse-meter-1` names a cost table with no reified form | yes |
+| F033 | high | high | 3.11 | `designs/ironhorse-engine.md:460` | `designs/ironhorse-engine.md:460` | open | `designs/ironhorse-engine.md:499` | partial | `designs/ironhorse-engine.md:499` | partial | Requirement 8: the `Machine` API the design says is "preserved verbatim" does not exist | yes |
+| F043 | high | high | 3.10 | `rust/engine/ironhorse-snapshot/src/machine.rs:902` | `rust/engine/ironhorse-snapshot/src/machine.rs:912` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:965` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:971` | open | The per-crank checkpoint is O(live side-table state), not O(dirty): the whole small state | yes |
+| F044 | high | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:31025` | `rust/engine/ironhorse-vm/src/interp.rs:37753` | open | `rust/engine/ironhorse-vm/src/interp.rs:39095` | open | `rust/engine/ironhorse-vm/src/interp.rs:40914` | open | Every String.prototype method decodes the whole receiver into a fresh Vec<u16>, defeating | no |
+| F045 | high | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:34435` | `rust/engine/ironhorse-vm/src/interp.rs:45060` | open | `rust/engine/ironhorse-vm/src/interp.rs:46487` | open | `rust/engine/ironhorse-vm/src/interp.rs:48569` | open | The meter is not a wall-clock proxy on the collection and iteration paths: quadratic host | no |
+| F046 | high | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:3528` | `rust/engine/ironhorse-snapshot/src/image.rs:3613` | open | `rust/engine/ironhorse-snapshot/src/image.rs:3613` | open | `rust/engine/ironhorse-snapshot/src/image.rs:3715` | open | A live heap edge into a free record bypasses the bounds gate; the collector then walks | no |
+| F048 | high | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:807` | `rust/engine/ironhorse-snapshot/src/image.rs:808` | open | `rust/engine/ironhorse-snapshot/src/image.rs:808` | open | `rust/engine/ironhorse-snapshot/src/image.rs:812` | open | Core atom payloads accept trailing slack, so one machine has many valid containers | yes |
+| F051 | high | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:8005` | `rust/engine/ironhorse-vm/src/interp.rs:55` | open | `rust/engine/ironhorse-vm/src/interp.rs:55` | open | `rust/engine/ironhorse-vm/src/interp.rs:55` | open | Runtime compilation is entirely unmetered, and straight-line bytecode has no check points | yes |
+| F056 | high | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:36348` | `rust/engine/ironhorse-vm/src/interp.rs:47612` | open | `rust/engine/ironhorse-vm/src/interp.rs:49738` | open | `rust/engine/ironhorse-vm/src/interp.rs:52101` | open | Several property seams, not one; 47 call sites bypass the seam the code declares | yes |
+| F057 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:38498` | `rust/engine/ironhorse-vm/src/interp.rs:50676` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:53130` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:55824` | fixed | Frozen and hardened global bindings remain writable through bare assignment | yes |
+| F058 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:35673` | `rust/engine/ironhorse-vm/src/interp.rs:46856` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:48919` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:51287` | fixed | Integrity model covers only slot-chain properties, so nothing exotic can be frozen | yes |
+| F059 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/compartment.rs:320` | `rust/engine/ironhorse-vm/src/compartment.rs:320` | open | `rust/engine/ironhorse-vm/src/compartment.rs:455` | partial | `rust/engine/ironhorse-vm/src/compartment.rs:432` | partial | Compartment is a stateless per-call evaluator; the shared-frozen-intrinsics seam | yes |
+| F061 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:37847` | `rust/engine/ironhorse-vm/src/interp.rs:50381` | partial | `rust/engine/ironhorse-vm/src/interp.rs:29605` | partial | `rust/engine/ironhorse-vm/src/interp.rs:30161` | partial | Property operations outside the mop_* seam bypass proxy traps and accessors | yes |
+| F062 | high | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:35493` | `rust/engine/ironhorse-vm/src/intl_number.rs:890` | partial | `rust/engine/ironhorse-vm/src/intl_number.rs:890` | partial | `rust/engine/ironhorse-vm/src/intl_number.rs:893` | partial | Silent wrong values at confinement-relevant seams contradict the named-skip doctrine | yes |
+| F063 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:2997` | `rust/engine/ironhorse-compile/src/coder.rs:2997` | open | `rust/engine/ironhorse-compile/src/coder.rs:3129` | open | `rust/engine/ironhorse-compile/src/coder.rs:3280` | open | Panic-as-control-flow: coder and scoper are not total, and the only panic firewall lives | yes |
+| F064 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:298` | `rust/engine/ironhorse-compile/src/coder.rs:298` | open | `rust/engine/ironhorse-compile/src/coder.rs:298` | open | `rust/engine/ironhorse-compile/src/coder.rs:356` | open | Symbol ids silently wrap at 65,536; the SYMB count wraps too and the VM's decoder ignores | yes |
+| F065 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:5440` | `rust/engine/ironhorse-compile/src/coder.rs:5440` | open | `rust/engine/ironhorse-compile/src/coder.rs:5572` | open | `rust/engine/ironhorse-compile/src/coder.rs:5893` | open | Compilation is quadratic in source size and entirely unmetered , 1 MB of ordinary JS takes | yes |
+| F066 | high | high | 3.3 | `rust/engine/ironhorse-compile/src/meter.rs:22` | `rust/engine/ironhorse-compile/src/meter.rs:22` | open | `rust/engine/ironhorse-compile/src/meter.rs:22` | open | `rust/engine/ironhorse-compile/src/meter.rs:22` | open | The parse meter is a dead instrument, separately versioned from the VM's, and its "frozen | no |
+| F071 | high | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:3517` | `rust/engine/ironhorse-vm/src/interp.rs:3886` | open | `rust/engine/ironhorse-vm/src/interp.rs:4049` | partial | `rust/engine/ironhorse-vm/src/interp.rs:4084` | partial | `Halt` conflates completion, internal control transfer, engine gaps, hostile-input refusals (discussed under F027) | yes |
+| F073 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:31218` | `rust/engine/ironhorse-vm/src/interp.rs:37915` | open | `rust/engine/ironhorse-vm/src/interp.rs:39257` | open | `rust/engine/ironhorse-vm/src/interp.rs:41079` | partial | Guest-sized allocations are made before any bound or charge; handle_alloc_error aborts | yes |
+| F074 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:20191` | `rust/engine/ironhorse-vm/src/interp.rs:23542` | open | `rust/engine/ironhorse-vm/src/interp.rs:24519` | partial | `rust/engine/ironhorse-vm/src/interp.rs:25082` | partial | Regexp compile and match are unmetered until after they finish; catastrophic backtracking | yes |
+| F076 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:11338` | `rust/engine/ironhorse-vm/src/value.rs:1479` | open | `rust/engine/ironhorse-vm/src/value.rs:1470` | open | `rust/engine/ironhorse-vm/src/value.rs:1484` | open | No allocation-pressure GC and no heap ceiling anywhere in the VM; chunk offsets narrow (discussed under F010) | yes |
+| F077 | high | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:39624` | `rust/engine/ironhorse-vm/src/interp.rs:53803` | partial | `rust/engine/ironhorse-vm/src/interp.rs:54872` | partial | `rust/engine/ironhorse-vm/src/interp.rs:59437` | partial | Guest-triggerable panics from &str slicing at non-char boundaries in the date and duration | no |
+| F078 | high | high | 3.1 | `rust/engine/ironhorse-regexp/src/compile.rs:385` | `rust/engine/ironhorse-regexp/src/compile.rs:1678` | open | `rust/engine/ironhorse-regexp/src/compile.rs:1735` | open | `rust/engine/ironhorse-regexp/src/compile.rs:1746` | open | A wrapped numeric backreference yields a negative capture index that indexes | no |
+| F079 | high | high | 3.1 | `rust/engine/Cargo.toml:1` | `rust/engine/Cargo.toml:1` | partial | `rust/engine/Cargo.toml:7` | partial | `rust/engine/ironhorse-vm/src/intl_number.rs:532` | partial | No overflow-checks profile: guest-reachable integer overflows are debug panics and release | yes |
+| F080 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:29829` | `rust/engine/ironhorse-vm/src/interp.rs:35906` | open | `rust/engine/ironhorse-vm/src/interp.rs:37248` | open | `rust/engine/ironhorse-vm/src/interp.rs:38976` | open | Platform libm in 22 Math built-ins defeats cross-host consensus; the narrowed scope | yes |
+| F081 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/value.rs:332` | `rust/engine/ironhorse-vm/src/value.rs:332` | open | `rust/engine/ironhorse-vm/src/value.rs:332` | open | `rust/engine/ironhorse-vm/src/value.rs:343` | open | No NaN canonicalization: the host CPU's default-NaN sign/payload is guest-observable | no |
+| F084 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:20284` | `rust/engine/ironhorse-vm/src/interp.rs:24076` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:25164` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:25185` | fixed | RegExp exec().index and String.prototype.search return UTF-8 byte offsets for non-ASCII | no |
+| F085 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:10892` | `rust/engine/ironhorse-vm/src/interp.rs:12772` | open | `rust/engine/ironhorse-vm/src/interp.rs:13433` | partial | `rust/engine/ironhorse-vm/src/interp.rs:13693` | partial | A lossy Rust-String ToString seam turns lone surrogates into U+FFFD in guest-observable | yes |
+| F086 | high | high | 3.6 | `rust/engine/ironhorse-snapshot/src/format.rs:326` | `rust/engine/ironhorse-snapshot/src/format.rs:358` | partial | `rust/engine/ironhorse-snapshot/src/format.rs:358` | partial | `rust/engine/ironhorse-snapshot/src/format.rs:325` | partial | Snapshot boot-layout compatibility rests on a caller-supplied opaque string; nothing | yes |
+| F087 | high | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:36967` | `rust/engine/ironhorse-vm/src/interp.rs:14895` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:15806` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:16215` | fixed | Array length above 2^31 is reported to the guest as a negative number, and above 2^32-1 | no |
+| F088 | high | high | 3.12 | `rust/engine/ironhorse-vm/src/interp.rs:6264` | `rust/engine/ironhorse-vm/src/interp.rs:6975` | open | `rust/engine/ironhorse-vm/src/interp.rs:7454` | open | `rust/engine/ironhorse-vm/src/interp.rs:7484` | open | Confirmed GC-root omission: %Error.prototype%.stack accessor pair is root-less until | no |
+| F090 | high | high | 3.12 | `rust/endo/src/ironhorse_engine.rs:680` | `rust/endo/src/ironhorse_engine.rs:682` | open | `rust/endo/src/ironhorse_engine.rs:1127` | open | `rust/endo/src/ironhorse_engine.rs:1120` | open | The exact collector has no production caller: WeakMap/WeakSet are strong and chunk space | no |
+| F113 | high | high | 3.8 | `.github/workflows/ci.yml:832` | `.github/workflows/ci.yml:830` | open | `.github/workflows/ci.yml:835` | fixed | `.github/workflows/ci.yml:829` | fixed | The oracle lane raises the test-thread stack to 16 MiB, configuring CI so the recursive | no |
+| F132 | high | high | 3.5 | `rust/engine/ironhorse-regexp/src/compile.rs:889` | `rust/engine/ironhorse-regexp/src/compile.rs:880` | open | `rust/engine/ironhorse-regexp/src/compile.rs:915` | open | `rust/engine/ironhorse-regexp/src/compile.rs:925` | open | Regexp compile is metered by output program size, not by parse work, and case-folded ranges | no |
+| F029 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:34654` | `rust/engine/ironhorse-vm/src/interp.rs:45283` | open | `rust/engine/ironhorse-vm/src/interp.rs:46732` | partial | `rust/engine/ironhorse-vm/src/interp.rs:48813` | partial | Engine-raised TypeError/RangeError never carry a message; the uncatchable sites carry | no |
+| F032 | medium | high | 3.11 | `designs/ironhorse-engine.md:1111` | `designs/ironhorse-engine.md:1111` | open | `designs/ironhorse-engine.md:6` | partial | `designs/ironhorse-engine.md:8` | partial | The approved design is content-frozen at 2026-07-29; no document describes the current | yes |
+| F034 | medium | high | 3.11 | `designs/ironhorse-engine.md:612` | `designs/ironhorse-engine.md:612` | open | `designs/ironhorse-engine.md:706` | open | `designs/ironhorse-engine.md:706` | fixed | Design-promised Miri and ASAN/UBSAN CI enforcement does not exist; four tests are named | yes |
+| F035 | medium | high | 3.11 | `rust/engine/ironhorse-vm/src/interp.rs:6409` | `rust/engine/ironhorse-vm/src/interp.rs:7152` | open | `rust/engine/ironhorse-vm/src/interp.rs:7640` | open | `rust/engine/ironhorse-vm/src/interp.rs:7663` | open | Resolved question 10 (Intl omitted, no seam) is violated with no amendment; Temporal landed | yes |
+| F036 | medium | high | 3.8 | `rust/engine/ironhorse-262/src/bin/endot_ih.rs:352` | `rust/engine/ironhorse-262/src/bin/endot_ih.rs:352` | open | `rust/engine/ironhorse-262/src/bin/endot_ih.rs:352` | open | `rust/engine/ironhorse-262/src/bin/endot_ih.rs:348` | fixed | The two-directional expectation ratchet exists only as code: no committed list, no CI | yes |
+| F037 | medium | high | 3.8 | `rust/engine/ironhorse-snapshot/tests/crafted_row_refusals.rs:1` | `rust/engine/ironhorse-snapshot/tests/crafted_row_refusals.rs:1` | open | `rust/engine/ironhorse-snapshot/tests/crafted_row_refusals.rs:1` | open | `rust/engine/ironhorse-snapshot/tests/crafted_row_refusals.rs:1` | open | 204 of 213 named Corrupt refusals in the snapshot decoder are asserted by no test | yes |
+| F039 | medium | high | 3.8 | `.github/workflows/ironhorse-deep-fuzz.yml:129` | `.github/workflows/ironhorse-deep-fuzz.yml:129` | open | `.github/workflows/ironhorse-deep-fuzz.yml:129` | open | `.github/workflows/ironhorse-deep-fuzz.yml:129` | open | Differential fuzzing , the design's flagship instrument , runs in no in-repo automation | yes |
+| F040 | medium | high | 3.8 | `rust/engine/ironhorse-fuzz/src/regexp.rs:44` | `rust/engine/ironhorse-fuzz/src/lib.rs:57` | open | `rust/engine/ironhorse-fuzz/src/lib.rs:71` | open | `rust/engine/ironhorse-fuzz/src/lib.rs:71` | open | Fuzz generator bias is measurable in the trophy ledger: 24 regressions, four root classes | no |
+| F041 | medium | high | 3.8 | `rust/engine/ironhorse-262/tests/multi_crank_oracle.rs:13` | `rust/engine/ironhorse-262/tests/multi_crank_oracle.rs:13` | open | `rust/engine/ironhorse-262/tests/multi_crank_oracle.rs:13` | open | `rust/engine/ironhorse-262/tests/multi_crank_oracle.rs:13` | open | The multi-crank oracle , the ledger's own named antidote , is seven hand-written tests | yes |
+| F042 | medium | high | 3.8 | `rust/engine/ironhorse-vm/tests/gc_side_tables.rs:36` | `rust/engine/ironhorse-vm/tests/gc_side_tables.rs:36` | open | `rust/engine/ironhorse-vm/tests/gc_side_tables.rs:36` | open | `rust/engine/ironhorse-vm/tests/gc_side_tables.rs:36` | open | No mid-crank collection anywhere, so the frame-register GC root classification | yes |
+| F047 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/machine.rs:209` | `rust/engine/ironhorse-snapshot/src/machine.rs:209` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:239` | partial | `rust/engine/ironhorse-snapshot/src/machine.rs:243` | partial | The persist gate is attached to three convenience verbs, not to the data path; every | yes |
+| F049 | medium | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:10667` | `rust/engine/ironhorse-vm/src/interp.rs:12456` | open | `rust/engine/ironhorse-vm/src/interp.rs:13031` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:13264` | fixed | Metering does not survive a resume in the shipped path; `arm_meter` zeroes the restored | no |
+| F050 | medium | high | 3.5 | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64` | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64` | open | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64` | open | `rust/engine/ironhorse-262/tests/corpus_conversion_equivalence.rs:64` | open | The doctrine's recalibration mechanism is blocked by ~1,600 XS-parity CI gates | yes |
+| F052 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:43711` | `rust/engine/ironhorse-vm/src/interp.rs:57357` | open | `rust/engine/ironhorse-vm/src/interp.rs:59859` | open | `rust/engine/ironhorse-vm/src/interp.rs:63299` | open | No seam layer: ~44 side tables hand-mirrored across ~10 enumerations in 2 crates | yes |
+| F053 | medium | high | 3.14 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:34` | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:34` | open | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:34` | open | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:34` | open | Both mechanical safety nets parse interp.rs as source text, making the monolith load-bearing | yes |
+| F054 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/compartment.rs:64` | `rust/engine/ironhorse-vm/src/compartment.rs:64` | open | `rust/engine/ironhorse-vm/src/compartment.rs:111` | partial | `rust/engine/ironhorse-vm/src/compartment.rs:110` | partial | The next-stage seams the design says are already carved do not exist | yes |
+| F055 | medium | high | 3.1 | `rust/engine/Cargo.toml:7` | `rust/engine/Cargo.toml:7` | open | `rust/engine/Cargo.toml:7` | open | `rust/engine/Cargo.toml:26` | fixed | No [profile] section: CI tests only the profile where overflow panics; production ships (discussed under F079) | yes |
+| F060 | medium | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:7683` | `rust/engine/ironhorse-vm/src/interp.rs:8743` | open | `rust/engine/ironhorse-vm/src/interp.rs:9257` | open | `rust/engine/ironhorse-vm/src/interp.rs:9405` | open | Relink re-installs %Error.prototype%.stack on every partial pass, silently reverting | yes |
+| F067 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/parser/stmt.rs:704` | `rust/engine/ironhorse-compile/src/parser/stmt.rs:704` | open | `rust/engine/ironhorse-compile/src/parser/stmt.rs:732` | partial | `rust/engine/ironhorse-compile/src/parser/stmt.rs:742` | partial | Two valid programs are rejected, and over-rejection is structurally invisible | no |
+| F068 | medium | high | 3.13 | `rust/endo/src/ironhorse_engine.rs:137` | `rust/endo/src/ironhorse_engine.rs:137` | open | `rust/endo/src/ironhorse_engine.rs:409` | open | `rust/endo/src/ironhorse_engine.rs:403` | open | No engine abstraction: the Ironhorse `Machine` is a parallel type, not an implementation | yes |
+| F069 | medium | high | 3.13 | `rust/endo/src/ironhorse_engine.rs:572` | `rust/endo/src/ironhorse_engine.rs:574` | open | `rust/endo/src/ironhorse_engine.rs:1004` | partial | `rust/engine/ironhorse-vm/src/interp.rs:27545` | partial | The daemon never arms the meter, and the pump/quiesce verbs the design names are private | no |
+| F070 | medium | high | 3.6 | `Cargo.toml:6` | `Cargo.lock:1` | open | `Cargo.lock:1` | open | `Cargo.toml:6` | partial | Two workspaces, two lockfiles: 22 of 48 shared dependencies resolve differently (discussed under F083) | yes |
+| F072 | medium | high | 3.13 | `rust/engine/ironhorse-vm/src/interp.rs:8273` | `rust/engine/ironhorse-vm/src/interp.rs:9518` | open | `rust/engine/ironhorse-vm/src/interp.rs:10070` | open | `rust/engine/ironhorse-vm/src/interp.rs:10196` | open | The restore seam is 21 public, inconsistently-validating mutators on `Interp` | yes |
+| F075 | medium | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:35006` | `rust/engine/ironhorse-vm/src/interp.rs:45736` | open | `rust/engine/ironhorse-vm/src/interp.rs:47175` | open | `rust/engine/ironhorse-vm/src/interp.rs:49256` | open | The u16 property-key id space is a monotone machine-lifetime budget; untrusted JSON | yes |
+| F082 | medium | high | 3.6 | `.github/workflows/ci.yml:698` | `.github/workflows/ci.yml:698` | open | `.github/workflows/ci.yml:698` | open | `.github/workflows/ci.yml:729` | partial | The design's cross-platform / repeat determinism CI does not exist, and no golden computron | yes |
+| F083 | medium | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:4422` | `Cargo.toml:6` | open | `Cargo.toml:6` | open | `rust/engine/ironhorse-vm/src/interp.rs:5307` | partial | The shipped build and the CI-tested build are different dependency graphs | yes |
+| F089 | medium | high | 3.12 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:458` | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:472` | open | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:473` | open | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:484` | open | The GC ground-truth registry's escape hatches are unconditionally satisfied; its 'checked | yes |
+| F091 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store.rs:3106` | `rust/engine/ironhorse-snapshot/src/store.rs:3106` | open | `rust/engine/ironhorse-snapshot/src/store.rs:3106` | open | `rust/engine/ironhorse-snapshot/src/store.rs:3254` | open | The GC schedule is consensus state and its only input, manifest.cranks, is unauthenticated (discussed under F126) | yes |
+| F092 | medium | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16588` | `rust/engine/ironhorse-vm/src/interp.rs:19102` | open | `rust/engine/ironhorse-vm/src/interp.rs:20026` | partial | `rust/engine/ironhorse-vm/src/interp.rs:20517` | partial | Three incompatible 'native try' boundaries and no shared primitive | no |
+| F093 | medium | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:11072` | `rust/engine/ironhorse-vm/src/interp.rs:12971` | partial | `rust/engine/ironhorse-vm/src/interp.rs:13676` | partial | `rust/engine/ironhorse-vm/src/interp.rs:13936` | partial | `render_uncaught` executes guest code after the halt is decided and silently discards any | no |
+| F097 | medium | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:43565` | `rust/engine/ironhorse-vm/src/interp.rs:57194` | open | `rust/engine/ironhorse-vm/src/interp.rs:59632` | open | `rust/engine/ironhorse-vm/src/interp.rs:63134` | open | GC-root coverage of the re-entrancy registers is convention, not mechanism: `target_func` | yes |
+| F098 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:205` | `rust/engine/ironhorse-vm/src/interp.rs:205` | open | `rust/engine/ironhorse-vm/src/interp.rs:233` | partial | `rust/engine/ironhorse-vm/src/interp.rs:233` | partial | DISPATCH_REENTRY_LIMIT = 64 reuses Halt::StackOverflow, aborting ordinary callback nesting | yes |
+| F099 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:11011` | `rust/engine/ironhorse-vm/src/interp.rs:12910` | open | `rust/engine/ironhorse-vm/src/interp.rs:13597` | open | `rust/engine/ironhorse-vm/src/interp.rs:13857` | partial | render reads a write-once shadow (error_data) while e.stack reads live properties | no |
+| F100 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:4971` | `rust/engine/ironhorse-vm/src/interp.rs:5385` | open | `rust/engine/ironhorse-vm/src/interp.rs:5845` | open | `rust/engine/ironhorse-vm/src/interp.rs:5881` | open | CatchJump records a bare target_pc with no code-segment identity | no |
+| F101 | medium | medium | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:3517` | `rust/engine/ironhorse-vm/src/interp.rs:3886` | open | `rust/engine/ironhorse-vm/src/interp.rs:4049` | open | `rust/engine/ironhorse-vm/src/interp.rs:4258` | fixed | Internal control transfers are host-visible Halt variants, and Halt::Return doubles | yes |
+| F102 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:5419` | `rust/engine/ironhorse-vm/src/interp.rs:5846` | open | `rust/engine/ironhorse-vm/src/interp.rs:6311` | open | `rust/engine/ironhorse-vm/src/interp.rs:6347` | open | Uncaught-rejection tracking is a whole-heap scan available only to the test harness | no |
+| F103 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:10741` | `rust/engine/ironhorse-vm/src/interp.rs:12531` | open | `rust/engine/ironhorse-vm/src/interp.rs:13142` | open | `rust/engine/ironhorse-vm/src/interp.rs:13375` | fixed | self.exception is never cleared after an uncaught throw: a live machine is permanently | yes |
+| F105 | medium | high | 3.11 | `rust/engine/README.md:118` | `rust/engine/README.md:118` | open | `rust/engine/README.md:204` | fixed | `rust/engine/README.md:260` | fixed | README:118 records the parser stack-margin gap as "Already mirrored"; no such check exists | yes |
+| F110 | medium | high | 3.11 | `designs/ironhorse-snapshot-store-seam.md:4066` | `designs/ironhorse-snapshot-store-seam.md:4078` | open | `designs/ironhorse-snapshot-store-seam.md:4101` | open | `designs/ironhorse-snapshot-store-seam.md:4102` | open | The store-seam design claims three ironhorse-fuzz store targets that do not exist | no |
+| F111 | medium | high | 3.11 | `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` | `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` | open | `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` | open | `designs/ironhorse-meter-opcode-cost-instrumentation.md:7` | open | The instrumentation design's Status is "Not Started" while its stage C1 has landed | yes |
+| F114 | medium | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:44716` | `rust/engine/Cargo.toml:7` | open | `rust/engine/Cargo.toml:7` | open | `rust/engine/Cargo.toml:26` | fixed | Release-profile arithmetic semantics are never tested: no overflow-checks profile, so (discussed under F079) | no |
+| F115 | medium | high | 3.6 | `.github/workflows/ci.yml:698` | `.github/workflows/ci.yml:698` | open | `.github/workflows/ci.yml:698` | open | `.github/workflows/ci.yml:729` | partial | No cross-platform or cross-build determinism lane, and the --repeat determinism gate (discussed under F082) | yes |
+| F117 | medium | high | 3.8 | `rust/engine/ironhorse-262/src/xst.rs:602` | `rust/engine/ironhorse-262/src/xst.rs:661` | open | `rust/engine/ironhorse-262/src/xst.rs:477` | open | `rust/engine/ironhorse-262/src/xst.rs:977` | fixed | The Temporal host exclusion is a source-substring heuristic evaluated before the agreement | no |
+| F119 | medium | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:12687` | `rust/engine/ironhorse-vm/src/interp.rs:14883` | open | `rust/engine/ironhorse-vm/src/interp.rs:15793` | open | `rust/engine/ironhorse-vm/src/interp.rs:16203` | open | Exotic-object dispatch by side-table membership puts 14 hash probes on the hottest opcode | no |
+| F120 | medium | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:15671` | `rust/engine/ironhorse-vm/src/interp.rs:18074` | open | `rust/engine/ironhorse-vm/src/interp.rs:18972` | open | `rust/engine/ironhorse-vm/src/interp.rs:19480` | open | CATCH clones the frame's id_map HashMap on every try entry: wall cost scales with frame | no |
+| F123 | medium | high | 3.10 | `rust/engine/ironhorse-vm/src/value.rs:1613` | `rust/engine/ironhorse-vm/src/gc.rs:183` | open | `rust/engine/ironhorse-vm/src/gc.rs:183` | open | `rust/engine/ironhorse-vm/src/gc.rs:183` | partial | The only chunk-space compactor fully reifies a lazily resumed arena and dirties the whole | yes |
+| F124 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store_suite.rs:346` | `rust/engine/ironhorse-snapshot/src/store_suite.rs:346` | open | `rust/engine/ironhorse-snapshot/src/store_suite.rs:375` | open | `rust/engine/ironhorse-snapshot/src/store_suite.rs:402` | open | The shared backend acceptance suite cannot observe durability or any refused commit | no |
+| F126 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store.rs:201` | `rust/engine/ironhorse-snapshot/src/store.rs:201` | open | `rust/engine/ironhorse-snapshot/src/store.rs:201` | open | `rust/engine/ironhorse-snapshot/src/store.rs:201` | open | `cranks` and `epoch` sit outside the Merkle root, and the seal is never verified at open | no |
+| F129 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/machine.rs:712` | `rust/engine/ironhorse-snapshot/src/machine.rs:722` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:780` | open | `rust/engine/ironhorse-snapshot/src/machine.rs:786` | open | The CAS identity contract is enforced on neither side: `resume_from_cas` never re-hashes | no |
+| F130 | medium | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:510` | `rust/engine/ironhorse-snapshot/src/image.rs:511` | open | `rust/engine/ironhorse-snapshot/src/image.rs:511` | open | `rust/engine/ironhorse-snapshot/src/image.rs:511` | open | Two divergent, hand-maintained stored-reference traversals with no mechanical net | yes |
+| F131 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:30905` | `rust/engine/ironhorse-vm/src/interp.rs:37507` | open | `rust/engine/ironhorse-vm/src/interp.rs:38852` | open | `rust/engine/ironhorse-vm/src/interp.rs:40664` | open | The string-op cost unit is inconsistent within one release: code units on one path, UTF-8 | no |
+| F133 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:36736` | `rust/engine/ironhorse-vm/src/interp.rs:48422` | partial | `rust/engine/ironhorse-vm/src/interp.rs:51520` | partial | `rust/engine/ironhorse-vm/src/interp.rs:54097` | partial | The Proxy/MOP seam is effectively unmetered (one meter tick in ~1,700 lines) | yes |
+| F134 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:3580` | `rust/engine/ironhorse-vm/src/interp.rs:3949` | open | `rust/engine/ironhorse-vm/src/interp.rs:4271` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:4297` | fixed | Check-point placement is not uniform: a catch landing reached through dispatch_result! | no |
+| F135 | medium | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:35099` | `rust/engine/ironhorse-vm/src/interp.rs:45920` | open | `rust/engine/ironhorse-vm/src/interp.rs:47386` | open | `rust/engine/ironhorse-vm/src/interp.rs:49468` | open | Unmetered O(n) reverse-lookup scans on hot property paths | yes |
+| F137 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/intl_number.rs:779` | `rust/engine/ironhorse-vm/src/intl_number.rs:792` | open | `rust/engine/ironhorse-vm/src/intl_number.rs:792` | open | `rust/engine/ironhorse-vm/src/intl_number.rs:795` | fixed | No mechanical style or lint floor, and a deny-level clippy error makes a clippy gate | yes |
+| F140 | medium | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:16310` | `rust/engine/ironhorse-vm/src/interp.rs:18849` | open | `rust/engine/ironhorse-vm/src/interp.rs:4083` | partial | `rust/engine/ironhorse-vm/src/interp.rs:4084` | fixed | Halt::Unsupported(&'static str) is the universal bail: 376 sites in one file (discussed under F027) | no |
+| F141 | medium | high | 3.14 | `rust/engine/ironhorse-snapshot/src/store.rs:2487` | `rust/engine/ironhorse-snapshot/src/store.rs:2487` | open | `rust/engine/ironhorse-snapshot/src/store.rs:2487` | open | `rust/engine/ironhorse-snapshot/src/store.rs:2566` | open | Copy-paste as the structuring principle in the persistence ladder and its test suite | no |
+| F142 | medium | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:5184` | `rust/engine/ironhorse-vm/src/interp.rs:5598` | open | `rust/engine/ironhorse-vm/src/interp.rs:6058` | open | `rust/engine/ironhorse-vm/src/interp.rs:6094` | open | The 44,942-line file: one 33,986-line impl, three functions over 900 lines, 42 tests | no |
+| F143 | medium | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:6339` | `rust/engine/ironhorse-vm/src/interp.rs:7082` | open | `rust/engine/ironhorse-vm/src/interp.rs:8120` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:8214` | fixed | The test262 host object ($262 with a live detachArrayBuffer) is built into every production | no |
+| F145 | medium | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:37861` | `rust/engine/ironhorse-vm/src/interp.rs:32217` | partial | `rust/engine/ironhorse-vm/src/interp.rs:4112` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:55068` | fixed | Descriptor helpers throw uncatchable host escapes where the spec throws a catchable | yes |
+| F147 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:5794` | `rust/engine/ironhorse-compile/src/coder.rs:5794` | open | `rust/engine/ironhorse-compile/src/coder.rs:5917` | open | `rust/engine/ironhorse-compile/src/coder.rs:6283` | open | Operand widths are defined twice with no cross-check, and emit_step's default arm silently | yes |
+| F148 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/scoper.rs:361` | `rust/engine/ironhorse-compile/src/scoper.rs:361` | open | `rust/engine/ironhorse-compile/src/scoper.rs:366` | open | `rust/engine/ironhorse-compile/src/scoper.rs:366` | open | The scoper->coder contract is raw-address hash maps with three inconsistent miss | no |
+| F149 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:942` | `rust/engine/ironhorse-compile/src/coder.rs:942` | open | `rust/engine/ironhorse-compile/src/coder.rs:1040` | partial | `rust/engine/ironhorse-compile/src/coder.rs:1110` | partial | The compiler has exactly one Script shape , the oracle shim's eval program , and production | yes |
+| F151 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/parser.rs:76` | `rust/engine/ironhorse-compile/src/parser.rs:76` | open | `rust/engine/ironhorse-compile/src/parser.rs:76` | open | `rust/engine/ironhorse-compile/src/parser.rs:79` | open | Lex-originating error messages carry a `line N:` prefix into the guest-observable | no |
+| F152 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/lexer.rs:1223` | `rust/engine/ironhorse-compile/src/lexer.rs:1223` | open | `rust/engine/ironhorse-compile/src/lexer.rs:1223` | partial | `rust/engine/ironhorse-compile/src/lexer.rs:1237` | partial | Eager regexp compilation inside the lexer: work discarded, duplicated at runtime | no |
+| F153 | medium | high | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:5996` | `rust/engine/ironhorse-compile/src/coder.rs:5996` | open | `rust/engine/ironhorse-compile/src/coder.rs:6128` | open | `rust/engine/ironhorse-compile/src/coder.rs:6497` | open | node_code_name is a hard-coded false stub with a stale comment; `x //= function(){}` emits | no |
+| F155 | medium | high | 3.13 | `rust/engine/ironhorse-snapshot/src/store.rs:1776` | `rust/engine/ironhorse-snapshot/src/store.rs:1777` | open | `rust/engine/ironhorse-snapshot/src/store.rs:1777` | partial | `rust/engine/ironhorse-snapshot/src/store.rs:1787` | partial | Persistence safety obligations are prose on a public trait, or default-open | no |
+| F156 | medium | high | 3.13 | `rust/engine/ironhorse-vm/src/meter.rs:26` | `rust/engine/ironhorse-vm/src/meter.rs:26` | open | `rust/engine/ironhorse-vm/src/meter.rs:34` | open | `rust/engine/ironhorse-vm/src/meter.rs:34` | open | Five independent version identifiers, no compatibility document, and the one the doctrine | yes |
+| F157 | medium | high | 3.13 | `rust/endo/src/ironhorse_engine.rs:381` | `rust/endo/src/ironhorse_engine.rs:383` | open | `rust/endo/src/ironhorse_engine.rs:725` | open | `rust/endo/src/ironhorse_engine.rs:718` | open | Structured engine errors are collapsed to `String` at the daemon seam, erasing | no |
+| F160 | medium | high | 3.13 | `rust/engine/ironhorse-vm/src/interp.rs:89` | `rust/engine/ironhorse-vm/src/interp.rs:89` | open | `rust/engine/ironhorse-vm/src/interp.rs:89` | open | `rust/engine/ironhorse-vm/src/interp.rs:89` | open | The compiler seam is correctly inverted, never wired in production, and carries no cost | no |
+| F162 | medium | high | 3.1 | `rust/engine/ironhorse-vm/src/interp.rs:10853` | `rust/engine/ironhorse-vm/src/interp.rs:12735` | open | `rust/engine/ironhorse-vm/src/interp.rs:13396` | partial | `rust/engine/ironhorse-vm/src/interp.rs:13640` | partial | The bytecode dispatch loop is fail-open on value-stack underflow | yes |
+| F163 | medium | high | 3.1 | `rust/engine/ironhorse-snapshot/src/image.rs:3589` | `rust/engine/ironhorse-snapshot/src/image.rs:3671` | open | `rust/engine/ironhorse-snapshot/src/image.rs:3671` | open | `rust/engine/ironhorse-snapshot/src/image.rs:3777` | open | Snapshot ABUF length is validated against the arena, not the chunk header, and slice_mut | no |
+| F167 | medium | high | 3.12 | `rust/engine/ironhorse-vm/src/interp.rs:9036` | `rust/engine/ironhorse-vm/src/interp.rs:10450` | open | `rust/engine/ironhorse-vm/src/interp.rs:11027` | open | `rust/engine/ironhorse-vm/src/interp.rs:11191` | open | ArrayBuffer restore validates the declared length against the arena, not the chunk header | yes |
+| F013 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/meter.rs:120` | `rust/engine/ironhorse-vm/src/meter.rs:120` | open | `rust/engine/ironhorse-vm/src/meter.rs:149` | fixed | `rust/engine/ironhorse-vm/src/meter.rs:149` | fixed | arm_meter silently disables metering for large budgets: interval << 16 drops the high bits | no |
+| F038 | low | high | 3.8 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:26` | `rust/engine/ironhorse-vm/src/interp.rs:58369` | open | `rust/engine/ironhorse-vm/src/interp.rs:60871` | open | `rust/engine/ironhorse-vm/src/interp.rs:64316` | partial | The GC counted-ref parity net is self-referential and debug-only , the exact pattern | yes |
+| F094 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16681` | `rust/engine/ironhorse-vm/src/interp.rs:19198` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:20129` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:20625` | fixed | Re-entrant resume of an executing generator is an uncatchable `Halt::Unsupported` | yes |
+| F095 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16248` | `rust/engine/ironhorse-vm/src/interp.rs:18762` | open | `rust/engine/ironhorse-vm/src/interp.rs:19666` | open | `rust/engine/ironhorse-vm/src/interp.rs:20157` | open | The single value-stack overflow check is in `enter_call`; the three resume paths reinstall | no |
+| F096 | low | medium | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16443` | `rust/engine/ironhorse-vm/src/interp.rs:18957` | open | `rust/engine/ironhorse-vm/src/interp.rs:19861` | open | `rust/engine/ironhorse-vm/src/interp.rs:4258` | fixed | `callback_return_depth` gives `Halt::Return` two meanings through a machine-global register | no |
+| F104 | low | high | 3.11 | `designs/ironhorse-engine.md:270` | `designs/ironhorse-engine.md:270` | open | `designs/ironhorse-engine.md:271` | open | `designs/ironhorse-engine.md:271` | open | Architecture diagram and unsafe roster name phantom crates and invert the integration | yes |
+| F106 | low | high | 3.11 | `designs/ironhorse-engine.md:753` | `designs/ironhorse-engine.md:756` | open | `designs/ironhorse-engine.md:849` | open | `designs/ironhorse-engine.md:860` | open | The performance envelope has no instrument: no benchmark harness, no fourth benchmark | no |
+| F107 | low | high | 3.11 | `rust/engine/ironhorse-vm/src/lib.rs:6` | `rust/engine/ironhorse-vm/src/lib.rs:6` | open | `rust/engine/ironhorse-vm/src/lib.rs:6` | open | `rust/engine/ironhorse-vm/src/lib.rs:6` | open | Crate-root rustdoc is stage-frozen; the snapshot crate root lists 9 atoms where the code | no |
+| F108 | low | high | 3.11 | `rust/engine/README.md:981` | `rust/engine/README.md:991` | open | `rust/engine/README.md:1169` | open | `rust/engine/README.md:1229` | open | Stage-4 "acceptance evidence" records an unmet bar as evidence, and README stage numbering | no |
+| F109 | low | high | 3.11 | `designs/ironhorse-engine.md:1152` | `rust/engine/README.md:1689` | open | `rust/engine/README.md:1867` | open | `rust/engine/README.md:1927` | open | README stage-5 verdict record carries eleven MET/NOT-MET verdicts out of chronological | yes |
+| F112 | low | high | 3.8 | `rust/engine/ironhorse-compile/Cargo.toml:22` | `rust/engine/ironhorse-compile/Cargo.toml:23` | open | `rust/engine/ironhorse-compile/Cargo.toml:23` | open | `rust/engine/ironhorse-compile/Cargo.toml:25` | fixed | PR CI has no oracle-free test target for ironhorse-compile and ironhorse-regexp: xs-oracle | no |
+| F116 | low | high | 3.8 | `rust/engine/ironhorse-262/src/xst.rs:1252` | `rust/engine/ironhorse-262/src/xst.rs:1625` | fixed | `rust/engine/ironhorse-262/src/xst.rs:2084` | fixed | `rust/engine/ironhorse-262/src/xst.rs:1966` | fixed | Expectation-list Mode axis is vestigial: strict-mode outcomes are folded into the sloppy | no |
+| F118 | low | high | 3.10 | `designs/ironhorse-engine.md:346` | `rust/engine/ironhorse-vm/src/interp.rs:13216` | open | `rust/engine/ironhorse-vm/src/interp.rs:14036` | open | `rust/engine/ironhorse-vm/src/interp.rs:14331` | open | The design's "small register struct threaded through the loop" does not exist; interpreter | no |
+| F121 | low | high | 3.10 | `rust/engine/ironhorse-vm/src/value.rs:967` | `rust/engine/ironhorse-vm/src/value.rs:298` | open | `rust/engine/ironhorse-vm/src/value.rs:298` | open | `rust/engine/ironhorse-vm/src/value.rs:309` | open | Slot is 24 bytes, not the documented 32; the footprint envelope is measured against | no |
+| F122 | low | high | 3.10 | `rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs:51` | `rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs:51` | open | `rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs:51` | open | `rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs:51` | open | The performance envelope has no machine-checked expression: six ignored benches, no CI | no |
+| F125 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store_suite.rs:60` | `rust/engine/ironhorse-snapshot/src/store_suite.rs:60` | open | `rust/engine/ironhorse-snapshot/src/store_suite.rs:88` | partial | `rust/engine/ironhorse-snapshot/src/store_suite.rs:89` | partial | The metamorphic suite varies the suspend backend but barely varies the suspend point | no |
+| F127 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/sidetable.rs:558` | `rust/engine/ironhorse-snapshot/src/sidetable.rs:554` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:574` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:587` | partial | Three Pending rows make every await-bearing or async-generator-bearing machine | yes |
+| F128 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/image.rs:4346` | `rust/engine/ironhorse-snapshot/src/image.rs:4463` | open | `rust/engine/ironhorse-snapshot/src/image.rs:4463` | open | `rust/engine/ironhorse-snapshot/src/image.rs:4651` | open | Two container grammars over one row set, with divergent emptiness rules and two | no |
+| F136 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/meter.rs:3` | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | `rust/engine/ironhorse-vm/src/meter.rs:3` | open | meter.rs's own doc comment states the opposite doctrine from the paragraph 19 lines below | yes |
+| F138 | low | high | 3.13 | `rust/engine/ironhorse-vm/src/lib.rs:28` | `rust/engine/ironhorse-vm/src/lib.rs:28` | open | `rust/engine/ironhorse-vm/src/lib.rs:29` | open | `rust/engine/ironhorse-vm/src/lib.rs:29` | open | A 45,000-line file is the crate's public API surface (discussed under F154) | no |
+| F139 | low | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:15359` | `rust/engine/ironhorse-vm/src/interp.rs:17762` | open | `rust/engine/ironhorse-vm/src/interp.rs:18659` | open | `rust/engine/ironhorse-vm/src/interp.rs:19159` | open | Activation-record suspend is copy-pasted at 8 sites, 4 with an identical jump-rebase block | no |
+| F144 | low | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:7427` | `rust/engine/ironhorse-vm/src/interp.rs:8367` | open | `rust/engine/ironhorse-vm/src/interp.rs:8842` | open | `rust/engine/ironhorse-vm/src/interp.rs:9025` | open | No attenuation seam: a program receives every intrinsic it names, and endowments can only | no |
+| F146 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:11075` | `rust/engine/ironhorse-vm/src/interp.rs:12985` | open | `rust/engine/ironhorse-vm/src/interp.rs:13688` | partial | `rust/engine/ironhorse-vm/src/interp.rs:13948` | partial | Guest code runs at the host boundary after the halt is decided, and a meter abort there (discussed under F093) | no |
+| F150 | low | high | 3.3 | `rust/engine/ironhorse-compile/tests/corpus_parse_smoke.rs:63` | `rust/engine/ironhorse-compile/tests/corpus_parse_smoke.rs:63` | open | `rust/engine/ironhorse-compile/tests/corpus_parse_smoke.rs:63` | open | `rust/engine/ironhorse-compile/tests/corpus_parse_smoke.rs:63` | open | Over-acceptance vs the oracle is recorded but never asserted in the compile crate's own | no |
+| F154 | low | high | 3.13 | `rust/engine/ironhorse-vm/src/lib.rs:28` | `rust/engine/ironhorse-vm/src/lib.rs:28` | open | `rust/engine/ironhorse-vm/src/lib.rs:29` | open | `rust/engine/ironhorse-vm/src/lib.rs:29` | open | `pub mod interp` publishes 241 metering constants and the raw arenas as external API | no |
+| F158 | low | high | 3.14 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:127` | `rust/engine/ironhorse-snapshot/src/sidetable.rs:661` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:681` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:687` | open | The vm/snapshot coverage contract is enforced by parsing the upstream crate's source text (discussed under F053) | yes |
+| F159 | low | high | 3.13 | `rust/engine/ironhorse-vm/src/compartment.rs:342` | `rust/engine/ironhorse-vm/src/compartment.rs:342` | open | `rust/engine/ironhorse-vm/src/compartment.rs:503` | open | `rust/engine/ironhorse-vm/src/compartment.rs:503` | open | `ironhorse_vm::Machine` occupies the design's Machine name with a stateless compartment | no |
+| F161 | low | high | 3.13 | `rust/engine/ironhorse-vm/Cargo.toml:39` | `rust/engine/ironhorse-vm/Cargo.toml:39` | open | `rust/engine/ironhorse-vm/Cargo.toml:39` | open | `rust/engine/ironhorse-vm/Cargo.toml:42` | open | `cost-calibration` is a determinism-relevant, workspace-unifiable feature with no CI job | yes |
+| F164 | low | high | 3.11 | `rust/engine/ironhorse-262/tests/intl_core.rs:14` | `rust/engine/ironhorse-vm/src/interp.rs:7152` | open | `rust/engine/ironhorse-vm/src/interp.rs:7640` | open | `rust/engine/ironhorse-vm/src/interp.rs:7663` | open | Intl and Temporal ship inside the consensus engine against a resolved design decision, (discussed under F035) | yes |
+| F165 | low | high | 3.12 | `rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs:362` | `rust/engine/ironhorse-vm/src/interp.rs:4230` | open | `rust/engine/ironhorse-vm/src/interp.rs:4675` | open | `rust/engine/ironhorse-vm/src/interp.rs:4698` | partial | Neither collector checks quiescence; pending_new_target is an unrooted register kept safe | yes |
+| F166 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/value.rs:853` | `rust/engine/ironhorse-vm/src/value.rs:853` | open | `rust/engine/ironhorse-vm/src/value.rs:853` | open | `rust/engine/ironhorse-vm/src/value.rs:852` | open | Arena accessors never consult the free bit, and free() has no double-free guard | yes |
+| F168 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/value.rs:1541` | `rust/engine/ironhorse-vm/src/value.rs:1541` | open | `rust/engine/ironhorse-vm/src/value.rs:1541` | open | `rust/engine/ironhorse-vm/src/value.rs:1555` | open | ChunkArena::compact silently resurrects a stale in-range offset, contradicting its own doc | yes |
+| F169 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:16252` | `rust/engine/ironhorse-vm/src/interp.rs:18766` | open | `rust/engine/ironhorse-vm/src/interp.rs:19670` | open | `rust/engine/ironhorse-vm/src/interp.rs:20161` | open | `enter_call`'s four early `Err` returns leave the frame quartet and arguments on the shared | no |
+| F170 | low | high | 3.4 | `rust/engine/ironhorse-vm/src/interp.rs:17155` | `rust/engine/ironhorse-vm/src/interp.rs:19701` | open | `rust/engine/ironhorse-vm/src/interp.rs:20677` | open | `rust/engine/ironhorse-vm/src/interp.rs:21163` | open | The async fence's own invariant is a `debug_assert!`, so a release build would silently | yes |
+| F171 | low | high | 3.2 | `rust/engine/ironhorse-vm/src/interp.rs:23014` | `rust/engine/ironhorse-vm/src/interp.rs:28352` | open | `rust/engine/ironhorse-vm/src/interp.rs:29493` | open | `rust/engine/ironhorse-vm/src/interp.rs:30050` | open | AggregateError.errors is enumerable on the Promise.any path and non-enumerable | yes |
+| F172 | low | high | 3.11 | `rust/engine/README.md:70` | `rust/engine/README.md:70` | open | `rust/engine/README.md:157` | open | `rust/engine/README.md:170` | open | Stale oracle-provisioning prose: the gitlink the docs call unfetchable and "deliberately | yes |
+| F173 | low | high | 3.11 | `rust/engine/ASYNC-AWAIT-HANDOFF.md:34` | `rust/engine/ASYNC-AWAIT-HANDOFF.md:34` | open | `rust/engine/ASYNC-AWAIT-HANDOFF.md:34` | partial | `rust/engine/ASYNC-AWAIT-HANDOFF.md:34` | partial | ASYNC-AWAIT-HANDOFF.md is an orchestration artifact shipped at the workspace root | no |
+| F174 | low | high | 3.11 | `designs/README.md:1274` | `designs/README.md:1382` | open | `designs/README.md:1383` | open | `designs/README.md:1397` | open | designs/README.md's index entry for the store-seam design is a 23 KB single table cell | no |
+| F175 | low | high | 3.8 | `rust/engine/ironhorse-vm/src/interp.rs:43173` | `rust/engine/ironhorse-vm/src/interp.rs:55092` | open | `rust/engine/ironhorse-vm/src/interp.rs:57568` | open | `rust/engine/ironhorse-vm/src/interp.rs:60881` | open | About 2,970 lines of tests live inside interp.rs, and regexp regressions are filed under | yes |
+| F176 | low | high | 3.10 | `rust/engine/ironhorse-vm/src/interp.rs:11162` | `rust/engine/ironhorse-vm/src/interp.rs:13084` | open | `rust/engine/ironhorse-vm/src/interp.rs:13796` | open | `rust/engine/ironhorse-vm/src/interp.rs:14086` | open | Per-crank whole-bytecode copy and per-eval full intrinsics boot | no |
+| F177 | low | high | 3.9 | `rust/engine/ironhorse-vm/src/interp.rs:8606` | `rust/engine/ironhorse-vm/src/interp.rs:9977` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:204` | open | `rust/engine/ironhorse-snapshot/src/sidetable.rs:204` | open | The seam's own correctness argument is carried by doc comments that now assert the opposite | no |
+| F178 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/store.rs:1441` | `rust/engine/ironhorse-snapshot/src/store.rs:1441` | open | `rust/engine/ironhorse-snapshot/src/store.rs:1441` | open | `rust/engine/ironhorse-snapshot/src/store.rs:1445` | open | `SmallState::decode` and `peek_cost_table_version` use unchecked `i + len` where every | yes |
+| F179 | low | high | 3.9 | `rust/engine/ironhorse-snapshot/src/atom.rs:40` | `rust/engine/ironhorse-snapshot/src/atom.rs:40` | open | `rust/engine/ironhorse-snapshot/src/atom.rs:40` | open | `rust/engine/ironhorse-snapshot/src/atom.rs:39` | open | `AtomWriter` silently wraps atom sizes past u32::MAX | no |
+| F180 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/interp.rs:3597` | `rust/engine/ironhorse-vm/src/interp.rs:3966` | open | `rust/engine/ironhorse-vm/src/interp.rs:4352` | open | `rust/engine/ironhorse-vm/src/interp.rs:4378` | open | RunOutcome.computrons is a machine-lifetime counter documented as a run-only count | yes |
+| F181 | low | high | 3.5 | `rust/engine/ironhorse-vm/src/default_keys.rs:9` | `rust/engine/ironhorse-vm/src/default_keys.rs:9` | open | `rust/engine/ironhorse-vm/src/default_keys.rs:9` | open | `rust/engine/ironhorse-vm/src/default_keys.rs:9` | open | DEFAULT_KEYS is an unversioned, untested input to the cost table | yes |
+| F182 | low | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:9473` | `rust/engine/ironhorse-vm/src/interp.rs:9473` | partial | `rust/engine/ironhorse-vm/src/interp.rs:27035` | partial | n/a | fixed | Every build of the VM emits a dead-code warning, and dead API persists behind | yes |
+| F183 | low | high | 3.14 | `rust/engine/ironhorse-vm/src/interp.rs:44605` | `rust/engine/ironhorse-vm/src/interp.rs:58262` | open | `rust/engine/ironhorse-vm/src/interp.rs:60764` | open | `rust/engine/ironhorse-vm/src/interp.rs:64211` | open | In-source comments record the authoring process rather than the invariant | no |
+| F184 | low | high | 3.7 | `rust/engine/ironhorse-vm/src/interp.rs:7442` | `rust/engine/ironhorse-vm/src/interp.rs:8377` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:8907` | fixed | `rust/engine/ironhorse-vm/src/interp.rs:9035` | fixed | Intrinsic globals are enumerable, configurable and writable | yes |
+| F185 | low | high | 3.3 | `rust/engine/ironhorse-262/src/compile_diff.rs:324` | `rust/engine/ironhorse-262/src/compile_diff.rs:324` | open | `rust/engine/ironhorse-262/src/compile_diff.rs:340` | open | `rust/engine/ironhorse-262/src/compile_diff.rs:342` | open | panic::set_hook is replaced process-wide from library functions in the 262 compile-diff | no |
+| F186 | low | medium | 3.3 | `rust/engine/ironhorse-compile/src/coder.rs:221` | `rust/engine/ironhorse-compile/src/coder.rs:221` | open | `rust/engine/ironhorse-compile/src/coder.rs:221` | open | `rust/engine/ironhorse-compile/src/coder.rs:274` | open | Byte identity with the oracle is platform-conditional for non-ASCII identifiers | yes |
+| F187 | low | high | 3.13 | `rust/engine/ironhorse-compile/src/lib.rs:32` | `rust/engine/ironhorse-compile/src/lib.rs:32` | open | `rust/engine/ironhorse-compile/src/lib.rs:32` | open | `rust/engine/ironhorse-compile/src/lib.rs:32` | open | `ironhorse-compile` re-exports a leaf crate's module as its own public API and publishes | no |
+| F188 | low | high | 3.6 | `rust/engine/ironhorse-vm/src/interp.rs:29746` | `rust/engine/ironhorse-vm/src/interp.rs:35602` | open | `rust/engine/ironhorse-vm/src/interp.rs:36901` | open | `rust/engine/ironhorse-vm/src/interp.rs:38647` | open | HashMap::iter().find() scans whose determinism relies on an un-asserted uniqueness invariant | no |
+| F189 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/interp.rs:44098` | `rust/engine/ironhorse-vm/src/interp.rs:57751` | open | `rust/engine/ironhorse-vm/src/interp.rs:60253` | open | `rust/engine/ironhorse-vm/src/interp.rs:63693` | open | Ephemeron symbol-key retention is a bare u16 equality over an unpartitioned id space | yes |
+| F190 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/bulk.rs:84` | `rust/engine/ironhorse-vm/src/bulk.rs:84` | open | `rust/engine/ironhorse-vm/src/bulk.rs:84` | open | `rust/engine/ironhorse-vm/src/bulk.rs:91` | fixed | The partial collector's soundness net exists only in debug builds | yes |
+| F191 | low | high | 3.12 | `rust/engine/ironhorse-vm/src/value.rs:1039` | `rust/engine/ironhorse-vm/src/value.rs:1039` | open | `rust/engine/ironhorse-vm/src/value.rs:1039` | open | `rust/engine/ironhorse-vm/src/value.rs:1052` | open | Free-list validity is enforced two crates away from the type that depends | yes |
 
 ## Appendix B: verification statistics, and how to read them
 
