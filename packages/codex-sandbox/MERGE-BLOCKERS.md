@@ -12,7 +12,8 @@ failed-history reconciliation, durable audit primitives, and the reproducible
 image recipe are implemented here.
 The repository foundations below are implemented and have passed the applicable
 Linux checks recorded in [deployment acceptance](./DEPLOYMENT-ACCEPTANCE.md).
-The supported review scope is the API-key gateway substrate.
+The supported review scope is the gateway substrate, for API-key and for a
+broker-held refreshing OAuth credential.
 Subscription modes and a Claude hosted implementation remain disabled, so this
 PR makes no claim that those modes satisfy the contract.
 Production activation still requires the operator's approved images, storage
@@ -54,7 +55,12 @@ asserts claims the outer sandbox cannot observe:
   the same launch policy, including direct and indirect control-state mutations.
   The pinned runtime remains trusted to apply this policy to later commands.
 - The default verifier also measures the probe's effective environment and
-  rejects unexpected credential or proxy settings.
+  rejects unexpected credential or proxy settings, and looks in the session's
+  `CODEX_HOME` for the `auth.json` a ChatGPT login would be cached in,
+  reporting `codexHomeAuthFile: 'absent'`.
+  That field claims only what the probe looked for: a keyring-backed credential
+  store or an `experimental_bearer_token` in `config.toml` is neither probed nor
+  asserted.
   This is a bounded preflight, not continuous observation of future processes.
 
 `makeAttestedCodexResourceProvisioner` now provides the adapter that composes `HostedAgentPolicyV1` from
@@ -103,8 +109,14 @@ The broker's own credential lifecycle no longer waits on that question: it
 tracks expiry, refreshes under a single-flight guard, rotates the stored state
 through a rotate-only capability that carries no `revoke`, `delete`, or
 `setDescription`, and retries a rejected credential exactly once.
-`BrokerLeaseV1` now carries `authMode`, proved by construction because the
-broker core refuses to exist in `oauth` mode without both authorities.
+`BrokerLeaseV1` now carries `authMode`, so an operator can pin the mode it
+accepts and refuse a lease issued in the other.
+The claim it carries is narrow: the broker core refuses to exist in `oauth` mode
+without a refreshing credential bound to the lease's account, and it is
+constructed before the lease record, so a lease reporting `oauth` was issued by a
+core that had one.
+It is not evidence about the stored secret, which is first read on the first
+request.
 
 `@endo/claude-sandbox` still injects `CLAUDE_CODE_OAUTH_TOKEN` into its own
 slice, which this section otherwise rules out.

@@ -13,36 +13,42 @@
 Implemented in this pass:
 
 - `packages/hosted-agent/src/provider-broker.js` — `authMode: 'oauth'`, a
-  `BrokerOAuthStateV1` credential document, proactive expiry refresh,
-  single-flight token exchange, rotate-on-refresh, one bounded
-  refresh-and-retry on a rejected credential, account binding, and echo
-  screening that covers both tokens.
+  `BrokerOAuthStateV1` credential document, and `makeBrokerOAuthCredential`:
+  one refreshing credential per secret record, shared by every lease over it,
+  with proactive expiry refresh, a single-flight token exchange, rotation, and
+  account binding.
+  The lease adds one bounded refresh-and-retry on a rejected credential, and
+  echo screening that covers both tokens in every form, accumulated across the
+  retry.
 - `packages/hosted-agent/src/secret-rotator.js` — the rotate-only attenuation
   of a secret administration facet.
 - `packages/hosted-agent/src/provider-transport.js` — `anthropic-beta` added to
-  the header allowlist, and a credential-rejection classification so the broker
-  can tell "the token is bad" from "the request is bad".
-- `packages/hosted-agent/src/provider-lease-issuer.js` — threads the refresh and
-  rotate authorities, binds the lease to the operator's selected account, and
-  reports `authMode` in `BrokerLeaseV1`.
+  the header allowlist, and a 401 classification so the broker can tell "the
+  token is bad" from "the request is bad".
+- `packages/hosted-agent/src/provider-lease-issuer.js` — builds the shared
+  credential once per record, attenuates `rotate` on the way in, binds the
+  lease to the operator's selected account, and reports `authMode` in
+  `BrokerLeaseV1`.
 - `packages/codex-sandbox/src/backend-factory.js` — `BrokerLeaseV1` carries and
   validates `authMode`; an operator may pin the mode it will accept.
-- `packages/codex-sandbox/src/runtime-verifier.js` — the live probe now proves
-  the session's `CODEX_HOME` holds no `auth.json`, reported as
-  `codexHomeCredentials: 'absent'` in `CodexRuntimeEvidenceV1`.
+- `packages/codex-sandbox/src/runtime-verifier.js` — the live preflight probe
+  now looks for `auth.json` in the session's `CODEX_HOME` and reports
+  `codexHomeAuthFile: 'absent'` in `CodexRuntimeEvidenceV1`.
 
 Not implemented, deliberately: **subscription mode remains unavailable for both
-providers.** The finding below is the reason, and it is a property of the
-vendors' client configuration surfaces rather than of this code.
+providers.**
+The finding below is the reason, and it is a property of the vendors' client
+configuration surfaces rather than of this code.
 
 ## What is the Problem Being Solved?
 
 A user who already pays for a ChatGPT or Claude subscription cannot use it to
-drive a hosted agent. The API-key broker in `@endo/hosted-agent` keeps the
-credential out of the slice but bills usage-based API credit; the Claude backend
-in `@endo/claude-sandbox` accepts a subscription token but materializes it into
-the slice's environment. So the secure path has no subscription and the
-subscription path is not secure.
+drive a hosted agent.
+The API-key broker in `@endo/hosted-agent` keeps the credential out of the slice
+but bills usage-based API credit.
+The Claude backend in `@endo/claude-sandbox` accepts a subscription token but
+materializes it into the slice's environment.
+So the secure path has no subscription and the subscription path is not secure.
 
 `SUBSCRIPTION-AUTH.md` states the contract both would have to meet: the broker
 alone stores, rotates, and refreshes the credential; the slice receives a
@@ -54,59 +60,69 @@ That last clause is the gate, so it was answered first.
 
 ## The feasibility finding
 
-Sources checked 2026-09-08. Both vendors document a proxy or gateway in the
-inference path, and both document it as carrying the *client's* credential. In
-each case the one supported way to put a subscription behind a proxy is to leave
-the subscription credential in the client — which is the posture the contract
+Sources checked 2026-09-08.
+Both vendors document a proxy or gateway in the inference path.
+Both document it as carrying the *client's* credential.
+The one documented way to put a subscription behind a proxy is therefore to
+leave the subscription credential in the client — the posture this contract
 exists to forbid.
 
 ### Codex with a ChatGPT subscription: blocked
 
 Codex does document an LLM-proxy configuration, and it does work with a ChatGPT
-sign-in. A custom provider takes a `base_url`, and
+sign-in.
+A custom provider takes a `base_url`, and among its authentication methods:
 
-> When you define a custom model provider in your configuration file, you can
-> use OpenAI authentication by setting `requires_openai_auth = true`. You can
-> then sign in with ChatGPT or an API key. This is useful when you access OpenAI
-> models through an LLM proxy server.
+> **OpenAI authentication**: Set `requires_openai_auth = true` to use OpenAI
+> authentication. You can then sign in with ChatGPT or an API key. This is
+> useful when you access OpenAI models through an LLM proxy server. When
+> `requires_openai_auth = true`, Codex ignores `env_key`.
 >
-> — [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+> — [Codex authentication](https://learn.chatgpt.com/docs/auth), § Alternative
+> model providers
 
-The blocker is *which side holds the credential* in that mode. `requires_openai_auth`
-means the CLI authenticates the proxied request with its own ChatGPT login, and
-that login lives in the slice:
+The blocker is which side holds the credential in that mode.
+"OpenAI authentication" means the CLI authenticates the proxied request with
+its own sign-in, and that sign-in lives where the CLI runs:
 
 > Codex caches login details locally in a plaintext file at `~/.codex/auth.json`
-> or in your OS-specific credential store. […] Treat `~/.codex/auth.json` like a
-> password: it contains access tokens.
+> or in your OS-specific credential store.
 >
 > — [Codex authentication](https://learn.chatgpt.com/docs/auth)
 
 So a broker can sit *in front of* subscription traffic, but only by being handed
-the reusable access and refresh tokens it was supposed to replace. That fails
-both the token-free slice and `SUBSCRIPTION-AUTH.md`'s explicit "with no
+the reusable access and refresh tokens it was meant to replace.
+That fails both the token-free slice and this repository's explicit "with no
 `auth.json`".
 
-The configurations that *would* leave the slice credential-free —
-`env_key`, `experimental_bearer_token`, and the command-backed
-`[model_providers.<id>.auth]` credential helper — are documented as mutually
-exclusive with it ("Do not combine command-backed bearer token configuration
-with `env_key`, `experimental_bearer_token`, or `requires_openai_auth`"). In
-those modes Codex is not in ChatGPT-subscription mode at all: it presents an
-opaque bearer, and a broker would have to *substitute* a ChatGPT OAuth
-credential upstream. No vendor document describes or sanctions that, so it is
-not the vendor-supported configuration the gate asks for.
+The configurations that would leave the slice credential-free are the ones that
+are not ChatGPT-subscription mode.
+`env_key` supplies a provider API key from the environment, and the same
+sentence above says `requires_openai_auth` makes Codex ignore it — precedence,
+not a subscription.
+The command-backed credential helper is documented as exclusive with the rest
+("Do not combine with `env_key`, `experimental_bearer_token`, or
+`requires_openai_auth`"), so a broker-scoped bearer fetched by a helper puts
+Codex in a plain bearer mode and the broker would have to *substitute* a ChatGPT
+credential upstream.
+No vendor document describes or sanctions that.
 
-The enterprise path (`printenv CODEX_ACCESS_TOKEN | codex login
---with-access-token`) is real and vendor-supported, but it is a ChatGPT
-Enterprise feature and it also lands the credential in the CLI's own credential
-store. It is a different deployment shape, not this one.
+Two adjacent documented shapes do not change the answer.
+A ChatGPT Enterprise workspace can mint an access token for non-interactive use
+(`printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`), which is a
+login the CLI performs and therefore a credential in the slice, and it is an
+Enterprise feature rather than an individual subscription.
+Workload identity federation avoids storing an OpenAI credential, but it is the
+process environment that authenticates — "when the process selects workload
+identity, Codex rejects `codex login` and `codex logout` because the process
+environment controls authentication" — so the credential material still lands
+with the CLI, and it is again a managed-workspace path, not a subscription.
 
 ### Claude Code with a Claude.ai subscription: blocked
 
-Anthropic documents the same fork more explicitly, and closes it from both ends.
+Anthropic documents the same fork and closes it from both ends.
 
-Pointing at a gateway without a gateway credential keeps the subscription — and
+Pointing at a gateway without a gateway credential keeps the subscription, and
 keeps the credential in the client:
 
 > Setting only that variable, without a gateway credential, doesn't replace the
@@ -115,20 +131,29 @@ keeps the credential in the client:
 >
 > — [Other LLM gateways](https://code.claude.com/docs/en/llm-gateway)
 
-Supplying a gateway credential — the shape the broker actually issues — ends the
+Supplying a gateway credential — the shape a broker actually issues — ends the
 subscription for that session:
 
 > While a gateway credential variable or `apiKeyHelper` is active, a developer's
 > claude.ai subscription isn't used: the credential replaces the subscription
 > login for that session, and the subscription's usage limits don't apply. That
 > traffic is billed per token to whoever owns the credential the gateway
-> forwards.
+> forwards, such as your organization's Anthropic Console account, or your
+> Amazon Bedrock, Google Cloud's Agent Platform, or Microsoft Foundry account
+> when the gateway routes there.
 >
 > — [Other LLM gateways](https://code.claude.com/docs/en/llm-gateway)
 
-And Anthropic's own first-party gateway — architecturally the same thing this
-broker is, down to holding the upstream credential on the client's behalf — is
-documented as carrying organization credentials rather than subscriptions:
+Leaving the slice with no credential at all is not a third option:
+
+> The CLI has no credential of its own: a reachable base URL isn't one
+>
+> — [Connect Claude Code to an LLM gateway](https://code.claude.com/docs/en/llm-gateway-connect),
+> troubleshooting
+
+And Anthropic's own first-party gateway — architecturally what this broker is,
+down to holding the upstream credential on the client's behalf — is documented
+as carrying organization credentials rather than subscriptions:
 
 > They don't need a claude.ai account, an API key, or a subscription, because
 > requests to the model go through the gateway using the organization's upstream
@@ -136,40 +161,61 @@ documented as carrying organization credentials rather than subscriptions:
 >
 > — [Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway)
 
-A slice with no credential at all is not an option either: Claude Code with a
-reachable base URL and nothing else opens its login screen ("The CLI has no
-credential of its own: a reachable base URL isn't one").
+### The one shape that comes closest, and why it still does not qualify
+
+A portable subscription credential does exist, and it is worth naming precisely
+because a reader who knows about it will otherwise think this finding overlooked
+it.
+`claude setup-token` mints "a one-year OAuth token" for `CLAUDE_CODE_OAUTH_TOKEN`,
+and "this token authenticates with your Claude subscription and requires a Pro,
+Max, Team, or Enterprise plan"
+([Authentication](https://code.claude.com/docs/en/authentication)).
+It is exactly what `@endo/claude-sandbox` injects into its slice today.
+
+So the obstacle is not that a subscription credential cannot be moved.
+It is that every documented use of that token puts it in the *client*: it is
+described for "CI pipelines, scripts, or other environments where interactive
+browser login isn't available", and it sits in the client's own credential
+precedence list below `ANTHROPIC_AUTH_TOKEN`.
+Nothing documents a gateway holding it and presenting it upstream on a user's
+behalf.
+A broker that did so would be relying on undocumented behavior, which is
+precisely what the gate in `SUBSCRIPTION-AUTH.md` refuses — "an officially
+supported proxy/gateway configuration" — so the mode stays closed.
+This is a statement about what is documented, not a claim that the bytes would
+be rejected.
 
 ### What that leaves
 
 There is no vendor-supported configuration, for either provider, in which the
 broker holds an individual subscription credential and the slice holds none.
-Under `SUBSCRIPTION-AUTH.md` that means both subscription modes stay
-unavailable, and this document is the record of why rather than a silent
-`Fail` in a constructor.
+Under `SUBSCRIPTION-AUTH.md` both subscription modes therefore stay unavailable,
+and this document is the record of why rather than a silent `Fail` in a
+constructor.
 
-The gap is narrow and specific, which is worth stating precisely because it is
-what a future re-check should look for: **a documented way for a proxy or
-gateway to supply the subscription credential itself.** Codex would need a
-custom-provider mode that combines a `base_url` with a credential the proxy
-holds and still bills the ChatGPT plan. Claude Code would need a gateway
-credential that does not displace the claude.ai login, or a documented way for a
-gateway to present a subscription credential upstream. Either one turns this
-from a finding into an implementation.
+The gap is narrow and specific, which is worth stating because it is what a
+future re-check should look for.
+For Codex: a custom-provider mode that combines a `base_url` with a credential
+the proxy holds and still bills the ChatGPT plan.
+For Claude Code: a documented gateway credential that does not displace the
+claude.ai login, or documented support for a gateway presenting a subscription
+credential such as a `setup-token` upstream.
+Either one turns this from a finding into an implementation.
 
 ## What was built anyway, and why it is not speculative
 
-The half of the requirement that is blocked is *slice-side configuration*. The
-half that is not blocked is the broker's own credential lifecycle, and every
-requirement in `SUBSCRIPTION-AUTH.md` § "Shared broker contract" beyond
-API-key storage was unimplemented: no expiry tracking, no refresh, no
-write-back, no single-flight.
+The half of the requirement that is blocked is *slice-side configuration*.
+The half that is not blocked is the broker's own credential lifecycle, and every
+requirement in `SUBSCRIPTION-AUTH.md` § "Shared broker contract" beyond API-key
+storage was unimplemented: no expiry tracking, no refresh, no write-back, no
+single-flight.
 
 That machinery is needed by any OAuth-bearing upstream credential — an
 enterprise access token, a workload-identity-federated token, or a subscription
 grant if a vendor ever documents one — and none of it depends on the blocked
-question. So `authMode` widens to `'api-key' | 'oauth'`, and `'subscription'`
-stays refused with the reason above recorded next to the refusal.
+question.
+So `authMode` widens to `'api-key' | 'oauth'`, and `'subscription'` stays
+refused with the reason above recorded next to the refusal.
 
 ### The credential is a document, not a bearer string
 
@@ -185,60 +231,101 @@ harden({
 });
 ```
 
-Refreshing rotates every field at once, so they travel together. `accountId`
-travels with them because a refresh that came back naming a different account
-would silently move the session's billing and quota; the broker checks it
-against the account the lease issuer bound, on every read and again on every
-refresh result.
+Refreshing rotates every field at once, so they travel together.
+`accountId` travels with them because a refresh that came back naming a
+different account would silently move the session's billing and quota; the
+credential checks it against the account the lease issuer bound, on every read
+and again on every refresh result.
+
+A refresh response that omits `refreshToken` means "keep the one you have"
+(RFC 6749 § 6), which is how a non-rotating provider answers, so the stored one
+is carried forward.
+Persisting the response verbatim would drop it and strand the record at its next
+expiry with nothing left to exchange.
+A refreshed state that is *already* spent is refused rather than written, since
+the next request would otherwise refresh again, indefinitely and silently.
 
 ### Refresh does not go through the lease
 
 The lease's route allowlist admits three inference paths and nothing else, on
-one fixed origin. A token endpoint is neither. Refresh therefore travels on
-`powers.refresh`, a separate outbound authority the broker holds and the lease
-never sees, and `powers.rotate`, a rotate-only capability. A lease that names
-`oauth` without both is refused at admission — an OAuth lease that cannot
-refresh is an API-key lease with a shorter life, and would fail its first turn
-after expiry instead of failing to exist.
+one fixed origin.
+A token endpoint is neither.
+Refresh therefore travels on the credential's own `refresh` authority, which the
+lease never sees, and its `rotate` capability.
+A lease that names `oauth` without a credential bound to its account is refused
+at admission — an OAuth lease that cannot refresh is an API-key lease with a
+shorter life, and would fail its first turn after expiry instead of failing to
+exist.
 
 ### Rotation is one narrow capability, not the admin facet
 
 `SecretAdminInterface` carries `revoke`, `delete`, and `setDescription`
-alongside `replaceBase64`. A broker holding it could destroy the operator's
-credential. `makeSecretRotator` attenuates it to `replaceBase64` alone. It is a
-structural attenuation rather than a daemon dependency, so anything with that
-one method can back it.
+alongside `replaceBase64`.
+A broker holding it could destroy the operator's credential.
+`makeSecretRotator` attenuates it to `replaceBase64` alone, and the lease issuer
+applies that attenuation itself rather than trusting the caller to have applied
+it — so an operator who hands the issuer a full `SecretAdmin` still cannot get
+one to the broker.
+It is a structural attenuation rather than a daemon dependency, so anything with
+that one method can back it.
 
-### Single-flight, and why it is a correctness property
+### Single-flight belongs to the record, not to the lease
 
-Concurrent turns arriving on an expiring credential share one exchange. This is
-not deduplication for its own sake: a provider that invalidates a refresh token
-on use turns a concurrent second exchange into a revoked session, and the two
-write-backs would race each other regardless.
+Concurrent turns arriving on an expiring credential share one exchange.
+This is not deduplication for its own sake: a provider that invalidates a
+refresh token on use reads a second redemption as a replay and revokes the whole
+grant, killing the credential the first exchange just stored.
+
+That is why `makeBrokerOAuthCredential` is built once per secret record and
+handed to every lease over it, rather than being assembled inside each lease.
+The refresh token belongs to the record; a guard on the lease would leave two
+concurrent sessions on one account each redeeming it.
+The guard also re-reads the record before exchanging, so a caller that lost the
+race — to another lease, or to an operator's re-grant — takes what is now stored
+instead of replaying the token it was holding.
+
+What remains is a genuine last-writer-wins window against an operator re-grant
+that lands mid-exchange.
+Closing it needs a compare-and-swap the secret manager does not currently
+offer; the re-read narrows it to the duration of one token round trip.
 
 ### One retry, on one classification
 
-The transport tells the broker whether the *credential* was refused (401/403)
-or the *request* was. That single bit is all that crosses: no challenge header,
-no error body, no upstream wording. On it, and only on it, the broker refreshes
-once and dispatches once more within the same admission — so a token revoked or
-rotated elsewhere mid-session does not cost a turn, and no other failure is
-retried. A transport that does not classify degrades to the proactive expiry
-refresh rather than to a failure.
+The transport tells the broker whether the *credential* was refused or the
+*request* was.
+That single bit is all that crosses: no challenge header, no error body, no
+upstream wording.
+On it, and only on it, the broker refreshes once and dispatches once more within
+the same admission — so a token revoked or rotated elsewhere mid-session does not
+cost a turn, and no other failure is retried.
+A transport that does not classify degrades to the proactive expiry refresh
+rather than to a failure.
+
+The bit is 401 alone.
+A 403 is the upstream refusing *this request* — an unentitled model, a region, a
+content policy — and refreshing cannot fix it.
+Counting it would let a slice that can reproduce one turn every admitted request
+into a second dispatch, a token exchange and a secret write, none of which the
+request and cost quotas meter.
+
+The retry also does not narrow the echo screen.
+The first attempt handed its token to the upstream, so the screen accumulates
+across both attempts; screening the response against the second credential alone
+could deliver the first one back to the slice.
 
 ### The per-request secret read stays
 
 `perform()` re-reads the secret on every request, and every length the echo
-screen derives comes from that read. That is what lets a rotated credential of a
-different length be picked up with no further change, and it is why the read is
-not hoisted for "efficiency".
+screen derives comes from that read.
+That is what lets a rotated credential of a different length be picked up with no
+further change, and it is why the read is not hoisted for "efficiency".
 
 ## `CODEX_HOME` posture: what was and was not proved
 
 `SUBSCRIPTION-AUTH.md` requires the session's `CODEX_HOME` to be session-scoped,
 durable across slice replacement, destroyed at logical-session teardown, free of
-`auth.json`, and readable-but-not-writable by model-launched commands. Auditing
-the pinned runtime verifier against that list:
+`auth.json`, and readable-but-not-writable by model-launched commands.
+Auditing the pinned runtime verifier against that list:
 
 | Requirement | Where it is established | Status before | Status now |
 |---|---|---|---|
@@ -247,14 +334,22 @@ the pinned runtime verifier against that list:
 | No credential or proxy variables | `PROBE` exact-environment equality | Proved | Proved |
 | Session-scoped and durable across slice replacement | `sandbox-policy.js` binds `/codex-home` to the session's durable `stateVolume` | Proved | Proved |
 | Destroyed at logical-session teardown | `durable-volumes.js` `destroy()`, refusing a leased session | Proved | Proved |
-| **No `auth.json`** | — | **Not probed** | `PROBE` asserts absence; `CodexRuntimeEvidenceV1` reports `codexHomeCredentials: 'absent'` |
+| **No `auth.json`** | — | **Not probed** | `PROBE` asserts absence of `auth.json` and `auth.json.lock`; `CodexRuntimeEvidenceV1` reports `codexHomeAuthFile: 'absent'` |
 
 The last row was the real gap, and it is the one the finding above makes load
-bearing: `auth.json` is exactly what a subscription-mode deployment would have
-to place there, so its absence is what distinguishes a broker-fronted slice from
-one simply handed the operator's credential. Because
-`CodexRuntimeEvidenceV1` is checked for an exact shape, the new field is part of
-the attested record rather than a comment.
+bearing: `auth.json` is exactly what a subscription-mode deployment would have to
+place there.
+Because `CodexRuntimeEvidenceV1` is checked for an exact shape, the new field is
+part of the attested record rather than a comment.
+
+The field is named for exactly what ran, and the claim stops there.
+It is not evidence that the home holds no credential of any kind:
+`cli_auth_credentials_store` can name an OS keyring instead of a file, and
+`config.toml` can carry an `experimental_bearer_token`.
+Neither is probed and neither is asserted.
+It is also a preflight on a volume the app-server can write, so it is an
+observation about the slice at admission, not a standing property of the
+session — which is the same bound every other row of this table carries.
 
 ## Dependencies
 
@@ -268,20 +363,29 @@ the attested record rather than a comment.
 1. **`'subscription'` is refused, not implemented as a stub.** A mode that
    exists but cannot be provisioned is a claim that something was built. The
    union admits what is implemented; the refusal cites the finding.
-2. **`authMode` is proved by construction, not declared.** The broker core
-   refuses to exist in `oauth` mode without both capabilities, so a
-   `BrokerLeaseV1` reporting `oauth` has them. Stamping the field from a
-   configuration constant is the failure the attestation exists to exclude.
+2. **`authMode` says what the lease was built with, and no more.** The value
+   itself comes from the operator's policy, so the honest claim is narrow: the
+   broker core refuses to exist in `oauth` mode without a refreshing credential
+   bound to the lease's account, and it is constructed before the lease record,
+   so a `BrokerLeaseV1` reporting `oauth` was issued by a core that had one.
+   It is not evidence about the *stored secret*: the credential is read on the
+   first request, not at construction, so a lease can report `oauth` over a
+   record that turns out to hold something else, and fail its first turn.
+   `'api-key'` carries no construction-time consequence at all.
+   The field is there so an operator can pin the mode and refuse the other, not
+   to attest the credential.
 3. **No speculative ChatGPT binding headers.** Account-binding headers for a
-   mode no vendor permits would be an unverified protocol guess. What is
-   implemented is the mechanism — a credential bound to a checked account — plus
-   `anthropic-beta`, which is documented ("Gateways that pass this traffic on to
-   Anthropic must forward the OAuth capability in `anthropic-beta`"). The
-   operator supplies the sourced value; the broker only proves it cannot carry a
-   header separator.
+   mode no vendor permits would be an unverified protocol guess.
+   What is implemented is the mechanism — a credential bound to a checked
+   account — plus `anthropic-beta`, which an Anthropic-format gateway is
+   documented to "forward unchanged"
+   ([gateway compatibility](https://code.claude.com/docs/en/llm-gateway-protocol)).
+   The operator supplies the value; the broker only proves it cannot carry a
+   header separator or a second header.
 4. **Classification, not error forwarding.** Exposing the upstream's 401 body or
    `www-authenticate` challenge to make retry decisions would undo the
-   transport's redaction. One boolean's worth of information is enough.
+   transport's redaction.
+   One boolean's worth of information is enough.
 
 ## Known Gaps and TODOs
 
@@ -290,7 +394,49 @@ the attested record rather than a comment.
 - [ ] Work the `SUBSCRIPTION-AUTH.md` acceptance matrix against a live upstream
       for `oauth` mode: refresh, expiry, revocation, account switching, model
       allowlists, quota exhaustion, broker crash, redirect/header smuggling, and
-      audit redaction. The unit suite covers refresh, expiry, account switching,
-      quota accounting, and redaction; the rest need the live gate.
+      audit redaction.
+      The unit suite covers refresh, expiry, account switching, refresh-token
+      replay across two leases, quota accounting, and redaction; the rest need
+      the live gate.
+- [ ] Give the rotation a compare-and-swap, so an operator re-grant that lands
+      during a token exchange is not overwritten by it.
+      The re-read inside the single-flight guard narrows that window to one
+      round trip but cannot close it without support in the secret manager.
+- [ ] Decide whether a persistently rejected credential deserves negative
+      caching.
+      Today each admitted turn costs one exchange and one secret write; the
+      request quota bounds it, but the refresh and rotate authorities are not
+      themselves metered.
 - [ ] Move `@endo/claude-sandbox` behind the broker, or retire the exception
       recorded in its README and in `MERGE-BLOCKERS.md`.
+
+## Prompt
+
+> Hosted Codex landed on `llm` with subscription authentication disabled, and
+> the repository now holds two inconsistent credential postures: Codex is
+> brokered and attested but API-key only, while Claude supports a subscription
+> by materializing `CLAUDE_CODE_OAUTH_TOKEN` into its slice — the very pattern
+> `MERGE-BLOCKERS.md` says must not land underneath this feature.
+>
+> Start with a feasibility spike, because it gates everything else: can the
+> pinned Codex CLI 0.152.0 be pointed at a broker base URL in
+> ChatGPT-subscription mode using a *vendor-supported* configuration, without
+> the slice receiving the real reusable credential? Do the same for Claude
+> Code's supported gateway/proxy configuration. Record the finding either way;
+> a documented "upstream does not support this, here is the specific blocker"
+> is a legitimate and valuable outcome.
+>
+> If it is feasible: widen `authMode` beyond `'api-key'`, add refresh with
+> single-flight and a narrow rotate-only capability over
+> `SecretAdminInterface.replaceBase64` (not the whole admin facet), keep
+> refresh off the lease's route allowlist, add provider-specific header and
+> account binding, update the attestation records to describe what was actually
+> proved, and work the acceptance matrix. Confirm the pinned runtime verifier
+> actually probes the `CODEX_HOME` posture it is credited with. Separately and
+> regardless of the Codex outcome, the Claude backend's materialized-token
+> posture should move behind the broker or be documented as a deliberate,
+> time-boxed exception.
+>
+> Do not re-land the PR #994 credential path. The
+> `provider-broker.test.js` assertion pinning the subscription refusal is to be
+> updated deliberately, not deleted.

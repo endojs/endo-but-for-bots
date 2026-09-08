@@ -1,7 +1,8 @@
 # Subscription authentication requirements
 
-The API-key inference broker and isolated listener are implemented in this PR.
-Subscription authentication and refresh are separate requirements.
+The inference broker and isolated listener are implemented, for API-key and for
+a broker-held refreshing OAuth credential.
+Subscription authentication is a separate requirement.
 Hosted subscription mode remains disabled until the relevant stock CLI is
 proven to work through this boundary using a vendor-supported configuration.
 
@@ -21,10 +22,10 @@ the client, which is the posture this contract exists to forbid.
   "in a plaintext file at `~/.codex/auth.json` or in your OS-specific credential
   store" — the reusable access and refresh tokens, inside the slice, and the
   `auth.json` this document forbids.
-  The configurations that would leave the slice credential-free (`env_key`,
-  `experimental_bearer_token`, the command-backed credential helper) are
-  documented as mutually exclusive with `requires_openai_auth`, so they are not
-  ChatGPT-subscription mode at all.
+  The configurations that would leave the slice credential-free are not
+  ChatGPT-subscription mode: the same sentence says Codex ignores `env_key`
+  when `requires_openai_auth` is set, and the command-backed credential helper
+  is documented as not to be combined with it.
 - **Claude Code.** `ANTHROPIC_BASE_URL` alone "doesn't replace the
   subscription", but then "a saved claude.ai login remains the active
   credential" — again in the client.
@@ -34,6 +35,13 @@ the client, which is the posture this contract exists to forbid.
   Anthropic's own first-party gateway, which holds the upstream credential
   exactly as this broker does, is documented as carrying organization
   credentials rather than subscriptions.
+
+A portable subscription credential does exist on the Claude side —
+`claude setup-token` mints a one-year OAuth token that "authenticates with your
+Claude subscription" — so the obstacle is not that such a credential cannot be
+moved.
+It is that every documented use of it puts it in the client, and nothing
+documents a gateway holding one and presenting it upstream.
 
 The refusal is therefore recorded rather than silent: the broker admits
 `api-key` and `oauth`, and refuses `subscription` citing this section.
@@ -93,7 +101,7 @@ audience restriction, and the provider-only lease.
 The slice receives a session-scoped `CODEX_HOME` that is durable across slice
 replacement and destroyed at logical-session teardown, with no `auth.json`.
 The pinned runtime verifier now probes that absence directly and reports
-`codexHomeCredentials: 'absent'` in `CodexRuntimeEvidenceV1`; the session
+`codexHomeAuthFile: 'absent'` in `CodexRuntimeEvidenceV1`; the session
 scoping, durability, and teardown are established by the durable `stateVolume`
 bound at `/codex-home`.
 App-server can write it, but the pinned `workspaceWrite` tool sandbox permits

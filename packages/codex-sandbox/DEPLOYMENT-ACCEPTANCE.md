@@ -84,7 +84,7 @@ Do not convert a skipped test or an expected host refusal into a pass.
 2. Verify the runtime's effective environment and state contain no provider
    bearer, proxy credential, shared home, or login/refresh material.
    The default verifier's probe asserts the session's `CODEX_HOME` holds no
-   `auth.json` and reports `codexHomeCredentials: 'absent'`; confirm that the
+   `auth.json` and reports `codexHomeAuthFile: 'absent'`; confirm that the
    assertion actually ran rather than that the field is present.
    Exercise read-only control state through symlink, hardlink, rename, subprocess,
    and configuration override attempts.
