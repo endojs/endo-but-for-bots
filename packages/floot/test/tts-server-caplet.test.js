@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { make } from '../voice/tts-server-caplet.js';
+import { make, takeWholeSamples } from '../voice/tts-server-caplet.js';
 
 const fakePiper = fileURLToPath(
   new URL('./fixtures/fake-piper.mjs', import.meta.url),
@@ -65,7 +65,10 @@ const makeTtsServer = async (t, { mode, env, context, seed } = {}) => {
     );
     return log.split('\n').filter(Boolean);
   };
-  const spawnCount = async () => (await spawnLog()).length;
+  const spawnCount = async () => {
+    const lines = await spawnLog();
+    return lines.length;
+  };
   return { server, modelPath, spawnLog, spawnCount };
 };
 
@@ -143,10 +146,39 @@ test('one piper process serves a whole multi-sentence reply', async t => {
   t.is(await spawnCount(), 1);
 });
 
+test('whole samples are forwarded and the odd byte carried into the next read', t => {
+  // Reads that split s16le samples: the driver forwards whole samples only
+  // and holds the odd byte over, so nothing downstream is ever misaligned.
+  const reads = [3, 15, 3, 3].map((length, i) =>
+    Buffer.alloc(length, 0x41 + i),
+  );
+  /** @type {Buffer | null} */
+  let carry = null;
+  /** @type {Buffer[]} */
+  const forwarded = [];
+  for (const chunk of reads) {
+    const aligned = takeWholeSamples(carry, chunk);
+    carry = aligned.carry;
+    if (aligned.whole) forwarded.push(aligned.whole);
+  }
+  t.deepEqual(
+    forwarded.map(chunk => chunk.length),
+    [2, 16, 2, 4],
+  );
+  t.deepEqual(Buffer.concat(forwarded), Buffer.concat(reads));
+  t.is(carry, null);
+  // A lone odd byte waits for the next read.
+  const lone = takeWholeSamples(null, Buffer.from([0x7f]));
+  t.is(lone.whole, null);
+  t.deepEqual(lone.carry, Buffer.from([0x7f]));
+});
+
 test('audio split mid-sample across pipe reads is realigned, not dropped', async t => {
   t.timeout(20_000);
   // The fixture writes each utterance in two odd-length pieces a moment
-  // apart, so every read but the last straddles an s16le sample.
+  // apart, so reads straddle s16le samples — unless the pipe coalesces the
+  // pieces first, which no writer can rule out, so how many events arrive is
+  // not asserted; the alignment and reassembly always are.
   const { server } = await makeTtsServer(t, { mode: { split: true } });
   const { push, reader: textReader } = makeBufferedReader();
   const audioReader = server.synthesize(textReader);
@@ -156,7 +188,6 @@ test('audio split mid-sample across pipe reads is realigned, not dropped', async
 
   const events = await collect(audioReader);
   const chunks = events.filter(e => e.type === 'bytes').map(e => atob(e.b64));
-  t.true(chunks.length >= 2);
   // Whole samples only, on every event — the carry holds the odd byte over.
   for (const chunk of chunks) {
     t.is(chunk.length % 2, 0);
@@ -225,7 +256,10 @@ test('an audio consumer that hangs up kills piper and releases the text wire', a
     first = (await audio.next()).value;
   } while (first?.type !== 'bytes');
   await audio.return();
-  await eventually(async () => (await spawnLog()).includes('sigterm'));
+  await eventually(async () => {
+    const lines = await spawnLog();
+    return lines.includes('sigterm');
+  });
   t.deepEqual(await spawnLog(), ['spawn', 'sigterm']);
   await eventually(text.closed);
   t.true(text.closed());
@@ -257,7 +291,10 @@ test('cancelling the caplet stops every synthesis in flight', async t => {
   for await (const event of audio) rest.push(event);
   t.is(rest.at(-1)?.type, 'abort');
   t.is(rest.at(-1)?.reason, 'TTS capability cancelled');
-  await eventually(async () => (await spawnLog()).includes('sigterm'));
+  await eventually(async () => {
+    const lines = await spawnLog();
+    return lines.includes('sigterm');
+  });
   await eventually(text.closed);
   t.true(text.closed());
 });

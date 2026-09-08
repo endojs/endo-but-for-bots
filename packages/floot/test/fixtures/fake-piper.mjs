@@ -44,7 +44,10 @@ const emit = audio => {
           return;
         }
         process.stdout.write(audio.slice(0, 3));
-        setTimeout(() => process.stdout.write(audio.slice(3), () => resolve()), 5);
+        setTimeout(
+          () => process.stdout.write(audio.slice(3), () => resolve()),
+          25,
+        );
       }),
   );
 };

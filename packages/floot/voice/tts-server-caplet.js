@@ -165,6 +165,25 @@ const makeAudioChannel = onClose => {
   return harden({ writer, reader, isClosed });
 };
 
+// PCM samples are 2 bytes; a pipe read may split one across chunks. Forward
+// only whole samples and carry the odd byte into the next read, or every
+// later sample in the stream would be misaligned (loud static). Exported for
+// its unit test: a pipe cannot be made to deliver odd reads on demand.
+/**
+ * @param {Buffer | null} carry the odd byte held over from the previous read
+ * @param {Buffer} chunk this read
+ * @returns {{ whole: Buffer | null, carry: Buffer | null }}
+ */
+export const takeWholeSamples = (carry, chunk) => {
+  const buf = carry ? Buffer.concat([carry, chunk]) : chunk;
+  const evenLength = buf.length - (buf.length % 2);
+  return {
+    whole: evenLength > 0 ? buf.subarray(0, evenLength) : null,
+    carry: evenLength < buf.length ? buf.subarray(evenLength) : null,
+  };
+};
+harden(takeWholeSamples);
+
 // ── Minimal piper driver ─────────────────────────────────────────────────────
 // One long-lived piper process per synthesize() call (per reply). Piper in
 // --output-raw mode reads one utterance per stdin line and streams raw s16le
@@ -187,9 +206,7 @@ const makePiper = ({
   let aborted = false;
   /** @type {(pcm: Buffer) => void} */
   let onChunk = () => {};
-  // PCM samples are 2 bytes; a pipe read may split one across chunks. Forward
-  // only even-length prefixes and carry the odd byte, or every later sample in
-  // the stream would be misaligned (loud static).
+  // The odd byte of a read that split a sample (see takeWholeSamples).
   /** @type {Buffer | null} */
   let carry = null;
   /** @type {Promise<void> | null} */
@@ -240,11 +257,9 @@ const makePiper = ({
       proc.stdin.on('error', () => {});
       proc.stdout.on('data', (/** @type {Buffer} */ c) => {
         if (aborted) return;
-        const buf = carry ? Buffer.concat([carry, c]) : c;
-        /** @type {number} */
-        const evenLength = buf.length - (buf.length % 2);
-        carry = evenLength < buf.length ? buf.subarray(evenLength) : null;
-        if (evenLength > 0) onChunk(buf.subarray(0, evenLength));
+        const aligned = takeWholeSamples(carry, c);
+        carry = aligned.carry;
+        if (aligned.whole) onChunk(aligned.whole);
       });
       proc.on('close', code => {
         if (aborted) {
