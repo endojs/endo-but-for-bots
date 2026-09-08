@@ -33,7 +33,7 @@ use ironhorse_262::dual_run;
 fn exact(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert!(
-        run.is_bit_exact(),
+        run.observables_agree(),
         "not bit-exact: {source}\n  oracle_result={} ironhorse_result={}\n  oracle_computrons={} ironhorse_computrons={}\n  ironhorse_halt={:?}",
         run.oracle_result,
         run.ironhorse_result,

@@ -359,7 +359,7 @@ LLM-agent stack).*
 | [ironhorse-engine-trait-research](ironhorse-engine-trait-research.md) | 2026-09-08 | — | Reference |
 | [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-08 | Approved |
 | [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | — | Not Started |
-| [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | — | In Progress |
+| [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | 2026-09-08 | In Progress |
 | [test262-fixture-consolidation](test262-fixture-consolidation.md) | 2026-08-06 | 2026-08-14 | In Progress |
 | [platform-neutral-hash](platform-neutral-hash.md) | 2026-07-22 | 2026-08-12 | In Progress |
 | [conservative-regexp-subset](conservative-regexp-subset.md) | 2026-07-10 | 2026-07-29 | Not Started |

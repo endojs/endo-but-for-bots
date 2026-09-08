@@ -477,7 +477,7 @@ OPTIONS:
                              non-terminator is an ironhorse-hang failure, while
                              an oracle-only one is an infrastructure skip
                              (default 10; 0 = off)
-    --gate-meter-exact       fail ironhorse-meter-exact cases on a computron drift
+    --gate-meter-exact       legacy flag; oracle computron drift is always advisory
     --repeat N               re-run ironhorse N times; require identical computrons
     --features-include F[,F] opt features OUT of the skip set (e.g. ses-xs-parity)
     --feature-filter F[,F]   run ONLY cases carrying a feature (test262-harness

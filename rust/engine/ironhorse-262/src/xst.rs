@@ -172,9 +172,8 @@ pub struct Config {
     /// stands and an oracle disagreement cannot fail the build (it is
     /// demoted to a named skip).
     pub oracle: bool,
-    /// `--gate-meter-exact`: tighten `ironhorse-meter-exact`-tagged cases to the
-    /// historical bit-exact computron bar (a divergence fails). Off, the
-    /// computron comparison is advisory only.
+    /// Compatibility flag: XS cost drift is always advisory.
+    /// Ironhorse's release corpus, not oracle cost parity, gates metering.
     pub gate_meter_exact: bool,
     /// `--repeat N`: re-run ironhorse N times and require identical computrons
     /// across runs — the unconditional determinism gate. Default 1 (no
@@ -468,22 +467,11 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
         Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
-    let meter_violation = |run: &DualRun| -> Verdict {
-        Verdict::Fail(format!(
-            "meter-exact violation: oracle={} ironhorse={} computrons",
-            run.oracle_computrons, run.ironhorse_computrons
-        ))
-    };
+    let _ = meter_exact_gate; // Legacy CLI flag retained; cost drift is advisory.
     match run.agreement {
         Agreement::BothComplete => {
             if run.result_agrees {
-                // Observable agreement (gating) met. Computron is advisory,
-                // unless a meter-exact gate is armed for this case.
-                if meter_exact_gate && run.oracle_computrons != run.ironhorse_computrons {
-                    meter_violation(run)
-                } else {
-                    Verdict::Covered
-                }
+                Verdict::Covered
             } else if run.ironhorse_result == "[object Object]" {
                 // A non-primitive completion ironhorse renders as its Reference
                 // stub where the oracle's `String()` differs — a built-in
@@ -502,13 +490,7 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     rendered: thrown, ..
                 } => {
                     if run.error_agrees {
-                        // A meter-exact gate outranks every abort disposition: an
-                        // armed case that burns a different computron budget is a
-                        // violation even when both engines threw the same value, so
-                        // it is checked before the Test262Error shape below.
-                        if meter_exact_gate && run.oracle_computrons != run.ironhorse_computrons {
-                            meter_violation(run)
-                        } else if constructor_name(&run.oracle_error) == "Test262Error" {
+                        if constructor_name(&run.oracle_error) == "Test262Error" {
                             // Both engines threw the harness's own assertion error:
                             // the test's assertions failed identically in XS and in
                             // ironhorse. That is a *shared* conformance gap ironhorse
@@ -3492,7 +3474,7 @@ mod tests {
             run.ironhorse_computrons = 1;
             assert!(matches!(
                 evaluate_positive(&Config::default(), &run, true),
-                Verdict::Fail(reason) if reason.starts_with("meter-exact violation:")
+                Verdict::RunSkip(reason) if reason == "shared-positive-test-failure"
             ));
         }
         assert_eq!(
@@ -4167,10 +4149,8 @@ mod tests {
     }
 
     #[test]
-    fn shared_test262_error_still_yields_to_an_armed_meter_gate() {
-        // With a meter-exact gate armed, a differing computron budget is a
-        // violation even when both engines threw the same Test262Error — the
-        // gate outranks the shared-abort shape.
+    fn shared_test262_error_is_not_hidden_by_advisory_meter_drift() {
+        // The legacy flag must not replace an observable verdict with cost drift.
         let mut run = synthetic_abort(
             Halt::synthetic_throw("Test262Error: assertion failed"),
             "Test262Error: assertion failed",
@@ -4181,7 +4161,7 @@ mod tests {
         run.ironhorse_computrons = 101;
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, true),
-            Verdict::Fail(_)
+            Verdict::RunSkip(reason) if reason == "shared-test262-failure"
         ));
     }
 

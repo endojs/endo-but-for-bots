@@ -398,18 +398,18 @@ release-versioned cost table, not XS's constants:
 | Allocation | slot alloc (`XS_SLOT_ALLOCATION_METERING`) / chunk byte (`XS_CHUNK_ALLOCATION_METERING`) | cost-table entry |
 | Parse unit | `fxMeterSome` calls from the parser | cost-table entry |
 
-**Deriving and freezing the cost table.** The weights are not
-hand-copied from XS; they are calibration constants derived from the
-cost-calibration instrumentation (sibling plan
-[ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md)),
-which measures per-opcode and per-builtin-step real cost on a named
-reference platform. The measured costs are reduced to a frozen integer weight
-table checked into the release and stamped with an `ironhorse-meter-N`
-version. A recalibration re-runs that instrumentation and bumps the
-version; the previous table remains addressable by its version so
-old metered outcomes stay reproducible. Because the table is
-integer and frozen per release, metering is fully deterministic
-without needing to match any external reference.
+**Deriving and freezing the cost table.**
+The shipped weights are XS-derived historical estimates, now reified in
+`rust/engine/ironhorse-meter` with a fixed-order table and a pinned SHA-256 digest.
+They have not yet been calibrated against measured Ironhorse wall-clock cost.
+The [cost-calibration instrumentation](ironhorse-meter-opcode-cost-instrumentation.md)
+is the path to future evidence-based calibration, not evidence already obtained.
+A weight or charging-point change requires a new `ironhorse-meter-N` release and
+an explicit update to the local golden corpus.
+Snapshots carry both the release name and actual table digest and refuse a mismatch.
+Older name-only meters cannot establish which weights produced them and are refused.
+The oracle certifies observable results; all oracle computron comparisons,
+including the legacy `--gate-meter-exact` option, are advisory drift telemetry.
 
 **String-op weights are re-based to UTF-16 (2026-07-06).** With
 string storage revised to UTF-16 code units (§ Value and heap
@@ -418,7 +418,7 @@ compare, index, slice, char access — are expressed against the
 representation's real cost shape: **O(n) in code-unit length** for
 the length-proportional operations, **O(1) for a single code-unit
 access** (the cursor and fast-path machinery CESU-8 indexing
-required no longer exists to meter). The weights are derived from
+required no longer exists to meter). Future calibrated weights will derive from
 the cost-calibration instrumentation (sibling plan
 [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md))
 and the live calibration work

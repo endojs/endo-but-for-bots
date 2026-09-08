@@ -19,7 +19,7 @@ fn agrees(cranks: &[&str]) {
     assert_eq!(runs.len(), cranks.len(), "every crank ran");
     for (i, run) in runs.iter().enumerate() {
         assert_eq!(run.agreement, Agreement::BothComplete, "crank {i}: {run:?}");
-        assert!(run.is_bit_exact(), "crank {i}: {run:?}");
+        assert!(run.observables_agree(), "crank {i}: {run:?}");
     }
 }
 
@@ -112,12 +112,12 @@ fn an_aborting_crank_compares_and_stops() {
     // The run stops AT the aborting crank: two comparisons, not three.
     assert_eq!(runs.len(), 2, "{runs:?}");
     assert_eq!(runs[0].agreement, Agreement::BothComplete);
-    assert!(runs[0].is_bit_exact(), "{:?}", runs[0]);
+    assert!(runs[0].observables_agree(), "{:?}", runs[0]);
     // Both engines abort crank 2 with the SAME rendered error (the
     // error_data render crossing the crank boundary) and the same
     // run-only computron count at the throw.
     assert_eq!(runs[1].agreement, Agreement::BothAbort, "{:?}", runs[1]);
     assert!(runs[1].error_agrees, "{:?}", runs[1]);
-    assert!(runs[1].is_bit_exact(), "{:?}", runs[1]);
+    assert!(runs[1].observables_agree(), "{:?}", runs[1]);
     assert_eq!(runs[1].oracle_error, "RangeError: later");
 }

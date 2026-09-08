@@ -3,9 +3,11 @@
 //! Changing a weight or charging point requires a new release and golden corpus.
 #![forbid(unsafe_code)]
 mod default_keys;
+mod releases;
+pub use releases::PINNED;
 pub mod sha256;
 pub use default_keys::DEFAULT_KEYS;
-pub const COST_TABLE_VERSION: &str = "ironhorse-meter-1";
+pub const COST_TABLE_VERSION: &str = "ironhorse-meter-2";
 
 macro_rules! weights {
     ($($name:ident = $value:expr;)*) => {
@@ -150,9 +152,9 @@ weights! {
     GENERATOR_START_METERING = 1136;
     GENERATOR_YIELD_METERING = 32616;
     GOPDS_FRAME_METERING = 82432;
-    GOPDS_PER_KEY_METERING = 34568;
+    GOPDS_PER_KEY_METERING = 34568 - 5 * SLOT_ALLOCATION_METERING;
     GOPD_ABSENT_RESIDUAL_METERING = 65560;
-    GOPD_PRESENT_RESIDUAL_METERING = 99608;
+    GOPD_PRESENT_RESIDUAL_METERING = 99608 - 5 * SLOT_ALLOCATION_METERING;
     HARDEN_OBJECT_BASE_METERING = 2 * 65792;
     HARDEN_PER_KEY_METERING = 2 * 256;
     HARDEN_QUEUE_ITEM_METERING = 256;
@@ -242,6 +244,7 @@ weights! {
     PROXY_GET_PROTOTYPE_PRIMITIVE_METERING = 17_480;
     PROXY_GET_PROTOTYPE_THROW_METERING = 98_824;
     PROXY_GET_PROTOTYPE_TRAP_METERING = 164_080;
+    PROXY_INTERNAL_METHOD_METERING = CODE_METERING;
     REFLECT_FRAME_METERING = 1 << 16;
     REGEXP_CTOR_FRAME_METERING = 180296;
     REGEXP_EXEC_FRAME_METERING = 114696;
@@ -298,6 +301,20 @@ weights! {
     XS_REGEXP_METERING = 1 << 16;
 }
 
+/// Frozen allocation geometry, independent of host pointer size.
+pub fn chunk_cost(bytes: u64) -> u64 {
+    let aligned = bytes.saturating_add(CHUNK_ALIGNMENT - 1) & !(CHUNK_ALIGNMENT - 1);
+    aligned
+        .saturating_add(CHUNK_HEADER_BYTES)
+        .saturating_mul(CHUNK_ALLOCATION_METERING)
+}
+
+/// A string allocation is priced in UTF-16 code units, including its terminator.
+/// Interned strings do not allocate and their callers omit this charge.
+pub fn string_chunk_cost(units: u64) -> u64 {
+    chunk_cost(units.saturating_add(1))
+}
+
 /// SHA-256 over length-prefixed names and big-endian u64 weights, then keys.
 /// The domain separator versions this encoding independently of the meter release.
 pub fn digest() -> [u8; 32] {
@@ -322,11 +339,13 @@ mod tests {
     use super::*;
     #[test]
     fn frozen_release() {
-        assert_eq!(COST_TABLE_VERSION, "ironhorse-meter-1");
-        assert_eq!(
-            sha256::hex(&digest()),
-            "1ec1bc1202e33d831db9a3218eb53fa0d7b1b2e321a68cba6419216d8a722819"
-        );
+        assert_eq!(COST_TABLE_VERSION, "ironhorse-meter-2");
+        let expected = PINNED
+            .iter()
+            .find(|(version, _)| *version == COST_TABLE_VERSION)
+            .expect("a new release needs an explicit digest pin")
+            .1;
+        assert_eq!(sha256::hex(&digest()), expected);
         assert!(TABLE.windows(2).all(|w| w[0].0 < w[1].0));
     }
 }

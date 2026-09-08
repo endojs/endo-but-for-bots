@@ -18,9 +18,9 @@
 //! the bitwise ops, NaN-aware comparison, and the scope-slot addressing
 //! `mxEnvironment - index`.
 //!
-//! **Allocation-faithful metering (stage 2b).** Computrons are bit-exact
-//! for programs that allocate at run time, not only for pure
-//! expressions. The meter accrues, in raw 16.16 units so they compose
+//! **Frozen Ironhorse metering.** Weights are XS-derived historical estimates.
+//! Oracle computrons are advisory; local release golden values are the gate.
+//! The meter accrues in raw 16.16 units so charges compose
 //! through the carry into computrons:
 //!  - **per dispatched opcode** `XS_CODE_METERING` (1<<16), as `mxBreak`;
 //!  - **the program overhead** once at `BEGIN_*`: the invocation baseline
@@ -45,6 +45,8 @@ use ironhorse_meter::{
     ARRAY_FIND_VALUE_METERING, ARRAY_ITEM_BYTES, CHUNK_ALIGNMENT, CHUNK_ALLOCATION_METERING,
     CHUNK_HEADER_BYTES, MAP_FIRST_GROW_METERING,
 };
+
+use ironhorse_meter::{string_chunk_cost, PROXY_INTERNAL_METHOD_METERING};
 
 use crate::bulk::{ArrayData, CollKind, CollectionData, SideRefCounts};
 use crate::meter::{Meter, MeterCheck};
@@ -492,7 +494,8 @@ pub use ironhorse_meter::DEFINE_PROPERTY_NEW_RESIDUAL_METERING;
 pub use ironhorse_meter::GOPDS_FRAME_METERING;
 /// `Object.getOwnPropertyDescriptors(o)` per-own-key cost: the
 /// `fxFromPropertyDescriptor` descriptor-object build plus the key property
-/// slot linking it into the result — folded into one measured residual
+/// slot linking it into the result — five explicit descriptor slot charges
+/// are deducted from the historical measured residual
 /// (cheaper than the standalone `getOwnPropertyDescriptor`'s
 /// [`GOPD_PRESENT_RESIDUAL_METERING`] because the plural amortizes the native
 /// frame). Calibrated exact against the pin.
@@ -505,7 +508,7 @@ pub use ironhorse_meter::GOPD_ABSENT_RESIDUAL_METERING;
 /// descriptor object instance + its four `value`/`writable`/`enumerable`/
 /// `configurable` own data properties), beyond the call-dispatch opcodes the
 /// interpreter loop already meters. The descriptor object is built with its
-/// per-allocation metering folded into this one measured constant (the
+/// five slot charges removed from this measured constant (the
 /// isolated `B - A` raw-gap minus the shared call dispatch); a novel key's
 /// intern slot is metered separately by [`Interp::intern_key`].
 pub use ironhorse_meter::GOPD_PRESENT_RESIDUAL_METERING;
@@ -4402,8 +4405,8 @@ pub struct RunOutcome {
     /// reported to the operator as an uncaught `TypeError` and the
     /// managed lifecycle rewound it).
     pub coercion_error: Option<String>,
-    /// Computrons, comparable bit-for-bit with the oracle's run-only
-    /// count: dispatched opcodes plus the invocation baseline.
+    /// Whole computrons under Ironhorse's frozen cost-table release.
+    /// Oracle counts are advisory; this includes all costs charged to the meter.
     pub computrons: u64,
     /// Raw dispatched-opcode count, before the invocation baseline
     /// (useful for isolating a metering divergence).
@@ -13811,6 +13814,13 @@ impl Interp {
         self.chunks.alloc(&units_to_be16(&units))
     }
 
+    /// Allocate and price UTF-8 text using the same UTF-16 length as storage.
+    fn alloc_str_text_metered(&mut self, text: &[u8]) -> crate::value::ChunkOffset {
+        let units: Vec<u16> = String::from_utf8_lossy(text).encode_utf16().collect();
+        self.meter.tick_string(units.len() as u64);
+        self.chunks.alloc(&units_to_be16(&units))
+    }
+
     /// Render a completion/thrown value the way the oracle shim does:
     /// `fxToString` then a lossy decode of the string's code units
     /// (`String::from_utf16_lossy`), the display/debug boundary the design's
@@ -14459,6 +14469,12 @@ impl Interp {
         }
 
         loop {
+            if self.n_dispatched != 0
+                && self.n_dispatched % 4096 == 0
+                && self.check_meter() == MeterCheck::Abort
+            {
+                return Step::Host(Halt::MeterAbort);
+            }
             // Bounded-execution guard (default `u64::MAX` = unbounded, so the
             // oracle-differential paths are untouched). A finite ceiling makes
             // a non-terminating program — a self-targeting backward branch, an
@@ -18005,7 +18021,7 @@ impl Interp {
                         ),
                     };
                     let units = cesu8_to_units(&code[data..data + n]);
-                    self.meter.tick_chunk_new((units.len() + 1) as u64);
+                    self.meter.tick_string(units.len() as u64);
                     let off = self.chunks.alloc(&units_to_be16(&units));
                     self.push(Slot::of(Kind::String, Payload::String(off)));
                     pc += ilen;
@@ -25084,7 +25100,7 @@ impl Interp {
         // @@matchAll, String.prototype.matchAll, RegExp.prototype.toString)
         // reaches this, so the discarded chunk was per-dispatch garbage.
         if !units.is_empty() {
-            self.meter.tick_chunk_new((units.len() + 1) as u64);
+            self.meter.tick_string(units.len() as u64);
         }
         Ok(units)
     }
@@ -26316,12 +26332,12 @@ impl Interp {
                 let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
                 let units = self.to_string_units(code, value)?;
                 self.meter.tick_slot_alloc();
-                self.meter.tick_chunk_new((units.len() + 1) as u64);
+                self.meter.tick_string(units.len() as u64);
                 assembled.extend_from_slice(&units);
                 next_source_position = pos.saturating_add(match_len);
             }
             assembled.extend_from_slice(&subject_units[next_source_position..]);
-            self.meter.tick_chunk_new((assembled.len() + 1) as u64);
+            self.meter.tick_string(assembled.len() as u64);
             let off = self.chunks.alloc(&units_to_be16(&assembled));
             return Ok(Slot::of(Kind::String, Payload::String(off)));
         }
@@ -26340,13 +26356,13 @@ impl Interp {
                 repl.to_vec()
             };
             self.meter.tick_slot_alloc();
-            self.meter.tick_chunk_new((subst_units.len() + 1) as u64);
+            self.meter.tick_string(subst_units.len() as u64);
             assembled.extend_from_slice(&subst_units);
             next_source_position = pos + match_len;
         }
         assembled.extend_from_slice(&subject_units[next_source_position..]);
         // The final assembly `fxNewChunk(total + 1)`.
-        self.meter.tick_chunk_new((assembled.len() + 1) as u64);
+        self.meter.tick_string(assembled.len() as u64);
         let off = self.chunks.alloc(&units_to_be16(&assembled));
         Ok(Slot::of(Kind::String, Payload::String(off)))
     }
@@ -27016,21 +27032,28 @@ impl Interp {
         // fresh chunk (charged here); an unescaped source is the interned key.
         let (source_bytes, source_escaped) = self.regexp_source_bytes(inst);
         if source_escaped {
-            self.meter.tick_chunk_new((source_bytes.len() + 1) as u64);
+            self.meter.tick_string(
+                String::from_utf8_lossy(&source_bytes)
+                    .encode_utf16()
+                    .count() as u64,
+            );
         }
         // `mxGetID(_flags)` → the composite flags getter (the eight-property
         // cascade) + its result-string chunk.
         self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
         let flags = self.regexps[&inst].flags.clone();
-        self.meter.tick_chunk_new((flags.len() + 1) as u64);
+        self.meter.tick_string(flags.len() as u64);
         // The three growing concatenations XS performs
         // (`fxConcatString`/`fxConcatStringC`): `"/"` + source, + `"/"`, +
         // flags — each `fxNewChunk` of the running content length.
         let s = source_bytes.len();
+        let units = String::from_utf8_lossy(&source_bytes)
+            .encode_utf16()
+            .count();
         let f = flags.len();
-        self.meter.tick_chunk_new((1 + s + 1) as u64); // "/" + source
-        self.meter.tick_chunk_new((1 + s + 1 + 1) as u64); // + "/"
-        self.meter.tick_chunk_new((1 + s + 1 + f + 1) as u64); // + flags
+        self.meter.tick_string((1 + units) as u64); // "/" + source
+        self.meter.tick_string((2 + units) as u64); // + "/"
+        self.meter.tick_string((2 + units + f) as u64); // + flags
         let mut out = Vec::with_capacity(s + f + 2);
         out.push(b'/');
         out.extend_from_slice(&source_bytes);
@@ -27084,10 +27107,10 @@ impl Interp {
 
         // XS builds the result as three growing concatenations: `"/" +
         // source`, then `+ "/"`, then `+ flags`.
-        self.meter.tick_chunk_new((source.len() + 2) as u64);
-        self.meter.tick_chunk_new((source.len() + 3) as u64);
+        self.meter.tick_string((source.len() + 1) as u64);
+        self.meter.tick_string((source.len() + 2) as u64);
         self.meter
-            .tick_chunk_new((source.len() + flags.len() + 3) as u64);
+            .tick_string((source.len() + flags.len() + 2) as u64);
         let mut out = Vec::with_capacity(source.len() + flags.len() + 2);
         out.push(b'/' as u16);
         out.extend_from_slice(&source);
@@ -34389,8 +34412,7 @@ impl Interp {
                 } else {
                     b"[object Null]"
                 };
-                self.meter.tick_chunk_new(text.len() as u64);
-                let off = self.alloc_str_text(text);
+                let off = self.alloc_str_text_metered(text);
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Object.prototype.toString`: `[object Object]` for an ordinary
@@ -34425,8 +34447,7 @@ impl Interp {
                 };
                 if let Some(tag) = tag {
                     let owned = format!("[object {}]", tag);
-                    self.meter.tick_chunk_new(owned.len() as u64);
-                    let off = self.alloc_str_text(owned.as_bytes());
+                    let off = self.alloc_str_text_metered(owned.as_bytes());
                     Slot::of(Kind::String, Payload::String(off))
                 } else {
                     // `Object.prototype.toString` builtinTag (ECMA-262
@@ -34474,8 +34495,7 @@ impl Interp {
                         _ if this.kind == Kind::Symbol => b"[object Symbol]",
                         _ => b"[object Object]",
                     };
-                    self.meter.tick_chunk_new(text.len() as u64);
-                    let off = self.alloc_str_text(text);
+                    let off = self.alloc_str_text_metered(text);
                     Slot::of(Kind::String, Payload::String(off))
                 }
             }
@@ -34502,8 +34522,7 @@ impl Interp {
                 let mut units: Vec<u16> = "function [\"".encode_utf16().collect();
                 units.extend(name);
                 units.extend("\"] (){[native code]}".encode_utf16());
-                self.meter
-                    .tick_chunk_new(SymbolName::from_units(&units).as_bytes().len() as u64);
+                self.meter.tick_string(units.len() as u64);
                 let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
@@ -34511,7 +34530,7 @@ impl Interp {
             NativeMethod::ErrorToString => {
                 let units = self.error_to_string(code, this)?;
                 self.meter.tick_raw(METHOD_ERROR_TOSTRING_METERING);
-                self.meter.tick_chunk_new(units.len() as u64);
+                self.meter.tick_string(units.len() as u64);
                 let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
@@ -34621,8 +34640,7 @@ impl Interp {
                 let (negative, magnitude) = self.read_bigint(off);
                 let rendered = bi_to_radix(negative, &magnitude, radix);
                 self.meter.tick_builtin();
-                self.meter.tick_chunk_new((rendered.len() + 1) as u64);
-                let off = self.alloc_str_text(rendered.as_bytes());
+                let off = self.alloc_str_text_metered(rendered.as_bytes());
                 Slot::of(Kind::String, Payload::String(off))
             }
             NativeMethod::BigIntToLocaleString => {
@@ -34957,7 +34975,7 @@ impl Interp {
                                     let configurable = prop.flag & XS_DONT_DELETE_FLAG == 0;
                                     self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
                                     let value = Slot::of(prop.kind, prop.value);
-                                    let desc = self.slots.alloc(Slot::instance(self.object_proto));
+                                    let desc = self.alloc_descriptor_instance();
                                     self.define_descriptor_field(desc, "value", value);
                                     self.define_descriptor_field(
                                         desc,
@@ -34986,7 +35004,7 @@ impl Interp {
                                 if let Some(desc) = self.function_meta_own_descriptor(inst, id) {
                                     self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
                                     let value = desc.value.unwrap_or_else(Slot::undefined);
-                                    let d = self.slots.alloc(Slot::instance(self.object_proto));
+                                    let d = self.alloc_descriptor_instance();
                                     self.define_descriptor_field(d, "value", value);
                                     self.define_descriptor_field(
                                         d,
@@ -37115,8 +37133,7 @@ impl Interp {
                         _ => {}
                     }
                 }
-                self.meter.tick_chunk_new((out.len() + 1) as u64);
-                let off = self.alloc_str_text(&out);
+                let off = self.alloc_str_text_metered(&out);
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Array.prototype.toString()` delegates to `this.join()` with the
@@ -37190,8 +37207,7 @@ impl Interp {
                         _ => {}
                     }
                 }
-                self.meter.tick_chunk_new((out.len() + 1) as u64);
-                let off = self.alloc_str_text(&out);
+                let off = self.alloc_str_text_metered(&out);
                 Slot::of(Kind::String, Payload::String(off))
             }
             NativeMethod::ArraySort => self.array_sort(this, base, argc, code, false)?,
@@ -39532,8 +39548,7 @@ impl Interp {
                         }
                     };
                     self.meter.tick_builtin();
-                    self.meter.tick_chunk_new((bytes.len() + 1) as u64);
-                    let off = self.alloc_str_text(&bytes);
+                    let off = self.alloc_str_text_metered(&bytes);
                     Slot::of(Kind::String, Payload::String(off))
                 }
             }
@@ -40107,7 +40122,8 @@ impl Interp {
         let mut partial = Vec::new();
         for name in &names {
             *cost += JSON_STRINGIFY_OBJECT_KEY_BODY_METERING
-                + (((name.units.len() as u64 + 1) + 7) & !7);
+                + (string_chunk_cost(name.units.len() as u64)
+                    - CHUNK_HEADER_BYTES * CHUNK_ALLOCATION_METERING);
             if let Some(value) = self.json_stringify_property(code, inst, name, state, cost)? {
                 let mut member = json_escape_string(&name.units);
                 member.push(b':' as u16);
@@ -40198,11 +40214,8 @@ impl Interp {
                 let units = self.json_parse_string_units(input, pos)?;
                 // The tokenizer's `s = fxNewChunk(the, size + 1)`: always a
                 // chunk, even for the empty string (unlike an interned literal).
-                // XS stores this temporary in CESU-8, where an astral scalar
-                // occupies two three-byte surrogate sequences rather than one
-                // four-byte UTF-8 sequence.
-                let cesu8_len = Self::regexp_subject_bytes(&units).0.len() as u64;
-                *cost += (((cesu8_len + 1) + 7) & !7) + 16;
+                // The frozen Ironhorse price uses UTF-16 units on every path.
+                *cost += string_chunk_cost(units.len() as u64);
                 let off = self.chunks.alloc(&units_to_be16(&units));
                 let value = Slot::of(Kind::String, Payload::String(off));
                 let source = if track_source {
@@ -40540,8 +40553,7 @@ impl Interp {
             let key = SymbolName::from_units(&key_units);
             *cost += JSON_PARSE_OBJECT_KEY_METERING;
             // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
-            let cesu8_len = Self::regexp_subject_bytes(&key_units).0.len() as u64;
-            *cost += (((cesu8_len + 1) + 7) & !7) + 16;
+            *cost += string_chunk_cost(key_units.len() as u64);
             // A canonical INDEX key goes to the index store; only a real name
             // is interned. `fxNewName` is not reached for an index in XS
             // either, and parsing `{"0":…,"1":…}` with 70,000 index keys
@@ -40832,7 +40844,7 @@ impl Interp {
             let off = self.chunks.alloc(&[]);
             return Slot::of(Kind::String, Payload::String(off));
         }
-        self.meter.tick_chunk_new((units.len() + 1) as u64);
+        self.meter.tick_string(units.len() as u64);
         let off = self.chunks.alloc(&units_to_be16(units));
         Slot::of(Kind::String, Payload::String(off))
     }
@@ -43437,7 +43449,7 @@ impl Interp {
                 // value but does NOT meter it).
                 let bytes: Vec<u8> = if id == crate::value::XS_NO_ID {
                     let b = number_to_ecma_string(idx as f64).into_bytes();
-                    self.meter.tick_chunk_new((b.len() + 1) as u64);
+                    self.meter.tick_string(b.len() as u64);
                     b
                 } else {
                     self.symbol_names
@@ -50176,7 +50188,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.property_key_slot(id),
             ReadKey::Index(index) => {
-                let offset = self.alloc_str_text(index.to_string().as_bytes());
+                let offset = self.alloc_str_text_metered(index.to_string().as_bytes());
                 Ok(Slot::of(Kind::String, Payload::String(offset)))
             }
         }
@@ -52172,12 +52184,12 @@ impl Interp {
     }
 
     /// Add one field of a synthesized property descriptor object (an own
-    /// enumerable data property `name = value`) **without** metering — its
-    /// allocation cost is folded into the descriptor build's single measured
-    /// residual (`GOPD_PRESENT_RESIDUAL_METERING`). The field name resolves
+    /// enumerable data property `name = value`), charging the same slot weight
+    /// on ordinary and Proxy descriptor paths. The field name resolves
     /// through the global intern table so `descriptor.value` (etc.) reads back
     /// under the same id the program's `.value` access uses.
     fn define_descriptor_field(&mut self, inst: crate::value::SlotIndex, name: &str, value: Slot) {
+        self.meter.tick_slot_alloc();
         let id = self.intern_key(name);
         let head = self.slots.get(inst).next;
         let mut prop = value;
@@ -52819,6 +52831,8 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         name: &str,
     ) -> Result<(crate::value::SlotIndex, crate::value::SlotIndex), Step> {
+        self.meter.tick_raw(PROXY_INTERNAL_METHOD_METERING);
+        self.meter.tick_builtin(); // target/handler validity check
         match self.proxies.get(&proxy) {
             Some(data) if !data.revoked => Ok((data.target, data.handler)),
             _ => Err(self.catchable_type_error_msg(format!("(proxy).{name}: no handler"))),
@@ -53141,6 +53155,10 @@ impl Interp {
         let len = self.to_length_value(code, length)?;
         let mut out = Vec::new();
         for i in 0..len {
+            self.meter.tick_builtin();
+            if self.check_meter() == MeterCheck::Abort {
+                return Err(Step::Host(Halt::MeterAbort));
+            }
             let element = self.arraylike_index(code, inst, i, value)?;
             if element.kind != Kind::String && element.kind != Kind::Symbol {
                 return Err(self.catchable_type_error_msg(
@@ -55410,6 +55428,10 @@ impl Interp {
         let mut seen: Vec<ReadKey> = Vec::with_capacity(trap_keys.len());
         for k in &trap_keys {
             let key = self.to_read_key(code, *k)?;
+            self.meter.tick_builtin_some(seen.len() as u64);
+            if self.check_meter() == MeterCheck::Abort {
+                return Err(Step::Host(Halt::MeterAbort));
+            }
             if seen.contains(&key) {
                 return Err(self.catchable_type_error_msg("(proxy).ownKeys: duplicate key".into()));
             }
@@ -55420,6 +55442,7 @@ impl Interp {
         let mut target_configurable: Vec<ReadKey> = Vec::new();
         let mut target_nonconfigurable: Vec<ReadKey> = Vec::new();
         for tk in &target_keys {
+            self.meter.tick_builtin();
             let key = self.to_read_key(code, *tk)?;
             match self.mop_get_own_property_read(code, target, key)? {
                 Some(d) if d.configurable == Some(false) => target_nonconfigurable.push(key),
@@ -55444,6 +55467,10 @@ impl Interp {
         }
         let mut unchecked = seen.clone();
         for tid in &target_nonconfigurable {
+            self.meter.tick_builtin_some(unchecked.len() as u64);
+            if self.check_meter() == MeterCheck::Abort {
+                return Err(Step::Host(Halt::MeterAbort));
+            }
             match unchecked.iter().position(|u| u == tid) {
                 Some(pos) => {
                     unchecked.remove(pos);
@@ -55459,6 +55486,10 @@ impl Interp {
             return Ok(trap_keys);
         }
         for tid in &target_configurable {
+            self.meter.tick_builtin_some(unchecked.len() as u64);
+            if self.check_meter() == MeterCheck::Abort {
+                return Err(Step::Host(Halt::MeterAbort));
+            }
             match unchecked.iter().position(|u| u == tid) {
                 Some(pos) => {
                     unchecked.remove(pos);
@@ -55747,6 +55778,9 @@ impl Interp {
 
     /// Build a dense `Array` from a slot list (`CreateArrayFromList`).
     fn array_from_slots(&mut self, items: &[Slot]) -> Slot {
+        self.meter.tick_raw(ARRAY_CREATE_METERING);
+        self.meter
+            .tick_raw(self.array_chunk_size_metering(items.len() as u32));
         let inst = self.slots.alloc(Slot::instance(self.array_proto));
         let mut data = ArrayData::default();
         data.length = items.len() as u32;
@@ -55762,11 +55796,12 @@ impl Interp {
     /// `O` undefined — `IsCompatiblePropertyDescriptor`). `Desc` is a completed
     /// descriptor; `current` is the target's own descriptor (or `None`).
     fn is_compatible_descriptor(
-        &self,
+        &mut self,
         extensible: bool,
         desc: &OrdinaryDescriptor,
         current: Option<&OrdinaryDescriptor>,
     ) -> bool {
+        self.meter.tick_builtin(); // ordinary and Proxy descriptor invariant work
         let current = match current {
             None => return extensible,
             Some(c) => c,
@@ -55949,7 +55984,9 @@ impl Interp {
             .ok_or(Step::Host(Halt::EngineInvariant(
                 "ordinary-ownKeys:unknown-key",
             )))?;
-        let offset = self.chunks.alloc(&units_to_be16(&name.to_units()));
+        let units = name.to_units();
+        self.meter.tick_string(units.len() as u64);
+        let offset = self.chunks.alloc(&units_to_be16(&units));
         Ok(Slot::of(Kind::String, Payload::String(offset)))
     }
 
@@ -55985,8 +56022,13 @@ impl Interp {
         Ok(true)
     }
 
+    fn alloc_descriptor_instance(&mut self) -> crate::value::SlotIndex {
+        self.meter.tick_slot_alloc();
+        self.slots.alloc(Slot::instance(self.object_proto))
+    }
+
     fn descriptor_object(&mut self, descriptor: OrdinaryDescriptor) -> Slot {
-        let object = self.slots.alloc(Slot::instance(self.object_proto));
+        let object = self.alloc_descriptor_instance();
         if descriptor.is_accessor() {
             self.define_descriptor_field(
                 object,
@@ -57266,7 +57308,7 @@ impl Interp {
         // fxConcatString: one fxNewChunk over the joined code units. Metered by
         // total code-unit length (`+1`, the re-based O(n) string weight; for
         // ASCII operands this equals the old CESU-8 `aSize + bSize + 1`).
-        self.meter.tick_chunk_new((ua.len() + ub.len() + 1) as u64);
+        self.meter.tick_string((ua.len() + ub.len()) as u64);
         let mut joined = Vec::with_capacity(ua.len() + ub.len());
         joined.extend_from_slice(&ua);
         joined.extend_from_slice(&ub);
@@ -57324,13 +57366,13 @@ impl Interp {
                 // against the pin as exactly `XS_BUILTIN_METERING` over the
                 // allocation.
                 self.meter.tick_builtin();
-                self.meter.tick_chunk_new((r.len() + 1) as u64);
+                self.meter.tick_string(r.len() as u64);
                 r
             }
             Payload::Number(n) => {
                 let r = number_to_ecma_string(n).into_bytes();
                 self.meter.tick_builtin();
-                self.meter.tick_chunk_new((r.len() + 1) as u64);
+                self.meter.tick_string(r.len() as u64);
                 r
             }
             Payload::Boolean(bv) => {
@@ -57353,7 +57395,7 @@ impl Interp {
                 let (neg, mag) = self.read_bigint(off);
                 let r = bi_to_decimal(neg, &mag).into_bytes();
                 self.meter.tick_builtin();
-                self.meter.tick_chunk_new((r.len() + 1) as u64);
+                self.meter.tick_string(r.len() as u64);
                 r
             }
         }
@@ -65373,4 +65415,9 @@ impl Interp {
             visit(*d);
         }
     }
+}
+
+#[cfg(test)]
+mod meter_consistency {
+    include!("meter_consistency.rs");
 }

@@ -42,7 +42,8 @@ fn parse_computrons_are_deterministic_per_build() {
     // (bumping the suffix and recalibrating) is a deliberate release
     // boundary, not a silent drift.
     assert_eq!(
-        PARSE_METER_RELEASE, "ironhorse-meter-1",
+        PARSE_METER_RELEASE,
+        ironhorse_meter::COST_TABLE_VERSION,
         "the frozen parse-meter release changed; re-pin the determinism baseline deliberately"
     );
 

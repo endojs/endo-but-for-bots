@@ -228,8 +228,18 @@ pub struct DualRun {
 }
 
 impl DualRun {
-    /// The acceptance-bar predicate for one program: same completion,
-    /// same result string, same computrons.
+    /// The result-correctness gate. XS computation costs remain advisory.
+    pub fn observables_agree(&self) -> bool {
+        match self.agreement {
+            Agreement::BothComplete => self.result_agrees,
+            Agreement::BothAbort => {
+                matches!(self.ironhorse_halt, Halt::Throw { .. }) && self.error_agrees
+            }
+            _ => false,
+        }
+    }
+
+    /// Advisory historical parity predicate: same completion, result and costs.
     pub fn is_bit_exact(&self) -> bool {
         match self.agreement {
             Agreement::BothComplete => self.result_agrees && self.computrons_agree,
@@ -941,6 +951,7 @@ pub struct Summary {
 }
 
 impl Summary {
+    /// Historical parity summary for diagnostics; not a release acceptance gate.
     pub fn met_bar(&self) -> bool {
         self.total > 0 && self.bit_exact == self.total
     }

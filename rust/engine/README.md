@@ -1,5 +1,12 @@
 # Ironhorse engine (rust/engine)
 
+<!-- W4 metering policy -->
+Ironhorse metering uses its own frozen, XS-derived cost table.
+Oracle computron comparisons, including the legacy `--gate-meter-exact` flag,
+are advisory; result agreement and the release's local golden costs are gates.
+`ironhorse-meter-2` unifies string allocation prices in UTF-16 code units and
+charges Proxy frames, descriptor slots, keys, and invariant work.
+
 The oracle-locked transliteration of XS to Rust described in
 [`designs/ironhorse-engine.md`](../../designs/ironhorse-engine.md).
 An independent Cargo workspace (excluded from the repo-root workspace)
