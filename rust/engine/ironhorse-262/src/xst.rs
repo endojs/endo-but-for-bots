@@ -175,7 +175,7 @@ pub struct Config {
     /// Compatibility flag: XS cost drift is always advisory.
     /// Ironhorse's release corpus, not oracle cost parity, gates metering.
     pub gate_meter_exact: bool,
-    /// `--repeat N`: re-run ironhorse N times and require identical computrons
+    /// `--repeat N`: re-run ironhorse N times and require identical execution observations
     /// across runs — the unconditional determinism gate. Default 1 (no
     /// extra runs).
     pub repeat: u32,
@@ -413,7 +413,6 @@ fn assemble_strict(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<St
 
 struct Eval {
     outcome: Verdict,
-    ironhorse_computrons: u64,
     computron_gap: bool,
 }
 
@@ -435,12 +434,17 @@ fn evaluate(cfg: &Config, source: &str, fm: &Frontmatter, meter_exact_gate: bool
         None => {
             return Eval {
                 outcome: Verdict::RunSkip("oracle-machine-error".into()),
-                ironhorse_computrons: 0,
                 computron_gap: false,
             }
         }
     };
-    let outcome = verdict_for(cfg, &run, fm, meter_exact_gate);
+    let outcome = if determinism_violation(cfg.repeat, &Fingerprint::sync(&run), || {
+        dual_run(source).map(|run| Fingerprint::sync(&run))
+    }) {
+        nondeterministic(cfg.repeat)
+    } else {
+        verdict_for(cfg, &run, fm, meter_exact_gate)
+    };
     // The computron comparison is advisory (accuracy-over-parity): a covered
     // case whose computrons drift from the oracle's is telemetry, folded
     // into the report's `advisory:` section, never a failure on its own.
@@ -448,7 +452,6 @@ fn evaluate(cfg: &Config, source: &str, fm: &Frontmatter, meter_exact_gate: bool
         matches!(outcome, Verdict::Covered) && run.oracle_computrons != run.ironhorse_computrons;
     Eval {
         outcome,
-        ironhorse_computrons: run.ironhorse_computrons,
         computron_gap,
     }
 }
@@ -1184,18 +1187,66 @@ fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdi
     }
 }
 
-/// Re-run ironhorse `repeat` times and report whether its computrons ever differ
-/// from `baseline` — the unconditional determinism gate (design § Part 2:
-/// identical computrons per build). The oracle is deterministic too, so a
-/// plain re-`dual_run` isolates any ironhorse nondeterminism.
-fn determinism_violation(source: &str, repeat: u32, baseline: u64) -> bool {
-    for _ in 1..repeat {
-        match dual_run(source) {
-            Some(r) if r.ironhorse_computrons != baseline => return true,
-            _ => {}
+/// Everything observed on the Ironhorse side, independent of oracle cost
+/// drift. Raw fractional costs and emitted bytes matter even when the rounded
+/// computrons and rendered result happen to agree.
+#[derive(Debug, Clone, PartialEq)]
+struct Fingerprint {
+    result: String,
+    error: String,
+    halt: String,
+    compile: IronhorseCompile,
+    raw: u64,
+    computrons: u64,
+    dispatched: u64,
+    bytecode: Vec<u8>,
+    symbols: Vec<u8>,
+    async_state: Option<(Option<String>, bool)>,
+}
+
+impl Fingerprint {
+    fn sync(run: &DualRun) -> Self {
+        Self {
+            result: run.ironhorse_result.clone(),
+            error: run.ironhorse_error.clone(),
+            // Halt contains Slots with IEEE floats: NaN is not PartialEq to itself.
+            // Compare the complete diagnostic representation within this build.
+            halt: format!("{:?}", run.ironhorse_halt),
+            compile: run.ironhorse_compile.clone(),
+            raw: run.ironhorse_meter_raw,
+            computrons: run.ironhorse_computrons,
+            dispatched: run.ironhorse_dispatched,
+            bytecode: run.bytecode.clone(),
+            symbols: run.symbols.clone(),
+            async_state: None,
         }
     }
-    false
+
+    fn asynchronous(run: &AsyncDualRun) -> Self {
+        Self {
+            async_state: Some((
+                run.ironhorse_signal.clone(),
+                run.ironhorse_unhandled_rejection,
+            )),
+            ..Self::sync(&run.run)
+        }
+    }
+}
+
+/// The baseline is run one. A missing subsequent observation fails closed;
+/// callers supply the same runner and configuration that produced the baseline.
+fn determinism_violation<T: PartialEq>(
+    repeat: u32,
+    baseline: &T,
+    mut rerun: impl FnMut() -> Option<T>,
+) -> bool {
+    (1..repeat).any(|_| rerun().as_ref() != Some(baseline))
+}
+
+fn nondeterministic(repeat: u32) -> Verdict {
+    Verdict::Fail(format!(
+        "nondeterministic execution or missing rerun across {repeat} runs"
+    ))
 }
 
 /// The name of the global the async prelude records the `$DONE` completion
@@ -1319,24 +1370,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         return result;
     }
 
-    let run_mode = |source: &str| {
-        let eval = evaluate(cfg, source, &fm, meter_exact_gate);
-        let outcome = if cfg.repeat > 1
-            && determinism_violation(source, cfg.repeat, eval.ironhorse_computrons)
-        {
-            Verdict::Fail(format!(
-                "nondeterministic computrons across {} runs",
-                cfg.repeat
-            ))
-        } else {
-            eval.outcome
-        };
-        Eval {
-            outcome,
-            ironhorse_computrons: eval.ironhorse_computrons,
-            computron_gap: eval.computron_gap,
-        }
-    };
+    let run_mode = |source: &str| evaluate(cfg, source, &fm, meter_exact_gate);
 
     let sloppy = if run_sloppy {
         match assemble(harness_dir, src, &fm) {
@@ -1438,6 +1472,24 @@ fn evaluate_module_compile(
     let ironhorse = panic::catch_unwind(AssertUnwindSafe(|| {
         ironhorse_compile::compile_module_atoms(src)
     }));
+
+    // Parse-negative modules return before execution, so their compiler
+    // acceptance/rejection and emitted atoms need an independent repeat gate.
+    if let Ok(baseline) = &ironhorse {
+        if determinism_violation(cfg.repeat, baseline, || {
+            panic::catch_unwind(AssertUnwindSafe(|| {
+                ironhorse_compile::compile_module_atoms(src)
+            }))
+            .ok()
+        }) {
+            return CaseResult {
+                verdict: nondeterministic(cfg.repeat),
+                strict_skipped: false,
+                computron_gap: false,
+                mode_outcomes: Vec::new(),
+            };
+        }
+    }
 
     if let Some(negative) = &fm.negative {
         if negative.phase == "parse" {
@@ -1617,6 +1669,7 @@ fn run_oracle_single_module(source: &str) -> Result<xs_oracle::ModuleRunOutcome,
 fn module_dual_run(
     source: &str,
     bytecode: Vec<u8>,
+    symbols: Vec<u8>,
     oracle: xs_oracle::ModuleRunOutcome,
     ironhorse: RunOutcome,
 ) -> DualRun {
@@ -1651,6 +1704,7 @@ fn module_dual_run(
         ironhorse_halt: ironhorse.halt,
         ironhorse_compile: IronhorseCompile::Accepted,
         bytecode,
+        symbols,
         oracle_parsed: true,
         oracle_exit_status: oracle.exit_status,
     }
@@ -1700,6 +1754,25 @@ fn run_accepted_module(
     }
 
     let ironhorse = run_ironhorse_module(&bytecode, &symbols);
+    let observed = |run: &RunOutcome| {
+        (
+            run.completed,
+            run.result.clone(),
+            format!("{:?}", run.halt),
+            run.meter_raw,
+            run.computrons,
+            run.dispatched,
+        )
+    };
+    let baseline = (bytecode.clone(), symbols.clone(), observed(&ironhorse));
+    if determinism_violation(cfg.repeat, &baseline, || {
+        let (code, names) = ironhorse_compile::compile_module_atoms(source).ok()?;
+        let outcome = observed(&run_ironhorse_module(&code, &names));
+        Some((code, names, outcome))
+    }) {
+        return nondeterministic(cfg.repeat);
+    }
+
     match &ironhorse.halt {
         Halt::NotImplemented(op) => return declined_verdict(op),
         Halt::Refused(op) => return refused_verdict(op),
@@ -1729,7 +1802,7 @@ fn run_accepted_module(
             meter_raw: ironhorse.meter_raw as u32,
         }
     };
-    let run = module_dual_run(source, bytecode, oracle, ironhorse);
+    let run = module_dual_run(source, bytecode, symbols, oracle, ironhorse);
     verdict_for(cfg, &run, fm, false)
 }
 
@@ -1789,17 +1862,15 @@ fn run_async_case(
         other => other,
     };
 
-    // The determinism gate runs over the same prelude-bearing source.
-    let verdict = if cfg.repeat > 1
-        && determinism_violation(&source, cfg.repeat, async_run.run.ironhorse_computrons)
-    {
-        Verdict::Fail(format!(
-            "nondeterministic computrons across {} runs",
-            cfg.repeat
-        ))
-    } else {
-        outcome
-    };
+    // Preserve the async runner, completion sentinel, and rejection latch.
+    let verdict =
+        if determinism_violation(cfg.repeat, &Fingerprint::asynchronous(&async_run), || {
+            dual_run_async(&source, ASYNC_SIGNAL_NAME).map(|run| Fingerprint::asynchronous(&run))
+        }) {
+            nondeterministic(cfg.repeat)
+        } else {
+            outcome
+        };
 
     CaseResult {
         verdict,
@@ -3399,6 +3470,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn repeat_checks_every_observation_and_fails_closed() {
+        let run = synthetic_async(Some("done"), false);
+        let baseline = Fingerprint::asynchronous(&run);
+        let mut calls = 0;
+        assert!(!determinism_violation(3, &baseline, || {
+            calls += 1;
+            Some(Fingerprint::asynchronous(&run))
+        }));
+        assert_eq!(calls, 2, "baseline counts as run one");
+        assert!(!determinism_violation(1, &baseline, || panic!("extra run")));
+        assert!(determinism_violation(2, &baseline, || None));
+        macro_rules! changed {
+            ($field:ident, $value:expr) => {{
+                let mut changed = baseline.clone();
+                changed.$field = $value;
+                assert!(
+                    determinism_violation(3, &baseline, || Some(changed.clone())),
+                    stringify!($field)
+                );
+            }};
+        }
+        changed!(result, "different".into());
+        changed!(error, "different".into());
+        changed!(halt, format!("{:?}", Halt::MeterAbort));
+        changed!(compile, IronhorseCompile::Rejected("syntax".into()));
+        changed!(raw, 1); // fractional drift with unchanged whole computrons
+        changed!(computrons, 1);
+        changed!(dispatched, 1);
+        changed!(bytecode, vec![1]);
+        changed!(symbols, vec![1]);
+        changed!(async_state, Some((None, false)));
+        changed!(async_state, Some((Some("done".into()), true)));
+        let mut calls = 0;
+        assert!(determinism_violation(3, &baseline, || {
+            calls += 1;
+            (calls == 1).then(|| baseline.clone())
+        }));
+        assert_eq!(calls, 2, "missing final run must fail");
+    }
+
     /// A `DualRun` in a shared-abort shape for exercising the negative
     /// verdict helpers without an oracle machine.
     fn synthetic_abort(ironhorse_halt: Halt, ironhorse_error: &str) -> DualRun {
@@ -3420,6 +3532,7 @@ mod tests {
             ironhorse_halt,
             ironhorse_compile: IronhorseCompile::NotAttempted,
             bytecode: Vec::new(),
+            symbols: Vec::new(),
             oracle_parsed: false,
             oracle_exit_status: 0,
         }

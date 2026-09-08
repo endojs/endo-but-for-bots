@@ -880,7 +880,7 @@ jobs:
         run: >-
           cargo run --locked -p ironhorse-262 --bin endot-ih --
           --strict-skip-reasons
-          --expectations ironhorse-262/expectations/ironhorse.txt
+          --repeat 3 --expectations ironhorse-262/expectations/ironhorse.txt
           ../../packages/test262-runner/test262/test/ironhorse
   test-ocapn-python:
     name: test-ocapn-python

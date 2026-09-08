@@ -161,8 +161,8 @@ in or out with existing tooling (`--features-include`, as
   cannot turn oracle costs into a failure.
   The local golden corpus supplies the release-cost regression gate.
 - `ironhorse-meter-determinism` — the case is in the determinism set:
-  the runner re-runs it (`--repeat N`) and identical computrons
-  across runs of the same build are a **gating** assertion (this is
+  the runner re-runs it (`--repeat N`) and identical raw costs, results, errors, halt reasons,
+  compiler outcomes, and async completion state across runs of the same build are a **gating** assertion (this is
   the unconditional half of the doctrine).
 
 ### The meter assertion never enters the test body
@@ -274,7 +274,7 @@ per-engine `xst` verdicts:
    aggregated per section into the report's `advisory:` section;
    never a failure by itself, including with `--gate-meter-exact`.
    `--repeat N` drives the
-   determinism gate (identical Ironhorse computrons across runs — a red
+   determinism gate (identical Ironhorse execution observations across runs — a red
    build on drift, since determinism-per-release is unconditional).
 
 `ironhorse-compile` now moves the differential to the source boundary:
