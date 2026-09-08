@@ -2,8 +2,12 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { Fail } from '@endo/errors';
 
-import { makeProviderBrokerLease } from '../src/provider-broker.js';
+import {
+  makeBrokerOAuthCredential,
+  makeProviderBrokerLease,
+} from '../src/provider-broker.js';
 
 /** @import { BrokerPolicy } from '../src/provider-broker.js' */
 
@@ -41,75 +45,150 @@ const oauthState = (overrides = {}) =>
   });
 
 /**
+ * Build the shared powers behind one secret record: the store the rotate
+ * capability writes and the read facet reads back, plus a token endpoint that
+ * models a provider with refresh-token rotation and replay detection.
+ *
+ * Shared deliberately, so a test can put two leases over one record and see
+ * whether they redeem the same refresh token.
+ *
+ * @param {object} [options]
+ * @param {any} [options.state]
+ * @param {string} [options.rawStored] - Base64 to seed the record with, for
+ * the cases where what is stored is not a state document at all.
+ * @param {(request: any) => Promise<any>} [options.exchange]
+ * @param {string} [options.accountRef]
+ * @param {() => number} [options.now]
+ * @param {number} [options.refreshSkewMs]
+ */
+const makeRecord = ({
+  state,
+  rawStored,
+  exchange,
+  accountRef = 'account-1',
+  now = () => 0,
+  refreshSkewMs,
+} = {}) => {
+  const exchanges = [];
+  const rotations = [];
+  const spentTokens = new Set();
+  let stored =
+    rawStored ?? globalThis.btoa(JSON.stringify(state ?? oauthState()));
+  const facets = {
+    exchanges,
+    rotations,
+    stored: () => JSON.parse(globalThis.atob(stored)),
+    replace: next => {
+      stored = globalThis.btoa(JSON.stringify(next));
+    },
+    secret: Far('secret', {
+      async readBase64() {
+        return stored;
+      },
+    }),
+    refresh: Far('refresh', {
+      async refresh(exchangeRequest) {
+        exchanges.push(exchangeRequest);
+        if (exchange) return exchange(exchangeRequest);
+        // Replay detection, as a rotating provider implements it: presenting a
+        // refresh token twice is a breach signal, not a retry.
+        !spentTokens.has(exchangeRequest.refreshToken) ||
+          Fail`refresh token replayed`;
+        spentTokens.add(exchangeRequest.refreshToken);
+        return oauthState({
+          accessToken: `${accessToken}-${exchanges.length}`,
+          refreshToken: `${refreshToken}-${exchanges.length}`,
+        });
+      },
+    }),
+    rotate: Far('rotate', {
+      async replaceBase64(base64) {
+        rotations.push(base64);
+        stored = base64;
+      },
+    }),
+  };
+  // Deliberately not hardened: `exchanges` and `rotations` are the test's
+  // mutable observation log.
+  // One credential per record, as production builds it, so that two leases
+  // over this record share the guard rather than each getting their own.
+  return {
+    ...facets,
+    credential: makeBrokerOAuthCredential({
+      secret: facets.secret,
+      refresh: facets.refresh,
+      rotate: facets.rotate,
+      accountRef,
+      now,
+      ...(refreshSkewMs === undefined ? {} : { refreshSkewMs }),
+    }),
+  };
+};
+
+/**
  * @param {object} [options]
  * @param {Partial<BrokerPolicy>} [options.limits]
  * @param {(r: any) => Promise<any>} [options.respond]
+ * @param {(r: any) => Promise<any>} [options.respondStream]
  * @param {() => Promise<string>} [options.read]
- * @param {boolean} [options.oauth] - Provision the refresh and rotate halves.
+ * @param {boolean} [options.oauth] - Provision the refreshing credential.
  * @param {any} [options.state] - Initial OAuth state when `oauth` is set.
+ * @param {string} [options.rawStored] - Raw base64 to seed the record with.
  * @param {(request: any) => Promise<any>} [options.exchange] - Token endpoint.
+ * @param {any} [options.record] - An existing record to share.
+ * @param {() => number} [options.clock] - A clock shared between leases.
  */
 const setup = ({
   limits = {},
   respond = async () => ({ status: 200, body: 'ok' }),
+  respondStream,
   read,
   oauth = false,
   state,
+  rawStored,
   exchange,
+  record: shared,
+  clock,
 } = {}) => {
   const calls = [];
   const audit = [];
-  const exchanges = [];
-  const rotations = [];
   let time = 0;
-  // The rotate capability writes here and the read facet reads it back, so a
-  // test observes exactly what a later request would see.
-  let stored = oauth
-    ? globalThis.btoa(JSON.stringify(state ?? oauthState()))
-    : globalThis.btoa(credential);
+  const now = clock ?? (() => time);
+  const record = oauth
+    ? (shared ?? makeRecord({ state, rawStored, exchange, now }))
+    : undefined;
+  const transport = Far('transport', {
+    async request(r) {
+      calls.push(r);
+      return respond(r);
+    },
+    async requestStream(r) {
+      calls.push(r);
+      return respondStream ? respondStream(r) : respond(r);
+    },
+  });
   const powers = {
-    secret: Far('secret', {
-      readBase64: read ?? (async () => stored),
-    }),
-    transport: Far('transport', {
-      async request(r) {
-        calls.push(r);
-        return respond(r);
-      },
-    }),
-    now: () => time,
+    secret: record
+      ? record.secret
+      : Far('secret', {
+          readBase64: read ?? (async () => globalThis.btoa(credential)),
+        }),
+    transport,
+    now,
     audit: event => {
       audit.push(event);
     },
   };
-  if (oauth) {
-    Object.assign(powers, {
-      refresh: Far('refresh', {
-        async refresh(exchangeRequest) {
-          exchanges.push(exchangeRequest);
-          if (exchange) return exchange(exchangeRequest);
-          return oauthState({
-            accessToken: `${accessToken}-${exchanges.length}`,
-            refreshToken: `${refreshToken}-${exchanges.length}`,
-          });
-        },
-      }),
-      rotate: Far('rotate', {
-        async replaceBase64(base64) {
-          rotations.push(base64);
-          stored = base64;
-        },
-      }),
-    });
-  }
+  if (record) Object.assign(powers, { credential: record.credential });
   const lease = makeProviderBrokerLease({ ...policy, ...limits }, powers);
   return {
     ...lease,
     calls,
     audit,
-    exchanges,
-    rotations,
-    stored: () => JSON.parse(globalThis.atob(stored)),
+    record,
+    exchanges: record ? record.exchanges : [],
+    rotations: record ? record.rotations : [],
+    stored: () => /** @type {any} */ (record).stored(),
     advance: ms => {
       time += ms;
     },
@@ -791,7 +870,7 @@ test('a malformed oauth state is refused rather than sent upstream', async t => 
   const bare = setup({
     limits: oauthLimits,
     oauth: true,
-    read: async () => globalThis.btoa(credential),
+    rawStored: globalThis.btoa(credential),
   });
   await t.throwsAsync(() => E(bare.endpoint).request(request), {
     message: /Provider request failed/,
@@ -840,4 +919,246 @@ test('operator supplies Anthropic beta capabilities without caller headers', asy
       message: /Invalid Anthropic beta capabilities/,
     });
   }
+});
+
+test('two leases over one record never redeem the same refresh token', async t => {
+  // The refresh token belongs to the record, not to a session. A guard that
+  // lived on the lease would let each of these exchange it, and the fake token
+  // endpoint refuses a replayed token the way a rotating provider does.
+  const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
+  const first = setup({ limits: oauthLimits, oauth: true, record });
+  const second = setup({ limits: oauthLimits, oauth: true, record });
+  const [a, b] = await Promise.all([
+    E(first.endpoint).request(request),
+    E(second.endpoint).request(request),
+  ]);
+  t.deepEqual(
+    [a, b],
+    [
+      { status: 200, body: 'ok' },
+      { status: 200, body: 'ok' },
+    ],
+  );
+  t.is(record.exchanges.length, 1);
+  t.is(record.rotations.length, 1);
+  t.deepEqual(
+    record.exchanges.map(entry => entry.refreshToken),
+    [refreshToken],
+  );
+  // Both sessions ran on the one credential the exchange produced.
+  t.deepEqual(
+    [...first.calls, ...second.calls].map(call => call.headers.authorization),
+    [`Bearer ${accessToken}-1`, `Bearer ${accessToken}-1`],
+  );
+});
+
+test('a read that lost the race is not exchanged over', async t => {
+  // A request whose secret read observed the pre-rotation record must not
+  // redeem the token that read carried: another lease has already spent it.
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = resolve;
+  });
+  const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
+  // A second view of the same record whose read resolves late, so one lease
+  // observes the pre-rotation state after the other has already rotated it.
+  let reads = 0;
+  const slow = {
+    ...record,
+    secret: Far('secret', {
+      async readBase64() {
+        reads += 1;
+        if (reads === 2) await held;
+        return globalThis.btoa(JSON.stringify(record.stored()));
+      },
+    }),
+  };
+  const first = setup({ limits: oauthLimits, oauth: true, record });
+  const second = setup({ limits: oauthLimits, oauth: true, record: slow });
+  const a = E(first.endpoint).request(request);
+  const b = E(second.endpoint).request(request);
+  await a;
+  release(undefined);
+  await b;
+  t.deepEqual(
+    record.exchanges.map(entry => entry.refreshToken),
+    [refreshToken],
+  );
+  t.is(record.rotations.length, 1);
+});
+
+test('a refresh that omits the refresh token keeps the stored one', async t => {
+  // RFC 6749 section 6 makes it optional: omitting it means "keep the one you
+  // have". Persisting the response verbatim would strand the record.
+  const lease = setup({
+    limits: oauthLimits,
+    oauth: true,
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () =>
+      harden({
+        version: 'BrokerOAuthStateV1',
+        accessToken: 'rotated-access',
+        expiresAt: 1_000_000,
+        accountId: 'account-1',
+      }),
+  });
+  await E(lease.endpoint).request(request);
+  t.is(lease.stored().accessToken, 'rotated-access');
+  t.is(lease.stored().refreshToken, refreshToken);
+});
+
+test('a refresh that does not advance expiry is refused', async t => {
+  // Otherwise every subsequent request refreshes again, silently, forever.
+  const lease = setup({
+    limits: { ...oauthLimits, maxRequests: 4n, maxCostMicrounits: 100n },
+    oauth: true,
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => oauthState({ expiresAt: 10_000 }),
+  });
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(lease.calls.length, 0);
+  t.is(lease.rotations.length, 0);
+  // The bad state was refused rather than persisted, so a later good exchange
+  // still starts from the stored refresh token.
+  t.is(lease.stored().refreshToken, refreshToken);
+});
+
+test('a forbidden request is not treated as a rejected credential', async t => {
+  // A 403 is the upstream refusing this request, not the token. Refreshing on
+  // it would let a slice that can reproduce one turn every admitted request
+  // into a second dispatch, an exchange and a secret write.
+  const lease = setup({
+    limits: oauthLimits,
+    oauth: true,
+    respond: async () => {
+      throw Error('Provider transport failed');
+    },
+  });
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(lease.calls.length, 1);
+  t.is(lease.exchanges.length, 0);
+  t.is(lease.rotations.length, 0);
+});
+
+test('a retry does not unscreen the token the first attempt already sent', async t => {
+  // The first attempt handed its token to the upstream, so a response screened
+  // only against the second one could deliver the first back to the slice.
+  let attempts = 0;
+  const lease = setup({
+    limits: oauthLimits,
+    oauth: true,
+    respond: async () => {
+      attempts += 1;
+      if (attempts === 1) throw Error('Provider credential rejected');
+      return { status: 200, body: `echo:${accessToken}` };
+    },
+  });
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(lease.calls.length, 2);
+});
+
+test('a streaming oauth turn refreshes, retries and screens both tokens', async t => {
+  let attempts = 0;
+  const chunks = ['hel', 'lo'];
+  const lease = setup({
+    limits: oauthLimits,
+    oauth: true,
+    respondStream: async () => {
+      attempts += 1;
+      if (attempts === 1) throw Error('Provider credential rejected');
+      return harden({
+        status: 200,
+        reader: Far('reader', {
+          async next() {
+            const value = chunks.shift();
+            return harden({ done: value === undefined, value: value ?? '' });
+          },
+          return() {},
+        }),
+      });
+    },
+  });
+  const response = await E(lease.endpoint).requestStream(request);
+  t.is(response.status, 200);
+  let text = '';
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const chunk = await E(response.reader).next();
+    text += chunk.value;
+    if (chunk.done) break;
+  }
+  t.is(text, 'hello');
+  t.deepEqual(
+    lease.calls.map(call => call.headers.authorization),
+    [`Bearer ${accessToken}`, `Bearer ${accessToken}-1`],
+  );
+  t.deepEqual(
+    lease.audit.map(entry => entry.event),
+    ['admitted', 'credential-rejected', 'refreshed', 'completed'],
+  );
+
+  // And the streaming screen covers the token the first attempt sent.
+  const leaked = setup({
+    limits: oauthLimits,
+    oauth: true,
+    respondStream: async () =>
+      harden({
+        status: 200,
+        reader: Far('reader', {
+          async next() {
+            return harden({ done: false, value: `x${accessToken}x` });
+          },
+          return() {},
+        }),
+      }),
+  });
+  const stream = await E(leaked.endpoint).requestStream(request);
+  await t.throwsAsync(() => E(stream.reader).next(), {
+    message: /Provider request failed/,
+  });
+});
+
+test('a shared credential refuses a state whose account is not the bound one', t => {
+  const record = makeRecord();
+  t.throws(
+    () =>
+      makeBrokerOAuthCredential({
+        secret: record.secret,
+        refresh: record.refresh,
+        rotate: record.rotate,
+        accountRef: '',
+        now: () => 0,
+      }),
+    { message: /Invalid broker account binding/ },
+  );
+  for (const missing of ['secret', 'refresh', 'rotate']) {
+    t.throws(
+      () =>
+        makeBrokerOAuthCredential({
+          secret: record.secret,
+          refresh: record.refresh,
+          rotate: record.rotate,
+          accountRef: 'account-1',
+          now: () => 0,
+          [missing]: undefined,
+        }),
+      { message: /Unprovisioned broker OAuth credential/ },
+    );
+  }
+  // A lease may not be handed a credential bound to another account.
+  t.throws(
+    () =>
+      setup({
+        limits: { ...oauthLimits, accountRef: 'account-2' },
+        oauth: true,
+        record,
+      }),
+    { message: /Unprovisioned broker OAuth mode/ },
+  );
 });

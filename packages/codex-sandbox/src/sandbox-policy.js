@@ -320,7 +320,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           toolCodexHomeAccess: 'read-only',
           toolBrokerAccess: 'denied',
           environment: 'credential-and-proxy-free',
-          codexHomeCredentials: 'absent',
+          codexHomeAuthFile: 'absent',
         },
         'runtime evidence',
       );

@@ -6,8 +6,12 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { randomUUID } from 'node:crypto';
 
-import { makeProviderBrokerLease } from './provider-broker.js';
+import {
+  makeBrokerOAuthCredential,
+  makeProviderBrokerLease,
+} from './provider-broker.js';
 import { makeProviderFetchTransport } from './provider-transport.js';
+import { makeSecretRotator } from './secret-rotator.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
 
@@ -65,6 +69,25 @@ export const makeProviderBrokerLeaseIssuer = ({
     policy.accountRef === accountRef ||
     Fail`Invalid provider lease issuer policy`;
   const authMode = policy.authMode ?? 'api-key';
+  // One credential per secret record, shared by every lease this issuer makes,
+  // because the refresh token is the record's and not a session's: a per-lease
+  // refresh guard would let two concurrent sessions redeem the same one.
+  // `rotate` is attenuated here rather than trusted to arrive attenuated, so a
+  // full `SecretAdmin` handed to the issuer still cannot reach the broker with
+  // its `revoke`, `delete` and `setDescription` intact.
+  const credential =
+    authMode === 'oauth'
+      ? makeBrokerOAuthCredential({
+          secret,
+          refresh,
+          rotate: rotate && makeSecretRotator(rotate),
+          accountRef,
+          now,
+          ...(policy.refreshSkewMs === undefined
+            ? {}
+            : { refreshSkewMs: policy.refreshSkewMs }),
+        })
+      : undefined;
   // BrokerLeaseV1 carries the bounded request count as a number; its profile
   // explicitly caps it at 32 bits. Byte and cost counters retain bigint.
   const configuredPolicy = harden({
@@ -113,8 +136,7 @@ export const makeProviderBrokerLeaseIssuer = ({
         transport: transport.transport,
         now,
         audit,
-        refresh,
-        rotate,
+        credential,
       },
     );
     let worker;

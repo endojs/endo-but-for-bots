@@ -121,7 +121,7 @@ const fixture = (changes = {}) => {
           toolCodexHomeAccess: 'read-only',
           toolBrokerAccess: 'denied',
           environment: 'credential-and-proxy-free',
-          codexHomeCredentials: 'absent',
+          codexHomeAuthFile: 'absent',
           ...changes.runtime,
         });
       },
@@ -195,6 +195,14 @@ for (const [name, changes] of [
   ['missing runtime proof', { runtime: { toolBrokerAccess: undefined } }],
   ['mismatched runtime identity', { runtime: { sessionId: 'other' } }],
   ['unattested environment', { runtime: { environment: undefined } }],
+  [
+    'unattested codex home auth file',
+    { runtime: { codexHomeAuthFile: undefined } },
+  ],
+  [
+    'codex home auth file claimed but not absent',
+    { runtime: { codexHomeAuthFile: 'unknown' } },
+  ],
   ['unknown runtime assertion', { runtime: { extra: true } }],
   ['wrong broker namespace', { outer: { networkNamespaceId: 'other' } }],
   ['missing outer control', { outer: { seccomp: undefined } }],

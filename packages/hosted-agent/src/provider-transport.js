@@ -190,8 +190,14 @@ export const makeProviderFetchTransport = ({
           // the credential itself was refused. The status class carries it; the
           // challenge header, the error body, and the upstream's wording stay
           // on this side of the seam.
-          if (response.status === 401 || response.status === 403)
-            credentialRejected = true;
+          //
+          // 401 only. A 403 is the upstream refusing *this request* — an
+          // unentitled model, a region, a content policy — and refreshing
+          // cannot fix it. Treating it as a credential failure would let a
+          // slice that can reproduce one turn every admitted request into a
+          // second dispatch, a token exchange and a secret write, none of which
+          // the request and cost quotas meter.
+          if (response.status === 401) credentialRejected = true;
           (Number.isInteger(response.status) &&
             response.status >= 200 &&
             response.status < 300 &&

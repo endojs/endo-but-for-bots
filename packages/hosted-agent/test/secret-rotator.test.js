@@ -70,8 +70,22 @@ test('the rotator refuses a non-string replacement rather than forwarding it', a
   t.deepEqual(calls, []);
 });
 
-test('an absent administration facet is refused at construction', t => {
-  t.throws(() => makeSecretRotator(/** @type {any} */ (undefined)), {
-    message: /Secret rotator requires an administration facet/,
-  });
+test('something that could not be a facet is refused at construction', t => {
+  for (const bad of [undefined, null, 42, 'admin', true]) {
+    t.throws(() => makeSecretRotator(/** @type {any} */ (bad)), {
+      message: /Secret rotator requires an administration facet/,
+    });
+  }
+  // A CapTP presence has no methods to inspect, and the secret manager is
+  // exactly the sort of facet that arrives that way, so anything object-shaped
+  // is admitted and answers for itself.
+  t.notThrows(() =>
+    makeSecretRotator(
+      Far('SecretAdmin', {
+        async replaceBase64() {
+          return 'replaced';
+        },
+      }),
+    ),
+  );
 });

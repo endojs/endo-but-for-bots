@@ -130,11 +130,13 @@ test('invalid UTF8 and HTTP errors never expose raw payload or headers', async t
     { message: 'Provider credential rejected' },
   );
   t.true(isCredentialRejection(rejection));
+  // A 403 is the upstream refusing this request, not the credential, and a
+  // refresh cannot fix it; it stays an ordinary failure.
   const forbidden = setup(
     async () => new Response('canary-secret', { status: 403 }),
   );
   await t.throwsAsync(() => E(forbidden.transport).request(request), {
-    message: 'Provider credential rejected',
+    message: 'Provider transport failed',
   });
   const refused = setup(
     async () => new Response('canary-secret', { status: 500 }),
