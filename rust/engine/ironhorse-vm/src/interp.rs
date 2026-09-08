@@ -3338,6 +3338,8 @@ struct JsonPropertyName {
 /// PropertyList exist only for the duration of the native call.
 #[derive(Clone, Debug, Default)]
 struct JsonStringifyState {
+    /// Units emitted into the final result, prepaid once across recursive copies.
+    output_units: u64,
     replacer: Option<Slot>,
     property_list: Option<Vec<JsonPropertyName>>,
     gap: Vec<u16>,
@@ -13841,6 +13843,23 @@ impl Interp {
             .map_err(|_| Step::Host(Halt::HeapExhausted))?;
         output.extend_from_slice(addition);
         Ok(())
+    }
+
+    /// Bound an unmetered temporary by the heap profile before reserving it.
+    /// Its caller prepays the operation's existing work charge first.
+    fn reserve_scratch<T>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
+        self.admit_scratch::<T>(capacity)?;
+        Self::reserved_vec(capacity)
+    }
+
+    fn admit_scratch<T>(&mut self, capacity: usize) -> Result<(), Step> {
+        let bytes = capacity
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        if !self.chunks.can_allocate(bytes) {
+            return Err(Step::Host(Halt::HeapExhausted));
+        }
+        self.charge_and_check(0)
     }
 
     /// Materialize a capacity already admitted by `reserve_units` or a chunk
@@ -37422,7 +37441,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FLAT_FRAME_METERING);
                 let mut out: Vec<Slot> = Vec::new();
-                self.flat_into(inst, length, depth, &mut out);
+                self.flat_into(inst, length, depth, &mut out)?;
                 let result = self.new_array_unmetered();
                 let total = out.len() as u32;
                 {
@@ -39993,6 +40012,127 @@ impl Interp {
         Ok(result)
     }
 
+    /// `fxStringifyJSONString` (`xsJSON.c`): the JSON-escaped, double-quoted form
+    /// of a string, over its UTF-16 code `units`. Control characters below 0x20
+    /// map to the short escapes (`\b\t\n\f\r`) or `\uXXXX`; `"` and `\` are
+    /// backslash-escaped; an unpaired surrogate code unit becomes `\uXXXX`, while
+    /// a valid high/low pair is copied as the corresponding astral character;
+    /// every other code unit is copied verbatim. Output remains UTF-16 so the
+    /// optional indentation string can retain a code-unit truncation (and even a
+    /// resulting lone surrogate) without a lossy Rust `String` round trip.
+    fn json_escape_string(
+        &mut self,
+        units: &[u16],
+        state: &mut JsonStringifyState,
+    ) -> Result<Vec<u16>, Step> {
+        let mut size = 2usize;
+        let mut i = 0;
+        while i < units.len() {
+            let u = units[i];
+            let added = match u {
+                8 | 9 | 10 | 12 | 13 | 0x22 | 0x5c => 2,
+                0xd800..=0xdbff
+                    if units
+                        .get(i + 1)
+                        .is_some_and(|low| (0xdc00..=0xdfff).contains(low)) =>
+                {
+                    i += 1;
+                    2
+                }
+                0..=0x1f | 0xd800..=0xdfff => 6,
+                _ => 1,
+            };
+            size = size
+                .checked_add(added)
+                .ok_or(Step::Host(Halt::HeapExhausted))?;
+            i += 1;
+        }
+        self.json_reserve_output(state, size)?;
+        let mut out = Self::reserved_vec(size)?;
+        out.push(b'"' as u16);
+        let mut index = 0;
+        while index < units.len() {
+            let u = units[index];
+            match u {
+                8 => out.extend("\\b".encode_utf16()),
+                9 => out.extend("\\t".encode_utf16()),
+                10 => out.extend("\\n".encode_utf16()),
+                12 => out.extend("\\f".encode_utf16()),
+                13 => out.extend("\\r".encode_utf16()),
+                0x22 => out.extend("\\\"".encode_utf16()),
+                0x5C => out.extend("\\\\".encode_utf16()),
+                high if (0xD800..=0xDBFF).contains(&high)
+                    && units
+                        .get(index + 1)
+                        .is_some_and(|low| (0xDC00..=0xDFFF).contains(low)) =>
+                {
+                    out.push(high);
+                    out.push(units[index + 1]);
+                    index += 1;
+                }
+                c if c < 0x20 || (0xD800..=0xDFFF).contains(&c) => {
+                    out.extend(format!("\\u{:04x}", c).encode_utf16());
+                }
+                c => out.push(c),
+            }
+            index += 1;
+        }
+        out.push(b'"' as u16);
+        Ok(out)
+    }
+
+    fn json_reserve_output(
+        &mut self,
+        state: &mut JsonStringifyState,
+        additional: usize,
+    ) -> Result<(), Step> {
+        let total = state
+            .output_units
+            .checked_add(additional as u64)
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.reserve_units_growth(state.output_units, total)?;
+        state.output_units = total;
+        Ok(())
+    }
+
+    fn json_output_text(
+        &mut self,
+        state: &mut JsonStringifyState,
+        text: &str,
+    ) -> Result<Vec<u16>, Step> {
+        let size = text.encode_utf16().count();
+        self.json_reserve_output(state, size)?;
+        let mut out = Self::reserved_vec(size)?;
+        out.extend(text.encode_utf16());
+        Ok(out)
+    }
+
+    /// Reserve punctuation and indentation once, then size the assembly
+    /// buffer including children whose output has already been prepaid.
+    fn json_container_buffer(
+        &mut self,
+        state: &mut JsonStringifyState,
+        partial: &[Vec<u16>],
+        indent: &[u16],
+        stepback: &[u16],
+    ) -> Result<Vec<u16>, Step> {
+        let count = partial.len() as u64;
+        let extra = if count == 0 {
+            2
+        } else if state.gap.is_empty() {
+            count + 1
+        } else {
+            2 + 2 * count + count * indent.len() as u64 + stepback.len() as u64
+        };
+        let extra = usize::try_from(extra).map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        self.json_reserve_output(state, extra)?;
+        let length = partial
+            .iter()
+            .try_fold(extra, |length, part| length.checked_add(part.len()))
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.reserve_scratch(length)
+    }
+
     /// Dispatch `JSON.stringify` / `JSON.parse`. The stringifier's working
     /// buffer is unmetered (C-malloc'd in XS); only the final result chunk
     /// meters. `parse` allocates the parsed strings' chunks.
@@ -40057,9 +40197,12 @@ impl Interp {
                 if arg0.kind == Kind::Reference && out.is_some() {
                     cost += JSON_STRINGIFY_TOP_REFERENCE_METERING;
                 }
-                self.meter.tick_raw(cost);
+                self.charge_and_check(cost)?;
                 match out {
-                    Some(units) => Ok(self.new_string_units(&units)),
+                    Some(units) => {
+                        debug_assert_eq!(state.output_units, units.len() as u64);
+                        Ok(self.new_reserved_string_units(&units))
+                    }
                     // A value that serializes to nothing (undefined / symbol)
                     // yields `undefined`, with no chunk (setup metered only).
                     None => Ok(Slot::undefined()),
@@ -40321,42 +40464,43 @@ impl Interp {
 
         match value.kind {
             Kind::Null => {
-                *cost += JSON_STRINGIFY_SCALAR_METERING;
-                Ok(Some("null".encode_utf16().collect()))
+                self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
+                Ok(Some(self.json_output_text(state, "null")?))
             }
             Kind::Undefined | Kind::Symbol => Ok(None),
             Kind::Boolean => {
-                *cost += JSON_STRINGIFY_SCALAR_METERING;
+                self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
                 let text = if matches!(value.value, Payload::Boolean(true)) {
                     "true"
                 } else {
                     "false"
                 };
-                Ok(Some(text.encode_utf16().collect()))
+                Ok(Some(self.json_output_text(state, &text)?))
             }
             Kind::Integer => match value.value {
                 Payload::Integer(integer) => {
-                    *cost += JSON_STRINGIFY_SCALAR_METERING;
-                    Ok(Some(integer.to_string().encode_utf16().collect()))
+                    self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
+                    Ok(Some(self.json_output_text(state, &integer.to_string())?))
                 }
                 _ => Ok(None),
             },
             Kind::Number => match value.value {
                 Payload::Number(number) => {
-                    *cost += JSON_STRINGIFY_SCALAR_METERING;
+                    self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
                     let text = if number.is_finite() {
                         number_to_ecma_string(number)
                     } else {
                         "null".to_string()
                     };
-                    Ok(Some(text.encode_utf16().collect()))
+                    Ok(Some(self.json_output_text(state, &text)?))
                 }
                 _ => Ok(None),
             },
             Kind::String => match value.value {
                 Payload::String(offset) => {
-                    *cost += JSON_STRINGIFY_SCALAR_METERING;
-                    Ok(Some(json_escape_string(&self.str_units(offset))))
+                    self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
+                    let units = self.str_units(offset);
+                    Ok(Some(self.json_escape_string(&units, state)?))
                 }
                 _ => Ok(None),
             },
@@ -40405,9 +40549,10 @@ impl Interp {
         }
         let stepback = state.indent.clone();
         state.indent.extend_from_slice(&state.gap);
-        let mut partial = Vec::with_capacity(length as usize);
+        *cost += length * JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
+        self.charge_and_check(std::mem::take(cost))?;
+        let mut partial = self.reserve_scratch(length as usize)?;
         for index in 0..length {
-            *cost += JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
             let text = index.to_string();
             // XS walks the array here by index and never mints a key. Taking
             // the id unmetered kept the computron count right but still grew
@@ -40427,15 +40572,17 @@ impl Interp {
                 key,
                 units: text.encode_utf16().collect(),
             };
-            partial.push(
-                self.json_stringify_property(code, inst, &name, state, cost)?
-                    .unwrap_or_else(|| "null".encode_utf16().collect()),
-            );
+            let element = match self.json_stringify_property(code, inst, &name, state, cost)? {
+                Some(element) => element,
+                None => self.json_output_text(state, "null")?,
+            };
+            partial.push(element);
         }
         let indent = state.indent.clone();
         state.indent = stepback.clone();
         state.stack.pop();
-        let mut out = vec![b'[' as u16];
+        let mut out = self.json_container_buffer(state, &partial, &indent, &stepback)?;
+        out.push(b'[' as u16);
         if !partial.is_empty() {
             if state.gap.is_empty() {
                 for (index, element) in partial.iter().enumerate() {
@@ -40516,13 +40663,23 @@ impl Interp {
         }
         let stepback = state.indent.clone();
         state.indent.extend_from_slice(&state.gap);
-        let mut partial = Vec::new();
+        self.charge_and_check(std::mem::take(cost))?;
+        let mut partial = self.reserve_scratch(names.len())?;
         for name in &names {
-            *cost += JSON_STRINGIFY_OBJECT_KEY_BODY_METERING
-                + (string_chunk_cost(name.units.len() as u64)
-                    - CHUNK_HEADER_BYTES * CHUNK_ALLOCATION_METERING);
+            self.charge_and_check(
+                JSON_STRINGIFY_OBJECT_KEY_BODY_METERING
+                    + (string_chunk_cost(name.units.len() as u64)
+                        - CHUNK_HEADER_BYTES * CHUNK_ALLOCATION_METERING),
+            )?;
             if let Some(value) = self.json_stringify_property(code, inst, name, state, cost)? {
-                let mut member = json_escape_string(&name.units);
+                let mut member = self.json_escape_string(&name.units, state)?;
+                let punctuation = if state.gap.is_empty() { 1 } else { 2 };
+                self.json_reserve_output(state, punctuation)?;
+                let additional = punctuation + value.len();
+                self.admit_scratch::<u16>(member.len() + additional)?;
+                member
+                    .try_reserve(additional)
+                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
                 member.push(b':' as u16);
                 if !state.gap.is_empty() {
                     member.push(b' ' as u16);
@@ -40534,7 +40691,8 @@ impl Interp {
         let indent = state.indent.clone();
         state.indent = stepback.clone();
         state.stack.pop();
-        let mut out = vec![b'{' as u16];
+        let mut out = self.json_container_buffer(state, &partial, &indent, &stepback)?;
+        out.push(b'{' as u16);
         if !partial.is_empty() {
             if state.gap.is_empty() {
                 for (index, member) in partial.iter().enumerate() {
@@ -45619,7 +45777,10 @@ impl Interp {
                 // flat helper uses txIndex without a safe-integer guard.
                 return Err(self.catchable_type_error());
             }
-            self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
+            self.charge_and_check(ARRAY_FLAT_PER_LEAF_METERING)?;
+            let count =
+                usize::try_from(target_index + 1).map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            self.admit_scratch::<Slot>(count)?;
             self.array_generic_create_data_property(code, target, target_index, element)?;
             target_index += 1;
             source_index += 1;
@@ -49821,7 +49982,7 @@ impl Interp {
         len: u32,
         depth: u32,
         out: &mut Vec<Slot>,
-    ) {
+    ) -> Result<(), Step> {
         for index in 0..len {
             let item = match self
                 .arrays
@@ -49840,16 +50001,20 @@ impl Interp {
                 };
                 self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
                 let sub_len = self.arrays[&sub].length;
-                self.flat_into(sub, sub_len, depth - 1, out);
+                self.flat_into(sub, sub_len, depth - 1, out)?;
             } else {
                 // Append the leaf: the per-leaf cost plus the `mxDefineIndex`
                 // chunk growth to `out.len() + 1` slots.
                 self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
                 self.meter
                     .tick_raw(self.array_item_grow_metering(out.len() as u64));
+                self.admit_scratch::<Slot>(out.len() + 1)?;
+                out.try_reserve(1)
+                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
                 out.push(item);
             }
         }
+        Ok(())
     }
 
     /// Allocate an empty array instance **without** charging the standalone
@@ -61642,47 +61807,6 @@ fn cesu8_to_units(bytes: &[u8]) -> Vec<u16> {
         }
     }
     units
-}
-
-/// `fxStringifyJSONString` (`xsJSON.c`): the JSON-escaped, double-quoted form
-/// of a string, over its UTF-16 code `units`. Control characters below 0x20
-/// map to the short escapes (`\b\t\n\f\r`) or `\uXXXX`; `"` and `\` are
-/// backslash-escaped; an unpaired surrogate code unit becomes `\uXXXX`, while
-/// a valid high/low pair is copied as the corresponding astral character;
-/// every other code unit is copied verbatim. Output remains UTF-16 so the
-/// optional indentation string can retain a code-unit truncation (and even a
-/// resulting lone surrogate) without a lossy Rust `String` round trip.
-fn json_escape_string(units: &[u16]) -> Vec<u16> {
-    let mut out = vec![b'"' as u16];
-    let mut index = 0;
-    while index < units.len() {
-        let u = units[index];
-        match u {
-            8 => out.extend("\\b".encode_utf16()),
-            9 => out.extend("\\t".encode_utf16()),
-            10 => out.extend("\\n".encode_utf16()),
-            12 => out.extend("\\f".encode_utf16()),
-            13 => out.extend("\\r".encode_utf16()),
-            0x22 => out.extend("\\\"".encode_utf16()),
-            0x5C => out.extend("\\\\".encode_utf16()),
-            high if (0xD800..=0xDBFF).contains(&high)
-                && units
-                    .get(index + 1)
-                    .is_some_and(|low| (0xDC00..=0xDFFF).contains(low)) =>
-            {
-                out.push(high);
-                out.push(units[index + 1]);
-                index += 1;
-            }
-            c if c < 0x20 || (0xD800..=0xDFFF).contains(&c) => {
-                out.extend(format!("\\u{:04x}", c).encode_utf16());
-            }
-            c => out.push(c),
-        }
-        index += 1;
-    }
-    out.push(b'"' as u16);
-    out
 }
 
 /// Whether a Unicode scalar/code unit belongs to ECMAScript's exact

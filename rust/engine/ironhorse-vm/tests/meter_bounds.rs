@@ -165,3 +165,28 @@ fn allocation_admission_preserves_completed_meter_totals() {
         assert_eq!(unarmed.meter_raw, metered.meter_raw, "{source}");
     }
 }
+
+#[test]
+fn caught_late_json_failure_retains_admitted_work() {
+    for (source, expected_raw) in [
+        (
+            "try { JSON.stringify([1,1n]); } catch (_) { 'caught'; }",
+            4_574_688,
+        ),
+        (
+            "try { JSON.stringify({a:1,get b(){throw 'late'}}); } catch (_) { 'caught'; }",
+            4_577_976,
+        ),
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        let out = vm.run(&code);
+        assert!(out.completed, "{:?}", out.halt);
+        assert_eq!(out.result, "caught");
+        assert_eq!(
+            out.meter_raw, expected_raw,
+            "version-2 admission accounting"
+        );
+    }
+}
