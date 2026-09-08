@@ -152,3 +152,31 @@ fn element_scratch_is_bounded_by_bytes_instead_of_source_element_count() {
         assert!(!vm.is_quiescent());
     }
 }
+
+#[test]
+fn replacement_expansion_checks_each_append() {
+    for source in [
+        r#"'x'.repeat(5000).replace('x', "$'".repeat(1000))"#,
+        r#"'x'.repeat(5000).replace(/x/, "$'".repeat(1000))"#,
+        r#"var r=/x/;r.exec=function(){return {0:'x',length:1,index:0}}; 'x'.repeat(5000).replace(r,"$'".repeat(1000))"#,
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        vm.chunks.set_ceiling(vm.chunks.byte_size() + 100_000);
+        assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
+    }
+}
+
+#[test]
+fn empty_search_replace_all_streams_positions_under_low_headroom() {
+    let (code, names) = compile("'x'.repeat(10000).replaceAll('', '')");
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&names);
+    // Enough for UTF-16 source/result and construction scratch, less than an
+    // extra usize per input code unit. Empty replacement needs no index list.
+    vm.chunks.set_ceiling(vm.chunks.byte_size() + 70_000);
+    let out = vm.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result.len(), 10_000);
+}

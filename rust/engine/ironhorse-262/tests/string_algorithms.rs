@@ -643,8 +643,12 @@ fn deleting_regexp_split_selects_the_plain_string_fallback() {
 }
 
 #[test]
-fn regexp_split_protocol_metering_preserves_pinned_xs_totals() {
-    for source in [
+fn regexp_split_protocol_has_frozen_version_two_totals() {
+    let expected = [
+        5_772_960, 4_360_096, 5_813_920, 3_327_880, 6_437_776, 4_656_928, 6_478_736, 4_838_280,
+        5_082_408,
+    ];
+    for (source, raw) in [
         "'a,b,c'.split(/,/)",
         "'abc'.split(/,/)",
         "'a1b2c'.split(/[0-9]/)",
@@ -654,8 +658,12 @@ fn regexp_split_protocol_metering_preserves_pinned_xs_totals() {
         "'a1b2c'.split(/([0-9])/)",
         "'ab'.split(/(?:)/)",
         "RegExp.prototype[Symbol.split].call(/,/, 'a,b')",
-    ] {
+    ]
+    .into_iter()
+    .zip(expected)
+    {
         let run = dual_run(source).expect("the XS oracle machine must start");
+        assert_eq!(run.ironhorse_meter_raw, raw, "{source}");
         assert!(
             run.observables_agree(),
             "`{source}` is not bit exact: oracle={:?}/{}/{} ironhorse={:?}/{}/{}",

@@ -201,3 +201,17 @@ fn version_two_scratch_collection_costs_are_frozen() {
     assert_eq!(out.result, "1,2,3");
     assert_eq!(out.meter_raw, 3_395_480);
 }
+
+#[test]
+fn guest_regexp_source_rendering_has_an_admission_checkpoint() {
+    let (code, names) = compile("var r = new RegExp('x'.repeat(10000)); r.source");
+    let mut plain = Interp::new();
+    plain.link_intrinsics(&names);
+    let expected = plain.run(&code);
+    assert!(expected.completed);
+    let limit = expected.computrons - 1_000;
+    let mut metered = Interp::new();
+    metered.link_intrinsics(&names);
+    metered.arm_meter(1, Box::new(move |n| n <= limit));
+    assert_eq!(metered.run(&code).halt, Halt::MeterAbort);
+}

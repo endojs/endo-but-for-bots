@@ -402,3 +402,20 @@ fn successful_crank_reports_compilation_plus_execution_cost() {
         (runtime.meter_index() + compiled.parse_meter_raw) >> 16
     );
 }
+
+#[test]
+fn guest_allocations_are_refused_inside_the_builtin() {
+    let machine = Machine::with_bounds(MeterBounds::per_crank(1_000));
+    for source in [
+        "try { 'x'.repeat(1000000); } catch (_) { 'caught'; }",
+        "try { new ArrayBuffer(100000000); } catch (_) { 'caught'; }",
+        "try { Array.prototype.sort.call({length:1000000}); } catch (_) { 'caught'; }",
+        r"try { new RegExp('[\\u{0}-\\u{10ffff}]','iu'); } catch (_) { 'caught'; }",
+    ] {
+        assert!(
+            matches!(machine.eval(source), Err(MachineError::MeterAbort { .. })),
+            "{source}"
+        );
+    }
+    assert_eq!(machine.eval("1+2").unwrap(), "3");
+}
