@@ -163,6 +163,9 @@ test('bridges a Mount-shaped cap over 9P at a host-picked layout', async t => {
   ]);
   t.is(bridge.mountCap, h.names.get('claude-attach-abc123'));
   t.truthy(bridge.handle);
+  // The host mountpoint is reported for a runtime that binds by declared
+  // path: it is host layout the bridge chose, never anything a guest wrote.
+  t.is(bridge.mountPoint, '/attach-mounts/claude-attach-abc123');
 
   // Idempotent per key: a replay reuses the live bridge.
   const again = await E(h.provider).provideContainerMountBridge(
@@ -170,6 +173,7 @@ test('bridges a Mount-shaped cap over 9P at a host-picked layout', async t => {
   );
   t.is(h.mountCalls.length, 1);
   t.is(again.mountCap, bridge.mountCap);
+  t.is(again.mountPoint, bridge.mountPoint);
 
   await E(h.provider).releaseContainerMountBridge('abc123');
   t.deepEqual(h.unmounts, ['/attach-mounts/claude-attach-abc123']);

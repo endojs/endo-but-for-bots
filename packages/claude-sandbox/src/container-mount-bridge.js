@@ -127,7 +127,7 @@ export const makeContainerMountBridge = (
   // per-session workspace mount replay). The cap identity and mode are
   // remembered so a cached bridge is never served for a request it does not
   // match (a stale entry left by a swallowed release, say).
-  /** @type {Map<string, { mountCap: any, handle: any, capId: string, mode: string }>} */
+  /** @type {Map<string, { mountCap: any, handle: any, mountPoint: string, capId: string, mode: string }>} */
   const bridges = new Map();
 
   // Serialize bridge operations per key: without this, two concurrent
@@ -218,6 +218,7 @@ export const makeContainerMountBridge = (
           return harden({
             mountCap: existing.mountCap,
             handle: existing.handle,
+            mountPoint: existing.mountPoint,
           });
         }
         // A cached bridge that does not match the request (a swallowed
@@ -260,8 +261,12 @@ export const makeContainerMountBridge = (
           mountNameFor(key),
           harden({ readOnly }),
         );
-        bridges.set(key, harden({ mountCap, handle, capId, mode }));
-        return harden({ mountCap, handle });
+        bridges.set(key, harden({ mountCap, handle, mountPoint, capId, mode }));
+        // The host mountpoint is reported alongside the Mount cap because
+        // the attested hosted runtime binds by declared host path rather
+        // than by cap: its sandbox proves the path is a 9P projection. It
+        // is host layout the bridge chose, not anything a guest supplied.
+        return harden({ mountCap, handle, mountPoint });
       } catch (error) {
         await E(handle)
           .unmount()
