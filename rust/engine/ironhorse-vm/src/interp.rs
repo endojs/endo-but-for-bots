@@ -52604,12 +52604,39 @@ impl Interp {
         }) = self.wrapper_data.get(&inst).copied()
         {
             let mut out = Vec::new();
-            for index in 0..self.str_len(offset) {
+            let units = self.str_len(offset);
+            for index in 0..units {
                 out.push(self.read_key_slot(ReadKey::Index(index as u32))?);
+            }
+            // An expando whose name is a canonical index BEYOND the string's
+            // length is a real own property, and XS lists it right here:
+            // `fxStringOwnKeys` (`xsString.c`) queues the units, then the
+            // instance's own index keys via `fxQueueIndexKeys`, then `length`,
+            // then the named chain.
+            //
+            // Dropping every index-named expando instead made `s[5] = 'x'` on
+            // a two-unit wrapper invisible to every key walk, so `harden(s)`
+            // never froze it while `Object.isFrozen(s)` still answered `true` —
+            // a hardened object carrying a writable, configurable, deletable
+            // property, and an unhardened referent when the value was an
+            // object.
+            let ordinary_ids = self.ordered_own_key_ids(inst);
+            let mut index_expandos: Vec<(u32, u16)> = ordinary_ids
+                .iter()
+                .filter_map(|&id| {
+                    let index = string_to_index(&self.string_key_name(id)?)?;
+                    (index as usize >= units).then_some((index, id))
+                })
+                .collect();
+            index_expandos.sort_unstable_by_key(|&(index, _)| index);
+            for (_, id) in index_expandos {
+                out.push(self.property_key_slot(id)?);
             }
             let length_id = self.intern_key("length");
             out.push(self.property_key_slot(length_id)?);
-            for id in self.ordered_own_key_ids(inst) {
+            for id in ordinary_ids {
+                // Every index-named expando is already placed above, in range
+                // as a unit and out of range as its own key.
                 if id == length_id
                     || self
                         .string_key_name(id)
