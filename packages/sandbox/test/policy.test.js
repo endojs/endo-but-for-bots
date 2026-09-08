@@ -1015,12 +1015,14 @@ const makeAttachRequest = (overrides = {}) =>
  * Inspect output for a container whose runtime bound the attach as asked,
  * plus the kernel's view of it.
  *
- * @param {{ ro?: boolean, kernelFstype?: string, kernelOptions?: string[], omitKernel?: boolean }} [changes]
+ * @param {{ ro?: boolean, kernelFstype?: string, kernelRoot?: string, kernelOptions?: string[], runtimeOptions?: string[], omitKernel?: boolean }} [changes]
  */
 const makeAttachState = ({
   ro = false,
   kernelFstype = '9p',
+  kernelRoot,
   kernelOptions,
+  runtimeOptions,
   omitKernel = false,
 } = {}) =>
   makeState({
@@ -1029,7 +1031,13 @@ const makeAttachState = ({
         Type: 'bind',
         Source: '/host/mounts/claude-attach-a1',
         Destination: '/mnt/project',
-        Options: ['nosuid', 'nodev', 'rprivate', ro ? 'ro' : 'rw', 'rbind'],
+        Options: runtimeOptions ?? [
+          'nosuid',
+          'nodev',
+          'rprivate',
+          ro ? 'ro' : 'rw',
+          'rbind',
+        ],
         RW: !ro,
       });
     }),
@@ -1041,6 +1049,7 @@ const makeAttachState = ({
               '/mnt/project',
               harden({
                 fstype: kernelFstype,
+                root: kernelRoot ?? '/',
                 options: harden(
                   kernelOptions ?? [
                     ro ? 'ro' : 'rw',
@@ -1163,6 +1172,14 @@ test('an attach the kernel does not vouch for is not proved', t => {
       makeAttachState({ omitKernel: true }),
       /absent from the anchor mount table/,
     ],
+    // A bind of one subtree of the projection carries the same filesystem
+    // type as the whole of it, so type alone cannot tell them apart — and
+    // the slice would see a different tree than the capability names.
+    [
+      'a bind of a subtree rather than the projection',
+      makeAttachState({ kernelRoot: '/elsewhere' }),
+      /a bind of \/elsewhere within the projection rather than the whole of it/,
+    ],
     // The runtime says rw but the kernel mounted it ro — or the reverse.
     [
       'a kernel mode the runtime did not report',
@@ -1203,6 +1220,7 @@ test('an attach the kernel does not vouch for is not proved', t => {
               '/mnt/project',
               harden({
                 fstype: '9p',
+                root: '/',
                 options: harden(['rw', 'nosuid', 'nodev']),
               }),
             ],
@@ -1211,4 +1229,22 @@ test('an attach the kernel does not vouch for is not proved', t => {
       ),
     { message: /\/home\/operator/ },
   );
+});
+
+test('an attach attests the hardening the kernel shows, not the one the runtime claims', t => {
+  const policy = assertSlicePolicyRequest(makeAttachRequest());
+  // `noexec` is attested but required nowhere, so it is exactly the control
+  // a runtime could assert unilaterally. The record must follow the kernel:
+  // a runtime that claims noexec over a mount the kernel will execute from
+  // would otherwise have its claim attested as fact.
+  const attestation = attestSlicePolicy(
+    policy,
+    makeAttachState({
+      runtimeOptions: ['nosuid', 'nodev', 'noexec', 'rprivate', 'rw', 'rbind'],
+      kernelOptions: ['rw', 'nosuid', 'nodev', 'relatime'],
+    }),
+  );
+  const attach = attestation.mounts.find(mount => mount.role === 'attach-a1');
+  t.deepEqual(attach?.options, ['nodev', 'nosuid']);
+  t.false(attach?.options.includes('noexec'));
 });

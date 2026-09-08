@@ -391,13 +391,14 @@ export type ObservedSliceState = {
   /**
    * Per declared attach destination, the kernel's account of the mount
    * there in the anchor's own mount namespace (`/proc/<pid>/mountinfo`):
-   * its filesystem type and per-mount options, or `null` when nothing is
-   * mounted at it. May be absent when the policy declares no attaches;
-   * an attach with no entry here is not proved.
+   * its filesystem type, the subtree of that filesystem it exposes
+   * (`root`, `/` for the whole of it) and its per-mount options, or
+   * `null` when nothing is mounted at it. May be absent when the policy
+   * declares no attaches; an attach with no entry here is not proved.
    */
   attachMounts?: ReadonlyMap<
     string,
-    { fstype: string; options: readonly string[] } | null
+    { fstype: string; root: string; options: readonly string[] } | null
   >;
   /** Host controls the ceilings depend on. */
   resources: { cgroupControllers: readonly string[] };
