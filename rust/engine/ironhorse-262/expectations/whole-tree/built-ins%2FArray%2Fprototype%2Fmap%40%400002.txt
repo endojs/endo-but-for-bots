@@ -1,0 +1,33 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/map tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/map/create-species-non-ctor.js sloppy pass
+built-ins/Array/prototype/map/create-species-non-ctor.js strict pass
+built-ins/Array/prototype/map/create-species-null.js sloppy pass
+built-ins/Array/prototype/map/create-species-null.js strict pass
+built-ins/Array/prototype/map/create-species-poisoned.js sloppy pass
+built-ins/Array/prototype/map/create-species-poisoned.js strict pass
+built-ins/Array/prototype/map/create-species-undef-invalid-len.js sloppy pass
+built-ins/Array/prototype/map/create-species-undef-invalid-len.js strict pass
+built-ins/Array/prototype/map/create-species-undef.js sloppy pass
+built-ins/Array/prototype/map/create-species-undef.js strict pass
+built-ins/Array/prototype/map/create-species.js sloppy pass
+built-ins/Array/prototype/map/create-species.js strict pass
+built-ins/Array/prototype/map/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/map/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/map/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be map; name value should be map"
+built-ins/Array/prototype/map/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be map; name value should be map"
+built-ins/Array/prototype/map/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/map/not-a-constructor.js strict pass
+built-ins/Array/prototype/map/prop-desc.js sloppy pass
+built-ins/Array/prototype/map/prop-desc.js strict pass
+built-ins/Array/prototype/map/resizable-buffer-grow-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/map/resizable-buffer-grow-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/map/resizable-buffer-shrink-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/map/resizable-buffer-shrink-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/map/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/map/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/map/target-array-non-extensible.js sloppy pass
+built-ins/Array/prototype/map/target-array-non-extensible.js strict pass
+built-ins/Array/prototype/map/target-array-with-non-configurable-property.js sloppy pass
+built-ins/Array/prototype/map/target-array-with-non-configurable-property.js strict pass
+built-ins/Array/prototype/map/target-array-with-non-writable-property.js sloppy pass
+built-ins/Array/prototype/map/target-array-with-non-writable-property.js strict pass

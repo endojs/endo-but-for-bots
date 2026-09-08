@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/getTimeZones tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/getTimeZones/branding.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/branding.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/output-array-sorted.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/output-array-sorted.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/output-array-undefined.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/output-array-undefined.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/output-array.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/output-array.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getTimeZones/prop-desc.js strict skip:oracle-host-missing-global:Intl

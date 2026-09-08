@@ -1,0 +1,18 @@
+# engine=ironhorse features=default corpus=language/import/import-attributes tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-attributes/json-extensibility-array.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-extensibility-object.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-idempotency.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-invalid.js sloppy skip:module:resolution-linking
+language/import/import-attributes/json-named-bindings.js sloppy skip:module:resolution-linking
+language/import/import-attributes/json-value-array.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-value-boolean.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-value-null.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-value-number.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-value-object.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-value-string.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/json-via-namespace.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/text-empty.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/text-javascript.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/text-self.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/text-string.js sloppy skip:compiler-unimplemented:module
+language/import/import-attributes/text-via-namespace.js sloppy skip:compiler-unimplemented:module

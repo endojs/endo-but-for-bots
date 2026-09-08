@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/Symbol.toStringTag tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/Symbol.toStringTag/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/invoked-as-accessor.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/invoked-as-accessor.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/invoked-as-func.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/invoked-as-func.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/length.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/length.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/name.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/name.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/prop-desc.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/prop-desc.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/return-typedarrayname.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/return-typedarrayname.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/this-has-no-typedarrayname-internal.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/this-has-no-typedarrayname-internal.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/this-is-not-object.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/this-is-not-object.js strict pass

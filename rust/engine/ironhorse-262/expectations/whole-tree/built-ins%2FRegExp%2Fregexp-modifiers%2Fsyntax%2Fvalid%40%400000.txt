@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/regexp-modifiers/syntax/valid tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-and-remove-modifiers-can-have-empty-remove-modifiers.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-and-remove-modifiers-can-have-empty-remove-modifiers.js strict pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-and-remove-modifiers.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-and-remove-modifiers.js strict pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-modifiers-when-nested.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-modifiers-when-nested.js strict pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-modifiers-when-not-set-as-flags.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-modifiers-when-not-set-as-flags.js strict pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-modifiers-when-set-as-flags.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/add-modifiers-when-set-as-flags.js strict pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/remove-modifiers-when-nested.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/remove-modifiers-when-nested.js strict pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/remove-modifiers-when-not-set-as-flags.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/remove-modifiers-when-not-set-as-flags.js strict pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/remove-modifiers-when-set-as-flags.js sloppy pass
+built-ins/RegExp/regexp-modifiers/syntax/valid/remove-modifiers-when-set-as-flags.js strict pass

@@ -125,6 +125,19 @@ git -C c/moddable fetch --depth 1 --filter=blob:none \
 git -C c/moddable checkout 23b4d6b0a65f35209d9118c4c13c6c9b3e68784d
 ```
 
+The oracle build applies one checked diagnostic fix to a generated copy of
+`xsLexical.c` at `OUT_DIR/c/moddable/xs/sources/xsLexical.c`; it never edits the
+pinned submodule.
+The upstream source suffix preserves the existing upstream-only UBSAN exclusion;
+ASAN still instruments the copy, and UBSAN still instruments our C boundary code.
+The RegExp lexer passes a copied parser-owned message to `fxReportParserError`,
+avoiding overlapping `snprintf` input/output that erased the message on Linux
+while retaining it on macOS.
+The build requires exactly one matching call site and fails if that source changes.
+The `regexp_literal_rejection_preserves_its_diagnostic` oracle test covers the
+actual lexer rejection path.
+This changes no parse acceptance or harness classification rules.
+
 The shallow sha-fetch above works because the pin **is** the current
 `public` tip (verified 2026-07-08:
 `git ls-remote … public` → `23b4d6b0a65f…`). Should `public` later move
@@ -365,8 +378,11 @@ The answer decides whether the oracle gets to judge the run:
   ironhorse failing to resolve it is a spurious `ReferenceError` and fails.
 - A shared abort where the oracle threw a native error constructor and
   ironhorse threw a different one is a failure (`abort-type divergence`).
-  The same constructor with a different message stays the
-  `abort-value-differs` skip until engine errors carry messages.
+  The same native constructor with a different message is an
+  `error-message-differs:<constructor>` failure.
+  Other differing thrown values, including assertion errors and primitive
+  throws, are `abort-value-differs` failures.
+  Each failure retains both rendered values so changed diagnostics ratchet.
   An oracle that could not resolve a host intrinsic ironhorse has and the
   pinned XS build lacks (`Intl`) certified nothing: that shape is the oracle's
   host gap, `oracle-host-missing-global:<Name>`.
@@ -374,7 +390,8 @@ The answer decides whether the oracle gets to judge the run:
   out-of-scope reference, so it falls through to the abort-type comparison.
 - Every failure above that rests on the oracle's authority (an uncaught throw
   where the oracle completed, a spurious `ReferenceError`, an abort-type
-  divergence) is demoted to an `oracle-gate-off:<shape>` skip under
+  divergence, or a differing thrown value) is demoted to an
+  `oracle-gate-off:<shape>` skip under
   `--no-oracle`, like the existing over-acceptance arm.
   Three failures do not rest on it and gate regardless: an engine-invariant
   halt, an unregistered declined label, and an uncaught `Test262Error`, which

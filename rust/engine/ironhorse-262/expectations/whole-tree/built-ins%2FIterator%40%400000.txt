@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/Iterator tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Iterator/constructor.js sloppy pass
+built-ins/Iterator/constructor.js strict pass
+built-ins/Iterator/length.js sloppy pass
+built-ins/Iterator/length.js strict pass
+built-ins/Iterator/name.js sloppy pass
+built-ins/Iterator/name.js strict pass
+built-ins/Iterator/newtarget-or-active-function-object.js sloppy pass
+built-ins/Iterator/newtarget-or-active-function-object.js strict pass
+built-ins/Iterator/prop-desc.js sloppy pass
+built-ins/Iterator/prop-desc.js strict pass
+built-ins/Iterator/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/Iterator/proto.js sloppy pass
+built-ins/Iterator/proto.js strict pass
+built-ins/Iterator/subclassable.js sloppy pass
+built-ins/Iterator/subclassable.js strict pass

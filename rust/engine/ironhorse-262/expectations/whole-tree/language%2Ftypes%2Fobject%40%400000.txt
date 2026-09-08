@@ -1,0 +1,37 @@
+# engine=ironhorse features=default corpus=language/types/object tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/types/object/S8.6.1_A1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: __e = Math.E; Math.E=1; Math.E ===__e"
+language/types/object/S8.6.1_A2.js sloppy pass
+language/types/object/S8.6.1_A2.js strict pass
+language/types/object/S8.6.1_A3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: delete Number.NaN === false. Actual: true"
+language/types/object/S8.6.2_A1.js sloppy pass
+language/types/object/S8.6.2_A1.js strict pass
+language/types/object/S8.6.2_A2.js sloppy pass
+language/types/object/S8.6.2_A2.js strict pass
+language/types/object/S8.6.2_A3.js sloppy pass
+language/types/object/S8.6.2_A3.js strict pass
+language/types/object/S8.6.2_A4.js sloppy pass
+language/types/object/S8.6.2_A4.js strict pass
+language/types/object/S8.6.2_A5_T1.js sloppy pass
+language/types/object/S8.6.2_A5_T1.js strict pass
+language/types/object/S8.6.2_A5_T2.js sloppy pass
+language/types/object/S8.6.2_A5_T2.js strict pass
+language/types/object/S8.6.2_A5_T3.js sloppy pass
+language/types/object/S8.6.2_A5_T3.js strict skip:oracle-xs-script-decl-eval-framing
+language/types/object/S8.6.2_A5_T4.js sloppy pass
+language/types/object/S8.6.2_A5_T4.js strict pass
+language/types/object/S8.6.2_A6.js sloppy pass
+language/types/object/S8.6.2_A6.js strict pass
+language/types/object/S8.6.2_A7.js sloppy pass
+language/types/object/S8.6.2_A7.js strict pass
+language/types/object/S8.6.2_A8.js sloppy pass
+language/types/object/S8.6.2_A8.js strict pass
+language/types/object/S8.6_A2_T1.js sloppy pass
+language/types/object/S8.6_A2_T1.js strict pass
+language/types/object/S8.6_A2_T2.js sloppy pass
+language/types/object/S8.6_A2_T2.js strict pass
+language/types/object/S8.6_A3_T1.js sloppy pass
+language/types/object/S8.6_A3_T1.js strict pass
+language/types/object/S8.6_A3_T2.js sloppy pass
+language/types/object/S8.6_A3_T2.js strict pass
+language/types/object/S8.6_A4_T1.js sloppy pass
+language/types/object/S8.6_A4_T1.js strict pass

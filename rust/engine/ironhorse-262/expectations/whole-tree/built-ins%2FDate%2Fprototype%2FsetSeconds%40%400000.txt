@@ -1,0 +1,35 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/setSeconds tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/setSeconds/arg-coercion-order.js sloppy pass
+built-ins/Date/prototype/setSeconds/arg-coercion-order.js strict pass
+built-ins/Date/prototype/setSeconds/arg-ms-to-number-err.js sloppy pass
+built-ins/Date/prototype/setSeconds/arg-ms-to-number-err.js strict pass
+built-ins/Date/prototype/setSeconds/arg-ms-to-number.js sloppy pass
+built-ins/Date/prototype/setSeconds/arg-ms-to-number.js strict pass
+built-ins/Date/prototype/setSeconds/arg-sec-to-number-err.js sloppy pass
+built-ins/Date/prototype/setSeconds/arg-sec-to-number-err.js strict pass
+built-ins/Date/prototype/setSeconds/arg-sec-to-number.js sloppy pass
+built-ins/Date/prototype/setSeconds/arg-sec-to-number.js strict pass
+built-ins/Date/prototype/setSeconds/date-value-read-before-tonumber-when-date-is-invalid.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number0») to be true"
+built-ins/Date/prototype/setSeconds/date-value-read-before-tonumber-when-date-is-invalid.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number0») to be true"
+built-ins/Date/prototype/setSeconds/date-value-read-before-tonumber-when-date-is-valid.js sloppy pass
+built-ins/Date/prototype/setSeconds/date-value-read-before-tonumber-when-date-is-valid.js strict pass
+built-ins/Date/prototype/setSeconds/length.js sloppy pass
+built-ins/Date/prototype/setSeconds/length.js strict pass
+built-ins/Date/prototype/setSeconds/name.js sloppy pass
+built-ins/Date/prototype/setSeconds/name.js strict pass
+built-ins/Date/prototype/setSeconds/new-value-time-clip.js sloppy pass
+built-ins/Date/prototype/setSeconds/new-value-time-clip.js strict pass
+built-ins/Date/prototype/setSeconds/not-a-constructor.js sloppy pass
+built-ins/Date/prototype/setSeconds/not-a-constructor.js strict pass
+built-ins/Date/prototype/setSeconds/prop-desc.js sloppy pass
+built-ins/Date/prototype/setSeconds/prop-desc.js strict pass
+built-ins/Date/prototype/setSeconds/this-value-invalid-date.js sloppy pass
+built-ins/Date/prototype/setSeconds/this-value-invalid-date.js strict pass
+built-ins/Date/prototype/setSeconds/this-value-non-date.js sloppy pass
+built-ins/Date/prototype/setSeconds/this-value-non-date.js strict pass
+built-ins/Date/prototype/setSeconds/this-value-non-object.js sloppy pass
+built-ins/Date/prototype/setSeconds/this-value-non-object.js strict pass
+built-ins/Date/prototype/setSeconds/this-value-valid-date-ms.js sloppy pass
+built-ins/Date/prototype/setSeconds/this-value-valid-date-ms.js strict pass
+built-ins/Date/prototype/setSeconds/this-value-valid-date-sec.js sloppy pass
+built-ins/Date/prototype/setSeconds/this-value-valid-date-sec.js strict pass

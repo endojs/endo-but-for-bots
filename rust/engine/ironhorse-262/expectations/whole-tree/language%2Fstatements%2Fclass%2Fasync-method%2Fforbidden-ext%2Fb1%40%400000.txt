@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=language/statements/class/async-method/forbidden-ext/b1 tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/async-method/forbidden-ext/b1/cls-decl-async-meth-forbidden-ext-direct-access-prop-arguments.js sloppy pass
+language/statements/class/async-method/forbidden-ext/b1/cls-decl-async-meth-forbidden-ext-direct-access-prop-caller.js sloppy pass

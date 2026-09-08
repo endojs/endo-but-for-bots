@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/WeakMap/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/WeakMap/prototype/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"WeakMap\"») to be true"
+built-ins/WeakMap/prototype/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"WeakMap\"») to be true"
+built-ins/WeakMap/prototype/constructor.js sloppy pass
+built-ins/WeakMap/prototype/constructor.js strict pass
+built-ins/WeakMap/prototype/prototype-attributes.js sloppy pass
+built-ins/WeakMap/prototype/prototype-attributes.js strict pass

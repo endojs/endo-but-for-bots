@@ -47,7 +47,7 @@ fn without_a_compiler_eval_halts_before_any_segment_exists() {
     assert!(!o.completed);
     assert_eq!(
         o.halt,
-        ironhorse_vm::Halt::Unsupported("eval:no-compiler"),
+        ironhorse_vm::Halt::NotImplemented("eval:no-compiler"),
         "the honest no-compiler gap, not a segment"
     );
     assert!(m.live_dynamic_segment_function().is_none());

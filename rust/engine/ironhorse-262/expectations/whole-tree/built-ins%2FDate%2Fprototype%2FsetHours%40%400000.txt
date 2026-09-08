@@ -1,0 +1,47 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/setHours tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/setHours/arg-coercion-order.js sloppy pass
+built-ins/Date/prototype/setHours/arg-coercion-order.js strict pass
+built-ins/Date/prototype/setHours/arg-hour-to-number-err.js sloppy pass
+built-ins/Date/prototype/setHours/arg-hour-to-number-err.js strict pass
+built-ins/Date/prototype/setHours/arg-hour-to-number.js sloppy pass
+built-ins/Date/prototype/setHours/arg-hour-to-number.js strict pass
+built-ins/Date/prototype/setHours/arg-min-to-number-err.js sloppy pass
+built-ins/Date/prototype/setHours/arg-min-to-number-err.js strict pass
+built-ins/Date/prototype/setHours/arg-min-to-number.js sloppy pass
+built-ins/Date/prototype/setHours/arg-min-to-number.js strict pass
+built-ins/Date/prototype/setHours/arg-ms-to-number-err.js sloppy pass
+built-ins/Date/prototype/setHours/arg-ms-to-number-err.js strict pass
+built-ins/Date/prototype/setHours/arg-ms-to-number.js sloppy pass
+built-ins/Date/prototype/setHours/arg-ms-to-number.js strict pass
+built-ins/Date/prototype/setHours/arg-sec-to-number-err.js sloppy pass
+built-ins/Date/prototype/setHours/arg-sec-to-number-err.js strict pass
+built-ins/Date/prototype/setHours/arg-sec-to-number.js sloppy pass
+built-ins/Date/prototype/setHours/arg-sec-to-number.js strict pass
+built-ins/Date/prototype/setHours/date-value-read-before-tonumber-when-date-is-invalid.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number0») to be true"
+built-ins/Date/prototype/setHours/date-value-read-before-tonumber-when-date-is-invalid.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number0») to be true"
+built-ins/Date/prototype/setHours/date-value-read-before-tonumber-when-date-is-valid.js sloppy pass
+built-ins/Date/prototype/setHours/date-value-read-before-tonumber-when-date-is-valid.js strict pass
+built-ins/Date/prototype/setHours/length.js sloppy pass
+built-ins/Date/prototype/setHours/length.js strict pass
+built-ins/Date/prototype/setHours/name.js sloppy pass
+built-ins/Date/prototype/setHours/name.js strict pass
+built-ins/Date/prototype/setHours/new-value-time-clip.js sloppy pass
+built-ins/Date/prototype/setHours/new-value-time-clip.js strict pass
+built-ins/Date/prototype/setHours/not-a-constructor.js sloppy pass
+built-ins/Date/prototype/setHours/not-a-constructor.js strict pass
+built-ins/Date/prototype/setHours/prop-desc.js sloppy pass
+built-ins/Date/prototype/setHours/prop-desc.js strict pass
+built-ins/Date/prototype/setHours/this-value-invalid-date.js sloppy pass
+built-ins/Date/prototype/setHours/this-value-invalid-date.js strict pass
+built-ins/Date/prototype/setHours/this-value-non-date.js sloppy pass
+built-ins/Date/prototype/setHours/this-value-non-date.js strict pass
+built-ins/Date/prototype/setHours/this-value-non-object.js sloppy pass
+built-ins/Date/prototype/setHours/this-value-non-object.js strict pass
+built-ins/Date/prototype/setHours/this-value-valid-date-hour.js sloppy pass
+built-ins/Date/prototype/setHours/this-value-valid-date-hour.js strict pass
+built-ins/Date/prototype/setHours/this-value-valid-date-min.js sloppy pass
+built-ins/Date/prototype/setHours/this-value-valid-date-min.js strict pass
+built-ins/Date/prototype/setHours/this-value-valid-date-ms.js sloppy pass
+built-ins/Date/prototype/setHours/this-value-valid-date-ms.js strict pass
+built-ins/Date/prototype/setHours/this-value-valid-date-sec.js sloppy pass
+built-ins/Date/prototype/setHours/this-value-valid-date-sec.js strict pass

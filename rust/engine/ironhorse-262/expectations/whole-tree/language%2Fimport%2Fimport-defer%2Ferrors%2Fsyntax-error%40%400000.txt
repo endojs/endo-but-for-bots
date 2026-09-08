@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=language/import/import-defer/errors/syntax-error tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-defer/errors/syntax-error/import-defer-of-syntax-error-fails.js sloppy skip:module:resolution-linking

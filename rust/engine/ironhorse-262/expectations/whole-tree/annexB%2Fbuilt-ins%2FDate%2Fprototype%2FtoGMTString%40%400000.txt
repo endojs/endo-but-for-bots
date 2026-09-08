@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/Date/prototype/toGMTString tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/Date/prototype/toGMTString/not-a-constructor.js sloppy pass
+annexB/built-ins/Date/prototype/toGMTString/not-a-constructor.js strict pass
+annexB/built-ins/Date/prototype/toGMTString/prop-desc.js sloppy pass
+annexB/built-ins/Date/prototype/toGMTString/prop-desc.js strict pass
+annexB/built-ins/Date/prototype/toGMTString/value.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"\"] (){[native code]}») to be true"
+annexB/built-ins/Date/prototype/toGMTString/value.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"\"] (){[native code]}») to be true"

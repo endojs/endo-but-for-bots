@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=annexB/language/eval-code/direct tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/eval-code/direct/global-switch-dflt-eval-global-skip-early-err-for.js sloppy pass
+annexB/language/eval-code/direct/global-switch-dflt-eval-global-skip-early-err-switch.js sloppy pass
+annexB/language/eval-code/direct/global-switch-dflt-eval-global-skip-early-err-try.js sloppy pass
+annexB/language/eval-code/direct/global-switch-dflt-eval-global-skip-early-err.js sloppy pass
+annexB/language/eval-code/direct/global-switch-dflt-eval-global-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/eval-code/direct/script-decl-lex-no-collision.js sloppy skip:shared-positive-test-failure
+annexB/language/eval-code/direct/script-decl-lex-no-collision.js strict skip:shared-positive-test-failure
+annexB/language/eval-code/direct/switch-case-decl-nostrict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefined») to be true\" ironhorse=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefinedundefined») to be true\""
+annexB/language/eval-code/direct/switch-dflt-decl-nostrict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefined») to be true\" ironhorse=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefinedundefined») to be true\""
+annexB/language/eval-code/direct/var-env-lower-lex-catch-non-strict.js sloppy skip:shared-positive-test-failure

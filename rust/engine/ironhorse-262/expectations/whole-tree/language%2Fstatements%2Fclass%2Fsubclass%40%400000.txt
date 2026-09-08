@@ -1,0 +1,78 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/binding.js sloppy pass
+language/statements/class/subclass/binding.js strict pass
+language/statements/class/subclass/builtins.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: `Object.getPrototypeOf(eua)` returns `ExtendedUint8Array.prototype` Expected SameValue(«[object Object]», «[object Object]») to be true"
+language/statements/class/subclass/builtins.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: `Object.getPrototypeOf(eua)` returns `ExtendedUint8Array.prototype` Expected SameValue(«[object Object]», «[object Object]») to be true"
+language/statements/class/subclass/class-definition-evaluation-empty-constructor-heritage-present.js sloppy pass
+language/statements/class/subclass/class-definition-evaluation-empty-constructor-heritage-present.js strict pass
+language/statements/class/subclass/class-definition-null-proto-contains-return-override.js sloppy pass
+language/statements/class/subclass/class-definition-null-proto-contains-return-override.js strict pass
+language/statements/class/subclass/class-definition-null-proto-missing-return-override.js sloppy pass
+language/statements/class/subclass/class-definition-null-proto-missing-return-override.js strict pass
+language/statements/class/subclass/class-definition-null-proto-super.js sloppy pass
+language/statements/class/subclass/class-definition-null-proto-super.js strict pass
+language/statements/class/subclass/class-definition-null-proto-this.js sloppy pass
+language/statements/class/subclass/class-definition-null-proto-this.js strict pass
+language/statements/class/subclass/class-definition-null-proto.js sloppy pass
+language/statements/class/subclass/class-definition-null-proto.js strict pass
+language/statements/class/subclass/class-definition-parent-proto-null.js sloppy pass
+language/statements/class/subclass/class-definition-parent-proto-null.js strict pass
+language/statements/class/subclass/default-constructor-2.js sloppy pass
+language/statements/class/subclass/default-constructor-2.js strict pass
+language/statements/class/subclass/default-constructor-spread-override.js sloppy skip:shared-test262-failure
+language/statements/class/subclass/default-constructor-spread-override.js strict skip:shared-test262-failure
+language/statements/class/subclass/default-constructor.js sloppy pass
+language/statements/class/subclass/default-constructor.js strict pass
+language/statements/class/subclass/derived-class-return-override-catch-finally-arrow.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/statements/class/subclass/derived-class-return-override-catch-finally-arrow.js strict fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/statements/class/subclass/derived-class-return-override-catch-finally.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-catch-finally.js strict pass
+language/statements/class/subclass/derived-class-return-override-catch-super-arrow.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-catch-super-arrow.js strict pass
+language/statements/class/subclass/derived-class-return-override-catch-super.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-catch-super.js strict pass
+language/statements/class/subclass/derived-class-return-override-catch.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-catch.js strict pass
+language/statements/class/subclass/derived-class-return-override-finally-super-arrow.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/statements/class/subclass/derived-class-return-override-finally-super-arrow.js strict fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/statements/class/subclass/derived-class-return-override-finally-super.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-finally-super.js strict pass
+language/statements/class/subclass/derived-class-return-override-for-of-arrow.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/statements/class/subclass/derived-class-return-override-for-of-arrow.js strict fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/statements/class/subclass/derived-class-return-override-for-of.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-for-of.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-boolean.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-boolean.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-empty.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-empty.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-null.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-null.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-number.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-number.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-object.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-object.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-string.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-string.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-symbol.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-symbol.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-this.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-this.js strict pass
+language/statements/class/subclass/derived-class-return-override-with-undefined.js sloppy pass
+language/statements/class/subclass/derived-class-return-override-with-undefined.js strict pass
+language/statements/class/subclass/private-class-field-on-nonextensible-return-override.js strict skip:shared-test262-failure
+language/statements/class/subclass/superclass-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-async-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-async-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-async-generator-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-async-generator-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-bound-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«[object Object]», «[object Object]») to be true"
+language/statements/class/subclass/superclass-bound-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«[object Object]», «[object Object]») to be true"
+language/statements/class/subclass/superclass-generator-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-generator-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/superclass-prototype-setter-constructor.js sloppy pass
+language/statements/class/subclass/superclass-prototype-setter-constructor.js strict pass
+language/statements/class/subclass/superclass-prototype-setter-method-override.js sloppy pass
+language/statements/class/subclass/superclass-prototype-setter-method-override.js strict pass
+language/statements/class/subclass/superclass-static-method-override.js sloppy pass
+language/statements/class/subclass/superclass-static-method-override.js strict pass

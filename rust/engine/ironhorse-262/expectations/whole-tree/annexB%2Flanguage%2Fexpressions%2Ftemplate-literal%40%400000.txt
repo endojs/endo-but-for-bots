@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=annexB/language/expressions/template-literal tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/expressions/template-literal/legacy-octal-escape-sequence-non-strict.js sloppy pass
+annexB/language/expressions/template-literal/legacy-octal-escape-sequence-strict.js strict pass

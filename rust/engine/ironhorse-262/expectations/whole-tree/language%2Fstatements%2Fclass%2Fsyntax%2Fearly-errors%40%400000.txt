@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/class/syntax/early-errors tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/syntax/early-errors/class-definition-evaluation-block-duplicate-binding.js sloppy pass
+language/statements/class/syntax/early-errors/class-definition-evaluation-block-duplicate-binding.js strict pass
+language/statements/class/syntax/early-errors/class-definition-evaluation-scriptbody-duplicate-binding.js sloppy pass
+language/statements/class/syntax/early-errors/class-definition-evaluation-scriptbody-duplicate-binding.js strict pass

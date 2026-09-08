@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=language/expressions/assignment tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/assignment/target-member-identifier-reference-undefined.js sloppy pass
+language/expressions/assignment/target-member-identifier-reference-undefined.js strict pass
+language/expressions/assignment/target-newtarget.js sloppy pass
+language/expressions/assignment/target-newtarget.js strict pass
+language/expressions/assignment/target-null.js sloppy pass
+language/expressions/assignment/target-null.js strict pass
+language/expressions/assignment/target-number.js sloppy pass
+language/expressions/assignment/target-number.js strict pass
+language/expressions/assignment/target-string.js sloppy pass
+language/expressions/assignment/target-string.js strict pass
+language/expressions/assignment/target-super-computed-reference-null.js sloppy pass
+language/expressions/assignment/target-super-computed-reference-null.js strict pass
+language/expressions/assignment/target-super-computed-reference.js sloppy pass
+language/expressions/assignment/target-super-computed-reference.js strict pass
+language/expressions/assignment/target-super-identifier-reference-null.js sloppy pass
+language/expressions/assignment/target-super-identifier-reference-null.js strict pass
+language/expressions/assignment/white-space.js sloppy pass
+language/expressions/assignment/white-space.js strict pass

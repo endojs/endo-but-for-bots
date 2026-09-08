@@ -65,7 +65,7 @@ pub struct CompiledSource {
 /// catchable `SyntaxError` (as the spec's `eval`/`Function` early-error path
 /// throws); a [`SourceCompileError::Unsupported`] is an honest Ironhorse
 /// compiler-coverage gap (an unported-but-valid construct), surfaced as
-/// [`Halt::Unsupported`] rather than a mis-executed result.
+/// [`Halt::NotImplemented`] rather than a mis-executed result.
 pub enum SourceCompileError {
     /// A genuine early (parse/early) error: the source is not a valid
     /// Script. The bridge throws a catchable realm `SyntaxError`.
@@ -3807,7 +3807,7 @@ impl TemporalDurationRecord {
 /// the Error hierarchy the design's stage-3 decomposition names. A bare
 /// reference and `typeof` are modeled for every variant (both are pure
 /// dispatch, bit-exact); the *call* and *construct* behaviors land
-/// incrementally, and an unmodeled one self-names [`Halt::Unsupported`]
+/// incrementally, and an unmodeled one self-names [`Halt::NotImplemented`]
 /// (an honest skip) rather than mis-executing.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Native {
@@ -4065,7 +4065,8 @@ impl Native {
     }
 }
 
-/// Why a run stopped.
+/// A host-observable completion or abort. Nested catch and suspension transfers
+/// are private interpreter state and cannot be returned in this type.
 ///
 /// Match a **panic** via [`Halt::is_panic`] (or the
 /// `ExecutionOutcome` seam in the `endo` crate's `ironhorse_engine`
@@ -4077,17 +4078,12 @@ impl Native {
 /// § The Formal `Panic` Category). `#[non_exhaustive]` adds
 /// discovery-time friction toward this rule for out-of-crate matches; it
 /// is a convention, not a type-level guarantee.
-// `Eq` is not derivable: `Halt::Yield` carries a `Slot`, whose `Number` arm
-// holds an `f64` (only `PartialEq`). `Halt` is compared with `==` (a
-// `PartialEq` use), never used as a hash key, so `PartialEq` alone suffices.
+// Thrown values contain floating-point numbers, so only PartialEq is derived.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Halt {
     /// Reached RETURN/END: the completion value is in `result`.
     Return,
-    /// Internal control transfer to a JavaScript catch/finally target after a
-    /// native helper raises a realm-local error. Consumed by the dispatch loop.
-    Resume(usize),
     /// The meter host refused more computation.
     MeterAbort,
     /// The interpreter ran past a caller-supplied **step ceiling** without
@@ -4100,23 +4096,15 @@ pub enum Halt {
     /// Never produced by the default-unbounded [`Interp::run`], so it does
     /// not perturb the oracle-differential paths.
     StepLimit(u64),
-    /// The engine **declined** the program: an opcode, built-in, or value
-    /// shape outside the ported subset (an unlanded feature), or a
-    /// deliberate value-dependent refusal (an oversized array-like, a
-    /// symbol where the port only models strings). Carries the label so
-    /// the harness can report exactly what to implement next, rather than
-    /// papering over it.
-    ///
-    /// This is the one halt the differential instruments may treat as
-    /// **skip-eligible**: a program that reaches it is uncovered ground, not
-    /// a divergence. The exemption is not granted by the halt itself but by
-    /// the explicit allowlist in [`crate::halt_labels`], which the instruments
-    /// consult: an `Unsupported` whose label is not registered there is a
-    /// failure, so a new label cannot widen the exemption. The registry test
-    /// `tests/halt_label_registry.rs` keeps that list in step with the
-    /// construction sites, and a new label fails it until classified as a
-    /// declined surface rather than an [`Halt::EngineInvariant`].
-    Unsupported(&'static str),
+    /// An opcode, built-in, or value shape outside the implemented surface.
+    /// Skip eligibility requires an explicit NotImplemented label in
+    /// [`crate::halt_labels`]; a new or misclassified label is a harness failure.
+    NotImplemented(&'static str),
+    /// A recognized operation deliberately excluded by the execution profile:
+    /// a resource-size ceiling, key-space limit, or host-policy restriction.
+    /// Skip eligibility requires an explicit Refused label in
+    /// [`crate::halt_labels`]; this is distinct from an implementation gap.
+    Refused(&'static str),
     /// The engine's **own state is wrong**: a guard on the interpreter's
     /// invariants fired (value-stack or frame underflow, a suspended
     /// generator or async instance with no saved frame, a resolving
@@ -4126,23 +4114,21 @@ pub enum Halt {
     /// bytecode it is the fail-closed refusal the decoder fuzz target pins.
     ///
     /// Never skip-eligible: both differential instruments report it as a
-    /// hard failure, which is what separates it from [`Halt::Unsupported`].
+    /// hard failure, which is what separates it from [`Halt::NotImplemented`].
     /// Its label set is pinned alongside the declined set in
     /// `tests/halt_label_registry.rs`.
     EngineInvariant(&'static str),
     /// The bytecode was truncated or an opcode byte was invalid.
     Decode(String),
     /// A JS-level throw that escaped every guest handler and reached the
-    /// host boundary. `value` is the thrown value itself — what a native
-    /// `mxTry` boundary (a promise executor, a reaction job, a disposer)
-    /// rejects with when it catches the escape instead of the host;
+    /// host boundary. `value` is the original guest value, carried through
+    /// nested dispatch and native catches before this outcome is constructed;
     /// `rendered` is its host-boundary `String()` rendering, for
     /// diagnostics and the oracle's thrown-value comparison.
     ///
-    /// Constructed only where the jump chain has actually been unwound:
-    /// [`Interp::raise_js`], the dispatch loop's inline `THROW`/`RETHROW`/
-    /// rejected-`await` unwinds, and [`Halt::synthetic_throw`] for the
-    /// harness (`tests/throw_construction_sites.rs` locks the set). An
+    /// Constructed at the host boundary after nested dispatch and native
+    /// catches have declined the thrown value, or by [`Halt::synthetic_throw`]
+    /// for the harness (`tests/throw_construction_sites.rs` locks the set). An
     /// engine error built anywhere else must be a real error object routed
     /// through `raise_js`, so guest `try`/`catch` can observe it.
     Throw { value: Slot, rendered: String },
@@ -4155,24 +4141,6 @@ pub enum Halt {
     /// slot count in use at the halt for diagnostics (over the limit in the
     /// first case; incidental in the second).
     StackOverflow(usize),
-    /// A generator body reached `XS_CODE_YIELD` and suspended its
-    /// activation into the `generators` side table (design § generators).
-    /// Carries the yielded value; produced only inside a
-    /// [`Self::resume_generator`] nested dispatch and caught there (it is
-    /// never seen by the top-level `run`). This is ironhorse's structural
-    /// analog of XS's `goto XS_CODE_END_ALL` out of `fxRunID` at a yield.
-    Yield(Slot),
-    /// An async-function body reached `XS_CODE_AWAIT` and suspended its
-    /// activation into the `async_instances` side table (design § async/await;
-    /// `ASYNC-AWAIT-HANDOFF.md`). Carries the awaited value; produced only
-    /// inside a [`Self::step_async`] nested dispatch and caught there (never
-    /// seen by the top-level `run`). The async analog of [`Self::Yield`] — XS's
-    /// `XS_CODE_AWAIT` shares the `YIELD` `mxCase` and likewise `goto
-    /// XS_CODE_END_ALL`s out of `fxRunID`.
-    Await(Slot),
-    /// An async-generator body reached `YIELD`; its active request remains
-    /// pending while the yielded value is assimilated as a promise.
-    AsyncYield(Slot),
     /// A **net-new panic** with no legacy `Halt` variant (design
     /// `ironhorse-panic.md` § The Formal `Panic` Category, item 3). The
     /// pre-existing panics (`StackOverflow`, `MeterAbort`) keep their flat,
@@ -4225,7 +4193,7 @@ impl Halt {
     /// every genuine panic rather than re-listing panic shapes, so adding a
     /// new panic variant updates this predicate alone. That classifier's
     /// `Panicked` outcome is a strict *superset* of this predicate, though:
-    /// it also absorbs `Halt::Unsupported` and a fail-closed catch-all, which
+    /// it also absorbs `Halt::NotImplemented` and a fail-closed catch-all, which
     /// terminate-without-commit but are **not** panics. Those extra cases
     /// live in `ExecutionOutcome::classify`, never here — so this predicate is
     /// still the sole definition of "is a panic," not of "must discard the
@@ -4284,8 +4252,28 @@ impl Halt {
     }
 }
 
-/// Consume a [`Halt`] inside the bytecode dispatch loop. This is the ONLY
-/// way a `Halt::Resume` may be acted on: a handler that lives in a frame
+/// A nested interpreter activation's completion. Only `finish_step` crosses
+/// from this private control-flow protocol to the public host outcome.
+#[derive(Debug, Clone, PartialEq)]
+enum Step {
+    /// The activation this dispatcher entered completed normally.
+    Returned,
+    /// No guest handler caught this value; a native boundary may still catch it.
+    Threw {
+        value: Slot,
+    },
+    /// Suspend to the generator, async-function, or async-generator driver.
+    Yielded(Slot),
+    Awaited(Slot),
+    AsyncYielded(Slot),
+    /// Resume a handler in the dispatch activation that owns its frame.
+    Unwound(usize),
+    /// A non-JavaScript abort, propagated unchanged through native boundaries.
+    Host(Halt),
+}
+
+/// Consume a [`Step`] inside the bytecode dispatch loop. This is the ONLY
+/// way a `Step::Unwound` may be acted on: a handler that lives in a frame
 /// below this loop's `return_depth` belongs to an enclosing (Rust-level
 /// nested) dispatch, so the `Resume` propagates out to it; a handler in
 /// this loop's frames resumes here, paying XS's `mxFirstCode` meter check
@@ -4301,13 +4289,13 @@ impl Halt {
 macro_rules! dispatch_halt {
     ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr) => {
         match $halt {
-            Halt::Resume(target) if $machine.call_stack.len() < $return_depth => {
-                return Halt::Resume(target);
+            Step::Unwound(target) if $machine.call_stack.len() < $return_depth => {
+                return Step::Unwound(target);
             }
-            Halt::Resume(target) => {
+            Step::Unwound(target) => {
                 $program_counter = target;
                 if $machine.check_meter() == MeterCheck::Abort {
-                    return Halt::MeterAbort;
+                    return Step::Host(Halt::MeterAbort);
                 }
                 continue;
             }
@@ -4362,8 +4350,8 @@ pub struct RunOutcome {
     /// The `TypeError` the oracle shim's post-run `String(result)`
     /// throws for this completion value, as the differential harness
     /// models it: a Symbol (`cannot coerce symbol to string`), or an
-    /// ordinary object whose prototype is `null` (`cannot convert
-    /// object to primitive value`, the bare `Object.create(null)` whose
+    /// ordinary object whose prototype is `null` (`cannot coerce object to
+    /// string`, the bare `Object.create(null)` whose
     /// `ToPrimitive` finds neither `toString` nor `valueOf`). `None`
     /// for every other completion and for every halt.
     ///
@@ -4451,7 +4439,7 @@ impl RunOutcome {
 /// Call/return frame *switching* (nested user functions) and the object
 /// model are the next stage-2 work items; opcodes outside the
 /// frame/scope/variable/control-flow/expression subset halt with
-/// [`Halt::Unsupported`] naming themselves, so the differential harness
+/// [`Halt::NotImplemented`] naming themselves, so the differential harness
 /// reports exactly what to implement next rather than diverging
 /// silently.
 /// Why [`Interp::relink_crank`] refused (side-table ledger G2). Every
@@ -4534,11 +4522,6 @@ pub struct Interp {
     /// for the exception/`this` semantics that observe it; the covered
     /// subset does not yet branch on it.
     strict: bool,
-    /// Depth of the most recent callback frame that reached its own `END`.
-    /// This distinguishes a normal re-entrant callback return from a throw
-    /// that unwound into, and completed, its caller while the nested
-    /// dispatcher was still active.
-    callback_return_depth: Option<usize>,
     meter: Meter,
     /// Cost-calibration histogram recorder (design
     /// `designs/ironhorse-meter-opcode-cost-instrumentation.md`, stage
@@ -4602,7 +4585,7 @@ pub struct Interp {
     /// realm. `None` until [`Self::set_source_compiler`] wires one in — the
     /// VM stays compiler-agnostic (no `ironhorse-compile` dependency), and an
     /// un-armed VM answers a string `eval` with an honest
-    /// [`Halt::Unsupported`] rather than a source-text guess.
+    /// [`Halt::NotImplemented`] rather than a source-text guess.
     source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
     /// Persisted bytecode buffers for units compiled at run time by the
     /// source-execution bridge (a string `eval`, the `Function` constructor).
@@ -6143,7 +6126,6 @@ impl Interp {
             eval_program_hoist: false,
             result: Slot::undefined(),
             strict: false,
-            callback_return_depth: None,
             meter: Meter::new(),
             cost: crate::cost::CostRecorder::default(),
             meter_host: None,
@@ -7017,7 +6999,7 @@ impl Interp {
         }
         // `%ArrayBuffer.prototype%`: the species-constructing `slice` method
         // plus the recognized-but-unimplemented methods bound so a reference
-        // is an honest NAMED skip (`Halt::Unsupported`) rather than a
+        // is an honest NAMED skip (`Halt::NotImplemented`) rather than a
         // completion divergence. `byteLength` also needs a real descriptor:
         // SES captures its getter through getOwnPropertyDescriptor at boot.
         self.arraybuffer_proto = self
@@ -8189,7 +8171,7 @@ impl Interp {
     /// shared intrinsics, taming Date/Math, the idempotence throw) and
     /// `mutabilities` (the `fxVerify*` mutable-residue report) are the reported
     /// scope fold of this child — a program that references either self-names an
-    /// honest `Halt::Unsupported` rather than a wrong value (see their dispatch).
+    /// honest `Halt::NotImplemented` rather than a wrong value (see their dispatch).
     fn create_hardened_globals(&mut self) {
         for (name, m) in [
             ("harden", NativeMethod::GlobalHarden),
@@ -8666,7 +8648,7 @@ impl Interp {
         code: &[u8],
         constructor: crate::value::SlotIndex,
         fallback: crate::value::SlotIndex,
-    ) -> Result<crate::value::SlotIndex, Halt> {
+    ) -> Result<crate::value::SlotIndex, Step> {
         let id = self.intern_key("prototype");
         let receiver = Slot::of(Kind::Reference, Payload::Reference(constructor));
         let value = self.mop_get(code, constructor, id, receiver)?;
@@ -8690,10 +8672,19 @@ impl Interp {
         code: &[u8],
         value: Slot,
         constructor: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let ctor = match constructor.value {
             Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    match constructor.kind {
+                        Kind::Undefined => "cannot coerce undefined to object",
+                        Kind::Null => "cannot coerce null to object",
+                        _ => "call: not a function",
+                    }
+                    .into(),
+                ))
+            }
         };
         self.meter.tick_raw(INSTANCEOF_METERING);
         let has_instance_id = self
@@ -8702,13 +8693,13 @@ impl Interp {
         let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
         if method.kind != Kind::Undefined && method.kind != Kind::Null {
             if !self.is_callable_value(method) {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("call: not a function".into()));
             }
             let result = self.invoke_value(code, method, constructor, &[value])?;
             return Ok(self.truthy(&result));
         }
         if !self.is_callable_value(constructor) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
         }
         self.ordinary_has_instance(code, constructor, value)
     }
@@ -8721,7 +8712,7 @@ impl Interp {
         code: &[u8],
         constructor: Slot,
         value: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if !self.is_callable_value(constructor) {
             return Ok(false);
         }
@@ -8742,7 +8733,7 @@ impl Interp {
         let prototype = self.mop_get(code, ctor, prototype_id, constructor)?;
         let target = match prototype.value {
             Payload::Reference(target) if prototype.kind == Kind::Reference => target,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this.prototype: not an object".into())),
         };
         let mut proxy_steps = 0;
         loop {
@@ -8916,6 +8907,12 @@ impl Interp {
         self.intern_key("toString");
         self.intern_key("valueOf");
         self.intern_key("join");
+        // Error.prototype.toString reads these implicitly. Materialize their
+        // inherited boot data even when source names neither property, so a
+        // caught native TypeError does not stringify with the default Error
+        // name. Including them in the install floor preserves guest deletions.
+        self.intern_key("name");
+        self.intern_key("message");
         // A non-guest-reachable descriptor in the persisted symbol-key table
         // marks the current arguments layout. Unlike a reserved string, this
         // cannot be pre-interned or spoofed by guest JavaScript; no property
@@ -9319,10 +9316,11 @@ impl Interp {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
                 if keep(pid) && (full || self.find_property(*proto, pid).is_none()) {
                     let off = self.alloc_str_text(value.as_bytes());
-                    self.set_own_unmetered(
+                    self.set_own_unmetered_with_flag(
                         *proto,
                         pid,
                         Slot::of(Kind::String, Payload::String(off)),
+                        XS_DONT_ENUM_FLAG,
                     );
                 }
             }
@@ -9740,7 +9738,7 @@ impl Interp {
     /// Install the source compiler the runtime source-execution bridge drives
     /// ([`SourceCompiler`]). Called once by the host after [`Self::new`] /
     /// [`Self::link_intrinsics`]; a string `eval` or the `Function`
-    /// constructor is an honest [`Halt::Unsupported`] until it is armed.
+    /// constructor is an honest [`Halt::NotImplemented`] until it is armed.
     pub fn set_source_compiler(&mut self, compiler: std::rc::Rc<dyn SourceCompiler>) {
         self.source_compiler = Some(compiler);
     }
@@ -9906,14 +9904,14 @@ impl Interp {
     /// - **Job/meter behavior.** Execution accrues on the shared meter; the
     ///   eval unit's promise reactions drain with the outer program's job
     ///   pump (not a nested drain), matching a single host crank.
-    fn eval_source(&mut self, source: &str, strict: bool) -> Result<Slot, Halt> {
+    fn eval_source(&mut self, source: &str, strict: bool) -> Result<Slot, Step> {
         // Whether this is a direct eval (its declaration instantiation observes
         // the caller's lexical environment). Captured before the nested-frame
         // setup clears `eval_direct`.
         let is_direct = self.eval_direct;
         let compiler = match &self.source_compiler {
             Some(compiler) => compiler.clone(),
-            None => return Err(Halt::Unsupported("eval:no-compiler")),
+            None => return Err(Step::Host(Halt::NotImplemented("eval:no-compiler"))),
         };
         let compiled = match compiler.compile_source(source, strict) {
             Ok(compiled) => compiled,
@@ -9921,13 +9919,15 @@ impl Interp {
                 return Err(self.catchable_syntax_error_with_message(message))
             }
             Err(SourceCompileError::Unsupported(_)) => {
-                return Err(Halt::Unsupported("eval:compiler-unimplemented"))
+                return Err(Step::Host(Halt::NotImplemented(
+                    "eval:compiler-unimplemented",
+                )))
             }
         };
         let eval_names = crate::symbols::parse_symbols(&compiled.symbols);
         let code = match self.relink_program_symbols(&compiled.bytecode, &eval_names) {
             Some(code) => code,
-            None => return Err(Halt::Unsupported("eval:relink")),
+            None => return Err(Step::Host(Halt::EngineInvariant("eval:relink"))),
         };
         // Bind only the ids appended SINCE THE LAST INSTALL PASS (the
         // installed-names floor, wave-6 W6-7 — a name interned at
@@ -9976,7 +9976,6 @@ impl Interp {
         let saved_cur_target = self.cur_target;
         let saved_target_func = self.target_func;
         let saved_pending_new_target = self.pending_new_target;
-        let saved_callback_return_depth = self.callback_return_depth;
         let saved_frame_slots = self.frame_slots;
         let saved_eval_direct = self.eval_direct;
         let saved_direct_eval_hoist = self.direct_eval_hoist;
@@ -9990,7 +9989,6 @@ impl Interp {
         self.cur_target = false;
         self.target_func = crate::value::SlotIndex::NULL;
         self.pending_new_target = None;
-        self.callback_return_depth = None;
         self.frame_slots = 0;
         self.eval_direct = false;
         // A direct eval resolves through the caller's compiler-published
@@ -10031,17 +10029,16 @@ impl Interp {
         self.cur_target = saved_cur_target;
         self.target_func = saved_target_func;
         self.pending_new_target = saved_pending_new_target;
-        self.callback_return_depth = saved_callback_return_depth;
         self.frame_slots = saved_frame_slots;
         self.eval_direct = saved_eval_direct;
 
         match halt {
-            Halt::Return => Ok(completion),
+            Step::Returned => Ok(completion),
             // An uncaught throw inside the eval unit: `self.exception` holds
             // the realm error value. Re-raise it into the *caller's* frame so
             // the caller's `try`/catch (its restored jump chain) observes it —
             // exactly as a native helper's `catchable_*` does.
-            Halt::Throw { value, .. } => Err(self.raise_js(value)),
+            Step::Threw { value, .. } => Err(self.raise_js(value)),
             // A coverage gap, meter abort, step-limit, or decode fault the
             // nested unit hit: propagate as-is (honest, non-result outcome).
             other => Err(other),
@@ -10069,7 +10066,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let mut params: Vec<String> = Vec::new();
         let mut body = String::new();
         for i in 0..argc {
@@ -12494,6 +12491,13 @@ impl Interp {
                 {
                     return false;
                 }
+                // A fresh executor has two internal never-called sentinels;
+                // a called executor has neither. A mixed pair is not reachable.
+                let resolve = self.instance_get(home, resolve_id.expect("checked field"));
+                let reject = self.instance_get(home, reject_id.expect("checked field"));
+                if (resolve.kind == Kind::Uninitialized) != (reject.kind == Kind::Uninitialized) {
+                    return false;
+                }
                 self.functions.insert(
                     function,
                     FuncInfo {
@@ -13457,7 +13461,10 @@ impl Interp {
             let is_function_declaration = matches!(kind, Some(Kind::Null));
             if let Some(variable_env) = direct_variable_env {
                 if self.has_lexical_binding_before(variable_env, id) {
-                    return Err(self.build_error("SyntaxError", 0, 0));
+                    return Err(self.internal_error(
+                        "SyntaxError",
+                        format!("{}: duplicate variable", self.property_debug_name(id)),
+                    ));
                 }
                 if !self.has_function_var_binding(variable_env, id) {
                     self.append_environment_capture(variable_env, id, Slot::undefined());
@@ -13475,11 +13482,20 @@ impl Interp {
             // scope that does not see it, so it never raises this — matching XS,
             // which throws only for the direct form.
             if self.direct_eval_hoist && self.has_lexical_env_binding(id) {
-                return Err(self.build_error("SyntaxError", 0, 0));
+                return Err(self.internal_error(
+                    "SyntaxError",
+                    format!("{}: duplicate variable", self.property_debug_name(id)),
+                ));
             }
             if self.global_props.contains_key(&id) {
                 if is_function_declaration && !self.can_declare_global_function(id) {
-                    return Err(self.build_error("TypeError", 0, 0));
+                    return Err(self.internal_error(
+                        "TypeError",
+                        format!(
+                            "{}: global property not configurable and not enumerable or writable",
+                            self.property_debug_name(id)
+                        ),
+                    ));
                 }
             } else {
                 // The property does not yet exist, so it must be *created* on the
@@ -13493,7 +13509,13 @@ impl Interp {
                 // sealed its global. An extensible global (the overwhelming common
                 // case) is unaffected, so this never perturbs an existing run.
                 if !self.instance_extensible(self.global_obj) {
-                    return Err(self.build_error("TypeError", 0, 0));
+                    return Err(self.internal_error(
+                        "TypeError",
+                        format!(
+                            "{}: global object not extensible",
+                            self.property_debug_name(id)
+                        ),
+                    ));
                 }
                 // `CreateGlobalVarBinding` / `CreateGlobalFunctionBinding` take
                 // the `D` argument as the new property's **configurable**
@@ -13696,7 +13718,7 @@ impl Interp {
     /// threaded as a parameter because this renderer is `&self`; it starts at
     /// whatever native depth the caller is at, so a diagnostic render from
     /// inside a native shares the one ceiling.
-    fn render(&self, s: &Slot) -> Result<String, Halt> {
+    fn render(&self, s: &Slot) -> Result<String, Step> {
         self.render_at(s, self.native_depth)
     }
 
@@ -13704,14 +13726,14 @@ impl Interp {
     /// refusal. Charged only where the renderer actually descends, so a
     /// scalar or an error object renders at any depth — including a
     /// diagnostic render at the very ceiling — and only nesting is refused.
-    fn render_descend(&self, depth: usize) -> Result<usize, Halt> {
+    fn render_descend(&self, depth: usize) -> Result<usize, Step> {
         if depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT {
-            return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
         }
         Ok(depth + LIGHT_FRAME_COST)
     }
 
-    fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Halt> {
+    fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Step> {
         Ok(match s.value {
             Payload::String(off) => self.str_text(off),
             // A BigInt completion renders as its decimal magnitude (XS's
@@ -13890,9 +13912,9 @@ impl Interp {
     /// boundary does (`String(exception)` after `fxRunScript`): a thrown user
     /// object runs its guest `toString` (sta.js's `Test262Error` carries
     /// one), so the abort value matches the oracle's rendering of the same
-    /// failure. Engine-built native errors (in `error_data`) keep the static
-    /// render — their `Error.prototype.toString` shape is already mirrored —
-    /// and any failure inside the guest coercion falls back to it.
+    /// failure. Native errors also use their observable `name`, `message`,
+    /// and coercion hooks: the guest may have changed them since construction.
+    /// Any failure inside guest coercion falls back to the static rendering.
     ///
     /// Called from [`Self::run`] only, once the halt has actually reached the
     /// host. An escape out of a nested dispatch is not yet uncaught — a
@@ -13921,8 +13943,8 @@ impl Interp {
         let stack_base = self.stack.len();
         let call_depth = self.call_stack.len();
         let jump_depth = self.jumps.len();
-        if let Payload::Reference(r) = v.value {
-            if v.kind == Kind::Reference && !self.error_data.contains_key(&r) {
+        if let Payload::Reference(_) = v.value {
+            if v.kind == Kind::Reference {
                 match self.to_primitive(code, v, true) {
                     Ok(prim) => {
                         self.exception = saved_exception;
@@ -14028,6 +14050,35 @@ impl Interp {
     }
 
     pub fn run(&mut self, code: &[u8]) -> RunOutcome {
+        // A halted crank retains its activation for inspection until the
+        // caller explicitly starts another run. Abandon that activation now:
+        // otherwise its frames make BEGIN treat this program as a callee,
+        // and its operands, handler PCs, or with environment leak into it.
+        // Captured locals and environments already live in arena cells and
+        // retained function records; dropping these transient roots preserves
+        // them. Keep queued jobs, metering, poison latches, and the externally
+        // configured eval_program_hoist policy unchanged.
+        while !self.call_stack.is_empty() {
+            let _ = self.leave_call();
+        }
+        self.stack.clear();
+        self.jumps.clear();
+        self.locals.clear();
+        self.id_map.clear();
+        self.args.clear();
+        self.this_captures.clear();
+        self.frame_slots = 0;
+        self.result = Slot::undefined();
+        self.exception = Slot::undefined();
+        self.this_val = Slot::undefined();
+        self.env = Slot::undefined();
+        self.cur_func = crate::value::SlotIndex::NULL;
+        self.target_func = crate::value::SlotIndex::NULL;
+        self.cur_target = false;
+        self.pending_new_target = None;
+        self.resume_status = ResumeStatus::NoStatus;
+        self.eval_direct = false;
+        self.direct_eval_hoist = false;
         // Retain the top-level bytecode so an eval-defined function that calls
         // back into a top-level function can be dispatched over the right
         // buffer from a nested segment. Only the cross-segment call path reads
@@ -14051,7 +14102,7 @@ impl Interp {
         // `is_quiescent` (a re-entrant host, a panic-recovery path) is
         // told so. It is re-established from the engine's own halt.
         self.last_crank_completed = false;
-        let mut halt = self.dispatch(code);
+        let mut step = self.dispatch(code);
         // Pump-loop latch: after the script settles, drain the promise job
         // queue with metering still accumulating — the host-driven microtask
         // drain the ironhorse embedding performs after a crank (design § promises).
@@ -14060,26 +14111,15 @@ impl Interp {
         // completion value (`self.result`) was fixed at `END` and is not
         // changed by the drain (reactions mutate closure state, not the
         // top-level result). A job that reaches an un-modeled path turns the
-        // whole run into an honest `Halt::Unsupported`.
-        if halt == Halt::Return {
+        // whole run into an honest `Halt::NotImplemented`.
+        if step == Step::Returned {
             let script_result = self.result;
             if let Err(h) = self.run_promise_jobs(code) {
-                halt = h;
+                step = h;
             }
             self.result = script_result;
         }
-        // THIS is the host boundary for an uncaught throw. The escape sites
-        // carry the static render; the guest-visible `String(exception)` the
-        // oracle shim performs (a thrown object's own `toString`) runs here,
-        // exactly once, and only for a throw nothing native caught — so a
-        // promise executor's thrown object never has its `toString` run
-        // (XS's `mxCatch` copies `mxException` silently), and a throw that
-        // crossed an `eval` unit's re-raise renders from the value it
-        // carried, not the inner unit's static text.
-        if let Halt::Throw { value, .. } = halt {
-            let rendered = self.render_uncaught(code, value);
-            halt = Halt::Throw { value, rendered };
-        }
+        let mut halt = self.finish_step(code, step);
         // The ENGINE's verdict on this crank: the dispatch reached `END`
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the
@@ -14111,7 +14151,7 @@ impl Interp {
                 && self.instance_prototype(object).is_null()
                 && !self.arrays.contains_key(&object)
                 && self.native_of(object).is_none())
-            .then(|| "TypeError: cannot convert object to primitive value".to_string())
+            .then(|| "TypeError: cannot coerce object to string".to_string())
         } else {
             None
         };
@@ -14134,7 +14174,7 @@ impl Interp {
             match self.render(&self.result) {
                 Ok(text) => text,
                 Err(render_halt) => {
-                    halt = render_halt;
+                    halt = self.finish_step(code, render_halt);
                     String::new()
                 }
             }
@@ -14178,7 +14218,23 @@ impl Interp {
         }
     }
 
-    fn dispatch(&mut self, code: &[u8]) -> Halt {
+    /// Translate an activation result at the host boundary. Suspension and
+    /// catch transfers must have been consumed by their owning activation.
+    fn finish_step(&mut self, code: &[u8], step: Step) -> Halt {
+        match step {
+            Step::Returned => Halt::Return,
+            Step::Threw { value, .. } => Halt::Throw {
+                value,
+                rendered: self.render_uncaught(code, value),
+            },
+            Step::Host(halt) => halt,
+            Step::Yielded(_) | Step::Awaited(_) | Step::AsyncYielded(_) | Step::Unwound(_) => {
+                Halt::EngineInvariant("dispatch:control-transfer-escaped")
+            }
+        }
+    }
+
+    fn dispatch(&mut self, code: &[u8]) -> Step {
         // The top-level program: start at pc 0, return to the host (C
         // boundary) when the call stack fully unwinds (depth 0).
         self.dispatch_at(code, 0, 0)
@@ -14200,7 +14256,7 @@ impl Interp {
     /// inner loop's many early returns; every re-entry site
     /// (`run_callback`/`step_async`/`step_async_generator`/`resume_generator`)
     /// calls back through here, so their native recursion is counted uniformly.
-    fn dispatch_at(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Halt {
+    fn dispatch_at(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Step {
         // Do not descend; the innermost re-entry that tipped the ceiling
         // aborts to the host exactly as the value-stack `fxOverflow` guard.
         if let Err(halt) = self.enter_native_frame(HEAVY_FRAME_COST) {
@@ -14216,9 +14272,9 @@ impl Interp {
     /// [`NATIVE_DEPTH_LIMIT`]. Pair with [`Self::leave_native_frame`] around the
     /// activation (or use [`Self::with_native_frame`], which cannot forget to).
     #[inline]
-    fn enter_native_frame(&mut self, cost: usize) -> Result<(), Halt> {
+    fn enter_native_frame(&mut self, cost: usize) -> Result<(), Step> {
         if self.native_depth + cost > NATIVE_DEPTH_LIMIT {
-            return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
         }
         self.native_depth += cost;
         Ok(())
@@ -14238,8 +14294,8 @@ impl Interp {
     fn with_native_frame<T>(
         &mut self,
         cost: usize,
-        f: impl FnOnce(&mut Self) -> Result<T, Halt>,
-    ) -> Result<T, Halt> {
+        f: impl FnOnce(&mut Self) -> Result<T, Step>,
+    ) -> Result<T, Step> {
         self.enter_native_frame(cost)?;
         let result = f(self);
         self.leave_native_frame(cost);
@@ -14260,17 +14316,17 @@ impl Interp {
         &self,
         object: crate::value::SlotIndex,
         proxy_steps: &mut usize,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if self.proxies.contains_key(&object) {
             *proxy_steps += LIGHT_FRAME_COST;
             if self.native_depth + *proxy_steps > NATIVE_DEPTH_LIMIT {
-                return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+                return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
             }
         }
         Ok(())
     }
 
-    fn dispatch_at_inner(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Halt {
+    fn dispatch_at_inner(&mut self, code: &[u8], start_pc: usize, return_depth: usize) -> Step {
         let len = code.len();
         let mut pc: usize = start_pc;
 
@@ -14304,7 +14360,7 @@ impl Interp {
             // top so every recursive `dispatch_at` entry (callbacks, promise
             // jobs) shares the one cumulative ceiling.
             if self.n_dispatched >= self.step_limit {
-                return Halt::StepLimit(self.n_dispatched);
+                return Step::Host(Halt::StepLimit(self.n_dispatched));
             }
             // Memory wedge guard, bounded mode ONLY (`step_limit` is
             // `u64::MAX` in production, which relies on the computron
@@ -14318,7 +14374,7 @@ impl Interp {
             // memory as much as time, and no real ≤21-byte fuzz input
             // legitimately reaches a million live slots.
             if self.step_limit != u64::MAX && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING {
-                return Halt::StepLimit(self.n_dispatched);
+                return Step::Host(Halt::StepLimit(self.n_dispatched));
             }
             // Property-key id-space poison latch (wave-6 Remaining item):
             // an intern that would alias sets the flag instead of handing
@@ -14328,16 +14384,19 @@ impl Interp {
             // crank halts identically — and `is_quiescent` keeps the
             // poisoned machine out of the persist gates.
             if self.id_space_exhausted {
-                return Halt::Unsupported("property-key:id-space-exhausted");
+                return Step::Host(Halt::Refused("property-key:id-space-exhausted"));
             }
             if pc >= len {
-                return Halt::Decode(format!("pc {} past end {}", pc, len));
+                return Step::Host(Halt::Decode(format!("pc {} past end {}", pc, len)));
             }
             let byte = code[pc];
             let op = match Opcode::from_u8(byte) {
                 Some(o) => o,
                 None => {
-                    return Halt::Decode(format!("invalid opcode byte {:#04x} at {}", byte, pc))
+                    return Step::Host(Halt::Decode(format!(
+                        "invalid opcode byte {:#04x} at {}",
+                        byte, pc
+                    )))
                 }
             };
             // Every dispatched opcode meters one code unit (mxBreak /
@@ -14358,22 +14417,22 @@ impl Interp {
             let ilen = match crate::opcode::instruction_len(code, pc) {
                 Some(l) if l > 0 => l,
                 _ => {
-                    return Halt::Decode(format!(
+                    return Step::Host(Halt::Decode(format!(
                         "opcode {} at {} has unresolvable length",
                         op.name(),
                         pc
-                    ))
+                    )))
                 }
             };
             // Bounds-check the operands before reading.
             if pc + ilen > len {
-                return Halt::Decode(format!(
+                return Step::Host(Halt::Decode(format!(
                     "opcode {} at {} needs {} bytes, {} left",
                     op.name(),
                     pc,
                     ilen,
                     len - pc
-                ));
+                )));
             }
 
             use Opcode::*;
@@ -14423,7 +14482,8 @@ impl Interp {
                                 // `new`.  Base construction allocates `this`
                                 // before the constructor body begins.
                                 if !self.cur_target {
-                                    let error = self.build_error("TypeError", 0, 0);
+                                    let error =
+                                        self.internal_error("TypeError", "call: class".into());
                                     dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                 }
                                 self.run_constructor();
@@ -14432,7 +14492,8 @@ impl Interp {
                                 // A derived constructor starts with an
                                 // uninitialized `this`; `super()` supplies it.
                                 if !self.cur_target {
-                                    let error = self.build_error("TypeError", 0, 0);
+                                    let error =
+                                        self.internal_error("TypeError", "call: class".into());
                                     dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                 }
                                 self.this_val = Slot::uninitialized();
@@ -14685,7 +14746,9 @@ impl Interp {
                 }
                 XS_CODE_NEW_LOCAL => {
                     let name = id!(1);
-                    self.locals.push(Slot::uninitialized());
+                    let mut local = Slot::uninitialized();
+                    local.id = name;
+                    self.locals.push(local);
                     self.id_map.insert(name, self.locals.len() - 1);
                     pc += ilen;
                 }
@@ -14719,7 +14782,11 @@ impl Interp {
                         .local_index(k)
                         .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let id = self.locals[self.local_index(k).expect("immutable binding")].id;
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("set {}: const", self.id_name(id)),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
@@ -14732,7 +14799,11 @@ impl Interp {
                         .local_index(k)
                         .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let id = self.locals[self.local_index(k).expect("immutable binding")].id;
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("set {}: const", self.id_name(id)),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let v = self.pop();
@@ -14756,7 +14827,14 @@ impl Interp {
                         // resolvable-local read) observes a realm-correct
                         // error. Mirrors the `GET_VARIABLE` unresolved arm.
                         None => {
-                            let error = self.build_error("ReferenceError", 0, 0);
+                            let id = self.local_index(k).map(|i| self.locals[i].id).unwrap_or(0);
+                            let error = self.internal_error(
+                                "ReferenceError",
+                                format!(
+                                    "get {}: not initialized yet",
+                                    self.property_debug_name(id)
+                                ),
+                            );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     }
@@ -15009,7 +15087,7 @@ impl Interp {
                                 self.push(head);
                             }
                         }
-                        _ => return Halt::Unsupported("to_instance:primitive-box"),
+                        _ => return Step::Host(Halt::NotImplemented("to_instance:primitive-box")),
                     }
                     pc += size as usize;
                 }
@@ -15054,7 +15132,13 @@ impl Interp {
                                         continue;
                                     }
                                     EnvironmentSet::Uninitialized => {
-                                        let error = self.build_error("ReferenceError", 0, 0);
+                                        let error = self.internal_error(
+                                            "ReferenceError",
+                                            format!(
+                                                "set {}: not initialized yet",
+                                                self.property_debug_name(name)
+                                            ),
+                                        );
                                         dispatch_halt!(
                                             self.raise_js(error),
                                             pc,
@@ -15063,7 +15147,13 @@ impl Interp {
                                         );
                                     }
                                     EnvironmentSet::Const => {
-                                        let error = self.build_error("TypeError", 0, 0);
+                                        let error = self.internal_error(
+                                            "TypeError",
+                                            format!(
+                                                "set {}: const",
+                                                self.property_debug_name(name)
+                                            ),
+                                        );
                                         dispatch_halt!(
                                             self.raise_js(error),
                                             pc,
@@ -15104,8 +15194,12 @@ impl Interp {
                                 // property, getter-only accessor, a `set` trap
                                 // answering false) is a TypeError in strict code,
                                 // exactly as the global arm below raises one.
-                                let error = self.build_error("TypeError", 0, 0);
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                dispatch_halt!(
+                                    self.failed_set_error(inst, name, "set"),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
                             }
                             self.meter.tick_builtin();
                             self.push(value);
@@ -15131,7 +15225,10 @@ impl Interp {
                             // scope that does not carry it, or an eval-published
                             // reference). Same TypeError SET_LOCAL/SET_CLOSURE
                             // raise for the by-index forms.
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error = self.internal_error(
+                                "TypeError",
+                                format!("set {}: const", self.property_debug_name(name)),
+                            );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     } else {
@@ -15198,8 +15295,12 @@ impl Interp {
                             return_depth
                         );
                         if !accepted && self.strict {
-                            let error = self.build_error("TypeError", 0, 0);
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(
+                                self.failed_set_error(self.global_obj, name, "set"),
+                                pc,
+                                self,
+                                return_depth
+                            );
                         }
                     }
                     // The property store itself is one built-in step
@@ -15260,7 +15361,7 @@ impl Interp {
                     let idx = self.stack.len().checked_sub(1 + depth);
                     let key = match idx.map(|i| self.stack[i]) {
                         Some(k) => k,
-                        None => return Halt::EngineInvariant("at:stack-underflow"),
+                        None => return Step::Host(Halt::EngineInvariant("at:stack-underflow")),
                     };
                     // XS coerces the BASE first (`mxToInstance(mxStack + 1)`,
                     // below the key): `null[k]` throws before `k`'s
@@ -15288,7 +15389,7 @@ impl Interp {
                         Some(at) => at,
                         // Every primitive kind resolves; `None` is a payload that does
                         // not match its kind, the engine's own value being malformed.
-                        None => return Halt::EngineInvariant("at:key-kind"),
+                        None => return Step::Host(Halt::EngineInvariant("at:key-kind")),
                     };
                     if let Some(i) = idx {
                         self.stack[i] = at;
@@ -15335,7 +15436,10 @@ impl Interp {
                 // literal keeps below.
                 XS_CODE_NEW_PROPERTY_AT => {
                     if pc + 3 > len {
-                        return Halt::Decode(format!("new_property_at at {} needs 3 bytes", pc));
+                        return Step::Host(Halt::Decode(format!(
+                            "new_property_at at {} needs 3 bytes",
+                            pc
+                        )));
                     }
                     let value = self.pop();
                     let key = self.pop();
@@ -15499,8 +15603,39 @@ impl Interp {
                     // awaits each compiler-emitted `next()` result/value.
                     // Async generators themselves have no synchronous fallback.
                     if op == XS_CODE_FOR_AWAIT_OF {
-                        if matches!(iterable.value, Payload::Reference(i) if self.async_generators.contains_key(&i))
-                        {
+                        let async_generator = match iterable.value {
+                            Payload::Reference(i) if self.async_generators.contains_key(&i) => {
+                                Some(i)
+                            }
+                            _ => None,
+                        };
+                        if let Some(instance) = async_generator {
+                            // XS falls back through fxGetIterator, whose call
+                            // of a missing synchronous method has this message.
+                            // A supplied sync method still needs the separate
+                            // AsyncFromSyncIterator semantic implementation;
+                            // do not claim that XS throws in that case.
+                            let sync_id = self
+                                .well_known_symbol_property_id("iterator")
+                                .unwrap_or(crate::value::XS_NO_ID);
+                            let sync_method = if sync_id == crate::value::XS_NO_ID {
+                                Slot::undefined()
+                            } else {
+                                dispatch_result!(
+                                    self.ordinary_get(code, instance, sync_id, iterable),
+                                    pc,
+                                    self,
+                                    return_depth
+                                )
+                            };
+                            if matches!(sync_method.kind, Kind::Undefined | Kind::Null) {
+                                dispatch_halt!(
+                                    self.catchable_type_error_msg("call: not a function".into()),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                            }
                             dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
                         }
                     }
@@ -15531,7 +15666,11 @@ impl Interp {
                             let it_kind = match self.collections[&i].kind {
                                 CollKind::Map => 7u8,
                                 CollKind::Set => 6u8,
-                                _ => return Halt::Unsupported("for_of:weak-collection"),
+                                _ => {
+                                    return Step::Host(Halt::NotImplemented(
+                                        "for_of:weak-collection",
+                                    ))
+                                }
                             };
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             let it = self.make_collection_iterator(i, it_kind);
@@ -15607,7 +15746,7 @@ impl Interp {
                         // its zero-key enumerator setup is a later increment;
                         // an object receiver is the covered case.
                         Payload::Reference(i) if obj.kind != Kind::Symbol => i,
-                        _ => return Halt::Unsupported("for_in:non-object-receiver"),
+                        _ => return Step::Host(Halt::NotImplemented("for_in:non-object-receiver")),
                     };
                     let it = self.make_enumerator(inst);
                     self.push(it);
@@ -15637,7 +15776,10 @@ impl Interp {
                 // so the flag pair is NOT a separate dispatched opcode.
                 XS_CODE_NEW_PROPERTY => {
                     if pc + 5 > len {
-                        return Halt::Decode(format!("new_property at {} needs 5 bytes", pc));
+                        return Step::Host(Halt::Decode(format!(
+                            "new_property at {} needs 5 bytes",
+                            pc
+                        )));
                     }
                     let id = id!(1);
                     let value = self.pop();
@@ -15750,18 +15892,22 @@ impl Interp {
                 // the ordinary public-property MOP untouched.
                 XS_CODE_NEW_PRIVATE_1 | XS_CODE_NEW_PRIVATE_2 => {
                     if pc + ilen + 2 > len {
-                        return Halt::Decode(format!("new_private at {pc} needs flag operand"));
+                        return Step::Host(Halt::Decode(format!(
+                            "new_private at {pc} needs flag operand"
+                        )));
                     }
                     let index = self.closure_index(op, code, pc);
                     let brand = match self.closure_cell(index) {
                         Some(cell) => cell,
-                        None => return Halt::Unsupported("private:missing-brand"),
+                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
                     };
                     let value = self.pop();
                     let receiver = self.pop();
                     let object = match receiver.value {
                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
                         _ => {
+                            // Valid compiled private initialization always has an
+                            // instance receiver; this guards malformed VM input.
                             let error = self.build_error("TypeError", 0, 0);
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
@@ -15810,13 +15956,23 @@ impl Interp {
                     let index = self.closure_index(op, code, pc);
                     let brand = match self.closure_cell(index) {
                         Some(cell) => cell,
-                        None => return Halt::Unsupported("private:missing-brand"),
+                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
                     };
+                    let private_name = self.property_debug_name(
+                        self.locals[self.local_index(index).expect("private name binding")].id,
+                    );
                     let receiver = self.pop();
                     let object = match receiver.value {
                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
                         _ => {
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error = self.internal_error(
+                                "TypeError",
+                                if matches!(receiver.kind, Kind::Null | Kind::Undefined) {
+                                    cannot_coerce_to_object(receiver.kind)
+                                } else {
+                                    format!("get {private_name}: undefined private property")
+                                },
+                            );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
@@ -15834,7 +15990,10 @@ impl Interp {
                             None => Slot::undefined(),
                         }
                     } else {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("get {private_name}: undefined private property"),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     };
                     self.push(value);
@@ -15844,14 +16003,24 @@ impl Interp {
                     let index = self.closure_index(op, code, pc);
                     let brand = match self.closure_cell(index) {
                         Some(cell) => cell,
-                        None => return Halt::Unsupported("private:missing-brand"),
+                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
                     };
                     let value = self.pop();
+                    let private_name = self.property_debug_name(
+                        self.locals[self.local_index(index).expect("private name binding")].id,
+                    );
                     let receiver = self.pop();
                     let object = match receiver.value {
                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
                         _ => {
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error = self.internal_error(
+                                "TypeError",
+                                if matches!(receiver.kind, Kind::Null | Kind::Undefined) {
+                                    cannot_coerce_to_object(receiver.kind)
+                                } else {
+                                    format!("set {private_name}: undefined private property")
+                                },
+                            );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
@@ -15869,12 +16038,18 @@ impl Interp {
                                 );
                             }
                             None => {
-                                let error = self.build_error("TypeError", 0, 0);
+                                let error = self.internal_error(
+                                    "TypeError",
+                                    format!("set {private_name}: undefined private property"),
+                                );
                                 dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                         }
                     } else {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("set {private_name}: undefined private property"),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(value);
@@ -15884,7 +16059,7 @@ impl Interp {
                     let index = self.closure_index(op, code, pc);
                     let brand = match self.closure_cell(index) {
                         Some(cell) => cell,
-                        None => return Halt::Unsupported("private:missing-brand"),
+                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
                     };
                     let receiver = self.pop();
                     let present = match receiver.value {
@@ -15894,7 +16069,8 @@ impl Interp {
                                 || self.private_accessors.contains_key(&key)
                         }
                         _ => {
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error =
+                                self.internal_error("TypeError", "in: not an object".into());
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
@@ -15919,7 +16095,10 @@ impl Interp {
                     // strict TypeError.
                     if obj.kind == Kind::Symbol {
                         if self.strict {
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error = self.internal_error(
+                                "TypeError",
+                                format!("set {}: not extensible", self.property_debug_name(id)),
+                            );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     } else if let Payload::Reference(inst) = obj.value {
@@ -15933,6 +16112,8 @@ impl Interp {
                                 return_depth
                             );
                             if !accepted && self.strict {
+                                // XS ignores a false set-trap result here. Keep
+                                // the spec strict rejection without invented text.
                                 let error = self.build_error("TypeError", 0, 0);
                                 dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
@@ -15948,7 +16129,10 @@ impl Interp {
                             // `DefineProperty`'s `ArraySetLength` path.
                             if !self.array_length_writable(inst) {
                                 if self.strict {
-                                    let error = self.build_error("TypeError", 0, 0);
+                                    let error = self.internal_error(
+                                        "TypeError",
+                                        "set length: not writable".into(),
+                                    );
                                     dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                                 }
                                 self.push(value);
@@ -15969,6 +16153,8 @@ impl Interp {
                                 return_depth
                             );
                             if !accepted && self.strict {
+                                // XS ignores the failed shrink result here; this
+                                // spec strict rejection has no XS throw message.
                                 let error = self.build_error("TypeError", 0, 0);
                                 dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
@@ -15987,8 +16173,12 @@ impl Interp {
                             // dispatch (verified against the pin). A **strict**
                             // callee throws a realm-local, catchable TypeError.
                             if self.strict {
-                                let error = self.build_error("TypeError", 0, 0);
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                dispatch_halt!(
+                                    self.failed_set_error(inst, id, "set"),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
                             }
                         }
                     } else if matches!(obj.kind, Kind::Null | Kind::Undefined) {
@@ -16383,7 +16573,7 @@ impl Interp {
                             )
                         }
                         // Route a thrown getter through the enclosing
-                        // `catch` (`Halt::Resume`), exactly as a throwing
+                        // `catch` (`Step::Unwound`), exactly as a throwing
                         // native call does — a raw `return halt` would exit the
                         // dispatch loop with the Resume unhandled, so a getter
                         // that throws (the `format` accessor read on a
@@ -16494,7 +16684,13 @@ impl Interp {
                             // `mxBehaviorDeleteProperty`). A sloppy `delete`
                             // yields `false` (fully modeled below).
                             if !deleted && self.strict {
-                                let error = self.build_error("TypeError", 0, 0);
+                                let error = self.internal_error(
+                                    "TypeError",
+                                    format!(
+                                        "delete {}: no permission (strict mode)",
+                                        self.property_debug_name(id)
+                                    ),
+                                );
                                 dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                             if let Some(s) = self.stack.last_mut() {
@@ -16525,7 +16721,7 @@ impl Interp {
                     let obj = self.pop();
                     let (id, index) = match key.value {
                         Payload::At(id, index) => (id, index),
-                        _ => return Halt::EngineInvariant("delete_property_at:key"),
+                        _ => return Step::Host(Halt::EngineInvariant("delete_property_at:key")),
                     };
                     let numeric_index = (id == crate::value::XS_NO_ID).then_some(index);
                     // The integer-indexed exotic `[[Delete]]` (10.4.5.7): a
@@ -16630,7 +16826,13 @@ impl Interp {
                         _ => true,
                     };
                     if !deleted && self.strict {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!(
+                                "delete {}: no permission (strict mode)",
+                                self.property_debug_name(id.unwrap_or(0))
+                            ),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(Slot::boolean(deleted));
@@ -16812,7 +17014,10 @@ impl Interp {
                                 .unwrap_or(crate::value::SlotIndex::NULL)
                         }
                         _ => {
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error = self.internal_error(
+                                "TypeError",
+                                "extends: class is not a constructor".into(),
+                            );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                     };
@@ -16836,7 +17041,7 @@ impl Interp {
                         {
                             (ctor, proto)
                         }
-                        _ => return Halt::EngineInvariant("class:invalid-stack"),
+                        _ => return Step::Host(Halt::EngineInvariant("class:invalid-stack")),
                     };
                     let derived = self
                         .functions
@@ -16945,8 +17150,9 @@ impl Interp {
                 // derived frame.
                 XS_CODE_SUPER => {
                     let parent = self.instance_prototype(self.cur_func);
-                    if parent.is_null() || !self.functions.contains_key(&parent) {
-                        let error = self.build_error("TypeError", 0, 0);
+                    if parent.is_null() || !self.slot_is_constructor(parent) {
+                        let error =
+                            self.internal_error("TypeError", "super: not a constructor".into());
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.pending_new_target = Some(self.target_func);
@@ -16966,17 +17172,17 @@ impl Interp {
                 XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
                     let argc = self.pop_run_count();
                     let Some(base) = self.stack.len().checked_sub(argc + 4) else {
-                        return Halt::EngineInvariant("eval:frame-underflow");
+                        return Step::Host(Halt::EngineInvariant("eval:frame-underflow"));
                     };
                     let native = match self.stack.get(base + 1).and_then(|slot| match slot.value {
                         Payload::Reference(function) => self.native_of(function),
                         _ => None,
                     }) {
                         Some(native) => native,
-                        None => return Halt::Unsupported("eval:shadowed-call"),
+                        None => return Step::Host(Halt::NotImplemented("eval:shadowed-call")),
                     };
                     if native != Native::Eval {
-                        return Halt::Unsupported("eval:shadowed-call");
+                        return Step::Host(Halt::NotImplemented("eval:shadowed-call"));
                     }
                     // This opcode is emitted only for a **direct** eval call,
                     // so the source (if a string) evaluates in the caller's
@@ -16988,7 +17194,7 @@ impl Interp {
                     self.eval_direct = false;
                     dispatch_result!(outcome, pc, self, return_depth);
                     if self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                     pc += size as usize;
                 }
@@ -17072,12 +17278,17 @@ impl Interp {
                     });
                     if let Some((f, base)) = promise_fn {
                         if has_target {
-                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
+                            dispatch_halt!(
+                                self.catchable_type_error_msg("new: not a constructor".into()),
+                                pc,
+                                self,
+                                return_depth
+                            );
                         }
                         let result = self.call_promise_function(code, f, base, argc);
                         dispatch_result!(result, pc, self, return_depth);
                         if self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = ret_pc;
                     } else if let Some((native, base)) = callee {
@@ -17090,7 +17301,7 @@ impl Interp {
                         );
                         // Return into the JS caller: `END_ALL` checks.
                         if self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = ret_pc;
                     } else if let Some((NativeMethod::FunctionCall, base)) = method {
@@ -17100,7 +17311,12 @@ impl Interp {
                         // throw a catchable TypeError, not trampoline.
                         let _ = base;
                         if has_target {
-                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
+                            dispatch_halt!(
+                                self.catchable_type_error_msg("new: not a constructor".into()),
+                                pc,
+                                self,
+                                return_depth
+                            );
                         }
                         // A native receiver can be dispatched in place; a user
                         // receiver re-enters its bytecode frame through the
@@ -17113,14 +17329,14 @@ impl Interp {
                         ) {
                             true => {
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
+                                    return Step::Host(Halt::MeterAbort);
                                 }
                                 pc = ret_pc;
                             }
                             false => match self.enter_call_dot_call(base, argc, ret_pc) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
-                                        return Halt::MeterAbort;
+                                        return Step::Host(Halt::MeterAbort);
                                     }
                                     pc = body_start;
                                 }
@@ -17132,7 +17348,12 @@ impl Interp {
                         // a constructor: `new fn.apply()` throws a catchable
                         // TypeError rather than trampolining.
                         if has_target {
-                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
+                            dispatch_halt!(
+                                self.catchable_type_error_msg("new: not a constructor".into()),
+                                pc,
+                                self,
+                                return_depth
+                            );
                         }
                         // A native receiver dispatches in place (dense-array or
                         // no-array argument shapes); a user receiver re-enters
@@ -17145,14 +17366,14 @@ impl Interp {
                         ) {
                             true => {
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
+                                    return Step::Host(Halt::MeterAbort);
                                 }
                                 pc = ret_pc;
                             }
                             false => match self.enter_call_dot_apply(base, argc, ret_pc, code) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
-                                        return Halt::MeterAbort;
+                                        return Step::Host(Halt::MeterAbort);
                                     }
                                     pc = body_start;
                                 }
@@ -17173,7 +17394,12 @@ impl Interp {
                         // reject a direct `new method()` just as the
                         // `Reflect.construct` constructor gate already does.
                         if has_target {
-                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
+                            dispatch_halt!(
+                                self.catchable_type_error_msg("new: not a constructor".into()),
+                                pc,
+                                self,
+                                return_depth
+                            );
                         }
                         dispatch_result!(
                             self.call_native_method(m, base, argc, code),
@@ -17182,7 +17408,7 @@ impl Interp {
                             return_depth
                         );
                         if self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = ret_pc;
                     } else if let Some((bf, base)) = bound {
@@ -17195,12 +17421,17 @@ impl Interp {
                             // ultimate target with the bound args prepended
                             // (`new.target` → the ultimate target).
                             if !self.slot_is_constructor(bf) {
-                                dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
+                                dispatch_halt!(
+                                    self.catchable_type_error_msg("new: not a constructor".into()),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
                             }
                             match self.enter_construct_bound(bf, base, argc, ret_pc) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
-                                        return Halt::MeterAbort;
+                                        return Step::Host(Halt::MeterAbort);
                                     }
                                     pc = body_start;
                                     continue;
@@ -17230,7 +17461,7 @@ impl Interp {
                         );
                         self.push(result);
                         if self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = ret_pc;
                     } else if let Some((px, base)) = proxy_callee {
@@ -17268,7 +17499,7 @@ impl Interp {
                         };
                         self.push(result);
                         if self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = ret_pc;
                     } else if let Some(seg) = self.cross_segment_callee(argc) {
@@ -17282,7 +17513,7 @@ impl Interp {
                             Ok(result) => {
                                 self.push(result);
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
+                                    return Step::Host(Halt::MeterAbort);
                                 }
                                 pc = ret_pc;
                             }
@@ -17302,7 +17533,7 @@ impl Interp {
                                 // Call entry: `mxFirstCode()` runs a meter check
                                 // before the callee's first opcode.
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
+                                    return Step::Host(Halt::MeterAbort);
                                 }
                                 pc = body_start;
                             }
@@ -17347,12 +17578,20 @@ impl Interp {
                         Some(cell) => {
                             let s = self.slots.get(cell);
                             if s.kind == Kind::Uninitialized {
-                                let error = self.build_error("ReferenceError", 0, 0);
+                                let id =
+                                    self.local_index(k).map(|i| self.locals[i].id).unwrap_or(0);
+                                let error = self.internal_error(
+                                    "ReferenceError",
+                                    format!(
+                                        "get {}: not initialized yet",
+                                        self.property_debug_name(id)
+                                    ),
+                                );
                                 dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
-                        None => return Halt::EngineInvariant("get_closure:no-cell"),
+                        None => return Step::Host(Halt::EngineInvariant("get_closure:no-cell")),
                     }
                     pc += op.size() as usize;
                 }
@@ -17381,7 +17620,11 @@ impl Interp {
                         .closure_cell(k)
                         .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let id = self.locals[self.local_index(k).expect("immutable binding")].id;
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("set {}: const", self.id_name(id)),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
@@ -17443,7 +17686,11 @@ impl Interp {
                         .closure_cell(k)
                         .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
                     if immutable {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let id = self.locals[self.local_index(k).expect("immutable binding")].id;
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("set {}: const", self.id_name(id)),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let v = self.pop();
@@ -17517,7 +17764,7 @@ impl Interp {
                         }
                     });
                     let (Some(env), Some(arrow)) = (env, arrow) else {
-                        return Halt::EngineInvariant("store_arrow:frame");
+                        return Step::Host(Halt::EngineInvariant("store_arrow:frame"));
                     };
                     let home = self
                         .functions
@@ -17700,7 +17947,7 @@ impl Interp {
                         // Closure/EnvReference/Uninitialized are never live
                         // stack *values*: reaching one here is the engine's
                         // own state being wrong, not an unported shape.
-                        _ => return Halt::EngineInvariant("typeof:non-value-kind"),
+                        _ => return Step::Host(Halt::EngineInvariant("typeof:non-value-kind")),
                     };
                     if let Some(s) = self.stack.last_mut() {
                         *s = Slot::of(Kind::String, Payload::String(off));
@@ -17777,8 +18024,12 @@ impl Interp {
                 }
                 XS_CODE_BIT_NOT => {
                     let raw = self.pop();
-                    let a =
-                        dispatch_result!(self.to_number_value(code, raw), pc, self, return_depth);
+                    let a = dispatch_result!(
+                        self.to_numeric_integer_value(code, raw),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     if let Payload::BigInt(off) = a.value {
                         let result = self.bigint_bit_not(off);
                         self.push(result);
@@ -17860,7 +18111,8 @@ impl Interp {
                     // a BigInt is a catchable TypeError. Preserve XS's integer
                     // fast kind for every other integral conversion.
                     if a.kind == Kind::BigInt {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self
+                            .internal_error("TypeError", "cannot coerce bigint to number".into());
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(a);
@@ -17891,7 +18143,8 @@ impl Interp {
                 // uninitialized binding until `super()` completes.
                 XS_CODE_GET_THIS => {
                     if self.this_val.kind == Kind::Uninitialized {
-                        let error = self.build_error("ReferenceError", 0, 0);
+                        let error = self
+                            .internal_error("ReferenceError", "this: not initialized yet".into());
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.push(self.this_val);
@@ -17906,13 +18159,15 @@ impl Interp {
                     let receiver_depth = if op == XS_CODE_SUPER_AT_2 { 3 } else { 2 };
                     let receiver_pos = match self.stack.len().checked_sub(receiver_depth) {
                         Some(pos) => pos,
-                        None => return Halt::EngineInvariant("super_at:stack"),
+                        None => return Step::Host(Halt::EngineInvariant("super_at:stack")),
                     };
                     let key_pos = receiver_pos + 1;
                     let receiver = self.stack[receiver_pos];
                     let receiver_ref = match receiver.value {
                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
-                        _ => return Halt::Unsupported("super_at:primitive-receiver"),
+                        _ => {
+                            return Step::Host(Halt::NotImplemented("super_at:primitive-receiver"))
+                        }
                     };
                     let home = self
                         .functions
@@ -17920,12 +18175,12 @@ impl Interp {
                         .map(|info| info.home)
                         .unwrap_or(crate::value::SlotIndex::NULL);
                     if home.is_null() {
-                        return Halt::Unsupported("super_at:no-home");
+                        return Step::Host(Halt::NotImplemented("super_at:no-home"));
                     }
                     let base = self.instance_prototype(home);
                     let key = match self.resolve_at_key(self.stack[key_pos]) {
                         Some(key) => key,
-                        None => return Halt::Unsupported("super_at:key"),
+                        None => return Step::Host(Halt::NotImplemented("super_at:key")),
                     };
                     let mut super_ref =
                         Slot::of(Kind::EnvReference, Payload::Reference(receiver_ref));
@@ -17936,7 +18191,8 @@ impl Interp {
                 }
                 XS_CODE_SET_THIS => {
                     if self.this_val.kind != Kind::Uninitialized {
-                        let error = self.build_error("ReferenceError", 0, 0);
+                        let error = self
+                            .internal_error("ReferenceError", "this: already initialized".into());
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     self.this_val = self.stack.last().copied().unwrap_or_else(Slot::undefined);
@@ -17959,14 +18215,17 @@ impl Interp {
                         .map(|info| info.home)
                         .unwrap_or(crate::value::SlotIndex::NULL);
                     if home.is_null() {
-                        return Halt::Unsupported("get_super:no-home");
+                        return Step::Host(Halt::NotImplemented("get_super:no-home"));
                     }
                     let base = self.instance_prototype(home);
                     // GetValue on a super reference performs ToObject on the
                     // home prototype; a null [[Prototype]] is a TypeError
                     // (ECMA-262 6.2.5.5), raised at use, after key evaluation.
                     if base.is_null() {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("get super.{}: no prototype", self.property_debug_name(id)),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let value = dispatch_result!(
@@ -17985,7 +18244,7 @@ impl Interp {
                         Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
                             receiver
                         }
-                        _ => return Halt::EngineInvariant("get_super_at:reference"),
+                        _ => return Step::Host(Halt::EngineInvariant("get_super_at:reference")),
                     };
                     // A read mints nothing: an index the key table has never
                     // held stays an index (`ReadKey`).
@@ -17997,11 +18256,14 @@ impl Interp {
                             }
                         }
                         Payload::At(id, _) => ReadKey::Id(id),
-                        _ => return Halt::EngineInvariant("get_super_at:key"),
+                        _ => return Step::Host(Halt::EngineInvariant("get_super_at:key")),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
                     // A computed super reference defers the null-base
                     // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
+                    // XS rejects earlier in SUPER_AT, before coercing the key,
+                    // and formats the prior opcode's ID. Keep this spec-ordered
+                    // guard bare rather than invent a corresponding XS text.
                     if super_ref.next.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
@@ -18030,14 +18292,17 @@ impl Interp {
                         .map(|info| info.home)
                         .unwrap_or(crate::value::SlotIndex::NULL);
                     if home.is_null() {
-                        return Halt::Unsupported("set_super:no-home");
+                        return Step::Host(Halt::NotImplemented("set_super:no-home"));
                     }
                     let base = self.instance_prototype(home);
                     // PutValue on a super reference performs ToObject on the
                     // home prototype; a null [[Prototype]] is a TypeError
                     // (ECMA-262 6.2.5.6), raised after the RHS has evaluated.
                     if base.is_null() {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self.internal_error(
+                            "TypeError",
+                            format!("set super.{}: no prototype", self.property_debug_name(id)),
+                        );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                     }
                     let accepted = dispatch_result!(
@@ -18047,8 +18312,12 @@ impl Interp {
                         return_depth
                     );
                     if !accepted {
-                        let error = self.build_error("TypeError", 0, 0);
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(
+                            self.failed_super_set_error(base, id, receiver),
+                            pc,
+                            self,
+                            return_depth
+                        );
                     }
                     self.push(value);
                     pc += ilen;
@@ -18061,19 +18330,21 @@ impl Interp {
                         Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
                             receiver
                         }
-                        _ => return Halt::EngineInvariant("set_super_at:reference"),
+                        _ => return Step::Host(Halt::EngineInvariant("set_super_at:reference")),
                     };
                     let id = match key.value {
                         Payload::At(id, index) if id == crate::value::XS_NO_ID => {
                             self.intern_key(&index.to_string())
                         }
                         Payload::At(id, _) => id,
-                        _ => return Halt::EngineInvariant("set_super_at:key"),
+                        _ => return Step::Host(Halt::EngineInvariant("set_super_at:key")),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
                     // A computed super reference defers the null-base
                     // TypeError to PutValue (ECMA-262 6.2.5.6 via ToObject),
                     // after both the key and the RHS have evaluated.
+                    // XS rejects earlier in SUPER_AT using the prior opcode's
+                    // ID; there is no corresponding stable diagnostic here.
                     if super_ref.next.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth);
@@ -18085,8 +18356,12 @@ impl Interp {
                         return_depth
                     );
                     if !accepted {
-                        let error = self.build_error("TypeError", 0, 0);
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(
+                            self.failed_super_set_error(super_ref.next, id, receiver),
+                            pc,
+                            self,
+                            return_depth
+                        );
                     }
                     self.push(value);
                     pc += size as usize;
@@ -18108,10 +18383,10 @@ impl Interp {
                 XS_CODE_TEMPLATE => {
                     let cooked = match self.stack.last().map(|slot| (slot.kind, slot.value)) {
                         Some((Kind::Reference, Payload::Reference(cooked))) => cooked,
-                        _ => return Halt::EngineInvariant("template:object"),
+                        _ => return Step::Host(Halt::EngineInvariant("template:object")),
                     };
                     if !self.freeze_template_object(cooked) {
-                        return Halt::Unsupported("template:raw");
+                        return Step::Host(Halt::NotImplemented("template:raw"));
                     }
                     pc += size as usize;
                 }
@@ -18150,7 +18425,7 @@ impl Interp {
                 // rather than pushing a bogus value.
                 XS_CODE_CURRENT => {
                     if self.cur_func.is_null() {
-                        return Halt::Unsupported("current:program-level");
+                        return Step::Host(Halt::NotImplemented("current:program-level"));
                     }
                     let f = self.cur_func;
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
@@ -18183,7 +18458,7 @@ impl Interp {
                                 *s = numeric;
                             }
                         }
-                        _ => return Halt::Unsupported("to_numeric:unmodeled-kind"),
+                        _ => return Step::Host(Halt::NotImplemented("to_numeric:unmodeled-kind")),
                     }
                     pc += size as usize;
                 }
@@ -18198,7 +18473,7 @@ impl Interp {
                         return_depth
                     );
                     if primitive.kind == Kind::Symbol {
-                        return Halt::Unsupported("to_string:symbol");
+                        return Step::Host(Halt::NotImplemented("to_string:symbol"));
                     }
                     let value = self.to_string_slot_metered(primitive);
                     if let Some(top) = self.stack.last_mut() {
@@ -18238,7 +18513,9 @@ impl Interp {
                     }
                     let top = match self.stack.last_mut() {
                         Some(s) => s,
-                        None => return Halt::EngineInvariant("increment:stack-underflow"),
+                        None => {
+                            return Step::Host(Halt::EngineInvariant("increment:stack-underflow"))
+                        }
                     };
                     match (top.kind, top.value) {
                         (Kind::Integer, Payload::Integer(v)) => {
@@ -18260,7 +18537,11 @@ impl Interp {
                         // `ToNumeric` above yields an Integer, Number, or
                         // BigInt (handled before); anything else is the
                         // engine's own coercion result being malformed.
-                        _ => return Halt::EngineInvariant("increment:non-numeric-result"),
+                        _ => {
+                            return Step::Host(Halt::EngineInvariant(
+                                "increment:non-numeric-result",
+                            ))
+                        }
                     }
                     pc += size as usize;
                 }
@@ -18275,7 +18556,7 @@ impl Interp {
                 XS_CODE_EXPONENTIATION => {
                     let n = self.stack.len();
                     if n < 2 {
-                        return Halt::EngineInvariant("exponentiation:stack-underflow");
+                        return Step::Host(Halt::EngineInvariant("exponentiation:stack-underflow"));
                     }
                     let left = self.stack[n - 2];
                     let right = self.stack[n - 1];
@@ -18291,7 +18572,15 @@ impl Interp {
                             self.push(result);
                         }
                         (Kind::BigInt, _) | (_, Kind::BigInt) => {
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error = self.internal_error(
+                                "TypeError",
+                                if a.kind == Kind::BigInt {
+                                    "cannot coerce right operand to bigint"
+                                } else {
+                                    "cannot coerce left operand to bigint"
+                                }
+                                .into(),
+                            );
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                         _ => self.push(Slot::number(fx_pow(to_number(&a), to_number(&b)))),
@@ -18370,7 +18659,8 @@ impl Interp {
                                 Some(index) => self.uninterned_index_proxy_has(code, objref, index),
                                 None => match self.property_key_id(key, false) {
                                     Some(id) => self.proxy_has(code, objref, id),
-                                    None => return Halt::EngineInvariant("in:proxy-key"),
+                                    None =>
+                                        return Step::Host(Halt::EngineInvariant("in:proxy-key")),
                                 },
                             },
                             pc,
@@ -18455,7 +18745,7 @@ impl Interp {
                     // for a computed compound assignment (xsRun.c DUB_AT).
                     let n = self.stack.len();
                     if n < 2 {
-                        return Halt::EngineInvariant("dub_at:stack-underflow");
+                        return Step::Host(Halt::EngineInvariant("dub_at:stack-underflow"));
                     }
                     let receiver = self.stack[n - 2];
                     let key = self.stack[n - 1];
@@ -18498,14 +18788,14 @@ impl Interp {
                 XS_CODE_BRANCH_1 => {
                     let off = s1!(1);
                     if off < 0 && self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                     pc = branch_target(pc, size, off);
                 }
                 XS_CODE_BRANCH_2 => {
                     let off = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
                     if off < 0 && self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                     pc = branch_target(pc, size, off);
                 }
@@ -18517,7 +18807,7 @@ impl Interp {
                         code[pc + 4],
                     ]);
                     if off < 0 && self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                     pc = branch_target(pc, size, off);
                 }
@@ -18557,23 +18847,7 @@ impl Interp {
                             // which `step_async` turns into a result-promise
                             // rejection.
                             let v = *self.stack.last().unwrap_or(&Slot::undefined());
-                            self.exception = v;
-                            match self.unwind_to_jump() {
-                                Some(target) => {
-                                    if self.call_stack.len() < return_depth {
-                                        return Halt::Resume(target);
-                                    }
-                                    pc = target;
-                                    if self.check_meter() == MeterCheck::Abort {
-                                        return Halt::MeterAbort;
-                                    }
-                                }
-                                None => {
-                                    self.meter_host_escape();
-                                    let rendered = self.render_or_stub(&v);
-                                    return Halt::Throw { value: v, rendered };
-                                }
-                            }
+                            dispatch_halt!(self.raise_js(v), pc, self, return_depth);
                         }
                         ResumeStatus::Return => {
                             // Fall through to the compiler-emitted generator
@@ -18585,7 +18859,7 @@ impl Interp {
                         }
                         ResumeStatus::NoStatus => {
                             if off < 0 && self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
+                                return Step::Host(Halt::MeterAbort);
                             }
                             pc = branch_target(pc, size, off);
                         }
@@ -18602,7 +18876,7 @@ impl Interp {
                         pc += size as usize;
                     } else {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = branch_target(pc, size, off);
                     }
@@ -18615,7 +18889,7 @@ impl Interp {
                         pc += size as usize;
                     } else {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = branch_target(pc, size, off);
                     }
@@ -18629,7 +18903,7 @@ impl Interp {
                     let cond = self.truthy(&v);
                     if cond {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = branch_target(pc, size, off);
                     } else {
@@ -18642,7 +18916,7 @@ impl Interp {
                     let cond = self.truthy(&v);
                     if cond {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = branch_target(pc, size, off);
                     } else {
@@ -18675,7 +18949,7 @@ impl Interp {
                         pc += size as usize;
                     } else {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = branch_target(pc, size, off);
                     }
@@ -18703,7 +18977,7 @@ impl Interp {
                             *s = Slot::undefined();
                         }
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Halt::MeterAbort;
+                            return Step::Host(Halt::MeterAbort);
                         }
                         pc = branch_target(pc, size, off);
                     } else {
@@ -18749,9 +19023,8 @@ impl Interp {
                             // activation is restored.
                             let _ = self.leave_call();
                             self.push(ret);
-                            self.callback_return_depth = Some(return_depth);
                         }
-                        return Halt::Return;
+                        return Step::Returned;
                     }
                     // Guard the non-boundary resume against a frame underflow:
                     // crafted bytecode can reach this return-family opcode with
@@ -18767,7 +19040,7 @@ impl Interp {
                     // as the sibling stack-underflow guards do (`yield:`/
                     // `await:`/`add:stack-underflow`), never `panic!`.
                     if self.call_stack.len() < return_depth {
-                        return Halt::EngineInvariant("end:frame-underflow");
+                        return Step::Host(Halt::EngineInvariant("end:frame-underflow"));
                     }
                     // Construct return (XS's `END` with `mxFrameHasTarget`):
                     // a constructor's completion is its `this` instance unless
@@ -18778,7 +19051,7 @@ impl Interp {
                     pc = resume;
                     // Returning into a JS caller: `mxFirstCode()` checks.
                     if self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                 }
                 // `return` (`XS_CODE_RETURN`, xsRun.c:1080): the top-level
@@ -18787,7 +19060,10 @@ impl Interp {
                 // it (a `return x` inside a function compiles to
                 // `set_result; end`), so this is the exit-to-host boundary.
                 XS_CODE_RETURN => {
-                    return Halt::Return;
+                    if return_depth != 0 || !self.call_stack.is_empty() {
+                        return Step::Host(Halt::EngineInvariant("return:non-program-frame"));
+                    }
+                    return Step::Returned;
                 }
 
                 // ---- generators -------------------------------------
@@ -18802,7 +19078,7 @@ impl Interp {
                     // A generator built with `new` is a `TypeError` in XS
                     // (`mxFrameHasTarget`); self-name rather than mis-handle.
                     if self.cur_target {
-                        return Halt::Unsupported("generator:new-target");
+                        return Step::Host(Halt::NotImplemented("generator:new-target"));
                     }
                     let resume_pc = pc + size as usize;
                     let proto = self
@@ -18816,28 +19092,29 @@ impl Interp {
                         if return_depth != 0 {
                             let _ = self.leave_call();
                             self.push(gen_slot);
-                            self.callback_return_depth = Some(return_depth);
                         }
-                        return Halt::Return;
+                        return Step::Returned;
                     }
                     // Same frame-underflow guard as `END` (see there): a
                     // `start_generator` reached below `return_depth` on crafted
                     // bytecode must not pop an outer frame (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Halt::EngineInvariant("start_generator:frame-underflow");
+                        return Step::Host(Halt::EngineInvariant(
+                            "start_generator:frame-underflow",
+                        ));
                     }
                     let resume = self.leave_call();
                     self.push(gen_slot);
                     pc = resume;
                     if self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                 }
                 // `yield` (`XS_CODE_YIELD`, xsRun.c:1213): suspend the running
                 // generator. Snapshot its activation (scope + own stack
                 // temporaries + resume cursor) back into the `generators` table
                 // and unwind to the `resume_generator` driver via
-                // [`Halt::Yield`], carrying the yielded value (the `.next`
+                // [`Step::Yielded`], carrying the yielded value (the `.next`
                 // result). `YIELD_STAR` uses the same suspension machinery,
                 // carrying the delegate's iterator-result object as-is.
                 XS_CODE_YIELD | XS_CODE_YIELD_STAR => {
@@ -18861,7 +19138,7 @@ impl Interp {
                         // below: splitting past the stack end is a panic,
                         // not a frame snapshot.
                         if stack_base > self.stack.len() {
-                            return Halt::EngineInvariant("yield:stack-underflow");
+                            return Step::Host(Halt::EngineInvariant("yield:stack-underflow"));
                         }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
@@ -18898,12 +19175,12 @@ impl Interp {
                             g.frame = Some(frame);
                             g.state = AsyncGeneratorState::Awaiting;
                         }
-                        return Halt::AsyncYield(yielded);
+                        return Step::AsyncYielded(yielded);
                     }
                     let (gen, stack_base, jumps_base, call_depth_base) =
                         match self.gen_run_stack.last() {
                             Some(g) => (g.gen, g.stack_base, g.jumps_base, g.call_depth_base),
-                            None => return Halt::EngineInvariant("yield:no-generator"),
+                            None => return Step::Host(Halt::EngineInvariant("yield:no-generator")),
                         };
                     let resume_pc = pc + size as usize;
                     let yielded = self.pop();
@@ -18913,7 +19190,7 @@ impl Interp {
                     // finding, on the `await` twin below). Fail closed like
                     // the other malformed suspend shapes.
                     if stack_base > self.stack.len() {
-                        return Halt::EngineInvariant("yield:stack-underflow");
+                        return Step::Host(Halt::EngineInvariant("yield:stack-underflow"));
                     }
                     let stack_slice = self.stack.split_off(stack_base);
                     let jumps = self
@@ -18954,13 +19231,13 @@ impl Interp {
                         g.state = GeneratorState::SuspendedYield;
                         g.frame = Some(frame);
                     }
-                    return Halt::Yield(yielded);
+                    return Step::Yielded(yielded);
                 }
 
                 // ---- async functions --------------------------------
                 XS_CODE_START_ASYNC_GENERATOR => {
                     if self.cur_target {
-                        return Halt::Unsupported("async-generator:new-target");
+                        return Step::Host(Halt::NotImplemented("async-generator:new-target"));
                     }
                     let resume_pc = pc + size as usize;
                     let proto = self
@@ -18972,21 +19249,22 @@ impl Interp {
                         if return_depth != 0 {
                             let _ = self.leave_call();
                             self.push(slot);
-                            self.callback_return_depth = Some(return_depth);
                         }
-                        return Halt::Return;
+                        return Step::Returned;
                     }
                     // Same frame-underflow guard as `END` (see there): a
                     // `start_async_generator` reached below `return_depth` on
                     // crafted bytecode must not pop an outer frame (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Halt::EngineInvariant("start_async_generator:frame-underflow");
+                        return Step::Host(Halt::EngineInvariant(
+                            "start_async_generator:frame-underflow",
+                        ));
                     }
                     let resume = self.leave_call();
                     self.push(slot);
                     pc = resume;
                     if self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                 }
                 // `start_async` (`XS_CODE_START_ASYNC`, xsRun.c:1094): the
@@ -19002,7 +19280,7 @@ impl Interp {
                     // `new asyncFn()` is a `TypeError` in XS (async functions are
                     // not constructors); self-name rather than mis-handle.
                     if self.cur_target {
-                        return Halt::Unsupported("async:new-target");
+                        return Step::Host(Halt::NotImplemented("async:new-target"));
                     }
                     let resume_pc = pc + size as usize;
                     let inst = self.new_async_instance(resume_pc);
@@ -19029,9 +19307,8 @@ impl Interp {
                         if return_depth != 0 {
                             let _ = self.leave_call();
                             self.push(promise_slot);
-                            self.callback_return_depth = Some(return_depth);
                         }
-                        return Halt::Return;
+                        return Step::Returned;
                     }
                     // Same frame-underflow guard as `END` (see there): a
                     // `start_async` reached below `return_depth` on crafted
@@ -19039,20 +19316,20 @@ impl Interp {
                     // site the `leave_call with empty call stack` fuzz abort
                     // hit (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Halt::EngineInvariant("start_async:frame-underflow");
+                        return Step::Host(Halt::EngineInvariant("start_async:frame-underflow"));
                     }
                     let resume = self.leave_call();
                     self.push(promise_slot);
                     pc = resume;
                     if self.check_meter() == MeterCheck::Abort {
-                        return Halt::MeterAbort;
+                        return Step::Host(Halt::MeterAbort);
                     }
                 }
                 // `await` (`XS_CODE_AWAIT`, xsRun.c:1212): suspend the running
                 // async instance. Shares XS's `YIELD` `mxCase` — snapshot the
                 // activation (scope + own stack temporaries + resume cursor) into
                 // the `async_instances` table and unwind to the `step_async`
-                // driver via [`Halt::Await`], carrying the awaited value (popped
+                // driver via [`Step::Awaited`], carrying the awaited value (popped
                 // to the frame result). The per-suspend metering is the identical
                 // C code as `YIELD`, so it reuses [`GENERATOR_YIELD_METERING`].
                 // `await` inside a live `try` travels like `yield`'s: the run's
@@ -19083,7 +19360,7 @@ impl Interp {
                         // Same hostile-bytecode refusal as the plain-async
                         // path below.
                         if stack_base > self.stack.len() {
-                            return Halt::EngineInvariant("await:stack-underflow");
+                            return Step::Host(Halt::EngineInvariant("await:stack-underflow"));
                         }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
@@ -19120,12 +19397,14 @@ impl Interp {
                             g.frame = Some(frame);
                             g.state = AsyncGeneratorState::Awaiting;
                         }
-                        return Halt::Await(awaited);
+                        return Step::Awaited(awaited);
                     }
                     let (inst, stack_base, jumps_base, call_depth_base) =
                         match self.async_run_stack.last() {
                             Some(a) => (a.inst, a.stack_base, a.jumps_base, a.call_depth_base),
-                            None => return Halt::EngineInvariant("await:no-async-instance"),
+                            None => {
+                                return Step::Host(Halt::EngineInvariant("await:no-async-instance"))
+                            }
                         };
                     let resume_pc = pc + size as usize;
                     let awaited = self.pop();
@@ -19135,7 +19414,7 @@ impl Interp {
                     // past the stack end panics where a named refusal is
                     // owed.
                     if stack_base > self.stack.len() {
-                        return Halt::EngineInvariant("await:stack-underflow");
+                        return Step::Host(Halt::EngineInvariant("await:stack-underflow"));
                     }
                     let stack_slice = self.stack.split_off(stack_base);
                     let jumps = self
@@ -19171,7 +19450,7 @@ impl Interp {
                     if let Some(a) = self.async_instances.get_mut(&inst) {
                         a.frame = Some(frame);
                     }
-                    return Halt::Await(awaited);
+                    return Step::Awaited(awaited);
                 }
 
                 // ---- exceptions: the jump-buffer chain --------------
@@ -19230,23 +19509,7 @@ impl Interp {
                 // no handler the throw escapes to the host: `Halt::Throw`.
                 XS_CODE_THROW => {
                     let v = *self.stack.last().unwrap_or(&Slot::undefined());
-                    self.exception = v;
-                    match self.unwind_to_jump() {
-                        Some(target) => {
-                            if self.call_stack.len() < return_depth {
-                                return Halt::Resume(target);
-                            }
-                            pc = target;
-                            if self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
-                            }
-                        }
-                        None => {
-                            self.meter_host_escape();
-                            let rendered = self.render_or_stub(&v);
-                            return Halt::Throw { value: v, rendered };
-                        }
-                    }
+                    dispatch_halt!(self.raise_js(v), pc, self, return_depth);
                 }
                 // `rethrow` (`XS_CODE_RETHROW`, xsRun.c:1405): re-`fxJump`
                 // with the current `mxException` (a finally re-raising a
@@ -19254,22 +19517,7 @@ impl Interp {
                 // already in `mxException` rather than on the stack.
                 XS_CODE_RETHROW => {
                     let v = self.exception;
-                    match self.unwind_to_jump() {
-                        Some(target) => {
-                            if self.call_stack.len() < return_depth {
-                                return Halt::Resume(target);
-                            }
-                            pc = target;
-                            if self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
-                            }
-                        }
-                        None => {
-                            self.meter_host_escape();
-                            let rendered = self.render_or_stub(&v);
-                            return Halt::Throw { value: v, rendered };
-                        }
-                    }
+                    dispatch_halt!(self.raise_js(v), pc, self, return_depth);
                 }
                 // `throw_status` (`XS_CODE_THROW_STATUS`, xsRun.c:1423):
                 // throw only when the frame's status carries `XS_THROW_STATUS`
@@ -19290,17 +19538,24 @@ impl Interp {
                     // Measured declaration residue (see the constants):
                     // one unit always, one more for a real resource.
                     self.meter.tick_raw(USING_DECL_METERING);
+                    let error_message = if op == XS_CODE_USING_ASYNC {
+                        "using: neither [Symbol.asyncDispose] nor [Symbol.dispose] are function"
+                    } else {
+                        "using: [Symbol.dispose] is not a function"
+                    };
                     let resource = *self.stack.last().unwrap_or(&Slot::undefined());
                     let disposer = if matches!(resource.kind, Kind::Null | Kind::Undefined) {
                         Slot::null()
                     } else {
                         self.meter.tick_raw(USING_RESOURCE_METERING);
-                        let inst = match resource.value {
-                            Payload::Reference(inst) if resource.kind == Kind::Reference => inst,
-                            _ => {
-                                let error = self.build_error("TypeError", 0, 0);
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
-                            }
+                        let object = dispatch_result!(
+                            self.array_to_object(resource),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        let Payload::Reference(inst) = object.value else {
+                            unreachable!("ToObject result")
                         };
                         let mut value = Slot::undefined();
                         if op == XS_CODE_USING_ASYNC {
@@ -19329,7 +19584,7 @@ impl Interp {
                             }
                         }
                         if !self.is_callable_value(value) {
-                            let error = self.build_error("TypeError", 0, 0);
+                            let error = self.internal_error("TypeError", error_message.into());
                             dispatch_halt!(self.raise_js(error), pc, self, return_depth);
                         }
                         value
@@ -19373,11 +19628,11 @@ impl Interp {
                 XS_CODE_TRANSFER | XS_CODE_TRANSFER_JSON => {
                     let count = match self.pop().value {
                         Payload::Integer(n) if n >= 3 => n as usize,
-                        _ => return Halt::EngineInvariant("module:transfer-shape"),
+                        _ => return Step::Host(Halt::EngineInvariant("module:transfer-shape")),
                     };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
-                        None => return Halt::EngineInvariant("module:transfer-stack"),
+                        None => return Step::Host(Halt::EngineInvariant("module:transfer-stack")),
                     };
                     let imported = self.stack[start + 1].kind == Kind::String;
                     let local_id = match self.stack[start].value {
@@ -19394,18 +19649,18 @@ impl Interp {
                 XS_CODE_MODULE => {
                     let flags = code.get(pc + 1).copied().unwrap_or_default();
                     if flags & 32 != 0 {
-                        return Halt::Unsupported("module:dynamic-import");
+                        return Step::Host(Halt::NotImplemented("module:dynamic-import"));
                     }
                     if flags & 64 != 0 {
-                        return Halt::Unsupported("module:import-meta");
+                        return Step::Host(Halt::NotImplemented("module:import-meta"));
                     }
                     let count = match self.pop().value {
                         Payload::Integer(n) if n >= 2 => n as usize,
-                        _ => return Halt::EngineInvariant("module:envelope-shape"),
+                        _ => return Step::Host(Halt::EngineInvariant("module:envelope-shape")),
                     };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
-                        None => return Halt::EngineInvariant("module:envelope-stack"),
+                        None => return Step::Host(Halt::EngineInvariant("module:envelope-stack")),
                     };
                     let initialize = self.stack[start];
                     let execute = self.stack[start + 1];
@@ -19413,17 +19668,17 @@ impl Interp {
                     if transfers.iter().any(|transfer| {
                         matches!(transfer.value, Payload::At(_, imported) if imported != 0)
                     }) {
-                        return Halt::Unsupported("module:static-linking");
+                        return Step::Host(Halt::NotImplemented("module:static-linking"));
                     }
                     let execute_function = match execute.value {
                         Payload::Reference(function) if execute.kind == Kind::Reference => function,
-                        _ => return Halt::Unsupported("module:execute-function"),
+                        _ => return Step::Host(Halt::NotImplemented("module:execute-function")),
                     };
                     if self.functions[&execute_function].body_start.is_none() {
-                        return Halt::Unsupported("module:execute-body");
+                        return Step::Host(Halt::NotImplemented("module:execute-body"));
                     }
                     if self.instance_prototype(execute_function) == self.async_function_proto {
-                        return Halt::Unsupported("module:top-level-await");
+                        return Step::Host(Halt::NotImplemented("module:top-level-await"));
                     }
                     let execute_environment = self.functions[&execute_function].closures;
                     let initialize_function = match initialize.value {
@@ -19437,7 +19692,7 @@ impl Interp {
                         .unwrap_or(crate::value::SlotIndex::NULL);
                     for transfer in &transfers {
                         let Payload::At(local_id, _) = transfer.value else {
-                            return Halt::EngineInvariant("module:transfer-record");
+                            return Step::Host(Halt::EngineInvariant("module:transfer-record"));
                         };
                         if local_id == crate::value::XS_NO_ID {
                             continue;
@@ -19484,10 +19739,10 @@ impl Interp {
                 // surface (design § accuracy over parity: an honest named
                 // skip, never a wrong value).
                 XS_CODE_IMPORT => {
-                    return Halt::Unsupported("module:dynamic-import");
+                    return Step::Host(Halt::NotImplemented("module:dynamic-import"));
                 }
                 XS_CODE_IMPORT_META => {
-                    return Halt::Unsupported("module:import-meta");
+                    return Step::Host(Halt::NotImplemented("module:import-meta"));
                 }
 
                 other => {
@@ -19496,9 +19751,9 @@ impl Interp {
                     // nothing: give the nameless opcode its own literal so the
                     // refusal still says what stopped the run.
                     if other.name().is_empty() {
-                        return Halt::Unsupported("opcode:no-code");
+                        return Step::Host(Halt::NotImplemented("opcode:no-code"));
                     }
-                    return Halt::Unsupported(other.name());
+                    return Step::Host(Halt::NotImplemented(other.name()));
                 }
             }
         }
@@ -19846,10 +20101,10 @@ impl Interp {
     /// the callee body's start pc, or `Halt::Throw` when the callee is not a
     /// known user function (the covered grammar only calls functions it
     /// defined).
-    fn enter_call(&mut self, argc: usize, ret_pc: usize, has_target: bool) -> Result<usize, Halt> {
+    fn enter_call(&mut self, argc: usize, ret_pc: usize, has_target: bool) -> Result<usize, Step> {
         let len = self.stack.len();
         if len < argc + 4 {
-            return Err(Halt::EngineInvariant("call:stack-underflow"));
+            return Err(Step::Host(Halt::EngineInvariant("call:stack-underflow")));
         }
         let base = len - argc - 4; // index of THIS
         let func_slot = self.stack[base + 1];
@@ -19865,11 +20120,15 @@ impl Interp {
             // a realm-correct `TypeError` object. Raise it through the same
             // jump-buffer chain as the `throw` opcode. A handler in the current
             // frame is a *resume*, not a callee body address: preserve that
-            // distinction with `Halt::Resume` so `RUN` does not enter the catch
+            // distinction with `Step::Unwound` so `RUN` does not enter the catch
             // target as though it were a function.
             _ => {
-                let error = self.build_error("TypeError", 0, 0);
-                return Err(self.raise_js(error));
+                let message = if has_target {
+                    "new: not a constructor"
+                } else {
+                    "call: not a function"
+                };
+                return Err(self.catchable_type_error_msg(message.into()));
             }
         };
         // The single choke point every user-function dispatch funnels through.
@@ -19880,7 +20139,7 @@ impl Interp {
         // in-range gates trampoline bound callees before they get here.
         let body_start = match self.functions[&func].body_start {
             Some(bs) => bs,
-            None => return Err(Halt::EngineInvariant("bind:bound-callback")),
+            None => return Err(Step::Host(Halt::EngineInvariant("bind:bound-callback"))),
         };
         let this_val = self.stack[base];
         // Stack-overflow guard (XS's `fxOverflow` on the callee's frame
@@ -19896,7 +20155,7 @@ impl Interp {
         // suspended on the stack). If that crosses the fixed budget, abort
         // to the host exactly as XS's `fxOverflow`.
         if self.would_overflow(FRAME_OVERHEAD_SLOTS + argc) {
-            return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
         }
         // Unwind the frame region (THIS..last arg).
         self.stack.truncate(base);
@@ -19957,7 +20216,7 @@ impl Interp {
         func: Slot,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.invoke_value(code, func, this, args)
     }
 
@@ -19977,12 +20236,16 @@ impl Interp {
         func: Slot,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // Resolve the callee. Only a user (bytecode) function is driven here;
         // a native callback or a non-callable is out of the modeled subset.
         let f = match func.value {
             Payload::Reference(f) if self.functions.contains_key(&f) => f,
-            _ => return Err(Halt::Unsupported("callback:non-user-function")),
+            _ => {
+                return Err(Step::Host(Halt::NotImplemented(
+                    "callback:non-user-function",
+                )))
+            }
         };
         // A bound wrapper has no bytecode body of its own. Route it back
         // through the shared abstract Call operation, which recursively
@@ -20059,7 +20322,6 @@ impl Interp {
         // After `enter_call` the callee frame's `CallerState` is on the call
         // stack; run until its `END` pops the stack back to this depth.
         let return_depth = self.call_stack.len();
-        self.callback_return_depth = None;
         // Dispatch over the callee's own buffer when it lives in a different
         // segment than the caller's `code` (an eval-defined function handed to
         // a native driver such as `Array.prototype.map`, or the `Function`
@@ -20085,13 +20347,9 @@ impl Interp {
         let outcome = self.dispatch_at(body_code, body_start, return_depth);
         self.active_segment = saved_segment;
         match outcome {
-            // A callback throw may unwind across this native re-entry into a
-            // catch/finally established by the caller. In that case the nested
-            // dispatcher has already resumed the caller and run it onward;
-            // its eventual Return must propagate instead of being mistaken
-            // for the callback's own result (whose frame was abandoned).
-            Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
-            Halt::Return => Ok(self.pop()),
+            // Only this activation's normal return supplies a callback result.
+            // A caller's handler travels outward as Step::Unwound instead.
+            Step::Returned => Ok(self.pop()),
             other => Err(other),
         }
     }
@@ -20206,7 +20464,7 @@ impl Interp {
         argc: usize,
         has_target: bool,
         callee_segment: Option<usize>,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let body_start = self.enter_call(argc, 0, has_target)?;
         self.dispatch_entered_cross_segment(body_start, callee_segment)
     }
@@ -20217,23 +20475,24 @@ impl Interp {
         &mut self,
         body_start: usize,
         callee_segment: Option<usize>,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let buf = match self.segment_buffer(callee_segment) {
             Some(buf) => buf,
-            None => return Err(Halt::EngineInvariant("function:missing-segment")),
+            None => {
+                return Err(Step::Host(Halt::EngineInvariant(
+                    "function:missing-segment",
+                )))
+            }
         };
         let return_depth = self.call_stack.len();
         let saved_segment = self.active_segment;
         self.active_segment = callee_segment;
-        self.callback_return_depth = None;
         let outcome = self.dispatch_at(&buf[..], body_start, return_depth);
         self.active_segment = saved_segment;
         match outcome {
-            // A throw unwound across this boundary into a caller catch/finally
-            // (the nested dispatcher already resumed the caller): propagate the
-            // Return rather than treat it as this call's result.
-            Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
-            Halt::Return => Ok(self.pop()),
+            // A caller's handler travels outward as Step::Unwound; only
+            // this activation's normal return supplies a call result.
+            Step::Returned => Ok(self.pop()),
             other => Err(other),
         }
     }
@@ -20252,23 +20511,25 @@ impl Interp {
     /// left the promise pending forever (review F023).
     ///
     /// A real host halt (meter abort, unsupported, …) propagates. A
-    /// `Halt::Resume` cannot escape a fenced body: every handler the guest
+    /// `Step::Unwound` cannot escape a fenced body: every handler the guest
     /// can reach was established inside `body`, at or above the depth of the
     /// nested dispatch that consumes it.
     fn native_try<T>(
         &mut self,
-        body: impl FnOnce(&mut Self) -> Result<T, Halt>,
-    ) -> Result<Result<T, Slot>, Halt> {
+        body: impl FnOnce(&mut Self) -> Result<T, Step>,
+    ) -> Result<Result<T, Slot>, Step> {
         let fenced_jumps = std::mem::take(&mut self.jumps);
         let stack_base = self.stack.len();
         let call_depth = self.call_stack.len();
         let outcome = match body(self) {
             Ok(value) => Ok(Ok(value)),
-            Err(Halt::Throw { value, .. }) => {
+            Err(Step::Threw { value, .. }) => {
                 self.unwind_native_try(stack_base, call_depth, 0);
                 Ok(Err(value))
             }
-            Err(Halt::Resume(_)) => Err(Halt::EngineInvariant("native-try:resume-escaped-fence")),
+            Err(Step::Unwound(_)) => Err(Step::Host(Halt::EngineInvariant(
+                "native-try:resume-escaped-fence",
+            ))),
             Err(halt) => Err(halt),
         };
         debug_assert!(
@@ -20290,7 +20551,7 @@ impl Interp {
         func: Slot,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         self.native_try(|machine| machine.run_callback(code, func, this, args))
     }
 
@@ -20330,7 +20591,7 @@ impl Interp {
     /// generator produces (`fx_Generator_prototype_aux`, the `state == END`
     /// branch): `next` → `{undefined, true}`; `return(v)` → `{v, true}`;
     /// `throw(e)` re-throws `e`.
-    fn generator_done_result(&mut self, status: GenStatus, sent: Slot) -> Result<Slot, Halt> {
+    fn generator_done_result(&mut self, status: GenStatus, sent: Slot) -> Result<Slot, Step> {
         match status {
             GenStatus::Next => Ok(self.new_generator_result(Slot::undefined(), true)),
             GenStatus::Return => Ok(self.new_generator_result(sent, true)),
@@ -20344,7 +20605,7 @@ impl Interp {
     /// completion, and return the `{value, done}` result. The driver's
     /// activation is suspended onto `call_stack` (exactly as [`Self::enter_call`]
     /// does) so the generator's `END`/`leave_call` restores it; a `yield`
-    /// unwinds here via [`Halt::Yield`] with the driver still suspended, which
+    /// unwinds here via [`Step::Yielded`] with the driver still suspended, which
     /// this restores. `.return`/`.throw` resume through the compiler's
     /// `BRANCH_STATUS` epilogue, including live catch/finally handlers.
     fn resume_generator(
@@ -20353,17 +20614,15 @@ impl Interp {
         gen: crate::value::SlotIndex,
         sent: Slot,
         status: GenStatus,
-    ) -> Result<Slot, Halt> {
-        let state = self
-            .generators
-            .get(&gen)
-            .map(|g| g.state)
-            .ok_or_else(|| self.catchable_type_error())?;
+    ) -> Result<Slot, Step> {
+        let state = self.generators.get(&gen).map(|g| g.state).ok_or_else(|| {
+            self.catchable_type_error_msg("this: not a Generator instance".into())
+        })?;
         match state {
             GeneratorState::Executing => {
                 // Re-entrant resume of a running generator is an ordinary
                 // catchable `TypeError` ("generator is running" in XS).
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("generator is running".into()));
             }
             GeneratorState::Completed => return self.generator_done_result(status, sent),
             GeneratorState::SuspendedStart => {
@@ -20384,7 +20643,7 @@ impl Interp {
             .generators
             .get_mut(&gen)
             .and_then(|g| g.frame.take())
-            .ok_or(Halt::EngineInvariant("generator:no-frame"))?;
+            .ok_or(Step::Host(Halt::EngineInvariant("generator:no-frame")))?;
         // The per-resume native-frame residual (`fx_Generator_prototype_aux` +
         // `fxRunID` re-entry) over the `RUN` trampoline already metered.
         self.meter.tick_raw(GENERATOR_RESUME_METERING);
@@ -20476,7 +20735,7 @@ impl Interp {
         self.gen_run_stack.pop();
         self.resume_status = ResumeStatus::NoStatus;
         match outcome {
-            Halt::Yield(v) => {
+            Step::Yielded(v) => {
                 // The `YIELD` arm snapshotted the generator and truncated the
                 // stack to `stack_base`; the driver is still suspended — restore
                 // it (its own `leave_call`). `v` is the `{value, done: false}`
@@ -20489,7 +20748,7 @@ impl Interp {
                 self.jumps.truncate(jumps_base);
                 Ok(v)
             }
-            Halt::Return => {
+            Step::Returned => {
                 // The generator's `END` boundary branch already ran
                 // `leave_call` (driver restored) and pushed the completion, so
                 // `call_stack.len() < return_depth` here. A body terminated by
@@ -20509,7 +20768,9 @@ impl Interp {
                         g.state = GeneratorState::Completed;
                         g.frame = None;
                     }
-                    return Err(Halt::EngineInvariant("generator:non-boundary-return"));
+                    return Err(Step::Host(Halt::EngineInvariant(
+                        "generator:non-boundary-return",
+                    )));
                 }
                 let ret = self.pop();
                 self.stack.truncate(stack_base);
@@ -20547,11 +20808,11 @@ impl Interp {
         gen: crate::value::SlotIndex,
         value: Slot,
         status: GenStatus,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if !self.async_generators.contains_key(&gen) {
-            return Err(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::EngineInvariant(
                 "async-generator:not-an-async-generator",
-            ));
+            )));
         }
         let (promise, resolve, reject) = self.new_promise_capability();
         self.async_generators
@@ -20572,9 +20833,9 @@ impl Interp {
     /// method is borrowed onto a receiver without `[[AsyncGeneratorState]]`.
     /// Unlike the synchronous Generator methods, this validation failure does
     /// not throw from the call itself.
-    fn reject_async_generator_brand(&mut self) -> Result<Slot, Halt> {
+    fn reject_async_generator_brand(&mut self) -> Result<Slot, Step> {
         let (promise, _resolve, reject) = self.new_promise_capability();
-        let error = self.build_error("TypeError", 0, 0);
+        let error = self.internal_error("TypeError", "this: not an AsyncGenerator instance".into());
         self.meter
             .tick_raw(ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING);
         self.reject_via_function(reject, error)?;
@@ -20594,7 +20855,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         gen: crate::value::SlotIndex,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         loop {
             let state = self.async_generators[&gen].state;
             if matches!(
@@ -20681,7 +20942,7 @@ impl Interp {
         gen: crate::value::SlotIndex,
         value: Slot,
         reject: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         self.settle_active_async_generator_request(code, gen, value, reject)?;
         self.kick_async_generator(code, gen)
     }
@@ -20695,12 +20956,14 @@ impl Interp {
         gen: crate::value::SlotIndex,
         value: Slot,
         reject: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let request = self
             .async_generators
             .get_mut(&gen)
             .and_then(|g| g.active.take())
-            .ok_or(Halt::EngineInvariant("async-generator:no-active-request"))?;
+            .ok_or(Step::Host(Halt::EngineInvariant(
+                "async-generator:no-active-request",
+            )))?;
         self.settle_via_function(
             code,
             if reject {
@@ -20719,12 +20982,14 @@ impl Interp {
         status: ResumeStatus,
         sent: Slot,
         is_start: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let saved = self
             .async_generators
             .get_mut(&gen)
             .and_then(|g| g.frame.take())
-            .ok_or(Halt::EngineInvariant("async-generator:no-frame"))?;
+            .ok_or(Step::Host(Halt::EngineInvariant(
+                "async-generator:no-frame",
+            )))?;
         if !is_start {
             self.meter.tick_raw(GENERATOR_RESUME_METERING);
         }
@@ -20751,7 +21016,7 @@ impl Interp {
         // `try` live around the synchronous start — where, unfenced,
         // the mainline's cross-frame unwind consumed the caller's
         // handler (a caught `1` where XS answers `after`, or a leaked
-        // Halt::Resume — review of the llm rebase, locked by the
+        // Step::Unwound — review of the llm rebase, locked by the
         // await_in_try boundary cases). Sync generators stay UNfenced:
         // there the cross-frame catch is XS's own behavior. The body's
         // rebased handlers live above the (now empty) chain and are
@@ -20822,19 +21087,19 @@ impl Interp {
         self.async_gen_run_stack.pop();
         self.resume_status = ResumeStatus::NoStatus;
         let step_result = match outcome {
-            Halt::AsyncYield(value) => {
+            Step::AsyncYielded(value) => {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
                 self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorYield(gen))
             }
-            Halt::Await(value) => {
+            Step::Awaited(value) => {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
                 self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorAwait(gen))
             }
-            Halt::Return => {
+            Step::Returned => {
                 // A boundary `END` already ran `leave_call` (driver restored),
                 // so `call_stack.len() < return_depth`. A body terminated by the
                 // top-level-*only* `RETURN` opcode instead skips that boundary
@@ -20851,7 +21116,9 @@ impl Interp {
                     let data = self.async_generators.get_mut(&gen).unwrap();
                     data.state = AsyncGeneratorState::Completed;
                     data.frame = None;
-                    return Err(Halt::EngineInvariant("async-generator:non-boundary-return"));
+                    return Err(Step::Host(Halt::EngineInvariant(
+                        "async-generator:non-boundary-return",
+                    )));
                 }
                 let value = self.pop();
                 self.stack.truncate(stack_base);
@@ -20861,7 +21128,7 @@ impl Interp {
                 data.frame = None;
                 self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorReturn(gen))
             }
-            Halt::Throw { value: reason, .. } => {
+            Step::Threw { value: reason, .. } => {
                 while self.call_stack.len() >= return_depth {
                     let _ = self.leave_call();
                 }
@@ -20914,7 +21181,7 @@ impl Interp {
     ///   `status` threads into the `BRANCH_STATUS` epilogue.
     ///
     /// Returns `Ok(())` when the step completed (the result promise settled or
-    /// the body re-suspended at another `await`); propagates `Halt::Unsupported`
+    /// the body re-suspended at another `await`); propagates `Halt::NotImplemented`
     /// / `MeterAbort` / `StackOverflow` when the body hit an un-modeled surface.
     /// A body `throw` is *not* propagated — it rejects the result promise.
     fn step_async(
@@ -20924,7 +21191,7 @@ impl Interp {
         status: ResumeStatus,
         sent: Slot,
         is_start: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         // A resume of an already-settled instance (a promise firing twice) is a
         // no-op — the two-level guard XS's resolving functions enforce.
         if self
@@ -20940,7 +21207,7 @@ impl Interp {
             .async_instances
             .get_mut(&inst)
             .and_then(|a| a.frame.take())
-            .ok_or(Halt::EngineInvariant("async:no-frame"))?;
+            .ok_or(Step::Host(Halt::EngineInvariant("async:no-frame")))?;
         if !is_start {
             // The per-resume native-frame residual (`fxResolveAwait`/
             // `fxRejectAwait` → `fxStepAsync` → `fxRunID` re-entry), the async
@@ -20972,7 +21239,7 @@ impl Interp {
         // `try` live around the synchronous start — where, unfenced,
         // the mainline's cross-frame unwind consumed the caller's
         // handler (a caught `1` where XS answers `after`, or a leaked
-        // Halt::Resume — review of the llm rebase, locked by the
+        // Step::Unwound — review of the llm rebase, locked by the
         // await_in_try boundary cases). Sync generators stay UNfenced:
         // there the cross-frame catch is XS's own behavior. The body's
         // rebased handlers live above the (now empty) chain and are
@@ -21046,7 +21313,7 @@ impl Interp {
         // Any `BRANCH_STATUS` will have consumed the status; reset defensively.
         self.resume_status = ResumeStatus::NoStatus;
         let step_result = match outcome {
-            Halt::Await(v) => {
+            Step::Awaited(v) => {
                 // The `AWAIT` arm snapshotted the instance and truncated the
                 // stack to `stack_base`; the ambient frame is still suspended —
                 // restore it (its own `leave_call`), then schedule the await.
@@ -21055,7 +21322,7 @@ impl Interp {
                 self.jumps.truncate(jumps_base);
                 self.await_schedule(code, inst, v)
             }
-            Halt::Return => {
+            Step::Returned => {
                 // The body's `END` boundary branch already ran `leave_call`
                 // (ambient restored) and pushed the completion value — so the
                 // driver frame is gone (`call_stack.len() < return_depth`).
@@ -21082,7 +21349,9 @@ impl Interp {
                         a.done = true;
                         a.frame = None;
                     }
-                    return Err(Halt::EngineInvariant("async:non-boundary-return"));
+                    return Err(Step::Host(Halt::EngineInvariant(
+                        "async:non-boundary-return",
+                    )));
                 }
                 let ret = self.pop();
                 self.stack.truncate(stack_base);
@@ -21099,7 +21368,7 @@ impl Interp {
                 let resolve_fn = self.async_instances[&inst].resolve_fn;
                 self.settle_via_function(code, resolve_fn, ret)
             }
-            Halt::Throw { value: reason, .. } => {
+            Step::Threw { value: reason, .. } => {
                 // A body throw that escaped every handler rejects the result
                 // promise (XS's `mxCatch` → `fxRejectException`), not the host.
                 while self.call_stack.len() >= return_depth {
@@ -21172,7 +21441,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         self.schedule_native_await(code, value, ReactionKind::AsyncAwait(inst))
     }
 
@@ -21181,7 +21450,7 @@ impl Interp {
         code: &[u8],
         value: Slot,
         kind: ReactionKind,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if let Payload::Reference(r) = value.value {
             if self.promises.contains_key(&r) {
                 // XS's fast path is `mxGetID(_constructor)` + `fxIsSameValue` +
@@ -21208,17 +21477,19 @@ impl Interp {
     /// the pair's shared `[[AlreadyResolved]]` guard, and if fresh, trip it and
     /// settle. Used where XS calls a resolving function via `mxRunCount(1)`
     /// (async completion, the await general path) rather than from guest code.
-    fn settle_via_function(&mut self, code: &[u8], f: Slot, value: Slot) -> Result<(), Halt> {
+    fn settle_via_function(&mut self, code: &[u8], f: Slot, value: Slot) -> Result<(), Step> {
         let fref = match f.value {
             Payload::Reference(r) => r,
-            _ => return Err(Halt::EngineInvariant("async:bad-resolving-fn")),
+            _ => return Err(Step::Host(Halt::EngineInvariant("async:bad-resolving-fn"))),
         };
         let data = match self.promise_functions.get(&fref) {
             Some(d) => *d,
-            None => return Err(Halt::EngineInvariant("async:bad-resolving-fn")),
+            None => return Err(Step::Host(Halt::EngineInvariant("async:bad-resolving-fn"))),
         };
         if !is_promise_resolving_guard(data.guard) || data.guard >= self.promise_guards.len() {
-            return Err(Halt::EngineInvariant("async:non-resolver-as-resolver"));
+            return Err(Step::Host(Halt::EngineInvariant(
+                "async:non-resolver-as-resolver",
+            )));
         }
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
@@ -21234,10 +21505,10 @@ impl Interp {
     /// assimilation, so it needs no bytecode buffer for observable property
     /// access; keeping this path explicit prevents fulfillment callers from
     /// accidentally bypassing the full `Get(resolution, "then")` operation.
-    fn reject_via_function(&mut self, f: Slot, value: Slot) -> Result<(), Halt> {
+    fn reject_via_function(&mut self, f: Slot, value: Slot) -> Result<(), Step> {
         let fref = match f.value {
             Payload::Reference(r) => r,
-            _ => return Err(Halt::EngineInvariant("async:bad-resolving-fn")),
+            _ => return Err(Step::Host(Halt::EngineInvariant("async:bad-resolving-fn"))),
         };
         let data = match self.promise_functions.get(&fref) {
             Some(d)
@@ -21247,7 +21518,7 @@ impl Interp {
             {
                 *d
             }
-            _ => return Err(Halt::EngineInvariant("async:bad-rejecting-fn")),
+            _ => return Err(Step::Host(Halt::EngineInvariant("async:bad-rejecting-fn"))),
         };
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
@@ -21268,7 +21539,7 @@ impl Interp {
         reject: Slot,
         value: Slot,
         rejected: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let function = if rejected { reject } else { resolve };
         let native_resolver = match function.value {
             Payload::Reference(f) if function.kind == Kind::Reference => {
@@ -21293,7 +21564,7 @@ impl Interp {
     /// single result slot (XS's `mxStack = mxFrameEnd; *mxStack =
     /// *mxFrameResult`), and meters exactly what the C built-in meters.
     /// A native whose call behavior ironhorse does not yet model returns
-    /// [`Halt::Unsupported`] naming the built-in — an honest skip, never a
+    /// [`Halt::NotImplemented`] naming the built-in — an honest skip, never a
     /// mis-executed result.
     fn call_native(
         &mut self,
@@ -21302,7 +21573,7 @@ impl Interp {
         argc: usize,
         has_target: bool,
         code: &[u8],
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         // The native-constructor/function dispatch below is one of the two
         // monolithic activations of this crate (with `call_native_method`):
         // charge the native-recursion budget's heavy class for it, so a
@@ -21322,7 +21593,7 @@ impl Interp {
         argc: usize,
         has_target: bool,
         code: &[u8],
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         // `code` is threaded through for a native that re-enters user code —
         // the `Promise` executor via `run_callback`, and `Symbol`'s
         // `ToString(description)` — and ignored by the rest.
@@ -21363,7 +21634,7 @@ impl Interp {
             // constructable.
             Native::Eval => {
                 if has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("new: not a constructor".into()));
                 }
                 let source = arg(0);
                 if source.kind == Kind::String {
@@ -21781,7 +22052,11 @@ impl Interp {
                             // kind (`fx_Math_toInteger`) in the non-target case.
                             math_to_integer(string_to_number(&bytes, true))
                         }
-                        _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
+                        _ => {
+                            return Err(Step::Host(Halt::NotImplemented(native_unsupported_name(
+                                native,
+                            ))))
+                        }
                     },
                     _ if argc == 0 => Slot::integer(0),
                     Kind::Reference => {
@@ -21795,8 +22070,16 @@ impl Interp {
                         Payload::BigInt(off) => Slot::number(self.bigint_to_f64(off)),
                         _ => return Err(self.catchable_type_error()),
                     },
-                    Kind::Symbol => return Err(self.catchable_type_error()),
-                    _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
+                    Kind::Symbol => {
+                        return Err(
+                            self.catchable_type_error_msg("cannot coerce symbol to number".into())
+                        )
+                    }
+                    _ => {
+                        return Err(Step::Host(Halt::NotImplemented(native_unsupported_name(
+                            native,
+                        ))))
+                    }
                 };
                 if has_target {
                     self.build_wrapper(Native::Number, prim)
@@ -21828,7 +22111,7 @@ impl Interp {
                         Kind::Reference => {
                             let primitive = self.to_primitive(code, a, true)?;
                             if primitive.kind == Kind::Symbol {
-                                return Err(Halt::Unsupported("to_string:symbol"));
+                                return Err(Step::Host(Halt::NotImplemented("to_string:symbol")));
                             }
                             let bytes = self.to_string_bytes_metered(primitive);
                             let off = self.alloc_str_text(&bytes);
@@ -21862,10 +22145,10 @@ impl Interp {
             // or a StringIntegerLiteral. `%BigInt%` is not constructible.
             Native::BigInt => {
                 if has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("new: BigInt".into()));
                 }
                 if argc == 0 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("cannot coerce to bigint".into()));
                 }
                 let primitive = self.to_primitive(code, arg(0), false)?;
                 match primitive.kind {
@@ -21886,7 +22169,11 @@ impl Interp {
                             let (negative, magnitude) = number_to_bigint(n);
                             self.make_bigint(negative, magnitude)
                         }
-                        Payload::Number(_) => return Err(self.catchable_range_error()),
+                        Payload::Number(_) => {
+                            return Err(self.catchable_range_error_msg(
+                                "cannot coerce number to bigint".into(),
+                            ))
+                        }
                         _ => return Err(self.catchable_type_error()),
                     },
                     Kind::String => {
@@ -21894,11 +22181,24 @@ impl Interp {
                             Payload::String(off) => self.str_text(off),
                             _ => return Err(self.catchable_syntax_error()),
                         };
-                        let (negative, magnitude) = parse_bigint_string(&text)
-                            .ok_or_else(|| self.catchable_syntax_error())?;
+                        let (negative, magnitude) =
+                            parse_bigint_string(&text).ok_or_else(|| {
+                                self.catchable_syntax_error_with_message(
+                                    "cannot coerce string to bigint".into(),
+                                )
+                            })?;
                         self.make_bigint(negative, magnitude)
                     }
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            if primitive.kind == Kind::Symbol {
+                                "cannot coerce symbol to bigint"
+                            } else {
+                                "cannot coerce to bigint"
+                            }
+                            .into(),
+                        ))
+                    }
                 }
             }
             // `Object([value])` / `new Object([value])` (`fx_Object`): with no
@@ -21962,7 +22262,11 @@ impl Interp {
                             let inst = self.box_object_primitive(Native::BigInt, a);
                             Slot::of(Kind::Reference, Payload::Reference(inst))
                         }
-                        _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
+                        _ => {
+                            return Err(Step::Host(Halt::NotImplemented(native_unsupported_name(
+                                native,
+                            ))))
+                        }
                     }
                 }
             }
@@ -21993,7 +22297,9 @@ impl Interp {
             }
             Native::DisposableStack | Native::AsyncDisposableStack => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg(format!("call: {}", native.display_name()))
+                    );
                 }
                 // Measured constructor residue (see the constant).
                 self.meter.tick_raw(DISPOSABLE_STACK_CONSTRUCT_METERING);
@@ -22056,7 +22362,14 @@ impl Interp {
             // additional internal slots.
             Native::Iterator => {
                 if !has_target || !derived_native_construct {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if has_target {
+                            "new: Iterator"
+                        } else {
+                            "call: Iterator"
+                        }
+                        .into(),
+                    ));
                 }
                 let target = new_target.expect("a derived native construct has a new.target");
                 let proto =
@@ -22085,7 +22398,11 @@ impl Interp {
                             // A non-length number (`Array(2.5)`, `Array(-1)`)
                             // is a `RangeError` in XS — its abort value and
                             // metering are a later increment; honest skip.
-                            None => return Err(Halt::Unsupported("native-call:Array:bad-length")),
+                            None => {
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "native-call:Array:bad-length",
+                                )))
+                            }
                         },
                         _ => {
                             self.meter.tick_raw(self.array_chunk_size_metering(1));
@@ -22146,7 +22463,7 @@ impl Interp {
             // without `new` is a TypeError (a constructor-only intrinsic).
             Native::Proxy => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("call: Proxy".into()));
                 }
                 let target = arg(0);
                 let handler = arg(1);
@@ -22175,7 +22492,13 @@ impl Interp {
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             Native::WeakMap | Native::WeakSet | Native::Map | Native::Set => {
-                return Err(self.catchable_type_error());
+                let name = match native {
+                    Native::WeakMap => "WeakMap",
+                    Native::WeakSet => "WeakSet",
+                    Native::Map => "Map",
+                    _ => "Set",
+                };
+                return Err(self.catchable_type_error_msg(format!("call: {name}")));
             }
             // `new ArrayBuffer(byteLength)` (`fx_ArrayBuffer` +
             // `fxNewArrayBufferInstance`): a fresh zero-filled buffer. The
@@ -22190,35 +22513,12 @@ impl Interp {
             // honest named skips — their abort metering is a later increment.
             Native::ArrayBuffer if has_target => {
                 if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Halt::Unsupported("native-call:ArrayBuffer:resizable"));
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "native-call:ArrayBuffer:resizable",
+                    )));
                 }
                 let a = arg(0);
-                let byte_length: u32 = match a.kind {
-                    Kind::Undefined => 0,
-                    Kind::Integer => match a.value {
-                        Payload::Integer(i) if i >= 0 => i as u32,
-                        // A negative byteLength is a RangeError (`fxToIndex`),
-                        // caught by the `assert.throws(RangeError, …)` harness.
-                        _ => return Err(self.catchable_range_error()),
-                    },
-                    Kind::Number => match a.value {
-                        Payload::Number(n) => {
-                            let t = n.trunc();
-                            if t.is_nan() {
-                                0
-                            } else if t < 0.0 || t > 0x7FFF_FFFF as f64 {
-                                return Err(self.catchable_range_error());
-                            } else {
-                                t as u32
-                            }
-                        }
-                        _ => return Err(self.catchable_range_error()),
-                    },
-                    // A boolean/string/object byteLength takes the general
-                    // ToIndex coercion (observing `valueOf`/`toString`); a
-                    // Symbol/BigInt argument throws a catchable TypeError.
-                    _ => self.to_index_arg(code, a)?,
-                };
+                let byte_length = self.to_index_arg(code, a)?;
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
                 let inst = self.alloc_array_buffer(byte_length);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -22230,30 +22530,12 @@ impl Interp {
             // general ToNumber self-names an honest skip.
             Native::SharedArrayBuffer if has_target => {
                 if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Halt::Unsupported("native-call:SharedArrayBuffer:growable"));
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "native-call:SharedArrayBuffer:growable",
+                    )));
                 }
                 let a = arg(0);
-                let byte_length: u32 = match a.kind {
-                    Kind::Undefined => 0,
-                    Kind::Integer => match a.value {
-                        Payload::Integer(i) if i >= 0 => i as u32,
-                        _ => return Err(self.catchable_range_error()),
-                    },
-                    Kind::Number => match a.value {
-                        Payload::Number(n) => {
-                            let t = n.trunc();
-                            if t.is_nan() {
-                                0
-                            } else if t < 0.0 || t > 0x7FFF_FFFF as f64 {
-                                return Err(self.catchable_range_error());
-                            } else {
-                                t as u32
-                            }
-                        }
-                        _ => return Err(self.catchable_range_error()),
-                    },
-                    _ => self.to_index_arg(code, a)?,
-                };
+                let byte_length = self.to_index_arg(code, a)?;
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
                 let inst = self.alloc_array_buffer(byte_length);
                 self.shared_buffers.insert(inst);
@@ -22299,13 +22581,12 @@ impl Interp {
                             Some(o) => o,
                             None => self.to_index_arg(code, a1)?,
                         };
-                        if self.detached_buffers.contains(&r) {
-                            return Err(self.catchable_type_error());
-                        }
                         // A byteOffset that is not a multiple of the element
                         // size is a RangeError (`fxCheckTypedArrayIndex`).
                         if offset & ((1 << shift) - 1) != 0 {
-                            return Err(self.catchable_range_error());
+                            return Err(self.catchable_range_error_msg(format!(
+                                "invalid byteOffset {offset}"
+                            )));
                         }
                         // length (arg2): explicit element count, or the
                         // remaining buffer (which must divide evenly).
@@ -22321,24 +22602,48 @@ impl Interp {
                             // A length whose byte span overflows u32, runs past
                             // the buffer, or (implicitly) exceeds the allocation
                             // ceiling is a RangeError (`fxCheckTypedArrayLength`).
-                            let delta = match len.checked_shl(shift) {
+                            if self.detached_buffers.contains(&r) {
+                                return Err(self.catchable_type_error_msg("detached buffer".into()));
+                            }
+                            let delta = match len.checked_mul(1 << shift) {
                                 Some(d) => d,
-                                None => return Err(self.catchable_range_error()),
+                                None => {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid length {len}"
+                                    )))
+                                }
                             };
                             let end = match offset.checked_add(delta) {
                                 Some(e) => e,
-                                None => return Err(self.catchable_range_error()),
+                                None => {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid length {len}"
+                                    )))
+                                }
                             };
                             if buf_len < end {
-                                return Err(self.catchable_range_error());
+                                return Err(
+                                    self.catchable_range_error_msg(format!("invalid length {len}"))
+                                );
                             }
                             byte_size = delta;
                         } else {
                             // Implicit length: the buffer must divide evenly by
                             // the element size and contain the offset — else a
                             // RangeError (`fxCheckTypedArrayLength`).
-                            if offset > buf_len || (buf_len & ((1 << shift) - 1)) != 0 {
-                                return Err(self.catchable_range_error());
+                            if self.detached_buffers.contains(&r) {
+                                return Err(self.catchable_type_error_msg("detached buffer".into()));
+                            }
+                            if (buf_len & ((1 << shift) - 1)) != 0 {
+                                return Err(self.catchable_range_error_msg(format!(
+                                    "invalid byteLength {buf_len}"
+                                )));
+                            }
+                            if offset > buf_len {
+                                return Err(self.catchable_range_error_msg(format!(
+                                    "invalid byteLength {}",
+                                    buf_len.wrapping_sub(offset)
+                                )));
                             }
                             byte_size = buf_len - offset;
                         }
@@ -22428,13 +22733,15 @@ impl Interp {
                                 NativeMethod::ArrayValues,
                             ) || !intrinsic_next
                             {
-                                return Err(Halt::Unsupported(
+                                return Err(Step::Host(Halt::NotImplemented(
                                     "native-call:TypedArray:from-array-like",
-                                ));
+                                )));
                             }
                         }
                         if length > (0x7FFF_FFFFu32 >> shift) {
-                            return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "native-call:TypedArray:bad-length",
+                            )));
                         }
                         let byte_length = length << shift;
                         self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
@@ -22554,40 +22861,9 @@ impl Interp {
                     }
                     // Length form: `new TA(n)`. `n` is `ToIndex`-coerced.
                     _ => {
-                        let length: u32 = match a.kind {
-                            Kind::Undefined => 0,
-                            Kind::Integer => match a.value {
-                                Payload::Integer(i) if i >= 0 => i as u32,
-                                // A negative integer length is a RangeError
-                                // (`fxToIndex`), caught by `assert.throws`.
-                                _ => return Err(self.catchable_range_error()),
-                            },
-                            Kind::Number => match a.value {
-                                Payload::Number(n) => {
-                                    let t = n.trunc();
-                                    if t.is_nan() {
-                                        0
-                                    } else if t < 0.0 || t > (0x7FFF_FFFFu32 >> shift) as f64 {
-                                        return Err(self.catchable_range_error());
-                                    } else {
-                                        t as u32
-                                    }
-                                }
-                                _ => return Err(self.catchable_range_error()),
-                            },
-                            // A boolean/string/null length (and a Symbol/BigInt,
-                            // whose `ToNumber` throws a catchable TypeError) takes
-                            // the general `ToIndex` coercion path.
-                            _ => {
-                                let n = self.to_index_arg(code, a)?;
-                                if n > (0x7FFF_FFFFu32 >> shift) {
-                                    return Err(self.catchable_range_error());
-                                }
-                                n
-                            }
-                        };
+                        let length = self.to_index_arg(code, a)?;
                         if length > (0x7FFF_FFFFu32 >> shift) {
-                            return Err(self.catchable_range_error());
+                            return Err(self.catchable_range_error_msg("byteLength too big".into()));
                         }
                         let byte_length = length << shift;
                         self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
@@ -22619,7 +22895,11 @@ impl Interp {
                 let a = arg(0);
                 let buf = match a.value {
                     Payload::Reference(r) if self.array_buffers.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "buffer: not an ArrayBuffer instance".into(),
+                        ))
+                    }
                 };
                 let offset_arg = arg(1);
                 let length_arg = arg(2);
@@ -22630,20 +22910,28 @@ impl Interp {
                 // `ToNumber(byteOffset)` is still observed once, ahead of the
                 // out-of-range RangeError.
                 if self.detached_buffers.contains(&buf) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
                 if offset > buf_len {
-                    return Err(self.catchable_range_error());
+                    return Err(
+                        self.catchable_range_error_msg(format!("invalid byteOffset {offset}"))
+                    );
                 }
                 let size: u32;
                 if argc >= 3 && length_arg.kind != Kind::Undefined {
                     let s = self.to_index_arg(code, length_arg)?;
                     let end = match offset.checked_add(s) {
                         Some(e) => e,
-                        None => return Err(self.catchable_range_error()),
+                        None => {
+                            return Err(
+                                self.catchable_range_error_msg(format!("invalid byteLength {s}"))
+                            )
+                        }
                     };
                     if buf_len < end {
-                        return Err(self.catchable_range_error());
+                        return Err(
+                            self.catchable_range_error_msg(format!("invalid byteLength {s}"))
+                        );
                     }
                     size = s;
                 } else {
@@ -22662,7 +22950,7 @@ impl Interp {
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             // `DataView(...)` is constructor-only.
-            Native::DataView => return Err(self.catchable_type_error()),
+            Native::DataView => return Err(self.catchable_type_error_msg("call: DataView".into())),
             // `new Promise(executor)` (`fx_Promise`): a fresh pending promise
             // whose resolve/reject functions are handed to the executor, which
             // runs synchronously inside the construct (`mxRunCount(2)`). The
@@ -22676,9 +22964,12 @@ impl Interp {
             // consulting `newTarget.prototype`), as required by the constructor
             // algorithm.
             Native::Promise if has_target => {
+                if argc == 0 {
+                    return Err(self.catchable_type_error_msg("no executor".into()));
+                }
                 let executor = arg(0);
                 if !self.is_callable_value(executor) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("executor: not a function".into()));
                 }
                 self.meter.tick_raw(PROMISE_CTOR_FRAME_METERING);
                 let proto = match new_target {
@@ -22707,7 +22998,7 @@ impl Interp {
             // `%Promise%` is constructor-only. The call form fails before
             // inspecting its argument, and the realm TypeError remains
             // catchable by surrounding guest code.
-            Native::Promise => return Err(self.catchable_type_error()),
+            Native::Promise => return Err(self.catchable_type_error_msg("call: Promise".into())),
             // `new RegExp(pattern, flags)` and the bare-call `RegExp(...)`
             // (`fx_RegExp` + `fxInitializeRegExp`): coerce the pattern and
             // flags to strings, compile the pattern with child 8's matcher,
@@ -22838,26 +23129,34 @@ impl Interp {
             // `fx_ArrayBuffer`/`fx_SharedArrayBuffer` throws a catchable TypeError
             // when `mxTarget` is undefined (`if (mxIsUndefined(mxTarget)) mxTypeError`).
             Native::ArrayBuffer | Native::SharedArrayBuffer => {
-                return Err(self.catchable_type_error());
+                let name = if matches!(native, Native::ArrayBuffer) {
+                    "ArrayBuffer"
+                } else {
+                    "SharedArrayBuffer"
+                };
+                return Err(self.catchable_type_error_msg(format!("call: {name}")));
             }
-            // The abstract `%TypedArray%` constructor is reachable through
-            // `Object.getPrototypeOf(Int8Array)`, but cannot itself create an
-            // instance. Both direct call and direct construction throw.
             Native::TypedArrayBase => {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    if has_target {
+                        "new: TypedArray"
+                    } else {
+                        "call: TypedArray"
+                    }
+                    .into(),
+                ));
             }
-            // A concrete `<TypedArray>(...)` called WITHOUT `new` (`has_target`
-            // false): every typed-array constructor is `[[Construct]]`-only. XS's
-            // `fx_TypedArray` throws a catchable TypeError when `mxTarget` is
-            // undefined (`if (mxIsUndefined(mxTarget)) mxTypeError(...)`), caught
-            // by the `assert.throws(TypeError, () => TA(0))` harness.
             Native::TypedArray(_) => {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("call: TypedArray".into()));
             }
             // The remaining fundamentals constructors' call/coerce/construct
             // behaviors land incrementally; until then they self-name so the
             // differential runner records an honest skip.
-            _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
+            _ => {
+                return Err(Step::Host(Halt::NotImplemented(native_unsupported_name(
+                    native,
+                ))))
+            }
         };
         // Collapse the call region to the single result (frame teardown).
         let _ = argc;
@@ -22866,7 +23165,7 @@ impl Interp {
         Ok(())
     }
 
-    fn intl_locale_argument(&mut self, code: &[u8], value: Slot) -> Result<String, Halt> {
+    fn intl_locale_argument(&mut self, code: &[u8], value: Slot) -> Result<String, Step> {
         if let Payload::Reference(r) = value.value {
             if let Some(locale) = self.locales.get(&r) {
                 return Ok(locale.tag.clone());
@@ -22886,7 +23185,7 @@ impl Interp {
         }
     }
 
-    fn intl_first_locale(&mut self, code: &[u8], value: Slot) -> Result<Option<String>, Halt> {
+    fn intl_first_locale(&mut self, code: &[u8], value: Slot) -> Result<Option<String>, Step> {
         if value.kind == Kind::Undefined {
             return Ok(None);
         }
@@ -22904,7 +23203,7 @@ impl Interp {
         self.intl_locale_argument(code, value).map(Some)
     }
 
-    fn intl_locale_list(&mut self, code: &[u8], value: Slot) -> Result<Vec<String>, Halt> {
+    fn intl_locale_list(&mut self, code: &[u8], value: Slot) -> Result<Vec<String>, Step> {
         if value.kind == Kind::Undefined {
             return Ok(Vec::new());
         }
@@ -22947,7 +23246,7 @@ impl Interp {
         code: &[u8],
         options: crate::value::SlotIndex,
         name: &str,
-    ) -> Result<Option<String>, Halt> {
+    ) -> Result<Option<String>, Step> {
         let Some(&id) = self.symbol_ids.get(name) else {
             return Ok(None);
         };
@@ -22975,7 +23274,7 @@ impl Interp {
         code: &[u8],
         options: crate::value::SlotIndex,
         locale: &mut LocaleData,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if let Some(language) = self.intl_option_string(code, options, "language")? {
             if !valid_language(&language) {
                 return Err(self.catchable_range_error());
@@ -23030,7 +23329,7 @@ impl Interp {
         code: &[u8],
         options: crate::value::SlotIndex,
         data: &mut CollatorData,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         for (name, target, allowed) in [
             ("usage", &mut data.usage, &["sort", "search"][..]),
             (
@@ -23070,7 +23369,7 @@ impl Interp {
     fn intl_get_options_object(
         &mut self,
         options_arg: Slot,
-    ) -> Result<Option<crate::value::SlotIndex>, Halt> {
+    ) -> Result<Option<crate::value::SlotIndex>, Step> {
         match options_arg.kind {
             Kind::Undefined => Ok(None),
             Kind::Reference => match options_arg.value {
@@ -23092,7 +23391,7 @@ impl Interp {
         name: &str,
         allowed: &[&str],
         default: &str,
-    ) -> Result<String, Halt> {
+    ) -> Result<String, Step> {
         let Some(&id) = self.symbol_ids.get(name) else {
             return Ok(default.to_string());
         };
@@ -23122,7 +23421,7 @@ impl Interp {
         minimum: f64,
         maximum: f64,
         default: Option<u32>,
-    ) -> Result<Option<u32>, Halt> {
+    ) -> Result<Option<u32>, Step> {
         let Some(&id) = self.symbol_ids.get(name) else {
             return Ok(default);
         };
@@ -23144,7 +23443,7 @@ impl Interp {
     /// data; every other request falls back to `en`. The returned tag preserves
     /// the requested region/script (its base name, extensions dropped), matching
     /// ResolveLocale's lookup result for the tested locales.
-    fn intl_resolve_locale(&mut self, code: &[u8], locale_arg: Slot) -> Result<String, Halt> {
+    fn intl_resolve_locale(&mut self, code: &[u8], locale_arg: Slot) -> Result<String, Step> {
         let requested = self.intl_first_locale(code, locale_arg)?;
         match requested {
             Some(raw) => {
@@ -23193,7 +23492,7 @@ impl Interp {
         options: crate::value::SlotIndex,
         name: &str,
         allowed: &[&str],
-    ) -> Result<Option<String>, Halt> {
+    ) -> Result<Option<String>, Step> {
         let Some(&id) = self.symbol_ids.get(name) else {
             return Ok(None);
         };
@@ -23219,7 +23518,7 @@ impl Interp {
         code: &[u8],
         locale_arg: Slot,
         options_arg: Slot,
-    ) -> Result<DateTimeFormatData, Halt> {
+    ) -> Result<DateTimeFormatData, Step> {
         let requested = self.intl_first_locale(code, locale_arg)?;
         let (locale_base, ext) = match &requested {
             Some(raw) => {
@@ -23415,7 +23714,7 @@ impl Interp {
         arg0: Slot,
         arg1: Slot,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let inst = match this.value {
             Payload::Reference(r) if self.date_time_formats.contains_key(&r) => r,
             _ => return Err(self.catchable_type_error()),
@@ -23463,7 +23762,7 @@ impl Interp {
 
     /// `? ToNumber` the date argument (or `undefined` → epoch), then require a
     /// finite integral time value in range (a non-finite one is a RangeError).
-    fn date_time_arg_to_time(&mut self, code: &[u8], arg: Slot) -> Result<f64, Halt> {
+    fn date_time_arg_to_time(&mut self, code: &[u8], arg: Slot) -> Result<f64, Step> {
         let n = if arg.kind == Kind::Undefined {
             0.0
         } else {
@@ -23569,7 +23868,7 @@ impl Interp {
     /// exactly as `for..of` does.
     /// A single list element must be a String (ECMA-402 StringListFromIterable
     /// step: `If Type(next) is not String, throw a TypeError`).
-    fn list_element_string(&mut self, value: Slot) -> Result<String, Halt> {
+    fn list_element_string(&mut self, value: Slot) -> Result<String, Step> {
         match value.value {
             Payload::String(off) if value.kind == Kind::String => Ok(self.str_text(off)),
             _ => Err(self.catchable_type_error()),
@@ -23580,7 +23879,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         iterable: Slot,
-    ) -> Result<Vec<String>, Halt> {
+    ) -> Result<Vec<String>, Step> {
         if iterable.kind == Kind::Undefined {
             return Ok(Vec::new());
         }
@@ -23713,7 +24012,7 @@ impl Interp {
         mnfd_default: u32,
         mxfd_default: u32,
         _compact: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         data.minimum_integer_digits = self
             .intl_get_number_option(code, options, "minimumIntegerDigits", 1.0, 21.0, Some(1))?
             .unwrap_or(1);
@@ -23848,7 +24147,7 @@ impl Interp {
         code: &[u8],
         locale_arg: Slot,
         options_arg: Slot,
-    ) -> Result<NumberFormatData, Halt> {
+    ) -> Result<NumberFormatData, Step> {
         let requested = self.intl_first_locale(code, locale_arg)?;
         let (locale_base, ext) = match &requested {
             Some(raw) => {
@@ -24054,7 +24353,7 @@ impl Interp {
         options: crate::value::SlotIndex,
         name: &str,
         fallback: &str,
-    ) -> Result<String, Halt> {
+    ) -> Result<String, Step> {
         let Some(&id) = self.symbol_ids.get(name) else {
             return Ok(fallback.to_string());
         };
@@ -24371,9 +24670,9 @@ impl Interp {
         &mut self,
         code: &[u8],
         constructor: Slot,
-    ) -> Result<PromiseCapability, Halt> {
+    ) -> Result<PromiseCapability, Step> {
         if !self.is_constructor_value(constructor) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
         }
         let intrinsic = self.intrinsics.get("Promise").copied();
         if matches!(constructor.value,
@@ -24401,8 +24700,12 @@ impl Interp {
         let home = self
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
-        self.set_own_unmetered(home, resolve_id, Slot::undefined());
-        self.set_own_unmetered(home, reject_id, Slot::undefined());
+
+        // Both private fields always exist so snapshot validation can reject
+        // unrelated objects substituted for the capture record. An internal
+        // sentinel distinguishes never-called from explicitly captured undefined.
+        self.set_own_unmetered(home, resolve_id, Slot::uninitialized());
+        self.set_own_unmetered(home, reject_id, Slot::uninitialized());
 
         let empty_name = self.alloc_str_text(b"");
         let function = self.slots.alloc(Slot::instance(self.function_proto));
@@ -24425,10 +24728,18 @@ impl Interp {
         );
         let executor = Slot::of(Kind::Reference, Payload::Reference(function));
         let promise = self.construct_value(code, constructor, &[executor], constructor)?;
+        if self.instance_get(home, resolve_id).kind == Kind::Uninitialized {
+            return Err(self.catchable_type_error_msg("executor not called".into()));
+        }
         let resolve = self.instance_get(home, resolve_id);
         let reject = self.instance_get(home, reject_id);
-        if !self.is_callable_value(resolve) || !self.is_callable_value(reject) {
-            return Err(self.catchable_type_error());
+        for (name, function) in [("resolve", resolve), ("reject", reject)] {
+            if function.kind != Kind::Reference {
+                return Err(self.catchable_type_error_msg(format!("{name}: not an object")));
+            }
+            if !self.is_callable_value(function) {
+                return Err(self.catchable_type_error_msg(format!("{name}: not a function")));
+            }
         }
         Ok(PromiseCapability {
             promise,
@@ -24506,7 +24817,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let id = self.regexp_last_index_id();
         let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
         self.mop_get(code, inst, id, receiver)
@@ -24519,13 +24830,13 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let id = self.regexp_last_index_id();
         let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
         if self.mop_set(code, inst, id, value, receiver)? {
             Ok(())
         } else {
-            Err(self.catchable_type_error())
+            Err(self.failed_set_error(inst, id, "C: xsSet"))
         }
     }
 
@@ -24533,7 +24844,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<u64, Halt> {
+    ) -> Result<u64, Step> {
         let value = self.regexp_get_last_index(code, inst)?;
         self.to_length_value(code, value)
     }
@@ -24542,10 +24853,10 @@ impl Interp {
     /// Constructor and `@@species` reads remain observable through the full
     /// object MOP; undefined constructor and nullish species select the realm
     /// intrinsic.
-    fn regexp_species_constructor(&mut self, code: &[u8], regexp: Slot) -> Result<Slot, Halt> {
+    fn regexp_species_constructor(&mut self, code: &[u8], regexp: Slot) -> Result<Slot, Step> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
         let default_ref = *self
             .intrinsics
@@ -24559,7 +24870,7 @@ impl Interp {
         }
         let constructor_inst = match constructor.value {
             Payload::Reference(inst) if constructor.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("no constructor".into())),
         };
         let species_id = self
             .well_known_symbol_property_id("species")
@@ -24571,7 +24882,7 @@ impl Interp {
             species
         };
         if !self.is_constructor_value(selected) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("no constructor".into()));
         }
         Ok(selected)
     }
@@ -24581,7 +24892,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         subject: &[u16],
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let index = self.regexp_last_index_length(code, inst)?;
         let unicode = self.regexps[&inst].program.flags()
             & (ironhorse_regexp::XS_REGEXP_U | ironhorse_regexp::XS_REGEXP_V)
@@ -24600,11 +24911,13 @@ impl Interp {
         inst: crate::value::SlotIndex,
         receiver: Slot,
         reject_nullish: bool,
-    ) -> Result<Vec<u16>, Halt> {
+    ) -> Result<Vec<u16>, Step> {
         let flags_id = self.intern_key("flags");
         if !self.regexps.contains_key(&inst) || !self.regexp_getter_uses_default(inst, flags_id) {
             let flags = self.mop_get(code, inst, flags_id, receiver)?;
             if reject_nullish && matches!(flags.kind, Kind::Undefined | Kind::Null) {
+                // Keep RequireObjectCoercible from the spec. Pinned XS instead
+                // stringifies these values and reports its missing-global-flag error.
                 return Err(self.catchable_type_error());
             }
             return self.to_string_units(code, flags);
@@ -24742,16 +25055,20 @@ impl Interp {
     /// `lastIndex` = 0 in the `regexps` side table. An invalid pattern throws a
     /// catchable `SyntaxError` (as `fxCompileRegExp` failing does); a
     /// not-yet-ported pattern feature self-names an honest skip.
-    fn build_regexp(&mut self, pattern: String, flags: String) -> Result<Slot, Halt> {
+    fn build_regexp(&mut self, pattern: String, flags: String) -> Result<Slot, Step> {
         let program = match ironhorse_regexp::compile(&pattern, &flags) {
             Ok(p) => p,
-            Err(ironhorse_regexp::CompileError::Syntax(_)) => {
+            Err(ironhorse_regexp::CompileError::Syntax(reason)) => {
                 // An invalid pattern is a catchable `SyntaxError`, exactly as
                 // `fxCompileRegExp` failing makes `new RegExp(...)` throw.
-                return Err(self.catchable_syntax_error());
+                let message = format!("invalid regular expression: {reason}");
+                // XS fxThrowMessage renders into a 128-byte C buffer.
+                let bytes = message.as_bytes();
+                let message = String::from_utf8_lossy(&bytes[..bytes.len().min(127)]).into_owned();
+                return Err(self.catchable_syntax_error_with_message(message));
             }
             Err(ironhorse_regexp::CompileError::Unsupported(regexp_feature)) => {
-                return Err(Halt::Unsupported(regexp_feature))
+                return Err(Step::Host(Halt::NotImplemented(regexp_feature)))
             }
         };
         // `fxNewRegExpInstance`: four `fxNewSlot`s — the instance, the
@@ -24811,7 +25128,7 @@ impl Interp {
         subject: &[u8],
         subject_units: &[u16],
         offsets: &[usize],
-    ) -> Result<(bool, Vec<(i32, i32)>, Vec<i32>), Halt> {
+    ) -> Result<(bool, Vec<(i32, i32)>, Vec<i32>), Step> {
         let (unicode, global, sticky) = {
             let d = &self.regexps[&inst];
             let f = d.program.flags();
@@ -24912,7 +25229,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         subject: &[u8],
         start: i32,
-    ) -> Result<ironhorse_regexp::MatchOutcome, Halt> {
+    ) -> Result<ironhorse_regexp::MatchOutcome, Step> {
         let program = &self.regexps[&inst].program;
         if !self.meter.is_armed() && self.meter_host.is_none() {
             let outcome = ironhorse_regexp::match_regexp(program, subject, start);
@@ -24939,7 +25256,7 @@ impl Interp {
         // The tail the last stride did not cover.
         meter.tick_raw(outcome.match_meter_raw - charged);
         if outcome.aborted {
-            return Err(Halt::MeterAbort);
+            return Err(Step::Host(Halt::MeterAbort));
         }
         Ok(outcome)
     }
@@ -24952,7 +25269,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         arg0: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         Ok(self.regexp_exec_inner(code, inst, arg0)?.0)
     }
 
@@ -24965,20 +25282,20 @@ impl Interp {
         inst: crate::value::SlotIndex,
         receiver: Slot,
         subject: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let exec_id = self.intern_key("exec");
         let exec = self.mop_get(code, inst, exec_id, receiver)?;
         if self.is_callable_value(exec) {
             let result = self.invoke_value(code, exec, receiver, &[subject])?;
             return match result.kind {
                 Kind::Null | Kind::Reference => Ok(result),
-                _ => Err(self.catchable_type_error()),
+                _ => Err(self.catchable_type_error_msg("invalid exec result".into())),
             };
         }
         if self.regexps.contains_key(&inst) {
             self.regexp_exec(code, inst, subject)
         } else {
-            Err(self.catchable_type_error())
+            Err(self.catchable_type_error_msg("this: not a RegExp instance".into()))
         }
     }
 
@@ -24986,10 +25303,19 @@ impl Interp {
     /// non-global receiver, or repeatedly collect each whole-match string.
     /// Empty global matches advance the observable `lastIndex`, including a
     /// complete surrogate pair in `u`/`v` mode.
-    fn regexp_match(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Halt> {
+    fn regexp_match(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Step> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    match regexp.kind {
+                        Kind::Null => "cannot coerce null to object",
+                        Kind::Undefined => "cannot coerce undefined to object",
+                        _ => "this: not a RegExp instance",
+                    }
+                    .into(),
+                ))
+            }
         };
         self.meter.tick_raw(REGEXP_MATCH_FRAME_METERING);
         let subject = self.to_string_slot(code, input)?;
@@ -25042,10 +25368,19 @@ impl Interp {
     /// `%RegExp.prototype%[@@search]`: search from `lastIndex = 0`, then
     /// restore the exact prior value when the matcher changed it. The result's
     /// `index` property is returned without coercion.
-    fn regexp_search(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Halt> {
+    fn regexp_search(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Step> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    match regexp.kind {
+                        Kind::Null => "cannot coerce null to object",
+                        Kind::Undefined => "cannot coerce undefined to object",
+                        _ => "this: not a RegExp instance",
+                    }
+                    .into(),
+                ))
+            }
         };
         self.meter.tick_raw(REGEXP_SEARCH_FRAME_METERING);
         let subject = self.to_string_slot(code, input)?;
@@ -25084,10 +25419,10 @@ impl Interp {
         regexp: Slot,
         input: Slot,
         limit_slot: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
         let subject = self.to_string_slot(code, input)?;
         let subject_units = match subject.value {
@@ -25191,10 +25526,10 @@ impl Interp {
     /// create a lazy RegExp String Iterator. The iterator records `global` and
     /// full-Unicode from the original flags string; it never probes similarly
     /// named properties on the species result.
-    fn regexp_match_all(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Halt> {
+    fn regexp_match_all(&mut self, code: &[u8], regexp: Slot, input: Slot) -> Result<Slot, Step> {
         let regexp_inst = match regexp.value {
             Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
         let subject = self.to_string_slot(code, input)?;
         let subject_units = match subject.value {
@@ -25219,7 +25554,7 @@ impl Interp {
             Slot::number(last_index as f64),
             matcher,
         )? {
-            return Err(self.catchable_type_error());
+            return Err(self.failed_set_error(matcher_inst, last_index_id, "C: xsSet"));
         }
         let global = flags.contains(&(b'g' as u16));
         let full_unicode = flags
@@ -25281,7 +25616,7 @@ impl Interp {
     /// through abstract `RegExpExec`. A non-global iterator yields once; a
     /// global empty match advances the matcher's `lastIndex` by one UTF-16 code
     /// unit or one Unicode code point so iteration cannot stall.
-    fn regexp_string_iterator_next(&mut self, code: &[u8], receiver: Slot) -> Result<Slot, Halt> {
+    fn regexp_string_iterator_next(&mut self, code: &[u8], receiver: Slot) -> Result<Slot, Step> {
         let iterator = match receiver.value {
             Payload::Reference(inst)
                 if receiver.kind == Kind::Reference
@@ -25292,7 +25627,7 @@ impl Interp {
             {
                 inst
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
         };
         let state = self.iterators[&iterator].clone();
         if state.done {
@@ -25330,7 +25665,7 @@ impl Interp {
                     Slot::number(next_index as f64),
                     matcher,
                 )? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(state.iterable, last_index_id, "C: xsSet"));
                 }
             }
         }
@@ -25374,7 +25709,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         arg0: Slot,
-    ) -> Result<(Slot, Option<i32>), Halt> {
+    ) -> Result<(Slot, Option<i32>), Step> {
         self.meter.tick_raw(REGEXP_EXEC_FRAME_METERING);
         let subject_slot = self.to_string_slot(code, arg0)?;
         let subject_units = match subject_slot.value {
@@ -25586,7 +25921,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         receiver: Slot,
         arg0: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.meter.tick_raw(REGEXP_TEST_FRAME_METERING);
         let subject = self.to_string_slot(code, arg0)?;
         let result = self.regexp_exec_abstract(code, inst, receiver, subject)?;
@@ -25637,7 +25972,7 @@ impl Interp {
         subject: Slot,
         search: Slot,
         replacement: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let subject_units = match subject.value {
             Payload::String(off) => self.str_units(off),
             _ => unreachable!("replace subject was already converted to String"),
@@ -25698,7 +26033,7 @@ impl Interp {
         subject: Slot,
         search: Slot,
         replacement: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let subject_units = match subject.value {
             Payload::String(off) => self.str_units(off),
             _ => unreachable!("replaceAll subject was already converted to String"),
@@ -25772,12 +26107,16 @@ impl Interp {
         inst: crate::value::SlotIndex,
         subject: Slot,
         replacement: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let global = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_G != 0;
         let functional = self.is_callable_value(replacement);
         let subject_units = match self.string_receiver_units(subject) {
             Some(c) => c,
-            None => return Err(Halt::Unsupported("String.replace:non-string-receiver")),
+            None => {
+                return Err(Step::Host(Halt::NotImplemented(
+                    "String.replace:non-string-receiver",
+                )))
+            }
         };
         // A non-callable replacement is converted once before any match is
         // attempted. Callable replacements are converted only after each call.
@@ -25896,7 +26235,7 @@ impl Interp {
         receiver: Slot,
         subject: Slot,
         replacement: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let subject_units = match subject.value {
             Payload::String(off) if subject.kind == Kind::String => self.str_units(off),
             _ => unreachable!("RegExp @@replace subject was already converted to String"),
@@ -25926,7 +26265,7 @@ impl Interp {
         if global {
             let last_index_id = self.regexp_last_index_id();
             if !self.mop_set(code, inst, last_index_id, Slot::integer(0), receiver)? {
-                return Err(self.catchable_type_error());
+                return Err(self.failed_set_error(inst, last_index_id, "C: xsSet"));
             }
         }
 
@@ -25959,7 +26298,7 @@ impl Interp {
                     Slot::number(next as f64),
                     receiver,
                 )? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(inst, last_index_id, "C: xsSet"));
                 }
             }
         }
@@ -25975,7 +26314,7 @@ impl Interp {
             let captures_count = result_length.saturating_sub(1);
             const GENERIC_CAPTURE_CAP: u64 = 1 << 24;
             if captures_count > GENERIC_CAPTURE_CAP {
-                return Err(Halt::Unsupported("RegExp.replace:oversized-result"));
+                return Err(Step::Host(Halt::Refused("RegExp.replace:oversized-result")));
             }
 
             let matched = self.mop_get(code, result_inst, zero_id, result)?;
@@ -26065,7 +26404,7 @@ impl Interp {
         captures: &[Slot],
         named_captures: Option<(crate::value::SlotIndex, Slot)>,
         replacement: &[u16],
-    ) -> Result<Vec<u16>, Halt> {
+    ) -> Result<Vec<u16>, Step> {
         let tail = position.saturating_add(matched.len()).min(subject.len());
         let mut out = Vec::with_capacity(replacement.len());
         let mut i = 0;
@@ -26327,7 +26666,7 @@ impl Interp {
         code: &[u8],
         value: Slot,
         name: &str,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let Payload::Reference(inst) = value.value else {
             return Ok(Slot::undefined());
         };
@@ -26350,9 +26689,16 @@ impl Interp {
         code: &[u8],
         receiver: Slot,
         regexp: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if matches!(receiver.kind, Kind::Undefined | Kind::Null) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                if receiver.kind == Kind::Null {
+                    "this: null"
+                } else {
+                    "this: undefined"
+                }
+                .into(),
+            ));
         }
         if !matches!(regexp.kind, Kind::Undefined | Kind::Null) {
             if self.string_is_regexp(code, regexp)? {
@@ -26361,7 +26707,7 @@ impl Interp {
                 };
                 let flags = self.regexp_flags_units(code, inst, regexp, true)?;
                 if !flags.contains(&(b'g' as u16)) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("regexp has no g flag".into()));
                 }
             }
             let method = self.string_protocol_method(code, regexp, "matchAll")?;
@@ -26387,7 +26733,7 @@ impl Interp {
     /// while `undefined` falls back to that brand. This is shared by
     /// `includes`, `startsWith`, and `endsWith`, which reject RegExp search
     /// values before applying `ToString`.
-    fn string_is_regexp(&mut self, code: &[u8], value: Slot) -> Result<bool, Halt> {
+    fn string_is_regexp(&mut self, code: &[u8], value: Slot) -> Result<bool, Step> {
         let Payload::Reference(inst) = value.value else {
             return Ok(false);
         };
@@ -26404,15 +26750,18 @@ impl Interp {
     /// ECMAScript `ToUint32`, used by the ordinary string-split limit. The
     /// coercion is re-entrant and therefore observes object conversion hooks;
     /// Symbols and BigInts reject through the shared `ToNumber` path.
-    fn string_split_limit(&mut self, code: &[u8], limit: Slot) -> Result<u32, Halt> {
+    fn string_split_limit(&mut self, code: &[u8], limit: Slot) -> Result<u32, Step> {
         if limit.kind == Kind::Undefined {
             return Ok(u32::MAX);
         }
-        let number = self.to_number_value(code, limit)?;
-        if number.kind == Kind::BigInt {
-            return Err(self.catchable_type_error());
+        let primitive = self.to_primitive(code, limit, false)?;
+        if primitive.kind == Kind::Symbol {
+            return Err(self.catchable_type_error_msg("cannot coerce symbol to unsigned".into()));
         }
-        let n = to_number(&number);
+        if primitive.kind == Kind::BigInt {
+            return Err(self.catchable_type_error_msg("cannot coerce to unsigned".into()));
+        }
+        let n = self.to_number_f64(code, primitive)?;
         if !n.is_finite() || n == 0.0 {
             return Ok(0);
         }
@@ -26429,9 +26778,16 @@ impl Interp {
         subject: Slot,
         separator: Slot,
         limit_slot: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if matches!(subject.kind, Kind::Undefined | Kind::Null) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                if subject.kind == Kind::Null {
+                    "this: null"
+                } else {
+                    "this: undefined"
+                }
+                .into(),
+            ));
         }
         let subject_units = self.to_string_units(code, subject)?;
         let limit = self.string_split_limit(code, limit_slot)? as usize;
@@ -26524,7 +26880,7 @@ impl Interp {
     /// `RegExp.prototype.toString()` (`fx_RegExp_prototype_toString`): the
     /// `/source/flags` literal, built from the (escaped) source and the flag
     /// string.
-    fn regexp_to_string(&mut self, inst: crate::value::SlotIndex) -> Result<Slot, Halt> {
+    fn regexp_to_string(&mut self, inst: crate::value::SlotIndex) -> Result<Slot, Step> {
         // The `toString` host frame (the two `mxGetID` gets + the base
         // `fxStringX("/")`).
         self.meter.tick_raw(REGEXP_TOSTRING_METERING);
@@ -26567,7 +26923,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.meter.tick_raw(REGEXP_TOSTRING_METERING);
         let source_id = self.intern_key("source");
         let source = if self.regexps.contains_key(&inst)
@@ -26701,7 +27057,7 @@ impl Interp {
         code: &[u8],
         promise: crate::value::SlotIndex,
         base: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let arg0 = self
             .stack
             .get(base + 4)
@@ -26724,7 +27080,7 @@ impl Interp {
         promise: crate::value::SlotIndex,
         arg0: Slot,
         arg1: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let on_fulfilled = if self.is_callable_value(arg0) {
             arg0
         } else {
@@ -26816,7 +27172,7 @@ impl Interp {
         f: crate::value::SlotIndex,
         base: usize,
         _argc: usize,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let data = self.promise_functions[&f];
         if data.guard == PROMISE_FINALLY_HANDLER_GUARD || data.guard == PROMISE_FINALLY_VALUE_GUARD
         {
@@ -26840,8 +27196,10 @@ impl Interp {
             let reject_id = self.intern_key("[[PromiseCapabilityReject]]");
             let resolve = self.instance_get(data.promise, resolve_id);
             let reject = self.instance_get(data.promise, reject_id);
-            if resolve.kind != Kind::Undefined || reject.kind != Kind::Undefined {
-                return Err(self.catchable_type_error());
+            if !matches!(resolve.kind, Kind::Undefined | Kind::Uninitialized)
+                || !matches!(reject.kind, Kind::Undefined | Kind::Uninitialized)
+            {
+                return Err(self.catchable_type_error_msg("executor already called".into()));
             }
             let supplied_resolve = self
                 .stack
@@ -26913,7 +27271,7 @@ impl Interp {
         code: &[u8],
         data: PromiseFnData,
         argument: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if data.guard == PROMISE_FINALLY_VALUE_GUARD {
             let value_id = self.intern_key("[[PromiseFinallyValue]]");
             let value = self.instance_get(data.promise, value_id);
@@ -26923,7 +27281,9 @@ impl Interp {
             return Ok(value);
         }
         if data.guard != PROMISE_FINALLY_HANDLER_GUARD {
-            return Err(Halt::EngineInvariant("promise:unknown-finally-function"));
+            return Err(Step::Host(Halt::EngineInvariant(
+                "promise:unknown-finally-function",
+            )));
         }
         let handler_id = self.intern_key("[[PromiseFinallyHandler]]");
         let constructor_id = self.intern_key("[[PromiseFinallyConstructor]]");
@@ -26949,9 +27309,11 @@ impl Interp {
         promise: crate::value::SlotIndex,
         value: Slot,
         reject: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if !self.promises.contains_key(&promise) {
-            return Err(Halt::EngineInvariant("promise:settle-non-promise"));
+            return Err(Step::Host(Halt::EngineInvariant(
+                "promise:settle-non-promise",
+            )));
         }
         // The resolve-with-thenable branch (`fxResolvePromise`, `mxIsReference`):
         // probe `.then`; a callable one adopts the thenable rather than settling.
@@ -26959,7 +27321,7 @@ impl Interp {
             if let Payload::Reference(obj) = value.value {
                 if obj == promise {
                     // `resolve(promise)` rejects that promise with a TypeError.
-                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.internal_error("TypeError", "promise resolves itself".into());
                     return self.finish_promise_settlement(promise, error, true);
                 }
                 // `Get(resolution, "then")` is observable even for branded
@@ -27021,9 +27383,11 @@ impl Interp {
         promise: crate::value::SlotIndex,
         value: Slot,
         reject: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if !self.promises.contains_key(&promise) {
-            return Err(Halt::EngineInvariant("promise:settle-non-promise"));
+            return Err(Step::Host(Halt::EngineInvariant(
+                "promise:settle-non-promise",
+            )));
         }
         let state = if reject {
             PromiseState::Rejected
@@ -27088,7 +27452,7 @@ impl Interp {
         promise: crate::value::SlotIndex,
         thenable: Slot,
         then: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         // `fxPushPromiseFunctions(the, promise)` — the second resolving pair
         // (13 `fxNewSlot`s, its own `[[AlreadyResolved]]` guard).
         let (resolve, reject) = self.make_resolving_functions(promise);
@@ -27178,7 +27542,7 @@ impl Interp {
     /// settles the derived promise, which may queue further jobs; the drain
     /// continues until the queue empties. Metering accumulates through the
     /// reactions, matching the oracle shim's post-`fxRunScript` drain.
-    fn run_promise_jobs(&mut self, code: &[u8]) -> Result<(), Halt> {
+    fn run_promise_jobs(&mut self, code: &[u8]) -> Result<(), Step> {
         while let Some(job) = self.promise_jobs.pop_front() {
             self.run_promise_job(code, job)?;
         }
@@ -27192,7 +27556,7 @@ impl Interp {
     /// handler), or rejected with the thrown value if the handler throws. A
     /// **thenable** job is XS's `fxOnThenable`: it calls `then.call(thenable,
     /// resolve, reject)`.
-    fn run_promise_job(&mut self, code: &[u8], job: PromiseJob) -> Result<(), Halt> {
+    fn run_promise_job(&mut self, code: &[u8], job: PromiseJob) -> Result<(), Step> {
         let (reaction, value, rejected) = match job {
             PromiseJob::Reaction {
                 reaction,
@@ -27236,12 +27600,9 @@ impl Interp {
         if let ReactionKind::AsyncGeneratorYield(gen) = reaction.kind {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
             if rejected {
-                let data = self
-                    .async_generators
-                    .get_mut(&gen)
-                    .ok_or(Halt::EngineInvariant(
-                        "async-generator:yield-reaction-missing",
-                    ))?;
+                let data = self.async_generators.get_mut(&gen).ok_or(Step::Host(
+                    Halt::EngineInvariant("async-generator:yield-reaction-missing"),
+                ))?;
                 data.state = AsyncGeneratorState::Completed;
                 data.frame = None;
                 return self.finish_async_generator_request(code, gen, value, true);
@@ -27361,7 +27722,7 @@ impl Interp {
     // element-definition completion.
     // ------------------------------------------------------------------
 
-    fn array_from(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Halt> {
+    fn array_from(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Step> {
         let saved_jumps = std::mem::take(&mut self.jumps);
         let outcome = self.array_from_inner(code, base, argc);
         self.jumps = saved_jumps;
@@ -27378,7 +27739,7 @@ impl Interp {
     // the same observable MOP paths as `Array.from`.
     // ------------------------------------------------------------------
 
-    fn array_of(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Halt> {
+    fn array_of(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Step> {
         let saved_jumps = std::mem::take(&mut self.jumps);
         let outcome = self.array_of_inner(code, base, argc);
         self.jumps = saved_jumps;
@@ -27394,7 +27755,7 @@ impl Interp {
         code: &[u8],
         base: usize,
         argc: usize,
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         self.meter.tick_builtin();
         let constructor = self
             .stack
@@ -27430,8 +27791,8 @@ impl Interp {
     /// throw 5 } })` land in the caller's catch where XS rejects the promise.
     fn array_from_try<T>(
         &mut self,
-        operation: impl FnOnce(&mut Self) -> Result<T, Halt>,
-    ) -> Result<Result<T, Slot>, Halt> {
+        operation: impl FnOnce(&mut Self) -> Result<T, Step>,
+    ) -> Result<Result<T, Slot>, Step> {
         self.native_try(operation)
     }
 
@@ -27443,7 +27804,7 @@ impl Interp {
         code: &[u8],
         iterator: Slot,
         original: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let inst = match iterator.value {
             Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
             _ => return Ok(original),
@@ -27469,7 +27830,7 @@ impl Interp {
         code: &[u8],
         constructor: Slot,
         len: Option<u64>,
-    ) -> Result<Result<crate::value::SlotIndex, Slot>, Halt> {
+    ) -> Result<Result<crate::value::SlotIndex, Slot>, Step> {
         if self.is_constructor_value(constructor) {
             let args = len
                 .map(|length| vec![Slot::number(length as f64)])
@@ -27482,13 +27843,17 @@ impl Interp {
             };
             return match value.value {
                 Payload::Reference(target) if value.kind == Kind::Reference => Ok(Ok(target)),
-                _ => Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => Ok(Err(
+                    self.internal_error("TypeError", "invalid constructor".into())
+                )),
             };
         }
         let array = self.new_array();
         if let Some(length) = len {
             if length > u32::MAX as u64 {
-                return Ok(Err(self.build_error("RangeError", 0, 0)));
+                return Ok(Err(
+                    self.internal_error("RangeError", "invalid length".into())
+                ));
             }
             self.array_set_length(array, Slot::number(length as f64));
         }
@@ -27501,9 +27866,11 @@ impl Interp {
         target: crate::value::SlotIndex,
         index: u64,
         value: Slot,
-    ) -> Result<Result<(), Slot>, Halt> {
+    ) -> Result<Result<(), Slot>, Step> {
         if index > u32::MAX as u64 {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "array overflow".into())
+            ));
         }
         // Look the index name up; do NOT mint it. XS mints nothing here:
         // `fx_Array_from_aux` defines each element through `mxDefineIndex`,
@@ -27556,7 +27923,9 @@ impl Interp {
             this.mop_define_own_property_read(code, target, key, descriptor)
         })? {
             Ok(true) => Ok(Ok(())),
-            Ok(false) => Ok(Err(self.build_error("TypeError", 0, 0))),
+            Ok(false) => Ok(Err(
+                self.internal_error("TypeError", "define 0: not configurable".into())
+            )),
             Err(error) => Ok(Err(error)),
         }
     }
@@ -27566,20 +27935,21 @@ impl Interp {
         code: &[u8],
         target: crate::value::SlotIndex,
         length: u64,
-    ) -> Result<Result<(), Slot>, Halt> {
+    ) -> Result<Result<(), Slot>, Step> {
         let value = Slot::number(length as f64);
         if self.arrays.contains_key(&target) && !self.arguments_objects.contains(&target) {
             return if self.array_length_writable(target) && self.array_set_length(target, value) {
                 Ok(Ok(()))
             } else {
-                Ok(Err(self.build_error("TypeError", 0, 0)))
+                let id = self.intern_key_unmetered("length");
+                Ok(Err(self.failed_set_error_value(target, id, "C: xsSet")))
             };
         }
         let id = self.intern_key("length");
         let receiver = Slot::of(Kind::Reference, Payload::Reference(target));
         match self.array_from_try(|this| this.mop_set(code, target, id, value, receiver))? {
             Ok(true) => Ok(Ok(())),
-            Ok(false) => Ok(Err(self.build_error("TypeError", 0, 0))),
+            Ok(false) => Ok(Err(self.failed_set_error_value(target, id, "C: xsSet"))),
             Err(error) => Ok(Err(error)),
         }
     }
@@ -27592,7 +27962,7 @@ impl Interp {
         this_arg: Slot,
         value: Slot,
         index: u64,
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         if !mapping {
             return Ok(Ok(value));
         }
@@ -27606,7 +27976,7 @@ impl Interp {
         code: &[u8],
         base: usize,
         _argc: usize,
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         self.meter.tick_builtin();
         let constructor = self
             .stack
@@ -27633,10 +28003,20 @@ impl Interp {
         } else if self.is_callable_value(mapfn) {
             true
         } else {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "callback: not a function".into())
+            ));
         };
         if matches!(items.kind, Kind::Null | Kind::Undefined) {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(self.internal_error(
+                "TypeError",
+                if items.kind == Kind::Null {
+                    "cannot coerce null to object"
+                } else {
+                    "cannot coerce undefined to object"
+                }
+                .into(),
+            )));
         }
 
         // Intrinsic iterator result objects only materialize fields whose ids
@@ -27695,7 +28075,9 @@ impl Interp {
             && iterator_method.kind != Kind::Null
             && !self.is_callable_value(iterator_method)
         {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
         }
 
         let mut next_method = Slot::undefined();
@@ -27718,13 +28100,21 @@ impl Interp {
             };
             let inst = match iterator.value {
                 Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
-                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => {
+                    return Ok(Err(
+                        self.internal_error("TypeError", "iterator: not an object".into())
+                    ))
+                }
             };
             let next_id = self.intern_key("next");
             next_method =
                 match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
                     Ok(method) if self.is_callable_value(method) => method,
-                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                    Ok(_) => {
+                        return Ok(Err(
+                            self.internal_error("TypeError", "call: not a function".into())
+                        ))
+                    }
                     Err(error) => return Ok(Err(error)),
                 };
             Some(iterator)
@@ -27757,7 +28147,12 @@ impl Interp {
                 };
                 let step_inst = match step.value {
                     Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
-                    _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                    _ => {
+                        return Ok(Err(self.internal_error(
+                            "TypeError",
+                            "iterator result: not an object".into(),
+                        )))
+                    }
                 };
                 let done = match self
                     .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
@@ -27791,7 +28186,7 @@ impl Interp {
                     return Ok(Err(error));
                 }
             }
-            return Err(Halt::StepLimit(self.n_dispatched));
+            return Err(Step::Host(Halt::StepLimit(self.n_dispatched)));
         }
 
         // Array-like fallback: ToObject, ToLength(Get(length)), construct with
@@ -27800,7 +28195,11 @@ impl Interp {
             Payload::Reference(_) if items.kind == Kind::Reference => items,
             _ => match self.from_async_box_primitive(items) {
                 Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                None => {
+                    return Ok(Err(
+                        self.internal_error("TypeError", "cannot coerce to object".into())
+                    ))
+                }
             },
         };
         let inst = match array_like.value {
@@ -27816,6 +28215,11 @@ impl Interp {
             Ok(length) => length,
             Err(error) => return Ok(Err(error)),
         };
+        if length > u32::MAX as u64 {
+            return Ok(Err(
+                self.internal_error("RangeError", "invalid length".into())
+            ));
+        }
         let target = match self.array_from_make_target(code, constructor, Some(length))? {
             Ok(target) => target,
             Err(error) => return Ok(Err(error)),
@@ -27882,14 +28286,14 @@ impl Interp {
     /// [`Self::native_try`], which fences first.
     fn from_async_try<T>(
         &mut self,
-        r: Result<T, Halt>,
+        r: Result<T, Step>,
         sb: usize,
         cd: usize,
         jd: usize,
-    ) -> Result<Result<T, Slot>, Halt> {
+    ) -> Result<Result<T, Slot>, Step> {
         match r {
             Ok(v) => Ok(Ok(v)),
-            Err(Halt::Throw { value, .. }) => {
+            Err(Step::Threw { value, .. }) => {
                 self.unwind_native_try(sb, cd, jd);
                 Ok(Err(value))
             }
@@ -27907,7 +28311,7 @@ impl Interp {
         func: Slot,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.invoke_value(code, func, this, args)
     }
 
@@ -27919,7 +28323,7 @@ impl Interp {
         func: Slot,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         self.native_try(|machine| machine.call_any(code, func, this, args))
     }
 
@@ -27932,9 +28336,16 @@ impl Interp {
         value: Slot,
         name: &str,
         args: &[Slot],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if matches!(value.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                if value.kind == Kind::Undefined {
+                    "cannot coerce undefined to object"
+                } else {
+                    "cannot coerce null to object"
+                }
+                .into(),
+            ));
         }
         let id = self.intern_key(name);
         let method = match value.value {
@@ -27961,7 +28372,7 @@ impl Interp {
             }
         };
         if !self.is_callable_value(method) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
         }
         self.call_any(code, method, value, args)
     }
@@ -27975,9 +28386,11 @@ impl Interp {
         f: Slot,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         if !self.is_callable_value(f) {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
         }
         self.call_any_catching_throw(code, f, this, args)
     }
@@ -28070,7 +28483,7 @@ impl Interp {
     /// The `Array.fromAsync(asyncItems [, mapfn [, thisArg]])` entry: build the
     /// result promise, seed the [`FromAsyncData`] machine, run the synchronous
     /// prologue, and return the promise (the async work continues at the drain).
-    fn array_from_async(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Halt> {
+    fn array_from_async(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Step> {
         let _ = argc;
         let this_c = self
             .stack
@@ -28121,7 +28534,7 @@ impl Interp {
         // their own handlers above this boundary). Every later step already runs
         // at the microtask drain with a clean stack.
         let saved_jumps = std::mem::take(&mut self.jumps);
-        let r = self.from_async_start(code, id, this_c, items);
+        let r = self.from_async_start(code, id, this_c, items, argc != 0);
         self.jumps = saved_jumps;
         r?;
         Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
@@ -28137,22 +28550,36 @@ impl Interp {
         id: usize,
         c: Slot,
         items: Slot,
-    ) -> Result<(), Halt> {
+        has_items: bool,
+    ) -> Result<(), Step> {
         // 3.a/b: mapping validity.
         let mapfn = self.from_async[id].mapfn;
         let mapping = if mapfn.kind == Kind::Undefined {
             false
         } else if !self.is_callable_value(mapfn) {
-            let e = self.build_error("TypeError", 0, 0);
+            let e = self.internal_error("TypeError", "callback: not a function".into());
             return self.from_async_reject(id, e);
         } else {
             true
         };
         self.from_async[id].mapping = mapping;
 
+        if !has_items {
+            let error = self.internal_error("TypeError", "no items".into());
+            return self.from_async_reject(id, error);
+        }
+
         // GetV(items, @@asyncIterator) throws for null/undefined.
         if items.kind == Kind::Null || items.kind == Kind::Undefined {
-            let e = self.build_error("TypeError", 0, 0);
+            let e = self.internal_error(
+                "TypeError",
+                if items.kind == Kind::Null {
+                    "cannot coerce null to object"
+                } else {
+                    "cannot coerce undefined to object"
+                }
+                .into(),
+            );
             return self.from_async_reject(id, e);
         }
 
@@ -28178,7 +28605,7 @@ impl Interp {
             if method_async.kind == Kind::Undefined || method_async.kind == Kind::Null {
                 false
             } else if !self.is_callable_value(method_async) {
-                let e = self.build_error("TypeError", 0, 0);
+                let e = self.internal_error("TypeError", "call: not a function".into());
                 return self.from_async_reject(id, e);
             } else {
                 true
@@ -28208,7 +28635,7 @@ impl Interp {
         } else if method_sync.kind == Kind::Undefined || method_sync.kind == Kind::Null {
             false
         } else if !self.is_callable_value(method_sync) {
-            let e = self.build_error("TypeError", 0, 0);
+            let e = self.internal_error("TypeError", "call: not a function".into());
             return self.from_async_reject(id, e);
         } else {
             true
@@ -28267,7 +28694,7 @@ impl Interp {
             let iter_inst = match iterator.value {
                 Payload::Reference(r) if iterator.kind == Kind::Reference => r,
                 _ => {
-                    let e = self.build_error("TypeError", 0, 0);
+                    let e = self.internal_error("TypeError", "call: not a function".into());
                     return self.from_async_reject(id, e);
                 }
             };
@@ -28321,6 +28748,10 @@ impl Interp {
         } else {
             0
         };
+        if len > 0x7FFF_FFFF {
+            let error = self.internal_error("RangeError", "array overflow".into());
+            return self.from_async_reject(id, error);
+        }
         let target =
             match self.from_async_make_target(code, id, c, Some(Slot::number(len as f64)))? {
                 Ok(t) => t,
@@ -28342,7 +28773,7 @@ impl Interp {
         _id: usize,
         c: Slot,
         len_arg: Option<Slot>,
-    ) -> Result<Result<crate::value::SlotIndex, Slot>, Halt> {
+    ) -> Result<Result<crate::value::SlotIndex, Slot>, Step> {
         if self.from_async_is_constructor(c) {
             let sb = self.stack.len();
             let cd = self.call_stack.len();
@@ -28358,7 +28789,9 @@ impl Interp {
             };
             match obj.value {
                 Payload::Reference(inst) if obj.kind == Kind::Reference => Ok(Ok(inst)),
-                _ => Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => Ok(Err(
+                    self.internal_error("TypeError", "invalid constructor".into())
+                )),
             }
         } else {
             // ArrayCreate(len): the iterator path uses len 0; the array-like
@@ -28369,7 +28802,9 @@ impl Interp {
                 None => 0.0,
             };
             if len > (u32::MAX as f64) {
-                return Ok(Err(self.build_error("RangeError", 0, 0)));
+                return Ok(Err(
+                    self.internal_error("RangeError", "array overflow".into())
+                ));
             }
             let arr = self.new_array();
             if len > 0.0 {
@@ -28381,12 +28816,8 @@ impl Interp {
 
     /// `ToLength(Get(...))` for the array-like `length`, as a `u64` capped at
     /// 2^53 - 1 (the spec integer-index ceiling).
-    fn to_length_value(&mut self, code: &[u8], value: Slot) -> Result<u64, Halt> {
-        let slot = self.to_number_value(code, value)?;
-        if slot.kind == Kind::BigInt {
-            return Err(self.catchable_type_error());
-        }
-        let n = to_number(&slot);
+    fn to_length_value(&mut self, code: &[u8], value: Slot) -> Result<u64, Step> {
+        let n = self.to_number_f64(code, value)?;
         if n.is_nan() || n <= 0.0 {
             return Ok(0);
         }
@@ -28398,7 +28829,7 @@ impl Interp {
     /// path issue the next `next()` (async) / read the next sync step; on the
     /// array-like path `Get` and `Await` the next element, or finish when `k`
     /// reaches `len`.
-    fn from_async_drive(&mut self, code: &[u8], id: usize) -> Result<(), Halt> {
+    fn from_async_drive(&mut self, code: &[u8], id: usize) -> Result<(), Step> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28425,7 +28856,8 @@ impl Interp {
             let step_inst = match step.value {
                 Payload::Reference(r) if step.kind == Kind::Reference => r,
                 _ => {
-                    let e = self.build_error("TypeError", 0, 0);
+                    let e =
+                        self.internal_error("TypeError", "iterator result: not an object".into());
                     return self.from_async_reject(id, e);
                 }
             };
@@ -28459,7 +28891,7 @@ impl Interp {
             let inst = match array_like.value {
                 Payload::Reference(r) => r,
                 _ => {
-                    let e = self.build_error("TypeError", 0, 0);
+                    let e = self.internal_error("TypeError", "cannot coerce to object".into());
                     return self.from_async_reject(id, e);
                 }
             };
@@ -28485,7 +28917,7 @@ impl Interp {
         id: usize,
         value: Slot,
         rejected: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28500,7 +28932,7 @@ impl Interp {
         let step_inst = match value.value {
             Payload::Reference(r) if value.kind == Kind::Reference => r,
             _ => {
-                let e = self.build_error("TypeError", 0, 0);
+                let e = self.internal_error("TypeError", "iterator result: not an object".into());
                 return self.from_async_reject(id, e);
             }
         };
@@ -28534,7 +28966,7 @@ impl Interp {
         id: usize,
         value: Slot,
         rejected: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28548,7 +28980,7 @@ impl Interp {
 
     /// Apply `mapfn` to the resolved element value (awaiting the result) or,
     /// with no mapping, define it on `A` and advance.
-    fn from_async_process_value(&mut self, code: &[u8], id: usize, v: Slot) -> Result<(), Halt> {
+    fn from_async_process_value(&mut self, code: &[u8], id: usize, v: Slot) -> Result<(), Step> {
         if self.from_async[id].mapping {
             let mapfn = self.from_async[id].mapfn;
             let this_arg = self.from_async[id].this_arg;
@@ -28572,7 +29004,7 @@ impl Interp {
         id: usize,
         value: Slot,
         rejected: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28588,7 +29020,7 @@ impl Interp {
         code: &[u8],
         id: usize,
         v: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let sb = self.stack.len();
         let cd = self.call_stack.len();
         let jd = self.jumps.len();
@@ -28611,7 +29043,7 @@ impl Interp {
                 Err(e) => return self.from_async_close_and_reject(code, id, e),
             };
             if !ok {
-                let e = self.build_error("TypeError", 0, 0);
+                let e = self.internal_error("TypeError", "define 0: not configurable".into());
                 return self.from_async_close_and_reject(code, id, e);
             }
         }
@@ -28621,7 +29053,7 @@ impl Interp {
 
     /// Set `A.length` and resolve the result promise with `A` (iterator done /
     /// array-like exhausted).
-    fn from_async_finish(&mut self, code: &[u8], id: usize) -> Result<(), Halt> {
+    fn from_async_finish(&mut self, code: &[u8], id: usize) -> Result<(), Step> {
         let sb = self.stack.len();
         let cd = self.call_stack.len();
         let jd = self.jumps.len();
@@ -28642,7 +29074,7 @@ impl Interp {
                 Err(e) => return self.from_async_reject(id, e),
             };
             if !ok {
-                let e = self.build_error("TypeError", 0, 0);
+                let e = self.failed_set_error_value(target, length_id, "C: xsSet");
                 return self.from_async_reject(id, e);
             }
         }
@@ -28659,7 +29091,7 @@ impl Interp {
         code: &[u8],
         id: usize,
         err: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let iterator = self.from_async[id].iterator;
         if iterator.kind == Kind::Undefined {
             return self.from_async_reject(id, err);
@@ -28702,7 +29134,7 @@ impl Interp {
 
     /// Resume after awaiting an async iterator's `return()` result during
     /// close: reject with the saved error regardless of the outcome.
-    fn from_async_resume_close(&mut self, id: usize) -> Result<(), Halt> {
+    fn from_async_resume_close(&mut self, id: usize) -> Result<(), Step> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28711,7 +29143,7 @@ impl Interp {
     }
 
     /// Settle the result promise as fulfilled with `A` (idempotent).
-    fn from_async_resolve(&mut self, code: &[u8], id: usize, value: Slot) -> Result<(), Halt> {
+    fn from_async_resolve(&mut self, code: &[u8], id: usize, value: Slot) -> Result<(), Step> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28721,7 +29153,7 @@ impl Interp {
     }
 
     /// Settle the result promise as rejected with `err` (idempotent).
-    fn from_async_reject(&mut self, id: usize, err: Slot) -> Result<(), Halt> {
+    fn from_async_reject(&mut self, id: usize, err: Slot) -> Result<(), Step> {
         if self.from_async[id].settled {
             return Ok(());
         }
@@ -28742,7 +29174,7 @@ impl Interp {
         thenable: Slot,
         resolve: Slot,
         reject: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         self.meter.tick_raw(PROMISE_THENABLE_JOB_FRAME_METERING);
         match self.run_callback_catching_throw(code, then, thenable, &[resolve, reject])? {
             Ok(_) => Ok(()),
@@ -28800,7 +29232,7 @@ impl Interp {
         promise: crate::value::SlotIndex,
         on_finally: Slot,
         constructor: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.meter.tick_raw(PROMISE_FINALLY_FRAME_METERING);
         let capability = self.new_promise_capability_for(code, constructor)?;
         let reaction = PromiseReaction {
@@ -28820,10 +29252,10 @@ impl Interp {
     /// and `Promise.prototype.finally`. The constructor and `@@species` reads are
     /// observable through accessors and proxies; `undefined` constructor and
     /// nullish species select the realm's intrinsic Promise constructor.
-    fn promise_species_constructor(&mut self, code: &[u8], promise: Slot) -> Result<Slot, Halt> {
+    fn promise_species_constructor(&mut self, code: &[u8], promise: Slot) -> Result<Slot, Step> {
         let promise_inst = match promise.value {
             Payload::Reference(inst) if promise.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
         let default_ref = *self
             .intrinsics
@@ -28837,7 +29269,7 @@ impl Interp {
         }
         let constructor_inst = match constructor.value {
             Payload::Reference(inst) if constructor.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("no constructor".into())),
         };
         let species_id = self
             .well_known_symbol_property_id("species")
@@ -28849,7 +29281,7 @@ impl Interp {
             species
         };
         if !self.is_constructor_value(selected) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("no constructor".into()));
         }
         Ok(selected)
     }
@@ -28863,7 +29295,7 @@ impl Interp {
         code: &[u8],
         constructor: Slot,
         value: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if let Payload::Reference(inst) = value.value {
             if value.kind == Kind::Reference && self.promises.contains_key(&inst) {
                 let constructor_id = self.intern_key("constructor");
@@ -28889,16 +29321,16 @@ impl Interp {
         code: &[u8],
         promise: Slot,
         on_finally: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let promise_inst = match promise.value {
             Payload::Reference(inst) if promise.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
         let constructor = self.promise_species_constructor(code, promise)?;
         let then_id = self.intern_key("then");
         let then = self.mop_get(code, promise_inst, then_id, promise)?;
         if !self.is_callable_value(then) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
         }
         if !self.is_callable_value(on_finally) {
             self.meter.tick_raw(PROMISE_FINALLY_FRAME_METERING);
@@ -28930,7 +29362,7 @@ impl Interp {
         reaction: PromiseReaction,
         value: Slot,
         rejected: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let on_finally = reaction.on_fulfilled;
         if self.is_callable_value(on_finally) {
             match self.call_any_catching_throw(code, on_finally, Slot::undefined(), &[])? {
@@ -28957,7 +29389,7 @@ impl Interp {
         result: Slot,
         original: Slot,
         original_rejected: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let constructor = reaction.on_rejected;
 
         // PromiseResolve returns an already-native promise unchanged only when
@@ -29024,7 +29456,7 @@ impl Interp {
         let awaited = match awaited_slot.value {
             Payload::Reference(inst) if awaited_slot.kind == Kind::Reference => inst,
             _ => {
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error("TypeError", "call: not a function".into());
                 return self.settle_capability(
                     code,
                     reaction.resolve,
@@ -29042,7 +29474,7 @@ impl Interp {
         {
             Ok(method) if self.is_callable_value(method) => method,
             Ok(_) => {
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error("TypeError", "call: not a function".into());
                 return self.settle_capability(
                     code,
                     reaction.resolve,
@@ -29098,7 +29530,7 @@ impl Interp {
         kind: CombinatorKind,
         iterable: Slot,
         constructor: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // `NewPromiseCapability(C)` is outside the algorithm's rejection
         // conversion. Its abrupt completion must reach the caller's active
         // `try` statement synchronously.
@@ -29122,7 +29554,7 @@ impl Interp {
         iterable: Slot,
         constructor: Slot,
         capability: PromiseCapability,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // Static combinators use their `this` value directly as the capability
         // constructor; unlike `.then`, they must not consult `@@species`.
         // Capability construction happens before every caught algorithm step,
@@ -29137,7 +29569,7 @@ impl Interp {
         let constructor_inst = match constructor.value {
             Payload::Reference(inst) if constructor.kind == Kind::Reference => inst,
             _ => {
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error("TypeError", "this: not an object".into());
                 self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
@@ -29149,7 +29581,7 @@ impl Interp {
         {
             Ok(method) if self.is_callable_value(method) => method,
             Ok(_) => {
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error("TypeError", "resolve: not a function".into());
                 self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
@@ -29211,14 +29643,22 @@ impl Interp {
             }
         };
         if !self.is_callable_value(iterator_method) {
-            let error = self.build_error("TypeError", 0, 0);
+            let error = self.internal_error(
+                "TypeError",
+                match iterable.kind {
+                    Kind::Null => "cannot coerce null to object",
+                    Kind::Undefined => "cannot coerce undefined to object",
+                    _ => "call: not a function",
+                }
+                .into(),
+            );
             self.settle_capability(code, resolve, reject, error, true)?;
             return Ok(result_promise);
         }
         let iterator = match self.call_any_catching_throw(code, iterator_method, iterable, &[])? {
             Ok(iterator) if iterator.kind == Kind::Reference => iterator,
             Ok(_) => {
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error("TypeError", "iterator: not an object".into());
                 self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
@@ -29237,7 +29677,7 @@ impl Interp {
         {
             Ok(method) if self.is_callable_value(method) => method,
             Ok(_) => {
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error("TypeError", "call: not a function".into());
                 self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
@@ -29273,7 +29713,8 @@ impl Interp {
             let step_inst = match step.value {
                 Payload::Reference(inst) if step.kind == Kind::Reference => inst,
                 _ => {
-                    let error = self.build_error("TypeError", 0, 0);
+                    let error =
+                        self.internal_error("TypeError", "iterator result: not an object".into());
                     self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
@@ -29314,7 +29755,7 @@ impl Interp {
             self.combinators[comb_idx].remaining = self.combinators[comb_idx]
                 .remaining
                 .checked_add(1)
-                .ok_or(Halt::StepLimit(self.n_dispatched))?;
+                .ok_or(Step::Host(Halt::StepLimit(self.n_dispatched)))?;
             let next_promise =
                 match self.call_any_catching_throw(code, promise_resolve, constructor, &[value])? {
                     Ok(value) => value,
@@ -29327,7 +29768,15 @@ impl Interp {
             let next_promise_inst = match next_promise.value {
                 Payload::Reference(inst) if next_promise.kind == Kind::Reference => inst,
                 _ => {
-                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.internal_error(
+                        "TypeError",
+                        match next_promise.kind {
+                            Kind::Null => "cannot coerce null to object",
+                            Kind::Undefined => "cannot coerce undefined to object",
+                            _ => "call: not a function",
+                        }
+                        .into(),
+                    );
                     let error = self.array_from_close(code, iterator, error)?;
                     self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
@@ -29341,7 +29790,7 @@ impl Interp {
             })? {
                 Ok(method) if self.is_callable_value(method) => method,
                 Ok(_) => {
-                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.internal_error("TypeError", "call: not a function".into());
                     let error = self.array_from_close(code, iterator, error)?;
                     self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
@@ -29410,13 +29859,13 @@ impl Interp {
                 }
             }
         }
-        Err(Halt::StepLimit(self.n_dispatched))
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
 
     /// Settle a combinator whose iterable was empty: `all`/`allSettled` resolve
     /// with the empty results Array; `any` rejects with a zero-error
     /// `AggregateError`; `race` stays pending forever (no settlement).
-    fn settle_empty_combinator(&mut self, code: &[u8], ci: usize) -> Result<(), Halt> {
+    fn settle_empty_combinator(&mut self, code: &[u8], ci: usize) -> Result<(), Step> {
         let kind = self.combinators[ci].kind;
         let completion = match kind {
             CombinatorKind::All | CombinatorKind::AllSettled => {
@@ -29449,7 +29898,7 @@ impl Interp {
         ei: usize,
         value: Slot,
         rejected: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let resolve = self.combinators[ci].resolve;
         let reject = self.combinators[ci].reject;
         match self.combinators[ci].kind {
@@ -29729,7 +30178,7 @@ impl Interp {
         name: &'static str,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.meter.tick_builtin();
         let inst = self.new_object();
         self.meter.tick_raw(ERROR_CONSTRUCT_EXTRA);
@@ -29797,7 +30246,7 @@ impl Interp {
         code: &[u8],
         error: crate::value::SlotIndex,
         options: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let options_ref = match options.value {
             Payload::Reference(options_ref) if options.kind == Kind::Reference => options_ref,
             _ => return Ok(()),
@@ -29920,7 +30369,7 @@ impl Interp {
         code: &[u8],
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let errors_slot = self
             .stack
             .get(base + 4)
@@ -30013,7 +30462,7 @@ impl Interp {
     /// dense-Array path only when the observable iterator operations still
     /// resolve to the intrinsic Array iterator; sparse/custom inputs take the
     /// full protocol path.
-    fn aggregate_error_elements(&mut self, code: &[u8], errors: Slot) -> Result<Vec<Slot>, Halt> {
+    fn aggregate_error_elements(&mut self, code: &[u8], errors: Slot) -> Result<Vec<Slot>, Step> {
         if let Payload::Reference(array) = errors.value {
             if errors.kind == Kind::Reference
                 && self.arrays.contains_key(&array)
@@ -30057,7 +30506,7 @@ impl Interp {
     /// its `.name` is `"bound "` + the target's name; calling it invokes the
     /// target with the bound `this` + bound args prepended through
     /// [`Self::invoke_value`].
-    fn make_bound_function(&mut self, base: usize, argc: usize) -> Result<Slot, Halt> {
+    fn make_bound_function(&mut self, base: usize, argc: usize) -> Result<Slot, Step> {
         let this = self
             .stack
             .get(base)
@@ -30075,9 +30524,11 @@ impl Interp {
         let target = match this.value {
             Payload::Reference(r) if self.functions.contains_key(&r) => r,
             Payload::Reference(r) if self.slot_is_callable(r) => {
-                return Err(Halt::Unsupported("bind:non-user-function-receiver"));
+                return Err(Step::Host(Halt::NotImplemented(
+                    "bind:non-user-function-receiver",
+                )));
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not a Function instance".into())),
         };
         let this_arg = self
             .stack
@@ -30364,12 +30815,15 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let target = self
             .stack
             .get(base)
             .copied()
             .unwrap_or_else(Slot::undefined);
+        if !self.is_callable_value(target) {
+            return Err(self.catchable_type_error_msg("this: not a Function instance".into()));
+        }
         let target_ref = match target.value {
             Payload::Reference(r) => r,
             _ => return Ok(false),
@@ -30432,12 +30886,15 @@ impl Interp {
     /// `Ok(false)` for the in-place trampoline. Every native, native-method,
     /// and bound receiver accepts modeled array-like shapes through
     /// `CreateListFromArrayLike`.
-    fn call_dot_apply_native(&mut self, base: usize, code: &[u8]) -> Result<bool, Halt> {
+    fn call_dot_apply_native(&mut self, base: usize, code: &[u8]) -> Result<bool, Step> {
         let target = self
             .stack
             .get(base)
             .copied()
             .unwrap_or_else(Slot::undefined);
+        if !self.is_callable_value(target) {
+            return Err(self.catchable_type_error_msg("this: not a Function instance".into()));
+        }
         let target_ref = match target.value {
             Payload::Reference(r) => r,
             _ => return Ok(false),
@@ -30485,7 +30942,7 @@ impl Interp {
                 let meter = self.apply_arraylike_metering(arg_slot, args.len());
                 (args, meter)
             }
-            Some(_) => return Err(self.catchable_type_error()),
+            Some(_) => return Err(self.catchable_type_error_msg("argArray: not an object".into())),
         };
         let forwarded_len = forwarded.len();
         self.stack.truncate(base);
@@ -30535,7 +30992,7 @@ impl Interp {
         base: usize,
         argc: usize,
         ret_pc: usize,
-    ) -> Result<usize, Halt> {
+    ) -> Result<usize, Step> {
         let f = self
             .stack
             .get(base)
@@ -30550,7 +31007,11 @@ impl Interp {
             {
                 r
             }
-            _ => return Err(Halt::Unsupported("call:non-user-function-receiver")),
+            _ => {
+                return Err(Step::Host(Halt::NotImplemented(
+                    "call:non-user-function-receiver",
+                )))
+            }
         };
         let this_arg = self
             .stack
@@ -30604,7 +31065,7 @@ impl Interp {
         _argc: usize,
         ret_pc: usize,
         code: &[u8],
-    ) -> Result<usize, Halt> {
+    ) -> Result<usize, Step> {
         let f = self
             .stack
             .get(base)
@@ -30619,7 +31080,11 @@ impl Interp {
             {
                 r
             }
-            _ => return Err(Halt::Unsupported("apply:non-user-function-receiver")),
+            _ => {
+                return Err(Step::Host(Halt::NotImplemented(
+                    "apply:non-user-function-receiver",
+                )))
+            }
         };
         let this_arg = self
             .stack
@@ -30673,7 +31138,7 @@ impl Interp {
             // A non-object, non-nullish argArray (a Boolean/Number/String/
             // Symbol/BigInt primitive): `CreateListFromArrayLike` step 2
             // (ECMA-262 7.3.18) throws a catchable TypeError.
-            Some(_) => return Err(self.catchable_type_error()),
+            Some(_) => return Err(self.catchable_type_error_msg("argArray: not an object".into())),
         };
         let n = real_args.len();
         self.stack.truncate(base);
@@ -30723,7 +31188,7 @@ impl Interp {
         base: usize,
         argc: usize,
         ret_pc: usize,
-    ) -> Result<usize, Halt> {
+    ) -> Result<usize, Step> {
         let call_args: Vec<Slot> = if argc >= 1 {
             self.stack[base + 4..base + 4 + argc].to_vec()
         } else {
@@ -30744,7 +31209,7 @@ impl Interp {
             }
             match self.functions.get(&t) {
                 Some(fi) if fi.native.is_none() && fi.method.is_none() => break t,
-                _ => return Err(Halt::Unsupported("bind:new-bound-target")),
+                _ => return Err(Step::Host(Halt::NotImplemented("bind:new-bound-target"))),
             }
         };
         let total = acc.len();
@@ -30769,10 +31234,10 @@ impl Interp {
     /// method reads inherited `name`/`message` properties and applies the
     /// shared string-hint primitive conversion, rather than consulting the
     /// native Error side table (the method is intentionally generic).
-    fn error_to_string(&mut self, code: &[u8], this: Slot) -> Result<Vec<u16>, Halt> {
+    fn error_to_string(&mut self, code: &[u8], this: Slot) -> Result<Vec<u16>, Step> {
         let inst = match this.value {
             Payload::Reference(inst) if this.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
         let name_id = self.intern_key_unmetered("name");
         let message_id = self.intern_key_unmetered("message");
@@ -30801,14 +31266,14 @@ impl Interp {
         }
     }
 
-    fn value_to_string(&mut self, code: &[u8], value: Slot) -> Result<String, Halt> {
+    fn value_to_string(&mut self, code: &[u8], value: Slot) -> Result<String, Step> {
         let primitive = if value.kind == Kind::Reference {
             self.to_primitive(code, value, true)?
         } else {
             value
         };
         if primitive.kind == Kind::Symbol {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("cannot coerce symbol to string".into()));
         }
         Ok(String::from_utf8_lossy(&self.to_string_bytes_metered(primitive)).into_owned())
     }
@@ -30820,6 +31285,25 @@ impl Interp {
     /// user code), meters the method's steps, collapses the region to the
     /// result, and pushes it. A method whose receiver shape ironhorse cannot model
     /// self-names (an honest skip).
+    /// disposeAsync rejects its promise for receiver validation errors;
+    /// the remaining resource-management methods throw synchronously.
+    fn explicit_resource_error(
+        &mut self,
+        code: &[u8],
+        method: NativeMethod,
+        name: &'static str,
+        message: String,
+    ) -> Result<Slot, Step> {
+        let error = self.internal_error(name, message);
+        if method == NativeMethod::AsyncDisposableStackDisposeAsync {
+            let promise = self.new_promise_instance();
+            self.settle_promise(code, promise, error, true)?;
+            Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
+        } else {
+            Err(self.raise_js(error))
+        }
+    }
+
     fn explicit_resource_method(
         &mut self,
         method: NativeMethod,
@@ -30827,23 +31311,8 @@ impl Interp {
         base: usize,
         _argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
-        let inst = match (this.kind, this.value) {
-            (Kind::Reference, Payload::Reference(inst))
-                if self.disposable_stacks.contains_key(&inst) =>
-            {
-                inst
-            }
-            _ => return Err(self.catchable_type_error()),
-        };
-        let arg = |n: usize| {
-            self.stack
-                .get(base + 4 + n)
-                .copied()
-                .unwrap_or_else(Slot::undefined)
-        };
-        let is_async = self.disposable_stacks[&inst].asynchronous;
-        let expected_async = matches!(
+    ) -> Result<Slot, Step> {
+        let is_async = matches!(
             method,
             NativeMethod::AsyncDisposableStackUse
                 | NativeMethod::AsyncDisposableStackAdopt
@@ -30851,9 +31320,47 @@ impl Interp {
                 | NativeMethod::AsyncDisposableStackMove
                 | NativeMethod::AsyncDisposableStackDisposeAsync
         );
-        if is_async != expected_async {
-            return Err(self.catchable_type_error());
+        let brand = if is_async {
+            "AsyncDisposableStack"
+        } else {
+            "DisposableStack"
+        };
+        let inst = match (this.kind, this.value) {
+            (Kind::Reference, Payload::Reference(inst))
+                if self
+                    .disposable_stacks
+                    .get(&inst)
+                    .is_some_and(|data| data.asynchronous == is_async) =>
+            {
+                inst
+            }
+            _ => {
+                return self.explicit_resource_error(
+                    code,
+                    method,
+                    "TypeError",
+                    format!("this: not a {brand} instance"),
+                )
+            }
+        };
+        let disposing = matches!(
+            method,
+            NativeMethod::DisposableStackDispose | NativeMethod::AsyncDisposableStackDisposeAsync
+        );
+        if !disposing && self.disposable_stacks[&inst].disposed {
+            return self.explicit_resource_error(
+                code,
+                method,
+                "ReferenceError",
+                format!("this: disposed {brand} instance"),
+            );
         }
+        let arg = |n: usize| {
+            self.stack
+                .get(base + 4 + n)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
         if matches!(
             method,
             NativeMethod::DisposableStackUse | NativeMethod::AsyncDisposableStackUse
@@ -30862,30 +31369,31 @@ impl Interp {
             if matches!(resource.kind, Kind::Null | Kind::Undefined) {
                 return Ok(resource);
             }
-            let resource_inst = match (resource.kind, resource.value) {
-                (Kind::Reference, Payload::Reference(i)) => i,
-                _ => return Err(self.catchable_type_error()),
+            let resource_object = self.array_to_object(resource)?;
+            let Payload::Reference(resource_inst) = resource_object.value else {
+                unreachable!("ToObject result")
             };
             let symbol_name = if is_async { "asyncDispose" } else { "dispose" };
-            let mut disposer = self
-                .well_known_symbol_property_id(symbol_name)
-                .map(|id| self.instance_get(resource_inst, id))
-                .unwrap_or_else(Slot::undefined);
-            if is_async && matches!(disposer.kind, Kind::Undefined | Kind::Null) {
-                disposer = self
-                    .well_known_symbol_property_id("dispose")
-                    .map(|id| self.instance_get(resource_inst, id))
-                    .unwrap_or_else(Slot::undefined);
+            let mut disposer = match self.well_known_symbol_property_id(symbol_name) {
+                Some(id) => self.mop_get(code, resource_inst, id, resource)?,
+                None => Slot::undefined(),
+            };
+            // The pinned XS falls back on every non-callable async method.
+            if is_async && !self.is_callable_value(disposer) {
+                disposer = match self.well_known_symbol_property_id("dispose") {
+                    Some(id) => self.mop_get(code, resource_inst, id, resource)?,
+                    None => Slot::undefined(),
+                };
             }
             if !self.is_callable_value(disposer) {
-                return Err(self.catchable_type_error());
-            }
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            if data.disposed {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    if is_async {
+                        "dispose: no a function"
+                    } else {
+                        "dispose: not a function"
+                    }
+                    .into(),
+                ));
             }
             // Measured add-record residue (see the constant).
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
@@ -30907,14 +31415,14 @@ impl Interp {
             let resource = arg(0);
             let disposer = arg(1);
             if !self.is_callable_value(disposer) {
-                return Err(self.catchable_type_error());
-            }
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            if data.disposed {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    if is_async {
+                        "dispose: no a function"
+                    } else {
+                        "dispose: not a function"
+                    }
+                    .into(),
+                ));
             }
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
             let data = self
@@ -30934,14 +31442,14 @@ impl Interp {
         ) {
             let disposer = arg(0);
             if !self.is_callable_value(disposer) {
-                return Err(self.catchable_type_error());
-            }
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            if data.disposed {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    if is_async {
+                        "dispose: no a function"
+                    } else {
+                        "dispose: not a function"
+                    }
+                    .into(),
+                ));
             }
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
             let data = self
@@ -30959,13 +31467,6 @@ impl Interp {
             method,
             NativeMethod::DisposableStackMove | NativeMethod::AsyncDisposableStackMove
         ) {
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            if data.disposed {
-                return Err(self.catchable_type_error());
-            }
             self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
             let data = self
                 .disposable_stacks
@@ -31082,7 +31583,7 @@ impl Interp {
         self.make_bigint(negative, limbs)
     }
 
-    fn temporal_integer(&mut self, value: Slot) -> Result<i64, Halt> {
+    fn temporal_integer(&mut self, value: Slot) -> Result<i64, Step> {
         let value = self.to_number_value(&[], value)?;
         let n = to_number(&value);
         if !n.is_finite() || n.fract() != 0.0 || n.abs() > 9_007_199_254_740_991.0 {
@@ -31091,7 +31592,7 @@ impl Interp {
         Ok(n as i64)
     }
 
-    fn temporal_new_instant(&mut self, epoch_nanoseconds: i128) -> Result<Slot, Halt> {
+    fn temporal_new_instant(&mut self, epoch_nanoseconds: i128) -> Result<Slot, Step> {
         const LIMIT: i128 = 8_640_000_000_000_000_000_000;
         if !(-LIMIT..=LIMIT).contains(&epoch_nanoseconds) {
             return Err(self.catchable_range_error());
@@ -31104,7 +31605,7 @@ impl Interp {
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
-    fn temporal_new_duration(&mut self, record: TemporalDurationRecord) -> Result<Slot, Halt> {
+    fn temporal_new_duration(&mut self, record: TemporalDurationRecord) -> Result<Slot, Step> {
         if !temporal_duration_sign_valid(record) {
             return Err(self.catchable_range_error());
         }
@@ -31115,7 +31616,7 @@ impl Interp {
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
-    fn temporal_new_plain(&mut self, record: TemporalPlainRecord) -> Result<Slot, Halt> {
+    fn temporal_new_plain(&mut self, record: TemporalPlainRecord) -> Result<Slot, Step> {
         if !temporal_plain_valid(record) {
             return Err(self.catchable_range_error());
         }
@@ -31131,7 +31632,7 @@ impl Interp {
         kind: u8,
         args: &[Slot],
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if kind == 5 {
             let id =
                 self.value_to_string(code, args.first().copied().unwrap_or_else(Slot::undefined))?;
@@ -31143,7 +31644,7 @@ impl Interp {
                 ..Default::default()
             });
         }
-        let integer = |this: &mut Self, i: usize, default: i64| -> Result<i64, Halt> {
+        let integer = |this: &mut Self, i: usize, default: i64| -> Result<i64, Step> {
             let value = args.get(i).copied().unwrap_or_else(Slot::undefined);
             if value.kind == Kind::Undefined {
                 Ok(default)
@@ -31191,7 +31692,7 @@ impl Interp {
         kind: u8,
         value: Slot,
         code: &[u8],
-    ) -> Result<TemporalPlainRecord, Halt> {
+    ) -> Result<TemporalPlainRecord, Step> {
         if kind == 5 {
             if let Payload::Reference(i) = value.value {
                 if let Some(r) = self.temporal_plains.get(&i).filter(|r| r.kind == 5) {
@@ -31284,7 +31785,7 @@ impl Interp {
         arg0: Slot,
         arg1: Slot,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if op == 0 {
             let r = self.temporal_plain_from(kind, arg0, code)?;
             return self.temporal_new_plain(r);
@@ -31372,8 +31873,9 @@ impl Interp {
             5 | 6 => {
                 let other = self.temporal_plain_from(kind, arg0, code)?;
                 let (a, b) = if op == 5 { (old, other) } else { (other, old) };
-                let d = temporal_plain_difference(a, b)
-                    .ok_or(Halt::Unsupported("Temporal.Plain:difference-calendar"))?;
+                let d = temporal_plain_difference(a, b).ok_or(Step::Host(Halt::NotImplemented(
+                    "Temporal.Plain:difference-calendar",
+                )))?;
                 self.temporal_new_duration(d)
             }
             7 => Ok(Slot::boolean(
@@ -31412,11 +31914,11 @@ impl Interp {
                     ..d
                 })
             }
-            _ => Err(Halt::Unsupported("Temporal.Plain:method")),
+            _ => Err(Step::Host(Halt::NotImplemented("Temporal.Plain:method"))),
         }
     }
 
-    fn temporal_instant_from(&mut self, value: Slot, code: &[u8]) -> Result<i128, Halt> {
+    fn temporal_instant_from(&mut self, value: Slot, code: &[u8]) -> Result<i128, Step> {
         if let Payload::Reference(r) = value.value {
             if let Some(record) = self.temporal_instants.get(&r) {
                 return Ok(record.epoch_nanoseconds);
@@ -31430,7 +31932,7 @@ impl Interp {
         &mut self,
         value: Slot,
         code: &[u8],
-    ) -> Result<TemporalDurationRecord, Halt> {
+    ) -> Result<TemporalDurationRecord, Step> {
         if let Payload::Reference(r) = value.value {
             if let Some(record) = self.temporal_durations.get(&r) {
                 return Ok(*record);
@@ -31478,7 +31980,7 @@ impl Interp {
         value: Slot,
         code: &[u8],
         default: &str,
-    ) -> Result<String, Halt> {
+    ) -> Result<String, Step> {
         if value.kind == Kind::Undefined {
             return Ok(default.to_string());
         }
@@ -31504,7 +32006,7 @@ impl Interp {
         &mut self,
         options: Slot,
         code: &[u8],
-    ) -> Result<Option<TemporalPlainRecord>, Halt> {
+    ) -> Result<Option<TemporalPlainRecord>, Step> {
         if options.kind == Kind::Undefined {
             return Ok(None);
         }
@@ -31544,7 +32046,7 @@ impl Interp {
         &mut self,
         d: TemporalDurationRecord,
         relative: Option<TemporalPlainRecord>,
-    ) -> Result<i128, Halt> {
+    ) -> Result<i128, Step> {
         match relative {
             Some(start) => {
                 iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error())
@@ -31571,7 +32073,7 @@ impl Interp {
         d: TemporalDurationRecord,
         options: Slot,
         code: &[u8],
-    ) -> Result<TemporalDurationRecord, Halt> {
+    ) -> Result<TemporalDurationRecord, Step> {
         const DAY_NS: i128 = 86_400_000_000_000;
         let (smallest, largest_opt, increment, mode, relative) = if options.kind == Kind::String {
             (
@@ -31712,7 +32214,7 @@ impl Interp {
         arg1: Slot,
         arg2: Slot,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         use NativeMethod::*;
         match method {
             TemporalInstantFrom => {
@@ -31934,7 +32436,7 @@ impl Interp {
         epoch_nanoseconds: i128,
         time_zone: String,
         offset_ns: i64,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         const LIMIT: i128 = 8_640_000_000_000_000_000_000;
         if !(-LIMIT..=LIMIT).contains(&epoch_nanoseconds) {
             return Err(self.catchable_range_error());
@@ -31969,7 +32471,7 @@ impl Interp {
         &mut self,
         value: Slot,
         code: &[u8],
-    ) -> Result<TemporalZonedRecord, Halt> {
+    ) -> Result<TemporalZonedRecord, Step> {
         if let Some(rec) = self.temporal_zoned_brand(value) {
             return Ok(rec);
         }
@@ -32078,7 +32580,7 @@ impl Interp {
         smallest_default: Option<&str>,
         largest_default: &str,
         mode_default: &str,
-    ) -> Result<(String, String, i128, String), Halt> {
+    ) -> Result<(String, String, i128, String), Step> {
         // A bare string argument is the smallestUnit.
         if arg.kind == Kind::String {
             let unit = self.value_to_string(code, arg)?;
@@ -32139,7 +32641,7 @@ impl Interp {
         arg0: Slot,
         arg1: Slot,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // Statics: from(0), compare(1) — no `this` brand.
         if op == 0 {
             let rec = self.temporal_zoned_from(arg0, code)?;
@@ -32450,11 +32952,13 @@ impl Interp {
                 };
                 Ok(self.new_string_metered(s.as_bytes()))
             }
-            20 => Err(Halt::Unsupported(
+            20 => Err(Step::Host(Halt::NotImplemented(
                 "Temporal.ZonedDateTime.toLocaleString:needs-intl",
-            )),
+            ))),
             21 => Err(self.catchable_type_error()),
-            _ => Err(Halt::Unsupported("Temporal.ZonedDateTime:method")),
+            _ => Err(Step::Host(Halt::NotImplemented(
+                "Temporal.ZonedDateTime:method",
+            ))),
         }
     }
 
@@ -32465,7 +32969,7 @@ impl Interp {
         rec: &TemporalZonedRecord,
         options: Slot,
         code: &[u8],
-    ) -> Result<String, Halt> {
+    ) -> Result<String, Step> {
         let mut calendar_name = "auto".to_string();
         let mut show_offset = true;
         let mut show_zone = true;
@@ -32504,10 +33008,10 @@ impl Interp {
         ))
     }
 
-    fn temporal_now_method(&mut self, op: u8, arg0: Slot, code: &[u8]) -> Result<Slot, Halt> {
+    fn temporal_now_method(&mut self, op: u8, arg0: Slot, code: &[u8]) -> Result<Slot, Step> {
         // Deterministic host clock: the Unix epoch, and the `UTC` system zone.
         const NOW_EPOCH_NS: i128 = 0;
-        let zone_offset = |this: &mut Self, arg: Slot| -> Result<i64, Halt> {
+        let zone_offset = |this: &mut Self, arg: Slot| -> Result<i64, Step> {
             if arg.kind == Kind::Undefined {
                 return Ok(0);
             }
@@ -32557,7 +33061,7 @@ impl Interp {
                     ..Default::default()
                 })
             }
-            _ => Err(Halt::Unsupported("Temporal.Now:method")),
+            _ => Err(Step::Host(Halt::NotImplemented("Temporal.Now:method"))),
         }
     }
 
@@ -32568,7 +33072,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let arg = |stack: &[Slot], i: usize| {
             stack
                 .get(base + 4 + i)
@@ -32620,18 +33124,26 @@ impl Interp {
                         .symbol_ids
                         .get("toISOString")
                         .copied()
-                        .ok_or(Halt::Unsupported("Date.toJSON:toISOString-key"))?;
+                        .ok_or(Step::Host(Halt::EngineInvariant(
+                            "Date.toJSON:toISOString-key",
+                        )))?;
                     let method = self.mop_get(code, inst, id, object)?;
                     return self.invoke_value(code, method, object, &[]);
                 }
                 let inst = match this.value {
                     Payload::Reference(r) if self.dates.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a Date instance".into())
+                        )
+                    }
                 };
                 let t = self.dates[&inst];
                 if op == 26 {
                     if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
-                        return Err(self.catchable_type_error());
+                        return Err(
+                            self.catchable_type_error_msg("this: read-only Date instance".into())
+                        );
                     }
                     let clipped = time_clip(self.to_number_f64(code, arg(&self.stack, 0))?);
                     self.dates.insert(inst, clipped);
@@ -32655,7 +33167,9 @@ impl Interp {
                         inputs.push(self.to_number_f64(code, arg(&self.stack, i))?);
                     }
                     if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
-                        return Err(self.catchable_type_error());
+                        return Err(
+                            self.catchable_type_error_msg("this: read-only Date instance".into())
+                        );
                     }
                     // SetFullYear alone recovers an invalid Date from +0. Every
                     // other setter preserves NaN after performing the required
@@ -32735,7 +33249,7 @@ impl Interp {
                 }
                 if !t.is_finite() {
                     return match op {
-                        21 => Err(self.catchable_range_error()),
+                        21 => Err(self.catchable_range_error_msg("Invalid Date".into())),
                         22..=25 => Ok(self.intl_string("Invalid Date")),
                         _ => Ok(Slot::number(f64::NAN)),
                     };
@@ -32756,7 +33270,7 @@ impl Interp {
                     23 => self.intl_string(&date_local_string(t)),
                     24 => self.intl_string(&date_only_string(t)),
                     25 => self.intl_string(&date_time_string(t)),
-                    _ => return Err(Halt::Unsupported("Date:method")),
+                    _ => return Err(Step::Host(Halt::NotImplemented("Date:method"))),
                 })
             }
         }
@@ -32768,7 +33282,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         // The central native-method dispatch is the largest activation in the
         // crate. A method that invokes another native without entering
         // `dispatch_at` — `Array.prototype.join` stringifying an element that
@@ -32787,7 +33301,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let _ = code; // used by the callback-taking methods (run_callback)
                       // Cost-calibration builtin histogram: one invocation per dispatched
                       // native prototype method. This is the central native-method
@@ -33302,7 +33816,9 @@ impl Interp {
                     Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
                     _ => return Err(self.catchable_type_error()),
                 };
-                return Err(Halt::Unsupported("Intl.NumberFormat:formatRange"));
+                return Err(Step::Host(Halt::NotImplemented(
+                    "Intl.NumberFormat:formatRange",
+                )));
             }
             NativeMethod::NumberFormatResolvedOptions => {
                 let inst = match this.value {
@@ -33577,10 +34093,10 @@ impl Interp {
                                 .get("Boolean")
                                 .and_then(|&c| self.ctor_prototype.get(&c).copied())
                                 .unwrap_or(crate::value::SlotIndex::NULL),
-                            _ => return Err(self.catchable_type_error()),
+                            _ => return Err(self.catchable_type_error_msg("invalid object".into())),
                         };
                         if proto.is_null() {
-                            return Err(self.catchable_type_error());
+                            return Err(self.catchable_type_error_msg("invalid object".into()));
                         }
                         self.stack.truncate(base);
                         self.push(Slot::of(Kind::Reference, Payload::Reference(proto)));
@@ -33594,19 +34110,22 @@ impl Interp {
             // object's `[[SetPrototypeOf]]` (proxy-aware); returns `O`. A `false`
             // result throws. `proto` must be an object or `null`.
             NativeMethod::ObjectSetPrototypeOf => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid object".into()));
+                }
                 let proto = self
                     .stack
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if proto.kind != Kind::Reference && proto.kind != Kind::Null {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("invalid prototype".into()));
                 }
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => {
                         if arg0.kind == Kind::Undefined || arg0.kind == Kind::Null {
-                            return Err(self.catchable_type_error());
+                            return Err(self.catchable_type_error_msg("invalid object".into()));
                         }
                         // A primitive receiver: return it unchanged.
                         self.stack.truncate(base);
@@ -33616,7 +34135,7 @@ impl Interp {
                 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 if !self.mop_set_prototype(code, inst, proto)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("invalid prototype".into()));
                 }
                 arg0
             }
@@ -33688,10 +34207,14 @@ impl Interp {
             }
             // `Function.prototype.call` is handled by the `run` trampoline
             // (`enter_call_dot_call`) and never reaches here.
-            NativeMethod::FunctionCall => return Err(Halt::EngineInvariant("call:unexpected")),
+            NativeMethod::FunctionCall => {
+                return Err(Step::Host(Halt::EngineInvariant("call:unexpected")))
+            }
             // `Function.prototype.apply` is handled by the `run` trampoline
             // (`enter_call_dot_apply`) and never reaches here.
-            NativeMethod::FunctionApply => return Err(Halt::EngineInvariant("apply:unexpected")),
+            NativeMethod::FunctionApply => {
+                return Err(Step::Host(Halt::EngineInvariant("apply:unexpected")))
+            }
             NativeMethod::FunctionPrototype => Slot::undefined(),
             // `Object.prototype.valueOf`: `ToObject(this)`. Object receivers
             // retain their identity, primitive receivers become their realm
@@ -33708,7 +34231,12 @@ impl Interp {
                     self.array_to_object(this)?
                 }
                 Kind::Null | Kind::Undefined => {
-                    let error = self.catchable_type_error();
+                    let message = if this.kind == Kind::Null {
+                        "cannot coerce null to object"
+                    } else {
+                        "cannot coerce undefined to object"
+                    };
+                    let error = self.catchable_type_error_msg(message.into());
                     self.meter.untick_raw(if this.kind == Kind::Null {
                         OBJECT_VALUE_OF_NULL_CREDIT
                     } else {
@@ -33830,6 +34358,11 @@ impl Interp {
             // `Function.prototype.toString`: XS renders any function as
             // `function ["name"] (){[native code]}`.
             NativeMethod::FunctionToString => {
+                if !self.is_callable_value(this) {
+                    return Err(
+                        self.catchable_type_error_msg("this: not a Function instance".into())
+                    );
+                }
                 let name = match this.value {
                     Payload::Reference(r) => self
                         .functions
@@ -33914,7 +34447,7 @@ impl Interp {
                         ..
                     }
                 ) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("invalid this".into()));
                 }
                 let hint = match arg0 {
                     Slot {
@@ -33922,12 +34455,12 @@ impl Interp {
                         value: Payload::String(offset),
                         ..
                     } => self.str_text(offset),
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("invalid hint".into())),
                 };
                 match hint.as_str() {
                     "string" | "default" => self.ordinary_to_primitive(code, this, true)?,
                     "number" => self.ordinary_to_primitive(code, this, false)?,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("invalid hint".into())),
                 }
             }
             NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
@@ -33946,13 +34479,9 @@ impl Interp {
                 let radix = if arg0.kind == Kind::Undefined {
                     10
                 } else {
-                    let converted = self.to_number_value(code, arg0)?;
-                    if converted.kind == Kind::BigInt {
-                        return Err(self.catchable_type_error());
-                    }
-                    let n = to_number(&converted).trunc();
-                    if !(2.0..=36.0).contains(&n) {
-                        return Err(self.catchable_range_error());
+                    let n = self.number_radix_integer(code, arg0)?;
+                    if !(2..=36).contains(&n) {
+                        return Err(self.catchable_range_error_msg("invalid radix".into()));
                     }
                     n as u32
                 };
@@ -33994,7 +34523,9 @@ impl Interp {
             NativeMethod::SymbolFor => {
                 let primitive = self.to_primitive(code, arg0, true)?;
                 if primitive.kind == Kind::Symbol {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg("cannot coerce symbol to string".into())
+                    );
                 }
                 let string = self.to_string_slot_metered(primitive);
                 let key = match string.value {
@@ -34022,7 +34553,7 @@ impl Interp {
             // interned under, or `undefined` for a non-registered symbol.
             NativeMethod::SymbolKeyFor => {
                 if arg0.kind != Kind::Symbol {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("sym: not a symbol".into()));
                 }
                 self.meter.tick_raw(SYMBOL_KEYFOR_METERING);
                 match arg0.value {
@@ -34084,6 +34615,9 @@ impl Interp {
                 Slot::boolean(self.same_value(arg0, right))
             }
             NativeMethod::ObjectHasOwn => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid object".into()));
+                }
                 let key = self
                     .stack
                     .get(base + 5)
@@ -34092,6 +34626,9 @@ impl Interp {
                 self.object_has_own_property(code, arg0, key)?
             }
             NativeMethod::ObjectAssign => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid target".into()));
+                }
                 let sources: Vec<Slot> = (1..argc)
                     .map(|index| {
                         self.stack
@@ -34107,6 +34644,9 @@ impl Interp {
             // receiver's complete MOP, including primitive wrappers, arrays,
             // TypedArrays, and proxies.
             NativeMethod::ObjectKeys => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid object".into()));
+                }
                 let object = self.array_to_object(arg0)?;
                 let Payload::Reference(inst) = object.value else {
                     unreachable!("ToObject returns a reference")
@@ -34161,7 +34701,9 @@ impl Interp {
                 // answers `undefined` for every key through the ordinary path.
                 let inst = match (arg0.kind, arg0.value) {
                     (Kind::Reference, Payload::Reference(o)) => o,
-                    (Kind::Null | Kind::Undefined, _) => return Err(self.catchable_type_error()),
+                    (Kind::Null | Kind::Undefined, _) => {
+                        return Err(self.catchable_type_error_msg("invalid object".into()))
+                    }
                     (Kind::Boolean, _) => self.box_primitive_wrapper(Native::Boolean, arg0),
                     (Kind::Integer | Kind::Number, _) => {
                         self.box_primitive_wrapper(Native::Number, arg0)
@@ -34169,7 +34711,7 @@ impl Interp {
                     (Kind::String, _) => self.box_primitive_wrapper(Native::String, arg0),
                     (Kind::Symbol, _) => self.box_primitive_wrapper(Native::Symbol, arg0),
                     (Kind::BigInt, _) => self.box_primitive_wrapper(Native::BigInt, arg0),
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("invalid object".into())),
                 };
                 // The integer-indexed exotic `[[GetOwnProperty]]` (10.4.5.1): a
                 // canonical numeric index yields the element data descriptor
@@ -34320,6 +34862,9 @@ impl Interp {
                 }
             }
             NativeMethod::ObjectGetOwnPropertyNames => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid object".into()));
+                }
                 let object = self.array_to_object(arg0)?;
                 let Payload::Reference(inst) = object.value else {
                     unreachable!("ToObject returns a reference")
@@ -34356,9 +34901,7 @@ impl Interp {
                         unreachable!("ToObject returns a reference")
                     };
                     if !self.define_properties_from_object(code, object, descriptors)? {
-                        return Err(
-                            self.catchable_type_error_msg("cannot define properties".into())
-                        );
+                        return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                     }
                 }
                 Slot::of(Kind::Reference, Payload::Reference(object))
@@ -34373,16 +34916,22 @@ impl Interp {
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
+                if properties.kind == Kind::Undefined {
+                    return Err(self.catchable_type_error_msg("invalid properties".into()));
+                }
                 let descriptors = self.array_to_object(properties)?;
                 let Payload::Reference(descriptors) = descriptors.value else {
                     unreachable!("ToObject returns a reference")
                 };
                 if !self.define_properties_from_object(code, target, descriptors)? {
-                    return Err(self.catchable_type_error_msg("cannot define properties".into()));
+                    return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                 }
                 arg0
             }
             NativeMethod::ObjectGetOwnPropertySymbols => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid object".into()));
+                }
                 let value = self.array_to_object(arg0)?;
                 let Payload::Reference(object) = value.value else {
                     unreachable!("ToObject returns a reference")
@@ -34441,7 +34990,7 @@ impl Interp {
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
                     if !self.mop_define_own_property(code, object, id, descriptor)? {
-                        return Err(self.catchable_type_error_msg("cannot define property".into()));
+                        return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                     }
                     arg0
                 } else if self.typed_arrays.contains_key(&target) {
@@ -34483,7 +35032,7 @@ impl Interp {
                         // A realm-local, catchable `TypeError` (the
                         // `DefinePropertyOrThrow` rejection an `assert.throws`
                         // observes), not an uncatchable host escape.
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                     }
                     arg0
                 } else {
@@ -34499,7 +35048,11 @@ impl Interp {
                         .unwrap_or_else(Slot::undefined);
                     let inst = match arg0.value {
                         Payload::Reference(o) => o,
-                        _ => return Err(Halt::Unsupported("defineProperty:non-object")),
+                        _ => {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "defineProperty:non-object",
+                            )))
+                        }
                     };
                     if self.arrays.contains_key(&inst)
                         || self.collections.contains_key(&inst)
@@ -34508,11 +35061,17 @@ impl Interp {
                         || self.data_views.contains_key(&inst)
                         || self.wrapper_data.contains_key(&inst)
                     {
-                        return Err(Halt::Unsupported("defineProperty:exotic-object"));
+                        return Err(Step::Host(Halt::NotImplemented(
+                            "defineProperty:exotic-object",
+                        )));
                     }
                     let descref = match arg2.value {
                         Payload::Reference(d) => d,
-                        _ => return Err(Halt::Unsupported("defineProperty:non-object-descriptor")),
+                        _ => {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "defineProperty:non-object-descriptor",
+                            )))
+                        }
                     };
                     // A symbol key resolves to its interned key id (`mxID(symbol)`);
                     // a string key interns as a name, rejecting an index-valued
@@ -34522,28 +35081,40 @@ impl Interp {
                     let key_id = match arg1.kind {
                         Kind::Symbol => match arg1.value {
                             Payload::Reference(desc) => self.intern_symbol_key(desc),
-                            _ => return Err(Halt::Unsupported("defineProperty:bad-symbol-key")),
+                            _ => {
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "defineProperty:bad-symbol-key",
+                                )))
+                            }
                         },
                         Kind::String => {
                             let key = match arg1.value {
                                 Payload::String(off) => self.str_text(off),
                                 _ => {
-                                    return Err(Halt::Unsupported("defineProperty:non-string-key"))
+                                    return Err(Step::Host(Halt::NotImplemented(
+                                        "defineProperty:non-string-key",
+                                    )))
                                 }
                             };
                             if string_to_index(&key).is_some() {
-                                return Err(Halt::Unsupported("defineProperty:index-key"));
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "defineProperty:index-key",
+                                )));
                             }
                             if !self.symbol_ids.contains_key(&key)
                                 && self.default_keys.contains(key.as_str())
                             {
-                                return Err(Halt::Unsupported(
+                                return Err(Step::Host(Halt::NotImplemented(
                                     "defineProperty:ambiguous-default-key",
-                                ));
+                                )));
                             }
                             self.intern_key(&key)
                         }
-                        _ => return Err(Halt::Unsupported("defineProperty:non-string-key")),
+                        _ => {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "defineProperty:non-string-key",
+                            )))
+                        }
                     };
                     // Read the descriptor's four data fields (their keys are the
                     // descriptor literal's program symbols). Any get/set present,
@@ -34558,7 +35129,9 @@ impl Interp {
                             })
                     };
                     if field(self, "get").is_some() || field(self, "set").is_some() {
-                        return Err(Halt::Unsupported("defineProperty:accessor-descriptor"));
+                        return Err(Step::Host(Halt::NotImplemented(
+                            "defineProperty:accessor-descriptor",
+                        )));
                     }
                     let (value, writable, enumerable, configurable) = match (
                         field(self, "value"),
@@ -34567,7 +35140,11 @@ impl Interp {
                         field(self, "configurable"),
                     ) {
                         (Some(v), Some(w), Some(e), Some(c)) => (v, w, e, c),
-                        _ => return Err(Halt::Unsupported("defineProperty:partial-descriptor")),
+                        _ => {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "defineProperty:partial-descriptor",
+                            )))
+                        }
                     };
                     // The three attribute flags coerce the field values to boolean
                     // (XS's `fxToBoolean`); a non-boolean attribute is outside the
@@ -34584,13 +35161,17 @@ impl Interp {
                         as_bool(configurable),
                     ) {
                         (Some(w), Some(e), Some(c)) => (w, e, c),
-                        _ => return Err(Halt::Unsupported("defineProperty:non-boolean-attribute")),
+                        _ => {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "defineProperty:non-boolean-attribute",
+                            )))
+                        }
                     };
                     let id = key_id;
                     // Only a genuinely-new own property is covered; a redefine runs
                     // the configurable-compatibility checks (different metering).
                     if self.find_property(inst, id).is_some() {
-                        return Err(Halt::Unsupported("defineProperty:redefine"));
+                        return Err(Step::Host(Halt::NotImplemented("defineProperty:redefine")));
                     }
                     let mut flag = 0u8;
                     if !w {
@@ -34646,6 +35227,9 @@ impl Interp {
             // forms of `EnumerableOwnProperties`, using a snapshotted key list
             // but live descriptors and Gets for each key.
             NativeMethod::ObjectValues | NativeMethod::ObjectEntries => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid object".into()));
+                }
                 let entries = matches!(m, NativeMethod::ObjectEntries);
                 let object = self.array_to_object(arg0)?;
                 let Payload::Reference(inst) = object.value else {
@@ -34712,6 +35296,9 @@ impl Interp {
             // `Object.getOwnPropertyDescriptors(o)`: a fresh object mapping
             // every own string or symbol key to its complete descriptor.
             NativeMethod::ObjectGetOwnPropertyDescriptors => {
+                if matches!(arg0.kind, Kind::Null | Kind::Undefined) {
+                    return Err(self.catchable_type_error_msg("invalid object".into()));
+                }
                 let object = self.array_to_object(arg0)?;
                 let Payload::Reference(inst) = object.value else {
                     unreachable!("ToObject returns a reference")
@@ -34748,7 +35335,7 @@ impl Interp {
                     if let Payload::Reference(inst) = arg0.value {
                         self.meter.tick_raw(PREVENT_EXTENSIONS_RESIDUAL_METERING);
                         if !self.mop_prevent_extensions(code, inst)? {
-                            return Err(self.catchable_type_error());
+                            return Err(self.catchable_type_error_msg("extensible object".into()));
                         }
                     }
                 }
@@ -34760,9 +35347,7 @@ impl Interp {
                 let freeze = matches!(m, NativeMethod::ObjectFreeze);
                 if arg0.kind == Kind::Reference {
                     if let Payload::Reference(inst) = arg0.value {
-                        if !self.set_integrity_level(code, inst, freeze)? {
-                            return Err(self.catchable_type_error());
-                        }
+                        self.set_integrity_level(code, inst, freeze)?;
                     }
                 }
                 arg0
@@ -34810,7 +35395,11 @@ impl Interp {
                     {
                         r
                     }
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this is no ArrayBuffer instance".into())
+                        )
+                    }
                 };
                 self.detach_array_buffer(buffer);
                 Slot::undefined()
@@ -34832,7 +35421,11 @@ impl Interp {
                     {
                         typed_array
                     }
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a TypedArray instance".into())
+                        )
+                    }
                 };
                 self.validate_typed_array(this)?;
                 let kind = match m {
@@ -35272,7 +35865,7 @@ impl Interp {
                             (a.length, a.items().len() as u32 == a.length)
                         };
                         if !dense {
-                            return Err(Halt::Unsupported("concat:sparse-arg"));
+                            return Err(Step::Host(Halt::NotImplemented("concat:sparse-arg")));
                         }
                         for i in 0..len {
                             let s = self.arrays[&r]
@@ -35314,8 +35907,12 @@ impl Interp {
             // element read (`mxGetAt`).
             NativeMethod::ArrayAt => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
+                    Some(i)
+                        if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) =>
+                    {
+                        i
+                    }
+                    _ => {
                         let result = self.array_generic_readonly(code, m, this, base, argc)?;
                         self.stack.truncate(base);
                         self.push(result);
@@ -35324,9 +35921,11 @@ impl Interp {
                 };
                 self.meter.tick_raw(ARRAY_AT_FRAME_METERING);
                 let length = self.arrays[&inst].length as i64;
-                let raw = match numeric_of(&arg0) {
-                    Some(n) if !n.is_nan() => n.trunc() as i64,
-                    _ => 0,
+                let number = self.to_number_f64(code, arg0)?;
+                let raw = if number.is_nan() {
+                    0
+                } else {
+                    number.trunc() as i64
                 };
                 let idx = if raw < 0 { length + raw } else { raw };
                 let result = if idx >= 0 && idx < length {
@@ -35520,7 +36119,7 @@ impl Interp {
                 };
                 let index = if raw < 0 { length as i64 + raw } else { raw };
                 if index < 0 || index >= length as i64 {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg("invalid index".into()));
                 }
                 let value = self
                     .stack
@@ -35571,6 +36170,9 @@ impl Interp {
                     }
                 };
                 let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
                 let this_arg = self
                     .stack
                     .get(base + 4 + 1)
@@ -35602,6 +36204,9 @@ impl Interp {
                     }
                 };
                 let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
                 let this_arg = self
                     .stack
                     .get(base + 4 + 1)
@@ -35648,6 +36253,9 @@ impl Interp {
                     }
                 };
                 let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
                 let this_arg = self
                     .stack
                     .get(base + 4 + 1)
@@ -35692,6 +36300,9 @@ impl Interp {
                     }
                 };
                 let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
                 let this_arg = self
                     .stack
                     .get(base + 4 + 1)
@@ -35753,6 +36364,9 @@ impl Interp {
                     }
                 };
                 let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
                 let this_arg = self
                     .stack
                     .get(base + 4 + 1)
@@ -35808,6 +36422,9 @@ impl Interp {
                     }
                 };
                 let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
                 // The present indices in fold order.
@@ -35836,11 +36453,15 @@ impl Interp {
                             match self.arrays[&inst].items().get(&i) {
                                 Some(s) => *s,
                                 None => {
-                                    return Err(Halt::Unsupported("reduce:concurrent-mutation"))
+                                    return Err(Step::Host(Halt::NotImplemented(
+                                        "reduce:concurrent-mutation",
+                                    )))
                                 }
                             }
                         }
-                        None => return Err(Halt::Unsupported("reduce:empty-no-initial")),
+                        None => {
+                            return Err(self.catchable_type_error_msg("no initial value".into()))
+                        }
                     }
                 };
                 for i in it {
@@ -35849,7 +36470,11 @@ impl Interp {
                     // index self-names rather than panicking on a missing key.
                     let item = match self.arrays[&inst].items().get(&i) {
                         Some(s) => *s,
-                        None => return Err(Halt::Unsupported("reduce:concurrent-mutation")),
+                        None => {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "reduce:concurrent-mutation",
+                            )))
+                        }
                     };
                     self.meter.tick_raw(ARRAY_REDUCE_PER_ELEM_METERING);
                     let cb_args = [acc, item, Slot::integer(i as i32), this];
@@ -35872,6 +36497,9 @@ impl Interp {
                     }
                 };
                 let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
                 let this_arg = self
                     .stack
                     .get(base + 4 + 1)
@@ -36321,7 +36949,9 @@ impl Interp {
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
                             if s.kind == Kind::Reference {
-                                return Err(Halt::Unsupported("join:reference-element"));
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "join:reference-element",
+                                )));
                             }
                             self.meter.tick_slot_alloc(); // the element key slot
                             let bytes = self.to_string_bytes_metered(s);
@@ -36394,7 +37024,9 @@ impl Interp {
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
                             if s.kind == Kind::Reference {
-                                return Err(Halt::Unsupported("toString:reference-element"));
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "toString:reference-element",
+                                )));
                             }
                             self.meter.tick_slot_alloc();
                             let bytes = self.to_string_bytes_metered(s);
@@ -36452,7 +37084,7 @@ impl Interp {
                     {
                         i
                     }
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
                 };
                 self.array_iterator_next(code, iter)?
             }
@@ -36472,7 +37104,7 @@ impl Interp {
                     {
                         i
                     }
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
                 };
                 self.collection_iterator_next(iter)
             }
@@ -36483,11 +37115,9 @@ impl Interp {
             NativeMethod::IteratorWrapperNext => self.iterator_wrapper_next(code, this)?,
             NativeMethod::IteratorWrapperReturn => self.iterator_wrapper_return(code, this)?,
             NativeMethod::IteratorConstructorGetter => {
-                let constructor = self
-                    .intrinsics
-                    .get("Iterator")
-                    .copied()
-                    .ok_or(Halt::Unsupported("Iterator:missing-constructor"))?;
+                let constructor = self.intrinsics.get("Iterator").copied().ok_or(Step::Host(
+                    Halt::EngineInvariant("Iterator:missing-constructor"),
+                ))?;
                 Slot::of(Kind::Reference, Payload::Reference(constructor))
             }
             NativeMethod::IteratorToStringTagGetter => self.new_string_metered(b"Iterator"),
@@ -36498,7 +37128,7 @@ impl Interp {
                 self.iterator_terminal_helper(code, op, this, base, argc)?
             }
             NativeMethod::IteratorHelper(_) => {
-                return Err(Halt::Unsupported("Iterator.helper"));
+                return Err(Step::Host(Halt::NotImplemented("Iterator.helper")));
             }
             NativeMethod::Math(id) => self.call_math(id, base, argc, code)?,
             NativeMethod::ReflectGetPrototypeOf
@@ -36601,25 +37231,28 @@ impl Interp {
             }
             // `entries`/`keys`/`values` → a Map/Set Iterator over the receiver.
             NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
+                let expected =
+                    self.collection_method_brand(base)
+                        .ok_or(Step::Host(Halt::EngineInvariant(
+                            "collection:missing-method-brand",
+                        )))?;
                 let inst = match self.collection_ref(this) {
                     Some(i) => i,
-                    None => return Err(self.catchable_type_error()),
+                    None => return Err(self.collection_brand_error(expected, false)),
                 };
                 // The shared dispatch variants still retain their declaring
                 // prototype through the method function at `base + 1`.
                 // Require that exact brand: Map methods cannot operate on Set
                 // receivers (or vice versa), even though both use the same
                 // collection side-table representation.
-                let expected = self
-                    .collection_method_brand(base)
-                    .ok_or_else(|| self.catchable_type_error())?;
+
                 if self.collections[&inst].kind != expected {
                     self.meter.tick_raw(if expected == CollKind::Map {
                         MAP_METHOD_ON_SET_METERING
                     } else {
                         SET_METHOD_ON_MAP_METERING
                     });
-                    return Err(self.catchable_type_error());
+                    return Err(self.collection_brand_error(expected, false));
                 }
                 let iter_kind = match m {
                     NativeMethod::CollKeys => 5u8,
@@ -36631,23 +37264,26 @@ impl Interp {
             // `Map`/`Set` `clear` (`fxClearEntries`): drop all entries and
             // shrink the table back toward its minimum length.
             NativeMethod::CollClear => {
+                let expected =
+                    self.collection_method_brand(base)
+                        .ok_or(Step::Host(Halt::EngineInvariant(
+                            "collection:missing-method-brand",
+                        )))?;
                 let inst = match self.collection_ref(this) {
                     Some(i) => i,
-                    None => return Err(self.catchable_type_error()),
+                    None => return Err(self.collection_brand_error(expected, false)),
                 };
-                let expected = self
-                    .collection_method_brand(base)
-                    .ok_or_else(|| self.catchable_type_error())?;
+
                 if self.collections[&inst].kind != expected {
                     self.meter.tick_raw(if expected == CollKind::Map {
                         MAP_METHOD_ON_SET_METERING
                     } else {
                         SET_METHOD_ON_MAP_METERING
                     });
-                    return Err(self.catchable_type_error());
+                    return Err(self.collection_brand_error(expected, false));
                 }
                 if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.collection_brand_error(expected, true));
                 }
                 self.meter.tick_raw(COLLECTION_CLEAR_FRAME_METERING);
                 self.collections
@@ -36667,11 +37303,13 @@ impl Interp {
             NativeMethod::ArrayBufferDetachedGetter
             | NativeMethod::ArrayBufferMaxByteLengthGetter
             | NativeMethod::ArrayBufferResizableGetter => {
-                let buffer = self
-                    .array_buffer_ref(this)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let buffer = self.array_buffer_ref(this).ok_or_else(|| {
+                    self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+                })?;
                 if self.shared_buffers.contains(&buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+                    );
                 }
                 match m {
                     NativeMethod::ArrayBufferDetachedGetter => {
@@ -36692,10 +37330,14 @@ impl Interp {
             // `ArrayBuffer.prototype.resize`/`concat`: resizable buffers and
             // the XS concat extension remain honest named skips.
             NativeMethod::ArrayBufferResize => {
-                return Err(Halt::Unsupported("array-buffer-resize:unsupported"))
+                return Err(Step::Host(Halt::NotImplemented(
+                    "array-buffer-resize:unsupported",
+                )))
             }
             NativeMethod::ArrayBufferConcat => {
-                return Err(Halt::Unsupported("array-buffer-concat:unsupported"))
+                return Err(Step::Host(Halt::NotImplemented(
+                    "array-buffer-concat:unsupported",
+                )))
             }
             // `ArrayBuffer.isView(arg)` (`fx_ArrayBuffer_isView`): `true` iff
             // the argument is a TypedArray or DataView view, else `false`. The
@@ -36718,11 +37360,15 @@ impl Interp {
             NativeMethod::DataViewAccessor(index) => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a DataView instance".into())
+                        )
+                    }
                 };
                 let view = self.data_views[&inst];
                 if index != 0 && self.detached_buffers.contains(&view.buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
                 self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
                 match index {
@@ -36737,7 +37383,11 @@ impl Interp {
             NativeMethod::DataViewGet(kind) => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a DataView instance".into())
+                        )
+                    }
                 };
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
@@ -36747,11 +37397,11 @@ impl Interp {
                 // detached view with an out-of-range offset still throws
                 // TypeError (`detached-buffer-before-outofrange-byteoffset`).
                 if self.detached_buffers.contains(&dv.buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
                 // `(size < delta) || ((size - delta) < offset)` → RangeError.
                 if dv.size < delta || (dv.size - delta) < offset {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
                 }
                 let little = self.arg_is_truthy(base, 1);
                 let abs = dv.offset + offset;
@@ -36770,7 +37420,11 @@ impl Interp {
             NativeMethod::DataViewSet(kind) => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a DataView instance".into())
+                        )
+                    }
                 };
                 let dv = self.data_views[&inst];
                 let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
@@ -36796,10 +37450,10 @@ impl Interp {
                 // A detached backing buffer is a TypeError, ahead of the
                 // out-of-range RangeError (`detached-buffer-*` ordering cases).
                 if self.detached_buffers.contains(&dv.buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
                 if dv.size < delta || (dv.size - delta) < offset {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
                 }
                 let abs = dv.offset + offset;
                 self.data_view_store(dv.buffer, abs, &le);
@@ -36819,7 +37473,16 @@ impl Interp {
             NativeMethod::PromiseThen => {
                 let promise = match this.value {
                     Payload::Reference(r) if self.promises.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            if this.kind == Kind::Reference {
+                                "this: not a Promise instance"
+                            } else {
+                                "this: not an object"
+                            }
+                            .into(),
+                        ))
+                    }
                 };
                 self.promise_then(code, promise, base)?
             }
@@ -36829,21 +37492,33 @@ impl Interp {
             NativeMethod::GeneratorNext => {
                 let gen = match this.value {
                     Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a Generator instance".into())
+                        )
+                    }
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Next)?
             }
             NativeMethod::GeneratorReturn => {
                 let gen = match this.value {
                     Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a Generator instance".into())
+                        )
+                    }
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Return)?
             }
             NativeMethod::GeneratorThrow => {
                 let gen = match this.value {
                     Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a Generator instance".into())
+                        )
+                    }
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Throw)?
             }
@@ -36873,7 +37548,14 @@ impl Interp {
             // arbitrary constructors go through `NewPromiseCapability`.
             NativeMethod::PromiseResolveStatic => {
                 if !self.is_constructor_value(this) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Reference {
+                            "new: not a constructor"
+                        } else {
+                            "this: not an object"
+                        }
+                        .into(),
+                    ));
                 }
                 let intrinsic = self.intrinsics.get("Promise").copied();
                 let same_constructor = if let Payload::Reference(promise) = arg0.value {
@@ -36908,7 +37590,14 @@ impl Interp {
             // `reject` is called with `reason` (any value).
             NativeMethod::PromiseRejectStatic => {
                 if !self.is_constructor_value(this) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Reference {
+                            "new: not a constructor"
+                        } else {
+                            "this: not an object"
+                        }
+                        .into(),
+                    ));
                 }
                 let intrinsic = self.intrinsics.get("Promise").copied();
                 if matches!(this.value,
@@ -36966,27 +37655,42 @@ impl Interp {
             | NativeMethod::PromiseCapabilityExecutor
             | NativeMethod::PromiseFinallyHandler
             | NativeMethod::PromiseFinallyValue => {
-                return Err(Halt::EngineInvariant("promise:resolving-fn-unexpected"))
+                return Err(Step::Host(Halt::EngineInvariant(
+                    "promise:resolving-fn-unexpected",
+                )))
             }
             // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
             // surface over child 8's matcher.
             NativeMethod::RegExpExec => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a RegExp instance".into())
+                        )
+                    }
                 };
                 if self.regexps.contains_key(&inst) {
                     self.regexp_exec(code, inst, arg0)?
                 } else {
                     // The builtin rejects a receiver without
                     // [[RegExpMatcher]] before coercing its argument.
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("this: not a RegExp instance".into()));
                 }
             }
             NativeMethod::RegExpTest => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            match this.kind {
+                                Kind::Null => "cannot coerce null to object",
+                                Kind::Undefined => "cannot coerce undefined to object",
+                                _ => "this: not a RegExp instance",
+                            }
+                            .into(),
+                        ))
+                    }
                 };
                 self.regexp_test(code, inst, this, arg0)?
             }
@@ -36994,7 +37698,7 @@ impl Interp {
             NativeMethod::ErrorStackGetter => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
                 };
                 match self.error_data.get(&inst).cloned() {
                     None => Slot::undefined(),
@@ -37037,10 +37741,10 @@ impl Interp {
             NativeMethod::ErrorStackSetter => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
                 };
                 if argc < 1 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("no value".into()));
                 }
                 let id = self.intern_key("stack");
                 let desc = OrdinaryDescriptor {
@@ -37051,7 +37755,11 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 };
                 if !self.mop_define_own_property(code, inst, id, desc)? {
-                    return Err(self.catchable_type_error());
+                    // XS fxDefineID reports its numeric builtin ID for stack,
+                    // unlike the named-key opcode's diagnostic.
+                    return Err(
+                        self.catchable_type_error_msg("define 413: not configurable".into())
+                    );
                 }
                 Slot::undefined()
             }
@@ -37069,7 +37777,16 @@ impl Interp {
             NativeMethod::RegExpReplace => {
                 let regexp = match this.value {
                     Payload::Reference(regexp) if this.kind == Kind::Reference => regexp,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            match this.kind {
+                                Kind::Null => "cannot coerce null to object",
+                                Kind::Undefined => "cannot coerce undefined to object",
+                                _ => "this: not a RegExp instance",
+                            }
+                            .into(),
+                        ))
+                    }
                 };
                 let replacement = self
                     .stack
@@ -37091,6 +37808,13 @@ impl Interp {
             NativeMethod::RegExpToString => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ if matches!(this.kind, Kind::Null | Kind::Undefined) => {
+                        return Err(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(this.kind))
+                        )
+                    }
+                    // Spec requires an object. XS boxes other primitives and
+                    // can complete, so this guard has no XS error counterpart.
                     _ => return Err(self.catchable_type_error()),
                 };
                 let source_id = self.intern_key("source");
@@ -37111,7 +37835,14 @@ impl Interp {
             // argument is converted through `RegExpCreate(regexp, undefined)`.
             NativeMethod::StringSearch => {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Null {
+                            "this: null"
+                        } else {
+                            "this: undefined"
+                        }
+                        .into(),
+                    ));
                 }
                 self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let search_method = self.string_protocol_method(code, arg0, "search")?;
@@ -37141,7 +37872,14 @@ impl Interp {
             // argument is converted through `RegExpCreate(regexp, undefined)`.
             NativeMethod::StringMatch => {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Null {
+                            "this: null"
+                        } else {
+                            "this: undefined"
+                        }
+                        .into(),
+                    ));
                 }
                 self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let match_method = self.string_protocol_method(code, arg0, "match")?;
@@ -37172,7 +37910,14 @@ impl Interp {
             // ordinary first-string-occurrence algorithm.
             NativeMethod::StringReplace => {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Null {
+                            "this: null"
+                        } else {
+                            "this: undefined"
+                        }
+                        .into(),
+                    ));
                 }
                 let repl = self
                     .stack
@@ -37200,7 +37945,14 @@ impl Interp {
             // matcher worker.
             NativeMethod::StringReplaceAll => {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Undefined {
+                            "this: undefined"
+                        } else {
+                            "this: null"
+                        }
+                        .into(),
+                    ));
                 }
                 let repl = self
                     .stack
@@ -37218,7 +37970,7 @@ impl Interp {
                     };
                     let flags = self.regexp_flags_units(code, search_object, arg0, true)?;
                     if !flags.contains(&(b'g' as u16)) {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("regexp has no g flag".into()));
                     }
                 }
 
@@ -37243,7 +37995,14 @@ impl Interp {
                 // RequireObjectCoercible precedes the separator protocol, so a
                 // custom `@@split` cannot observe a nullish receiver.
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Undefined {
+                            "this: undefined"
+                        } else {
+                            "this: null"
+                        }
+                        .into(),
+                    ));
                 }
                 let limit = self
                     .stack
@@ -37276,7 +38035,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let _ = argc;
         let arg0 = self
             .stack
@@ -37305,7 +38064,7 @@ impl Interp {
             NativeMethod::ReflectGetPrototypeOf => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 self.mop_get_prototype(code, inst)
@@ -37315,10 +38074,10 @@ impl Interp {
             NativeMethod::ReflectSetPrototypeOf => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 if !matches!(arg1.kind, Kind::Null | Kind::Reference) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("invalid prototype".into()));
                 }
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 Ok(Slot::boolean(self.mop_set_prototype(code, inst, arg1)?))
@@ -37326,18 +38085,14 @@ impl Interp {
             NativeMethod::ReflectIsExtensible => {
                 let object = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("Reflect.isExtensible target".into())
-                        )
-                    }
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 Ok(Slot::boolean(self.mop_is_extensible(code, object)?))
             }
             NativeMethod::ReflectPreventExtensions => {
                 let object = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 Ok(Slot::boolean(self.mop_prevent_extensions(code, object)?))
             }
@@ -37347,7 +38102,7 @@ impl Interp {
             NativeMethod::ReflectGetOwnPropertyDescriptor => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 let key = self.to_read_key(code, arg1)?;
                 match self.mop_get_own_property_read(code, inst, key)? {
@@ -37367,12 +38122,12 @@ impl Interp {
             NativeMethod::ReflectDefineProperty => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 let id = self.to_property_id(code, arg1)?;
                 let descriptor_object = match arg2.value {
                     Payload::Reference(d) if arg2.kind == Kind::Reference => d,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("invalid descriptor".into())),
                 };
                 let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                 self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
@@ -37386,7 +38141,7 @@ impl Interp {
             NativeMethod::ReflectOwnKeys => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 let keys = self.mop_own_keys(code, inst)?;
                 let n = keys.len() as u32;
@@ -37402,7 +38157,7 @@ impl Interp {
             NativeMethod::ReflectHas => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 let key = self.to_read_key(code, arg1)?;
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
@@ -37416,7 +38171,7 @@ impl Interp {
             NativeMethod::ReflectGet => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 let key = self.to_read_key(code, arg1)?;
                 let receiver = if argc >= 3 { arg2 } else { arg0 };
@@ -37428,7 +38183,7 @@ impl Interp {
             NativeMethod::ReflectSet => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 let id = self.to_property_id(code, arg1)?;
                 let receiver = if argc >= 4 { arg3 } else { arg0 };
@@ -37440,7 +38195,7 @@ impl Interp {
             NativeMethod::ReflectDeleteProperty => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
                 };
                 let key = self.to_read_key(code, arg1)?;
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
@@ -37453,7 +38208,12 @@ impl Interp {
             // 28.1.1): `Call(target, thisArgument, CreateListFromArrayLike(...))`.
             NativeMethod::ReflectApply => {
                 if !self.is_callable_value(arg0) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("target: not a function".into()));
+                }
+                if arg2.kind != Kind::Reference {
+                    return Err(
+                        self.catchable_type_error_msg("argumentsList: not an object".into())
+                    );
                 }
                 let args = self.arraylike_to_vec(code, arg2)?;
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
@@ -37468,23 +38228,30 @@ impl Interp {
                 // has no `[[Construct]]`, so `Reflect.construct(fn, [], getter)`
                 // throws, and the harness `isConstructor(getter)` is `false`.
                 if !self.is_constructor_value(arg0) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("target: not a constructor".into()));
                 }
                 let new_target = if argc >= 3 { arg2 } else { arg0 };
                 if !self.is_constructor_value(new_target) {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg("newTarget: not a constructor".into())
+                    );
+                }
+                if arg1.kind != Kind::Reference {
+                    return Err(
+                        self.catchable_type_error_msg("argumentsList: not an object".into())
+                    );
                 }
                 let args = self.arraylike_to_vec(code, arg1)?;
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 self.construct_value(code, arg0, &args, new_target)
             }
-            _ => Err(Halt::EngineInvariant("Reflect:unexpected")),
+            _ => Err(Step::Host(Halt::EngineInvariant("Reflect:unexpected"))),
         }
     }
 
     /// `CreateListFromArrayLike(value)` (ECMA-262 7.3.18) with the default
     /// element-type list (any) — read `length`, then each indexed element.
-    fn arraylike_to_vec(&mut self, code: &[u8], value: Slot) -> Result<Vec<Slot>, Halt> {
+    fn arraylike_to_vec(&mut self, code: &[u8], value: Slot) -> Result<Vec<Slot>, Step> {
         let inst = match value.value {
             Payload::Reference(i) if value.kind == Kind::Reference => i,
             _ => return Err(self.catchable_type_error()),
@@ -37520,7 +38287,7 @@ impl Interp {
     /// `next` method once, then collect every IteratorStepValue result. An
     /// abrupt iterator step propagates directly; there is no later per-element
     /// operation requiring IteratorClose.
-    fn iterable_to_list(&mut self, code: &[u8], items: Slot) -> Result<Vec<Slot>, Halt> {
+    fn iterable_to_list(&mut self, code: &[u8], items: Slot) -> Result<Vec<Slot>, Step> {
         let saved_jumps = std::mem::take(&mut self.jumps);
         let outcome = self.iterable_to_list_inner(code, items);
         self.jumps = saved_jumps;
@@ -37535,7 +38302,15 @@ impl Interp {
         &mut self,
         code: &[u8],
         items: Slot,
-    ) -> Result<Result<Vec<Slot>, Slot>, Halt> {
+    ) -> Result<Result<Vec<Slot>, Slot>, Step> {
+        if matches!(items.kind, Kind::Null | Kind::Undefined) {
+            let message = if items.kind == Kind::Null {
+                "cannot coerce null to object"
+            } else {
+                "cannot coerce undefined to object"
+            };
+            return Ok(Err(self.internal_error("TypeError", message.into())));
+        }
         let value_id = self.intern_key("value");
         let done_id = self.intern_key("done");
         self.value_id = Some(value_id);
@@ -37576,7 +38351,9 @@ impl Interp {
             }
         };
         if !self.is_callable_value(iterator_method) {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
         }
         let iterator =
             match self.array_from_try(|this| this.call_any(code, iterator_method, items, &[]))? {
@@ -37585,14 +38362,22 @@ impl Interp {
             };
         let iterator_inst = match iterator.value {
             Payload::Reference(iterator_inst) if iterator.kind == Kind::Reference => iterator_inst,
-            _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            _ => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "iterator: not an object".into())
+                ))
+            }
         };
         let next_id = self.intern_key("next");
         let next = match self
             .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
         {
             Ok(next) if self.is_callable_value(next) => next,
-            Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            Ok(_) => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "call: not a function".into())
+                ))
+            }
             Err(error) => return Ok(Err(error)),
         };
         let mut values = Vec::new();
@@ -37603,7 +38388,12 @@ impl Interp {
             };
             let step_inst = match step.value {
                 Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
-                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => {
+                    return Ok(Err(self.internal_error(
+                        "TypeError",
+                        "iterator result: not an object".into(),
+                    )))
+                }
             };
             let done =
                 match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
@@ -37620,7 +38410,7 @@ impl Interp {
                 };
             values.push(value);
         }
-        Err(Halt::StepLimit(self.n_dispatched))
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
 
     /// Dispatch a Map/Set/WeakMap/WeakSet mutator or query method (xsMapSet.c).
@@ -37630,27 +38420,32 @@ impl Interp {
     /// calls no `mxMeter` — so a new entry charges its `fxNewSlot`s (and, for a
     /// Map/Set, any `fxResizeEntries` rehash chunk) while a query or an
     /// in-place update is allocation-free; each carries only the calibrated
-    /// native-frame residual. A receiver that is not the right collection kind,
-    /// or a WeakMap/WeakSet primitive key (a TypeError in XS), self-names an
-    /// honest skip rather than mis-metering the throw.
+    /// native-frame residual. Wrong receiver brands and invalid weak keys
+    /// produce real catchable TypeErrors with the corresponding XS diagnostic.
+    fn collection_brand_error(&mut self, kind: CollKind, readonly: bool) -> Step {
+        let name = match kind {
+            CollKind::Map => "Map",
+            CollKind::Set => "Set",
+            CollKind::WeakMap => "WeakMap",
+            CollKind::WeakSet => "WeakSet",
+        };
+        let state = if readonly { "read-only" } else { "not a" };
+        self.catchable_type_error_msg(format!("this: {state} {name} instance"))
+    }
+
     fn call_collection(
         &mut self,
         m: NativeMethod,
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let _ = argc;
         let arg0 = self
             .stack
             .get(base + 4)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        let inst = match self.collection_ref(this) {
-            Some(i) => i,
-            None => return Err(self.catchable_type_error()),
-        };
-        let kind = self.collections[&inst].kind;
         let expected_kind = match m {
             NativeMethod::MapSet
             | NativeMethod::MapGet
@@ -37664,10 +38459,19 @@ impl Interp {
             NativeMethod::WeakSetAdd | NativeMethod::WeakSetHas | NativeMethod::WeakSetDelete => {
                 CollKind::WeakSet
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(Step::Host(Halt::EngineInvariant(
+                    "collection:unexpected-method",
+                )))
+            }
         };
+        let inst = match self.collection_ref(this) {
+            Some(i) => i,
+            None => return Err(self.collection_brand_error(expected_kind, false)),
+        };
+        let kind = self.collections[&inst].kind;
         if kind != expected_kind {
-            return Err(self.catchable_type_error());
+            return Err(self.collection_brand_error(expected_kind, false));
         }
         if matches!(
             m,
@@ -37681,7 +38485,7 @@ impl Interp {
                 | NativeMethod::WeakSetDelete
         ) && self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0
         {
-            return Err(self.catchable_type_error());
+            return Err(self.collection_brand_error(expected_kind, true));
         }
         let weak = matches!(kind, CollKind::WeakMap | CollKind::WeakSet);
         match m {
@@ -37693,7 +38497,7 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 let key = self.normalize_coll_key(arg0);
                 if weak && key.kind != Kind::Reference {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("key: not an object".into()));
                 }
                 match self.collection_find(inst, &key) {
                     Some(p) => {
@@ -37721,7 +38525,7 @@ impl Interp {
             NativeMethod::SetAdd | NativeMethod::WeakSetAdd => {
                 let key = self.normalize_coll_key(arg0);
                 if weak && key.kind != Kind::Reference {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("value: not an object".into()));
                 }
                 if self.collection_find(inst, &key).is_none() {
                     // `fxSetEntry` with no pair → two slots (value + entry);
@@ -37773,7 +38577,9 @@ impl Interp {
                     None => Ok(Slot::boolean(false)),
                 }
             }
-            _ => Err(self.catchable_type_error()),
+            _ => Err(Step::Host(Halt::EngineInvariant(
+                "collection:unexpected-method",
+            ))),
         }
     }
 
@@ -37785,7 +38591,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         iterable: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let array = match iterable.value {
             Payload::Reference(array) if self.arrays.contains_key(&array) => array,
             _ => return self.populate_collection_from_iterable(code, inst, iterable),
@@ -37844,7 +38650,9 @@ impl Interp {
             }
         }
         if !self.is_callable_value(adder) {
-            return Err(self.catchable_type_error());
+            return Err(
+                self.catchable_type_error_msg(format!("result.{method_name}: not a function"))
+            );
         }
         let intrinsic_adder = match adder.value {
             Payload::Reference(function) => self.method_of(function) == Some(expected),
@@ -37904,11 +38712,18 @@ impl Interp {
             if matches!(kind, CollKind::WeakMap | CollKind::WeakSet) && key.kind != Kind::Reference
             {
                 if key.kind == Kind::Symbol {
-                    return Err(Halt::Unsupported(
+                    return Err(Step::Host(Halt::Refused(
                         "collection-constructor:weak-symbol-oracle-version",
-                    ));
+                    )));
                 }
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    if kind == CollKind::WeakMap {
+                        "key: not an object"
+                    } else {
+                        "value: not an object"
+                    }
+                    .into(),
+                ));
             }
             if let Some(position) = self.collection_find(inst, &key) {
                 if matches!(kind, CollKind::Map | CollKind::WeakMap) {
@@ -37944,7 +38759,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         iterable: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         self.populate_collection_from_iterable_with_adder(code, inst, iterable, None)
     }
 
@@ -37954,7 +38769,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         iterable: Slot,
         adder: Option<Slot>,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let saved_jumps = std::mem::take(&mut self.jumps);
         let outcome = self.populate_collection_from_iterable_inner(code, inst, iterable, adder);
         self.jumps = saved_jumps;
@@ -37971,7 +38786,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         iterable: Slot,
         prefetched_adder: Option<Slot>,
-    ) -> Result<Result<(), Slot>, Halt> {
+    ) -> Result<Result<(), Slot>, Step> {
         let kind = self.collections[&inst].kind;
         let is_map = matches!(kind, CollKind::Map | CollKind::WeakMap);
         let method_name = if is_map { "set" } else { "add" };
@@ -38006,7 +38821,10 @@ impl Interp {
             }
         }
         if !self.is_callable_value(adder) {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(self.internal_error(
+                "TypeError",
+                format!("result.{method_name}: not a function"),
+            )));
         }
 
         let iterator_id = self
@@ -38047,7 +38865,9 @@ impl Interp {
             }
         };
         if !self.is_callable_value(iterator_method) {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
         }
         let iterator = match self
             .array_from_try(|this| this.call_any(code, iterator_method, iterable, &[]))?
@@ -38057,14 +38877,22 @@ impl Interp {
         };
         let iterator_inst = match iterator.value {
             Payload::Reference(iterator_inst) if iterator.kind == Kind::Reference => iterator_inst,
-            _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            _ => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "iterator: not an object".into())
+                ))
+            }
         };
         let next_id = self.intern_key("next");
         let next = match self
             .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
         {
             Ok(next) if self.is_callable_value(next) => next,
-            Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            Ok(_) => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "call: not a function".into())
+                ))
+            }
             Err(error) => return Ok(Err(error)),
         };
         let done_id = self.intern_key("done");
@@ -38077,7 +38905,12 @@ impl Interp {
             };
             let step_inst = match step.value {
                 Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
-                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => {
+                    return Ok(Err(self.internal_error(
+                        "TypeError",
+                        "iterator result: not an object".into(),
+                    )))
+                }
             };
             let done =
                 match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
@@ -38096,7 +38929,7 @@ impl Interp {
                 let entry = match element.value {
                     Payload::Reference(entry) if element.kind == Kind::Reference => entry,
                     _ => {
-                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self.internal_error("TypeError", "item: not an object".into());
                         return Ok(Err(self.array_from_close(code, iterator, error)?));
                     }
                 };
@@ -38128,7 +38961,7 @@ impl Interp {
                 }
             }
         }
-        Err(Halt::StepLimit(self.n_dispatched))
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
 
     /// Dispatch a `Math.*` static (`xsMath.c`). Reads the positional
@@ -38161,7 +38994,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         use MathId::*;
         self.meter.tick_raw(MATH_FRAME_METERING);
         let r = match id {
@@ -38323,7 +39156,7 @@ impl Interp {
         base: usize,
         argc: usize,
         operation: fn(f64) -> f64,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         match self.math_arg(base, argc, 0) {
             None => Ok(Slot::number(f64::NAN)),
             Some(value) => Ok(Slot::number(operation(self.to_number_f64(code, value)?))),
@@ -38342,7 +39175,7 @@ impl Interp {
         argc: usize,
         base: usize,
         is_max: bool,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if argc == 0 {
             return Ok(Slot::number(if is_max {
                 f64::NEG_INFINITY
@@ -38409,6 +39242,18 @@ impl Interp {
         })
     }
 
+    /// XS `fxToInteger` uses distinct diagnostics and wraps to signed 32 bits.
+    fn number_radix_integer(&mut self, code: &[u8], value: Slot) -> Result<i32, Step> {
+        let value = self.to_primitive(code, value, false)?;
+        if value.kind == Kind::Symbol {
+            return Err(self.catchable_type_error_msg("cannot coerce symbol to integer".into()));
+        }
+        if value.kind == Kind::BigInt {
+            return Err(self.catchable_type_error_msg("cannot coerce to integer".into()));
+        }
+        Ok(to_int32(self.to_number_f64(code, value)?))
+    }
+
     /// Dispatch a `Number` static / `Number.prototype.toString` / numeric
     /// global (`parseInt`/`parseFloat`/`isNaN`/`isFinite`). The `xsNumber.c`
     /// bodies carry no `mxMeterSome`; `toString` allocates its result chunk,
@@ -38421,7 +39266,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let arg0 = if argc > 0 {
             Some(
                 self.stack
@@ -38468,9 +39313,9 @@ impl Interp {
                     Payload::Integer(_) | Payload::Number(_) => this,
                     Payload::Reference(r) => match self.wrapper_data.get(&r).copied() {
                         Some(s) if matches!(s.value, Payload::Integer(_) | Payload::Number(_)) => s,
-                        _ => return Err(self.catchable_type_error()),
+                        _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
                     },
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
                 };
                 let locale = arg0.unwrap_or_else(Slot::undefined);
                 let options = if argc > 1 {
@@ -38497,15 +39342,15 @@ impl Interp {
                     Payload::Integer(_) | Payload::Number(_) => this,
                     Payload::Reference(r) => match self.wrapper_data.get(&r).copied() {
                         Some(s) if matches!(s.value, Payload::Integer(_) | Payload::Number(_)) => s,
-                        _ => return Err(self.catchable_type_error()),
+                        _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
                     },
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
                 };
                 let radix = match arg0 {
                     Some(s) if s.kind != Kind::Undefined => {
-                        let r = to_number(&self.to_number_value(code, s)?).trunc();
+                        let r = self.number_radix_integer(code, s)? as f64;
                         if !(2.0..=36.0).contains(&r) {
-                            return Err(self.catchable_range_error());
+                            return Err(self.catchable_range_error_msg("invalid radix".into()));
                         }
                         r as u32
                     }
@@ -38526,9 +39371,9 @@ impl Interp {
                     let bytes = match number_to_radix_string(n, radix) {
                         Some(bytes) => bytes,
                         None => {
-                            return Err(Halt::Unsupported(
+                            return Err(Step::Host(Halt::NotImplemented(
                                 "Number.toString:fractional-non-decimal-radix",
-                            ));
+                            )));
                         }
                     };
                     self.meter.tick_builtin();
@@ -38545,7 +39390,7 @@ impl Interp {
                 let radix_arg = self.stack.get(base + 5).copied();
                 let radix = match radix_arg {
                     Some(s) if argc > 1 && s.kind != Kind::Undefined => {
-                        let r = to_number(&self.to_number_value(code, s)?).trunc();
+                        let r = self.number_radix_integer(code, s)? as f64;
                         if r != 0.0 && !(2.0..=36.0).contains(&r) {
                             return Ok(Slot::number(f64::NAN));
                         }
@@ -38568,10 +39413,7 @@ impl Interp {
             GlobalIsNaN | GlobalIsFinite => {
                 let n = match arg0 {
                     None => f64::NAN,
-                    Some(s) if matches!(s.kind, Kind::BigInt | Kind::Symbol) => {
-                        return Err(self.catchable_type_error());
-                    }
-                    Some(s) => to_number(&self.to_number_value(code, s)?),
+                    Some(s) => self.to_number_f64(code, s)?,
                 };
                 Slot::boolean(if m == GlobalIsNaN {
                     n.is_nan()
@@ -38579,7 +39421,7 @@ impl Interp {
                     n.is_finite()
                 })
             }
-            _ => return Err(Halt::Unsupported("number:unmodeled")),
+            _ => return Err(Step::Host(Halt::NotImplemented("number:unmodeled"))),
         };
         Ok(result)
     }
@@ -38593,7 +39435,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let arg0 = if argc > 0 {
             self.stack
                 .get(base + 4)
@@ -38671,7 +39513,9 @@ impl Interp {
                 // genuinely unpaired code unit cannot and must stay an honest
                 // named skip instead of being silently changed to U+FFFD.
                 if char::decode_utf16(units.iter().copied()).any(|unit| unit.is_err()) {
-                    return Err(Halt::Unsupported("JSON.parse:lone-surrogate"));
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "JSON.parse:lone-surrogate",
+                    )));
                 }
                 let input = String::from_utf16_lossy(&units).into_bytes();
                 self.meter.tick_raw(JSON_PARSE_SETUP_METERING);
@@ -38706,7 +39550,7 @@ impl Interp {
                     reviver,
                 )
             }
-            _ => Err(Halt::Unsupported("json:unmodeled")),
+            _ => Err(Step::Host(Halt::NotImplemented("json:unmodeled"))),
         }
     }
 
@@ -38718,7 +39562,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         replacer: Slot,
-    ) -> Result<(Option<Slot>, Option<Vec<JsonPropertyName>>), Halt> {
+    ) -> Result<(Option<Slot>, Option<Vec<JsonPropertyName>>), Step> {
         if self.is_callable_value(replacer) {
             return Ok((Some(replacer), None));
         }
@@ -38732,7 +39576,9 @@ impl Interp {
         let length_value = self.arraylike_length(code, inst, replacer)?;
         let length = self.to_length_value(code, length_value)?;
         if length > u64::from(u32::MAX) {
-            return Err(Halt::Unsupported("JSON.stringify:oversized-replacer"));
+            return Err(Step::Host(Halt::Refused(
+                "JSON.stringify:oversized-replacer",
+            )));
         }
         let mut property_list = Vec::new();
         for index in 0..length {
@@ -38788,7 +39634,7 @@ impl Interp {
     /// Produce JSON.stringify's Gap string from the third argument.  A Number
     /// (or Number wrapper) becomes at most ten spaces; a String (or String
     /// wrapper) is truncated to ten UTF-16 code units, not Unicode scalars.
-    fn json_stringify_gap(&mut self, code: &[u8], space: Slot) -> Result<Vec<u16>, Halt> {
+    fn json_stringify_gap(&mut self, code: &[u8], space: Slot) -> Result<Vec<u16>, Step> {
         let wrapped_kind = match space.value {
             Payload::Reference(object) if space.kind == Kind::Reference => {
                 self.wrapper_data.get(&object).map(|value| value.kind)
@@ -38826,7 +39672,7 @@ impl Interp {
         name: &JsonPropertyName,
         state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Halt> {
+    ) -> Result<Option<Vec<u16>>, Step> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
         // `json_stringify_own_names` snapshots every key BEFORE any value is
         // read, and a replacer list is cached for the whole stringify, so a
@@ -38840,7 +39686,7 @@ impl Interp {
 
     /// `GetV(value, id)` for the object/BigInt `toJSON` probe.  BigInt is the
     /// sole primitive admitted by the specification at this step.
-    fn json_stringify_get_v(&mut self, code: &[u8], value: Slot, id: u16) -> Result<Slot, Halt> {
+    fn json_stringify_get_v(&mut self, code: &[u8], value: Slot, id: u16) -> Result<Slot, Step> {
         match value.value {
             Payload::Reference(inst) if value.kind == Kind::Reference => {
                 self.mop_get(code, inst, id, value)
@@ -38866,7 +39712,7 @@ impl Interp {
         holder: Option<Slot>,
         state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Halt> {
+    ) -> Result<Option<Vec<u16>>, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.json_stringify_value_inner(code, value, name, holder, state, cost)
         })
@@ -38880,7 +39726,7 @@ impl Interp {
         holder: Option<Slot>,
         state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Halt> {
+    ) -> Result<Option<Vec<u16>>, Step> {
         if value.kind == Kind::Reference || value.kind == Kind::BigInt {
             let to_json_id = self.intern_key("toJSON");
             let to_json = self.json_stringify_get_v(code, value, to_json_id)?;
@@ -38947,7 +39793,7 @@ impl Interp {
                 }
                 _ => Ok(None),
             },
-            Kind::BigInt => Err(self.catchable_type_error()),
+            Kind::BigInt => Err(self.catchable_type_error_msg("stringify bigint".into())),
             Kind::Reference => {
                 let inst = match value.value {
                     Payload::Reference(inst) => inst,
@@ -38976,15 +39822,15 @@ impl Interp {
         receiver: Slot,
         state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Halt> {
+    ) -> Result<Option<Vec<u16>>, Step> {
         if state.stack.contains(&inst) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("cyclic value".into()));
         }
         state.stack.push(inst);
         let length_value = self.arraylike_length(code, inst, receiver)?;
         let length = self.to_length_value(code, length_value)?;
         if length > u64::from(u32::MAX) {
-            return Err(Halt::Unsupported("JSON.stringify:oversized-array"));
+            return Err(Step::Host(Halt::Refused("JSON.stringify:oversized-array")));
         }
         *cost += JSON_STRINGIFY_ARRAY_ENTER_METERING;
         if length > 0 {
@@ -39057,7 +39903,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Vec<JsonPropertyName>, Halt> {
+    ) -> Result<Vec<JsonPropertyName>, Step> {
         let mut names = Vec::new();
         for key in self.mop_own_keys(code, inst)? {
             if key.kind == Kind::Symbol {
@@ -39087,9 +39933,9 @@ impl Interp {
         _receiver: Slot,
         state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Halt> {
+    ) -> Result<Option<Vec<u16>>, Step> {
         if state.stack.contains(&inst) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("cyclic value".into()));
         }
         state.stack.push(inst);
         let names = match &state.property_list {
@@ -39173,7 +40019,7 @@ impl Interp {
         pos: &mut usize,
         cost: &mut u64,
         track_source: bool,
-    ) -> Result<(Slot, JsonSource), Halt> {
+    ) -> Result<(Slot, JsonSource), Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.json_parse_value_inner(input, pos, cost, track_source)
         })
@@ -39185,7 +40031,7 @@ impl Interp {
         pos: &mut usize,
         cost: &mut u64,
         track_source: bool,
-    ) -> Result<(Slot, JsonSource), Halt> {
+    ) -> Result<(Slot, JsonSource), Step> {
         if *pos >= input.len() {
             return Err(self.catchable_syntax_error());
         }
@@ -39280,7 +40126,7 @@ impl Interp {
         input: &[u8],
         pos: &mut usize,
         word: &[u8],
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if input.len() - *pos >= word.len() && &input[*pos..*pos + word.len()] == word {
             *pos += word.len();
             Ok(())
@@ -39293,7 +40139,7 @@ impl Interp {
     /// classify it exactly as XS does: an integral value in `txInteger` range
     /// (and not zero, which XS leaves as `XS_NUMBER_KIND`) is an integer, else a
     /// number. The number token itself allocates nothing.
-    fn json_parse_number(&mut self, input: &[u8], pos: &mut usize) -> Result<Slot, Halt> {
+    fn json_parse_number(&mut self, input: &[u8], pos: &mut usize) -> Result<Slot, Step> {
         let start = *pos;
         let n = input.len();
         let mut i = *pos;
@@ -39363,7 +40209,7 @@ impl Interp {
     /// unescaped UTF-16 code units. JSON `\u` escapes append exactly one code
     /// unit, so both valid surrogate pairs and lone surrogates survive in a
     /// parsed string value. Malformed escapes throw a SyntaxError.
-    fn json_parse_string_units(&mut self, input: &[u8], pos: &mut usize) -> Result<Vec<u16>, Halt> {
+    fn json_parse_string_units(&mut self, input: &[u8], pos: &mut usize) -> Result<Vec<u16>, Step> {
         let n = input.len();
         let mut i = *pos + 1; // past opening quote
         let mut out: Vec<u16> = Vec::new();
@@ -39445,7 +40291,7 @@ impl Interp {
         pos: &mut usize,
         cost: &mut u64,
         track_source: bool,
-    ) -> Result<(Slot, JsonSource), Halt> {
+    ) -> Result<(Slot, JsonSource), Step> {
         *pos += 1; // past '['
         *cost += JSON_PARSE_ARRAY_INSTANCE_METERING;
         let inst = self.new_array_unmetered();
@@ -39510,7 +40356,7 @@ impl Interp {
         pos: &mut usize,
         cost: &mut u64,
         track_source: bool,
-    ) -> Result<(Slot, JsonSource), Halt> {
+    ) -> Result<(Slot, JsonSource), Step> {
         *pos += 1; // past '{'
         *cost += JSON_PARSE_OBJECT_INSTANCE_METERING;
         let inst = self.slots.alloc(Slot::instance(self.object_proto));
@@ -39538,7 +40384,11 @@ impl Interp {
                 // The VM's intern table is still scalar-text keyed. Preserve
                 // the broader JSON value behavior but refuse a lone-surrogate
                 // object key rather than replacing it with U+FFFD.
-                Err(_) => return Err(Halt::Unsupported("JSON.parse:lone-surrogate-key")),
+                Err(_) => {
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "JSON.parse:lone-surrogate-key",
+                    )))
+                }
             };
             *cost += JSON_PARSE_OBJECT_KEY_METERING;
             // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
@@ -39599,7 +40449,7 @@ impl Interp {
         name: ReadKey,
         source: Option<JsonSource>,
         reviver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.json_internalize_property_inner(code, input, holder, name, source, reviver)
         })
@@ -39613,7 +40463,7 @@ impl Interp {
         name: ReadKey,
         source: Option<JsonSource>,
         reviver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
         let value = self.mop_get_read(code, holder, name, holder_slot)?;
         if let Payload::Reference(object) = value.value {
@@ -39689,7 +40539,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         object: crate::value::SlotIndex,
-    ) -> Result<Vec<u16>, Halt> {
+    ) -> Result<Vec<u16>, Step> {
         let keys = self.mop_own_keys(code, object)?;
         let mut out = Vec::new();
         for key in keys {
@@ -39715,7 +40565,7 @@ impl Interp {
         object: crate::value::SlotIndex,
         id: u16,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let descriptor = OrdinaryDescriptor {
             value: Some(value),
             writable: Some(true),
@@ -39736,7 +40586,7 @@ impl Interp {
         object: crate::value::SlotIndex,
         key: ReadKey,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let descriptor = OrdinaryDescriptor {
             value: Some(value),
             writable: Some(true),
@@ -39821,14 +40671,14 @@ impl Interp {
     /// scalar-value `String`). Objects use the shared, re-entrant
     /// `ToPrimitive` machinery; null and undefined are allowed here because
     /// this helper is also used for ordinary arguments.
-    fn to_string_units(&mut self, code: &[u8], value: Slot) -> Result<Vec<u16>, Halt> {
+    fn to_string_units(&mut self, code: &[u8], value: Slot) -> Result<Vec<u16>, Step> {
         let primitive = if value.kind == Kind::Reference {
             self.to_primitive(code, value, true)?
         } else {
             value
         };
         if primitive.kind == Kind::Symbol {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("cannot coerce symbol to string".into()));
         }
         if let Payload::String(off) = primitive.value {
             return Ok(self.str_units(off));
@@ -39839,23 +40689,26 @@ impl Interp {
 
     /// ECMAScript `ToString`, retaining the resulting primitive as a String
     /// slot so callers can pass it to user code without a lossy text roundtrip.
-    fn to_string_slot(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+    fn to_string_slot(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
         let primitive = if value.kind == Kind::Reference {
             self.to_primitive(code, value, true)?
         } else {
             value
         };
         if primitive.kind == Kind::Symbol {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("cannot coerce symbol to string".into()));
         }
         Ok(self.to_string_slot_metered(primitive))
     }
 
     /// `RequireObjectCoercible(this)` followed by `ToString(this)` for the
     /// generic String prototype algorithms.
-    fn string_this_units(&mut self, code: &[u8], this: Slot) -> Result<Vec<u16>, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
+    fn string_this_units(&mut self, code: &[u8], this: Slot) -> Result<Vec<u16>, Step> {
+        if this.kind == Kind::Undefined {
+            return Err(self.catchable_type_error_msg("this: undefined".into()));
+        }
+        if this.kind == Kind::Null {
+            return Err(self.catchable_type_error_msg("this: null".into()));
         }
         if let Some(units) = self.string_receiver_units(this) {
             return Ok(units);
@@ -39870,7 +40723,13 @@ impl Interp {
         units.len() as u64
     }
 
-    fn catchable_range_error(&mut self) -> Halt {
+    /// Raise an XS RangeError diagnostic through the guest jump chain.
+    fn catchable_range_error_msg(&mut self, message: String) -> Step {
+        let error = self.internal_error("RangeError", message);
+        self.raise_js(error)
+    }
+
+    fn catchable_range_error(&mut self) -> Step {
         let error = self.build_error("RangeError", 0, 0);
         self.raise_js(error)
     }
@@ -39884,13 +40743,13 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if self
             .stack
             .get(base)
             .is_some_and(|this| this.kind == Kind::Uninitialized)
         {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
         }
         let mut out = Vec::with_capacity(argc.saturating_mul(2));
         for i in 0..argc {
@@ -39899,11 +40758,7 @@ impl Interp {
                 .get(base + 4 + i)
                 .copied()
                 .unwrap_or_else(Slot::undefined);
-            if matches!(value.kind, Kind::BigInt | Kind::Symbol) {
-                return Err(self.catchable_type_error());
-            }
-            let number = self.to_number_value(code, value)?;
-            let n = to_number(&number);
+            let n = self.to_number_f64(code, value)?;
             match m {
                 NativeMethod::StringFromCharCode => {
                     let integer = if !n.is_finite() || n == 0.0 {
@@ -39916,7 +40771,16 @@ impl Interp {
                 NativeMethod::StringFromCodePoint => {
                     if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10_FFFF as f64).contains(&n)
                     {
-                        return Err(self.catchable_range_error());
+                        let number = if n.is_nan() {
+                            "nan".into()
+                        } else {
+                            format!("{n:.6}")
+                        };
+                        // xsAPI.c fxThrowMessage uses a 128-byte C buffer.
+                        // This diagnostic is ASCII, so byte truncation is exact.
+                        let mut message = format!("invalid code point {number}");
+                        message.truncate(127);
+                        return Err(self.catchable_range_error_msg(message));
                     }
                     let cp = n as u32;
                     if cp <= 0xFFFF {
@@ -39938,13 +40802,13 @@ impl Interp {
     /// `ToLength`, then interleave each observable literal segment with the
     /// corresponding substitution. All string conversion remains in UTF-16
     /// units so lone surrogates survive unchanged.
-    fn call_string_raw(&mut self, base: usize, argc: usize, code: &[u8]) -> Result<Slot, Halt> {
+    fn call_string_raw(&mut self, base: usize, argc: usize, code: &[u8]) -> Result<Slot, Step> {
         if self
             .stack
             .get(base)
             .is_some_and(|this| this.kind == Kind::Uninitialized)
         {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
         }
         let template = self
             .stack
@@ -39968,7 +40832,7 @@ impl Interp {
         }
         const STRING_RAW_SEGMENT_CAP: u64 = 1 << 24;
         if literal_segments > STRING_RAW_SEGMENT_CAP {
-            return Err(Halt::Unsupported("String.raw:oversized-template"));
+            return Err(Step::Host(Halt::Refused("String.raw:oversized-template")));
         }
 
         let substitutions = argc.saturating_sub(1) as u64;
@@ -40002,7 +40866,7 @@ impl Interp {
         arg: Option<Slot>,
         default: i64,
         len: i64,
-    ) -> Result<i64, Halt> {
+    ) -> Result<i64, Step> {
         let Some(value) = arg.filter(|value| value.kind != Kind::Undefined) else {
             return Ok(default);
         };
@@ -40024,7 +40888,7 @@ impl Interp {
         arg: Option<Slot>,
         default: i64,
         len: i64,
-    ) -> Result<i64, Halt> {
+    ) -> Result<i64, Step> {
         let Some(value) = arg.filter(|value| value.kind != Kind::Undefined) else {
             return Ok(default);
         };
@@ -40046,7 +40910,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let content = self.string_this_units(code, this)?;
         let ulen = content.len() as i64; // UTF-16 code-unit length
                                          // Clamp a (possibly negative / out-of-range) code-unit position to a
@@ -40193,8 +41057,11 @@ impl Interp {
                 let count = match argn(0) {
                     Some(s) if s.kind != Kind::Undefined => {
                         let n = self.array_to_integer_or_infinity(code, s)?;
-                        if n < 0.0 || n == f64::INFINITY || n > 0x7FFF_FFFF as f64 {
-                            return Err(self.catchable_range_error());
+                        if n < 0.0 {
+                            return Err(self.catchable_range_error_msg("count < 0".into()));
+                        }
+                        if n > 0x7FFF_FFFF as f64 {
+                            return Err(self.catchable_range_error_msg("count too big".into()));
                         }
                         n as i64
                     }
@@ -40221,7 +41088,7 @@ impl Interp {
             StringStartsWith | StringEndsWith => {
                 let search = argn(0).unwrap_or_else(Slot::undefined);
                 if self.string_is_regexp(code, search)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("future editions".into()));
                 }
                 let sub = self.to_string_units(code, search)?;
                 let sub_units = sub.len() as u64;
@@ -40250,7 +41117,7 @@ impl Interp {
             StringIncludes => {
                 let search = argn(0).unwrap_or_else(Slot::undefined);
                 if self.string_is_regexp(code, search)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("future editions".into()));
                 }
                 let sub = self.to_string_units(code, search)?;
                 let from = self.string_arg_to_position(code, argn(1), 0, ulen)?;
@@ -40411,7 +41278,7 @@ impl Interp {
                     [0x4E, 0x46, 0x44] => UnicodeNormalizationForm::Nfd,
                     [0x4E, 0x46, 0x4B, 0x43] => UnicodeNormalizationForm::Nfkc,
                     [0x4E, 0x46, 0x4B, 0x44] => UnicodeNormalizationForm::Nfkd,
-                    _ => return Err(self.catchable_range_error()),
+                    _ => return Err(self.catchable_range_error_msg("invalid form".into())),
                 };
                 let out = unicode_normalize_utf16(&content, form);
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
@@ -40443,21 +41310,8 @@ impl Interp {
                 self.new_string_units(&content[lo..hi])
             }
             StringPadStart | StringPadEnd => {
-                let target = match argn(0) {
-                    Some(v) => {
-                        let n = self.to_number_value(code, v)?;
-                        let n = to_number(&n);
-                        if n.is_nan() || n <= 0.0 {
-                            0usize
-                        } else if n.is_infinite() || n > usize::MAX as f64 {
-                            return Err(self.catchable_range_error());
-                        } else {
-                            n.floor() as usize
-                        }
-                    }
-                    None => 0,
-                };
-                if target <= content.len() {
+                let target = self.to_length_value(code, argn(0).unwrap_or_else(Slot::undefined))?;
+                if target <= content.len() as u64 {
                     self.new_string_units(&content)
                 } else {
                     let fill = match argn(1) {
@@ -40471,6 +41325,17 @@ impl Interp {
                     if fill.is_empty() {
                         self.new_string_units(&content)
                     } else {
+                        // Allocation is an implementation limit, not a guest
+                        // RangeError. XS also aborts at its chunk-size limit.
+                        // Coerce the filler first: an empty filler needs no
+                        // allocation, even when the requested length is huge.
+                        const STRING_PAD_UNIT_CAP: u64 = 1 << 24;
+                        if target > STRING_PAD_UNIT_CAP {
+                            return Err(Step::Host(Halt::Refused(
+                                "String.prototype.pad:result-too-large",
+                            )));
+                        }
+                        let target = target as usize;
                         let needed = target - content.len();
                         let mut padding = Vec::with_capacity(needed);
                         while padding.len() < needed {
@@ -40521,7 +41386,7 @@ impl Interp {
                 }
             }
             StringIterator => self.make_string_iterator(units_to_be16(&content)),
-            _ => return Err(Halt::Unsupported("string-method:unmodeled")),
+            _ => return Err(Step::Host(Halt::NotImplemented("string-method:unmodeled"))),
         };
         Ok(result)
     }
@@ -40640,9 +41505,9 @@ impl Interp {
     /// arena holder containing the cached (not necessarily callable) `next`
     /// value. Keeping the holder in the arena lets the existing ITER snapshot
     /// row and GC edge machinery carry the otherwise arbitrary [`Slot`].
-    fn iterator_from(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+    fn iterator_from(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
         if value.kind != Kind::String && value.kind != Kind::Reference {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("iterator: not a string".into()));
         }
 
         let iterator_id = self
@@ -40661,25 +41526,27 @@ impl Interp {
             value
         } else {
             if !self.is_callable_value(iterator_method) {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("call: not a function".into()));
             }
             let iterator = self.call_any(code, iterator_method, value, &[])?;
             if iterator.kind != Kind::Reference {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("iterator: not an object".into()));
             }
             iterator
         };
         let Payload::Reference(iterator_inst) = iterator.value else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("iterator: not an object".into()));
         };
         let next_id = self.intern_key("next");
         let next_method = self.mop_get(code, iterator_inst, next_id, iterator)?;
 
-        let iterator_ctor = self
-            .intrinsics
-            .get("Iterator")
-            .copied()
-            .ok_or(Halt::Unsupported("Iterator:missing-constructor"))?;
+        let iterator_ctor =
+            self.intrinsics
+                .get("Iterator")
+                .copied()
+                .ok_or(Step::Host(Halt::EngineInvariant(
+                    "Iterator:missing-constructor",
+                )))?;
         let iterator_ctor = Slot::of(Kind::Reference, Payload::Reference(iterator_ctor));
         if self.ordinary_has_instance(code, iterator_ctor, iterator)? {
             return Ok(iterator);
@@ -40714,9 +41581,9 @@ impl Interp {
     /// from the wrapper's arena holder and called with the original iterator.
     /// The result is returned unchanged; iterator consumers perform the
     /// protocol's object-result validation when they advance it.
-    fn iterator_wrapper_next(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+    fn iterator_wrapper_next(&mut self, code: &[u8], this: Slot) -> Result<Slot, Step> {
         let Payload::Reference(wrapper) = this.value else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("this: not an iterator".into()));
         };
         let Some(state) = self
             .iterators
@@ -40724,7 +41591,7 @@ impl Interp {
             .filter(|state| state.kind == 8)
             .cloned()
         else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("this: not an iterator".into()));
         };
         let next_method = self.slots.get(state.result);
         let iterator = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
@@ -40735,9 +41602,9 @@ impl Interp {
     /// method is intentionally fetched on each call; unlike `next`, it is not
     /// part of the captured iterator record. An absent method produces a fresh
     /// ordinary `{ value: undefined, done: true }` result.
-    fn iterator_wrapper_return(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+    fn iterator_wrapper_return(&mut self, code: &[u8], this: Slot) -> Result<Slot, Step> {
         let Payload::Reference(wrapper) = this.value else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("this: not an iterator".into()));
         };
         let Some(state) = self
             .iterators
@@ -40745,7 +41612,7 @@ impl Interp {
             .filter(|state| state.kind == 8)
             .cloned()
         else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("this: not an iterator".into()));
         };
         let iterator = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
         let return_id = self.intern_key("return");
@@ -40759,7 +41626,7 @@ impl Interp {
             return Ok(Slot::of(Kind::Reference, Payload::Reference(result)));
         }
         if !self.is_callable_value(return_method) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
         }
         self.call_any(code, return_method, iterator, &[])
     }
@@ -40777,7 +41644,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let saved_jumps = std::mem::take(&mut self.jumps);
         let outcome = self.iterator_terminal_helper_inner(code, op, this, base, argc);
         self.jumps = saved_jumps;
@@ -40796,9 +41663,11 @@ impl Interp {
         code: &[u8],
         iterator: Slot,
         completion: Slot,
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         let Payload::Reference(inst) = iterator.value else {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "this: not an object".into())
+            ));
         };
         let return_id = self.intern_key("return");
         let return_method =
@@ -40810,7 +41679,9 @@ impl Interp {
             return Ok(Ok(completion));
         }
         if !self.is_callable_value(return_method) {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
         }
         let inner =
             match self.array_from_try(|this| this.call_any(code, return_method, iterator, &[]))? {
@@ -40818,7 +41689,10 @@ impl Interp {
                 Err(error) => return Ok(Err(error)),
             };
         if inner.kind != Kind::Reference {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(self.internal_error(
+                "TypeError",
+                "iterator result: not an object".into(),
+            )));
         }
         Ok(Ok(completion))
     }
@@ -40833,10 +41707,14 @@ impl Interp {
         iterator: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         let inst = match iterator.value {
             Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
-            _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            _ => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "this: not an object".into())
+                ))
+            }
         };
         let callback = self
             .stack
@@ -40847,7 +41725,15 @@ impl Interp {
             // ES2025 creates the incomplete iterator record before validating
             // the callback. IteratorClose therefore observes `return`, but it
             // has not yet read `next`; the original TypeError always wins.
-            let error = self.build_error("TypeError", 0, 0);
+            let error = self.internal_error(
+                "TypeError",
+                match op {
+                    5 => "reducer: not a function",
+                    7 => "procedure: not a function",
+                    _ => "predicate: not a function",
+                }
+                .into(),
+            );
             return Ok(Err(self.array_from_close(code, iterator, error)?));
         }
 
@@ -40859,7 +41745,11 @@ impl Interp {
         let next_method =
             match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
                 Ok(method) if self.is_callable_value(method) => method,
-                Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                Ok(_) => {
+                    return Ok(Err(
+                        self.internal_error("TypeError", "call: not a function".into())
+                    ))
+                }
                 Err(error) => return Ok(Err(error)),
             };
 
@@ -40885,7 +41775,12 @@ impl Interp {
             };
             let step_inst = match step.value {
                 Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
-                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => {
+                    return Ok(Err(self.internal_error(
+                        "TypeError",
+                        "iterator result: not an object".into(),
+                    )))
+                }
             };
             let done =
                 match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
@@ -40895,7 +41790,7 @@ impl Interp {
             if self.truthy(&done) {
                 return Ok(match op {
                     5 if accumulator.kind == Kind::Uninitialized => {
-                        Err(self.build_error("TypeError", 0, 0))
+                        Err(self.internal_error("TypeError", "no initial value".into()))
                     }
                     5 => Ok(accumulator),
                     6 => {
@@ -40968,7 +41863,7 @@ impl Interp {
             }
             counter += 1;
         }
-        Err(Halt::StepLimit(self.n_dispatched))
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
 
     /// `fx_MapIterator_prototype_next` / `fx_SetIterator_prototype_next`: yield
@@ -41082,30 +41977,32 @@ impl Interp {
     /// `(value, key, coll)`; Set passes `(value, value, coll)`. Meters the
     /// native frame ([`COLLECTION_FOREACH_FRAME_METERING`]) plus, per entry,
     /// the call-frame residual ([`COLLECTION_FOREACH_PER_ENTRY_METERING`]) over
-    /// the callback body the nested dispatch meters. WeakMap/WeakSet self-name
-    /// (no `forEach`). A non-user callback self-names via [`Self::run_callback`].
+    /// the callback body the nested dispatch meters. Receiver and callback
+    /// validation also applies to empty collections.
     fn call_collection_foreach(
         &mut self,
         this: Slot,
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let _ = argc;
+        let expected =
+            self.collection_method_brand(base)
+                .ok_or(Step::Host(Halt::EngineInvariant(
+                    "collection:missing-method-brand",
+                )))?;
         let inst = match self.collection_ref(this) {
             Some(i) => i,
-            None => return Err(self.catchable_type_error()),
+            None => return Err(self.collection_brand_error(expected, false)),
         };
-        let expected = self
-            .collection_method_brand(base)
-            .ok_or_else(|| self.catchable_type_error())?;
         if self.collections[&inst].kind != expected {
             self.meter.tick_raw(if expected == CollKind::Map {
                 MAP_METHOD_ON_SET_METERING
             } else {
                 SET_METHOD_ON_MAP_METERING
             });
-            return Err(self.catchable_type_error());
+            return Err(self.collection_brand_error(expected, false));
         }
         let is_set = expected == CollKind::Set;
         let callback = self
@@ -41113,6 +42010,9 @@ impl Interp {
             .get(base + 4)
             .copied()
             .unwrap_or_else(Slot::undefined);
+        if !self.is_callable_value(callback) {
+            return Err(self.catchable_type_error_msg("callback: not a function".into()));
+        }
         let this_arg = self
             .stack
             .get(base + 4 + 1)
@@ -41176,10 +42076,10 @@ impl Interp {
 
     /// The receiver's collection instance if it is a real (non-weak) Set, else
     /// a catchable TypeError (`RequireInternalSlot(O, [[SetData]])`).
-    fn require_set_receiver(&mut self, this: Slot) -> Result<crate::value::SlotIndex, Halt> {
+    fn require_set_receiver(&mut self, this: Slot) -> Result<crate::value::SlotIndex, Step> {
         match self.collection_ref(this) {
             Some(inst) if self.collections[&inst].kind == CollKind::Set => Ok(inst),
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.collection_brand_error(CollKind::Set, false)),
         }
     }
 
@@ -41215,7 +42115,7 @@ impl Interp {
         code: &[u8],
         obj: crate::value::SlotIndex,
         obj_slot: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let size_id = self.intern_key("size");
         let mut owner = obj;
         while !owner.is_null() {
@@ -41239,30 +42139,30 @@ impl Interp {
     /// keys)` after the exact observable get order — `size` → ToNumber →
     /// NaN/negative checks, then `has`, then `keys`. `size` is stored as an
     /// `f64` so `+Infinity` is representable.
-    fn get_set_record(&mut self, code: &[u8], arg: Slot) -> Result<(Slot, f64, Slot, Slot), Halt> {
+    fn get_set_record(&mut self, code: &[u8], arg: Slot) -> Result<(Slot, f64, Slot, Slot), Step> {
         let obj = match arg.value {
             Payload::Reference(inst) if arg.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("other is no object".into())),
         };
         let raw_size = self.set_record_get_size(code, obj, arg)?;
         let num = self.to_number_value(code, raw_size)?;
         let num = to_number(&num);
         if num.is_nan() {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("other.size is NaN".into()));
         }
         let int_size = if num.is_infinite() { num } else { num.trunc() };
         if int_size < 0.0 {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg("other.size < 0".into()));
         }
         let has_id = self.intern_key("has");
         let has = self.ordinary_get(code, obj, has_id, arg)?;
         if !self.value_is_callable(has) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("other.has is no function".into()));
         }
         let keys_id = self.intern_key("keys");
         let keys = self.ordinary_get(code, obj, keys_id, arg)?;
         if !self.value_is_callable(keys) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("other.keys is no function".into()));
         }
         Ok((arg, int_size, has, keys))
     }
@@ -41285,10 +42185,15 @@ impl Interp {
         code: &[u8],
         obj: Slot,
         keys: Slot,
-    ) -> Result<(Slot, Slot), Halt> {
+    ) -> Result<(Slot, Slot), Step> {
         let iter = self.call_primitive_method(code, keys, obj, &[])?;
         let iter_inst = match iter.value {
             Payload::Reference(i) if iter.kind == Kind::Reference => i,
+            _ if matches!(iter.kind, Kind::Null | Kind::Undefined) => {
+                return Err(self.catchable_type_error_msg(cannot_coerce_to_object(iter.kind)))
+            }
+            // XS reads `next` from boxed primitives and can proceed through
+            // their prototypes. Keep the spec-only object guard distinct.
             _ => return Err(self.catchable_type_error()),
         };
         let next_id = self.intern_key("next");
@@ -41303,11 +42208,11 @@ impl Interp {
         code: &[u8],
         iter: Slot,
         next: Slot,
-    ) -> Result<Option<Slot>, Halt> {
+    ) -> Result<Option<Slot>, Step> {
         let result = self.call_primitive_method(code, next, iter, &[])?;
         let result_inst = match result.value {
             Payload::Reference(i) if result.kind == Kind::Reference => i,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("iterator result: not an object".into())),
         };
         let done_id = self.intern_key("done");
         let done = self.ordinary_get(code, result_inst, done_id, result)?;
@@ -41322,7 +42227,7 @@ impl Interp {
     /// `IteratorClose(keysIter, NormalCompletion)`: call the iterator's
     /// `return` method if present; a thrown completion from `return`
     /// propagates.
-    fn set_keys_iterator_close(&mut self, code: &[u8], iter: Slot) -> Result<(), Halt> {
+    fn set_keys_iterator_close(&mut self, code: &[u8], iter: Slot) -> Result<(), Step> {
         let iter_inst = match iter.value {
             Payload::Reference(i) if iter.kind == Kind::Reference => i,
             _ => return Ok(()),
@@ -41383,7 +42288,7 @@ impl Interp {
         this: Slot,
         base: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let inst = self.require_set_receiver(this)?;
         let arg0 = self
             .stack
@@ -41565,7 +42470,9 @@ impl Interp {
                 }
                 Ok(Slot::boolean(true))
             }
-            _ => Err(self.catchable_type_error()),
+            _ => Err(Step::Host(Halt::EngineInvariant(
+                "set-method:unexpected-method",
+            ))),
         }
     }
 
@@ -41588,7 +42495,7 @@ impl Interp {
         this: Slot,
         base: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let (expected_kind, weak) = match m {
             NativeMethod::MapGetOrInsert | NativeMethod::MapGetOrInsertComputed => {
                 (CollKind::Map, false)
@@ -41596,14 +42503,18 @@ impl Interp {
             NativeMethod::WeakMapGetOrInsert | NativeMethod::WeakMapGetOrInsertComputed => {
                 (CollKind::WeakMap, true)
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(Step::Host(Halt::EngineInvariant(
+                    "map-get-or-insert:unexpected-method",
+                )))
+            }
         };
         let inst = match self.collection_ref(this) {
             Some(i) if self.collections[&i].kind == expected_kind => i,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.collection_brand_error(expected_kind, false)),
         };
         if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
-            return Err(self.catchable_type_error());
+            return Err(self.collection_brand_error(expected_kind, true));
         }
         let key_arg = self
             .stack
@@ -41615,7 +42526,7 @@ impl Interp {
         // before the callable check and before any lookup/insert.
         let key = self.normalize_coll_key(key_arg);
         if weak && key.kind != Kind::Reference {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("key: not an object".into()));
         }
         match m {
             NativeMethod::MapGetOrInsert | NativeMethod::WeakMapGetOrInsert => {
@@ -41643,7 +42554,7 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if !self.value_is_callable(callbackfn) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 if let Some(p) = self.collection_find(inst, &key) {
                     return Ok(self.collections[&inst].entries()[p].unwrap().1);
@@ -41672,7 +42583,9 @@ impl Interp {
                 }
                 Ok(value)
             }
-            _ => Err(self.catchable_type_error()),
+            _ => Err(Step::Host(Halt::EngineInvariant(
+                "map-get-or-insert:unexpected-method",
+            ))),
         }
     }
 
@@ -41687,10 +42600,10 @@ impl Interp {
 
     /// Read one member of an iterator result object's own `value`/`done`
     /// (through the cached ids the group-by widening force-bound).
-    fn iter_result_member(&mut self, code: &[u8], result: Slot, done: bool) -> Result<Slot, Halt> {
+    fn iter_result_member(&mut self, code: &[u8], result: Slot, done: bool) -> Result<Slot, Step> {
         let inst = match result.value {
             Payload::Reference(i) if result.kind == Kind::Reference => i,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("iterator result: not an object".into())),
         };
         let id = if done {
             match self.done_id {
@@ -41706,7 +42619,7 @@ impl Interp {
         self.ordinary_get(code, inst, id, result)
     }
 
-    fn call_group_by(&mut self, m: NativeMethod, base: usize, code: &[u8]) -> Result<Slot, Halt> {
+    fn call_group_by(&mut self, m: NativeMethod, base: usize, code: &[u8]) -> Result<Slot, Step> {
         let is_map = matches!(m, NativeMethod::MapGroupBy);
         let items = self
             .stack
@@ -41718,8 +42631,13 @@ impl Interp {
             .get(base + 5)
             .copied()
             .unwrap_or_else(Slot::undefined);
+        // fxGroupBy diagnoses the missing items/callback slots before its
+        // callback and iterator checks (xsProperty.c).
+        if items.kind == Kind::Undefined || callbackfn.kind == Kind::Undefined {
+            return Err(self.catchable_type_error_msg("items: not an object".into()));
+        }
         if !self.value_is_callable(callbackfn) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("callback: not a function".into()));
         }
         // Buckets in first-insertion order: (canonical key slot, values). For
         // the `property` coercion, `repr` is the SameValue-distinguishing key
@@ -41794,7 +42712,11 @@ impl Interp {
                 let it = self.make_string_iterator(bytes);
                 let iter_inst = match it.value {
                     Payload::Reference(x) => x,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(Step::Host(Halt::EngineInvariant(
+                            "group-by:invalid-string-iterator",
+                        )))
+                    }
                 };
                 loop {
                     let result = self.string_iterator_next(iter_inst)?;
@@ -41818,12 +42740,14 @@ impl Interp {
                     self.ordinary_get(code, obj, iter_id, items)?
                 };
                 if method.kind == Kind::Undefined || method.kind == Kind::Null {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("call: not a function".into()));
                 }
                 let iterator = self.call_primitive_method(code, method, items, &[])?;
                 let iter_inst = match iterator.value {
                     Payload::Reference(x) if iterator.kind == Kind::Reference => x,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg("iterator: not an object".into()))
+                    }
                 };
                 let next_id = self.intern_key("next");
                 let next = self.ordinary_get(code, iter_inst, next_id, iterator)?;
@@ -41839,7 +42763,10 @@ impl Interp {
                     record!(value);
                 }
             }
-            _ => return Err(self.catchable_type_error()),
+            _ if items.kind == Kind::Null => {
+                return Err(self.catchable_type_error_msg("cannot coerce null to object".into()))
+            }
+            _ => return Err(self.catchable_type_error_msg("call: not a function".into())),
         }
 
         if is_map {
@@ -41852,7 +42779,7 @@ impl Interp {
     /// `? ToPropertyKey(key)` reduced to the canonical property-key VALUE (a
     /// Symbol slot, or a String slot) rather than an interned id, so the bucket
     /// preserves the key for a later `CreateDataPropertyOrThrow`.
-    fn to_property_key_slot(&mut self, code: &[u8], key: Slot) -> Result<Slot, Halt> {
+    fn to_property_key_slot(&mut self, code: &[u8], key: Slot) -> Result<Slot, Step> {
         if key.kind == Kind::Symbol {
             return Ok(key);
         }
@@ -41915,7 +42842,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         buckets: Vec<(Slot, Vec<Slot>)>,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let obj = self.new_object();
         // OrdinaryObjectCreate(null): a null prototype.
         self.slots.get_mut(obj).value = Payload::Reference(crate::value::SlotIndex::NULL);
@@ -41926,14 +42853,22 @@ impl Interp {
                 Kind::Symbol => {
                     let id = match key.value {
                         Payload::Reference(desc) => self.intern_symbol_key(desc),
-                        _ => return Err(self.catchable_type_error()),
+                        _ => {
+                            return Err(Step::Host(Halt::EngineInvariant(
+                                "group-by:invalid-symbol-key",
+                            )))
+                        }
                     };
                     Slot::of(Kind::At, Payload::At(id, 0))
                 }
                 Kind::String => {
                     let s = match key.value {
                         Payload::String(off) => self.str_text(off),
-                        _ => return Err(self.catchable_type_error()),
+                        _ => {
+                            return Err(Step::Host(Halt::EngineInvariant(
+                                "group-by:invalid-string-key",
+                            )))
+                        }
                     };
                     if let Some(idx) = string_to_index(&s) {
                         Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx))
@@ -41942,7 +42877,11 @@ impl Interp {
                         Slot::of(Kind::At, Payload::At(id, 0))
                     }
                 }
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    return Err(Step::Host(Halt::EngineInvariant(
+                        "group-by:invalid-key-kind",
+                    )))
+                }
             };
             // CreateDataPropertyOrThrow (enumerable/writable/configurable own).
             self.property_at_set(code, obj_slot, at, array, true)?;
@@ -41975,7 +42914,7 @@ impl Interp {
     /// sequence); an astral/surrogate sequence self-names an honest skip (its
     /// yielding astral code points by recombining surrogate pairs). Meters the
     /// per-`next()` base plus the yielded string's chunk allocation.
-    fn string_iterator_next(&mut self, iter: crate::value::SlotIndex) -> Result<Slot, Halt> {
+    fn string_iterator_next(&mut self, iter: crate::value::SlotIndex) -> Result<Slot, Step> {
         let st = self.iterators[&iter].clone();
         let result = st.result;
         let (new_value, new_done, next_index): (Slot, bool, u32) =
@@ -41987,7 +42926,9 @@ impl Interp {
                 // surrogate pair, two (4 bytes) — `for...of` iterates by code point.
                 let i = st.index as usize;
                 if i + 2 > st.str_bytes.len() {
-                    return Err(Halt::EngineInvariant("string-iterator:truncated-sequence"));
+                    return Err(Step::Host(Halt::EngineInvariant(
+                        "string-iterator:truncated-sequence",
+                    )));
                 }
                 let hi = u16::from_be_bytes([st.str_bytes[i], st.str_bytes[i + 1]]);
                 let consumed = if (0xD800..=0xDBFF).contains(&hi) && i + 4 <= st.str_bytes.len() {
@@ -42169,7 +43110,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         iter: crate::value::SlotIndex,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if self.iterators[&iter].kind == 3 {
             return Ok(self.enumerator_next(iter));
         }
@@ -42196,7 +43137,7 @@ impl Interp {
                 u64::from(self.arrays[&st.iterable].length)
             } else if let Some(typed_array) = self.typed_arrays.get(&st.iterable) {
                 if self.detached_buffers.contains(&typed_array.buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("out of bound buffer".into()));
                 } else {
                     u64::from(typed_array.length)
                 }
@@ -42807,7 +43748,7 @@ impl Interp {
     /// lighter array-like boxer used by `Array.fromAsync`, a mutating method
     /// can return the wrapper itself, so its primitive internal data and
     /// intrinsic wrapper prototype must both be observable.
-    fn array_to_object(&mut self, this: Slot) -> Result<Slot, Halt> {
+    fn array_to_object(&mut self, this: Slot) -> Result<Slot, Step> {
         if this.kind == Kind::Reference {
             return Ok(this);
         }
@@ -42817,7 +43758,14 @@ impl Interp {
             Kind::String => Native::String,
             Kind::Symbol => Native::Symbol,
             Kind::BigInt => Native::BigInt,
-            Kind::Null | Kind::Undefined => return Err(self.catchable_type_error()),
+            Kind::Null => {
+                return Err(self.catchable_type_error_msg("cannot coerce null to object".into()))
+            }
+            Kind::Undefined => {
+                return Err(
+                    self.catchable_type_error_msg("cannot coerce undefined to object".into())
+                )
+            }
             _ => return Err(self.catchable_type_error()),
         };
         let inst = self.box_object_primitive(native, this);
@@ -42840,7 +43788,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         o: crate::value::SlotIndex,
-    ) -> Result<u64, Halt> {
+    ) -> Result<u64, Step> {
         // `self.length_id` is minted from the program's STATIC name table, so a
         // source that never literally mentions `length` (e.g.
         // `new Array(4); a[3]='z'; a.lastIndexOf('z')`) leaves it `None`. The
@@ -42868,7 +43816,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         o: crate::value::SlotIndex,
-    ) -> Result<u64, Halt> {
+    ) -> Result<u64, Step> {
         let length_id = match self.length_id {
             Some(id) => id,
             None => {
@@ -43000,7 +43948,7 @@ impl Interp {
         code: &[u8],
         o: crate::value::SlotIndex,
         k: u64,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         match self.array_generic_index_read_key(o, k) {
             Some(key) => Ok(self.mop_has_read_with_recursions(code, o, key)?.0),
             None => Ok(false),
@@ -43015,7 +43963,7 @@ impl Interp {
         code: &[u8],
         o: crate::value::SlotIndex,
         k: u64,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         match self.array_generic_index_read_key(o, k) {
             Some(key) => {
                 let recv = Slot::of(Kind::Reference, Payload::Reference(o));
@@ -43032,7 +43980,7 @@ impl Interp {
         code: &[u8],
         o: crate::value::SlotIndex,
         k: u64,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // An index nothing on the chain can answer reads `undefined` with no
         // name and no trap, which is what lets `Array.from` and spread walk a
         // 70,000-hole sparse array. An index something CAN answer is resolved
@@ -43066,7 +44014,7 @@ impl Interp {
         this: Slot,
         separator: Slot,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
@@ -43087,7 +44035,7 @@ impl Interp {
         let mut result = Vec::new();
         for index in 0..length {
             if index >= GENERIC_JOIN_CAP {
-                return Err(Halt::Unsupported("join:oversized-array-like"));
+                return Err(Step::Host(Halt::Refused("join:oversized-array-like")));
             }
             self.meter.tick_builtin_some(1);
             if index > 0 {
@@ -43096,7 +44044,7 @@ impl Interp {
                     .checked_add(separator.len())
                     .map_or(true, |length| length > GENERIC_JOIN_OUTPUT_CAP)
                 {
-                    return Err(Halt::Unsupported("join:oversized-result"));
+                    return Err(Step::Host(Halt::Refused("join:oversized-result")));
                 }
                 result.extend_from_slice(&separator);
             }
@@ -43108,7 +44056,7 @@ impl Interp {
                     .checked_add(units.len())
                     .map_or(true, |length| length > GENERIC_JOIN_OUTPUT_CAP)
                 {
-                    return Err(Halt::Unsupported("join:oversized-result"));
+                    return Err(Step::Host(Halt::Refused("join:oversized-result")));
                 }
                 result.extend_from_slice(&units);
             }
@@ -43119,7 +44067,7 @@ impl Interp {
     /// Generic `Array.prototype.toString`: observe `Get(array, "join")`, call
     /// it when callable, or fall back to the intrinsic
     /// `%Object.prototype%.toString` method with the same receiver.
-    fn array_generic_to_string(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+    fn array_generic_to_string(&mut self, code: &[u8], this: Slot) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
@@ -43153,7 +44101,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
@@ -43166,7 +44114,7 @@ impl Interp {
                 let new_length = length
                     .checked_add(argc as u64)
                     .filter(|new_length| *new_length <= 9_007_199_254_740_991)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                    .ok_or_else(|| self.catchable_type_error_msg("unsafe integer".into()))?;
                 let args: Vec<Slot> = (0..argc)
                     .map(|index| {
                         self.stack
@@ -43178,7 +44126,7 @@ impl Interp {
                 for (offset, value) in args.into_iter().enumerate() {
                     let id = self.array_generic_index_id(length + offset as u64);
                     if !self.mop_set(code, inst, id, value, object)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.failed_set_error(inst, id, "C: xsSet"));
                     }
                 }
                 if !self.mop_set(
@@ -43188,14 +44136,14 @@ impl Interp {
                     Self::array_index_number(new_length),
                     object,
                 )? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(inst, length_id, "C: xsSet"));
                 }
                 Ok(Self::array_index_number(new_length))
             }
             NativeMethod::ArrayPop => {
                 if length == 0 {
                     if !self.mop_set(code, inst, length_id, Slot::integer(0), object)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.failed_set_error(inst, length_id, "C: xsSet"));
                     }
                     return Ok(Slot::undefined());
                 }
@@ -43203,7 +44151,7 @@ impl Interp {
                 let id = self.array_generic_index_id(new_length);
                 let value = self.mop_get(code, inst, id, object)?;
                 if !self.mop_delete(code, inst, id)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_delete_error(id));
                 }
                 if !self.mop_set(
                     code,
@@ -43212,7 +44160,7 @@ impl Interp {
                     Self::array_index_number(new_length),
                     object,
                 )? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(inst, length_id, "C: xsSet"));
                 }
                 Ok(value)
             }
@@ -43232,7 +44180,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
@@ -43245,7 +44193,7 @@ impl Interp {
             NativeMethod::ArrayShift => {
                 if length == 0 {
                     if !self.mop_set(code, inst, length_id, Slot::integer(0), object)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.failed_set_error(inst, length_id, "C: xsSet"));
                     }
                     return Ok(Slot::undefined());
                 }
@@ -43254,7 +44202,7 @@ impl Interp {
                 let mut linear_steps = 0u64;
                 for k in 1..length {
                     if linear_steps >= GENERIC_MOVE_CAP {
-                        return Err(Halt::Unsupported("shift:oversized-array-like"));
+                        return Err(Step::Host(Halt::Refused("shift:oversized-array-like")));
                     }
                     linear_steps += 1;
                     let from_id = self.array_generic_index_id(k);
@@ -43262,15 +44210,15 @@ impl Interp {
                     if self.mop_has(code, inst, from_id)? {
                         let value = self.mop_get(code, inst, from_id, object)?;
                         if !self.mop_set(code, inst, to_id, value, object)? {
-                            return Err(self.catchable_type_error());
+                            return Err(self.failed_set_error(inst, to_id, "C: xsSet"));
                         }
                     } else if !self.mop_delete(code, inst, to_id)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.failed_delete_error(to_id));
                     }
                 }
                 let last_id = self.array_generic_index_id(length - 1);
                 if !self.mop_delete(code, inst, last_id)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_delete_error(last_id));
                 }
                 if !self.mop_set(
                     code,
@@ -43279,7 +44227,7 @@ impl Interp {
                     Self::array_index_number(length - 1),
                     object,
                 )? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(inst, length_id, "C: xsSet"));
                 }
                 Ok(first)
             }
@@ -43287,7 +44235,7 @@ impl Interp {
                 let new_length = length
                     .checked_add(argc as u64)
                     .filter(|new_length| *new_length <= 9_007_199_254_740_991)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                    .ok_or_else(|| self.catchable_type_error_msg("unsafe integer".into()))?;
                 let args: Vec<Slot> = (0..argc)
                     .map(|index| {
                         self.stack
@@ -43302,7 +44250,7 @@ impl Interp {
                     let mut linear_steps = 0u64;
                     while k > 0 {
                         if linear_steps >= GENERIC_MOVE_CAP {
-                            return Err(Halt::Unsupported("unshift:oversized-array-like"));
+                            return Err(Step::Host(Halt::Refused("unshift:oversized-array-like")));
                         }
                         linear_steps += 1;
                         k -= 1;
@@ -43311,16 +44259,16 @@ impl Interp {
                         if self.mop_has(code, inst, from_id)? {
                             let value = self.mop_get(code, inst, from_id, object)?;
                             if !self.mop_set(code, inst, to_id, value, object)? {
-                                return Err(self.catchable_type_error());
+                                return Err(self.failed_set_error(inst, to_id, "C: xsSet"));
                             }
                         } else if !self.mop_delete(code, inst, to_id)? {
-                            return Err(self.catchable_type_error());
+                            return Err(self.failed_delete_error(to_id));
                         }
                     }
                     for (index, value) in args.into_iter().enumerate() {
                         let id = self.array_generic_index_id(index as u64);
                         if !self.mop_set(code, inst, id, value, object)? {
-                            return Err(self.catchable_type_error());
+                            return Err(self.failed_set_error(inst, id, "C: xsSet"));
                         }
                     }
                 }
@@ -43331,7 +44279,7 @@ impl Interp {
                     Self::array_index_number(new_length),
                     object,
                 )? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(inst, length_id, "C: xsSet"));
                 }
                 Ok(Self::array_index_number(new_length))
             }
@@ -43342,7 +44290,7 @@ impl Interp {
     /// Generic `Array.prototype.reverse`. Read and write every paired index
     /// through the object MOP so sparse/inherited properties, Proxies, and
     /// mapped arguments observe the specified Has/Get/Set/Delete order.
-    fn array_generic_reverse(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+    fn array_generic_reverse(&mut self, code: &[u8], this: Slot) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
@@ -43351,7 +44299,7 @@ impl Interp {
         const GENERIC_REVERSE_CAP: u64 = 1 << 24;
         for lower in 0..length / 2 {
             if lower >= GENERIC_REVERSE_CAP {
-                return Err(Halt::Unsupported("reverse:oversized-array-like"));
+                return Err(Step::Host(Halt::Refused("reverse:oversized-array-like")));
             }
             let upper = length - lower - 1;
             let lower_id = self.array_generic_index_id(lower);
@@ -43370,24 +44318,27 @@ impl Interp {
             };
             match (lower_value, upper_value) {
                 (Some(lower_value), Some(upper_value)) => {
-                    if !self.mop_set(code, inst, lower_id, upper_value, object)?
-                        || !self.mop_set(code, inst, upper_id, lower_value, object)?
-                    {
-                        return Err(self.catchable_type_error());
+                    if !self.mop_set(code, inst, lower_id, upper_value, object)? {
+                        return Err(self.failed_set_error(inst, lower_id, "C: xsSet"));
+                    }
+                    if !self.mop_set(code, inst, upper_id, lower_value, object)? {
+                        return Err(self.failed_set_error(inst, upper_id, "C: xsSet"));
                     }
                 }
                 (None, Some(upper_value)) => {
-                    if !self.mop_set(code, inst, lower_id, upper_value, object)?
-                        || !self.mop_delete(code, inst, upper_id)?
-                    {
-                        return Err(self.catchable_type_error());
+                    if !self.mop_set(code, inst, lower_id, upper_value, object)? {
+                        return Err(self.failed_set_error(inst, lower_id, "C: xsSet"));
+                    }
+                    if !self.mop_delete(code, inst, upper_id)? {
+                        return Err(self.failed_delete_error(upper_id));
                     }
                 }
                 (Some(lower_value), None) => {
-                    if !self.mop_delete(code, inst, lower_id)?
-                        || !self.mop_set(code, inst, upper_id, lower_value, object)?
-                    {
-                        return Err(self.catchable_type_error());
+                    if !self.mop_delete(code, inst, lower_id)? {
+                        return Err(self.failed_delete_error(lower_id));
+                    }
+                    if !self.mop_set(code, inst, upper_id, lower_value, object)? {
+                        return Err(self.failed_set_error(inst, upper_id, "C: xsSet"));
                     }
                 }
                 (None, None) => {}
@@ -43407,7 +44358,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
@@ -43451,14 +44402,14 @@ impl Interp {
             .checked_sub(actual_delete_count)
             .and_then(|remaining| remaining.checked_add(insert_count))
             .filter(|new_length| *new_length <= MAX_SAFE_INTEGER)
-            .ok_or_else(|| self.catchable_type_error())?;
+            .ok_or_else(|| self.catchable_type_error_msg("unsafe integer".into()))?;
 
         let removed = self.array_generic_species_create(code, inst, actual_delete_count)?;
         let removed_receiver = Slot::of(Kind::Reference, Payload::Reference(removed));
         const GENERIC_SPLICE_CAP: u64 = 1 << 24;
         for offset in 0..actual_delete_count {
             if offset >= GENERIC_SPLICE_CAP {
-                return Err(Halt::Unsupported("splice:oversized-delete"));
+                return Err(Step::Host(Halt::Refused("splice:oversized-delete")));
             }
             let source_id = self.array_generic_index_id(actual_start + offset);
             if self.mop_has(code, inst, source_id)? {
@@ -43474,7 +44425,7 @@ impl Interp {
             Self::array_index_number(actual_delete_count),
             removed_receiver,
         )? {
-            return Err(self.catchable_type_error());
+            return Err(self.failed_set_error(removed, length_id, "C: xsSet"));
         }
 
         if insert_count < actual_delete_count {
@@ -43482,36 +44433,36 @@ impl Interp {
             let move_end = length - actual_delete_count;
             while index < move_end {
                 if index - actual_start >= GENERIC_SPLICE_CAP {
-                    return Err(Halt::Unsupported("splice:oversized-move"));
+                    return Err(Step::Host(Halt::Refused("splice:oversized-move")));
                 }
                 let source_id = self.array_generic_index_id(index + actual_delete_count);
                 let target_id = self.array_generic_index_id(index + insert_count);
                 if self.mop_has(code, inst, source_id)? {
                     let value = self.mop_get(code, inst, source_id, object)?;
                     if !self.mop_set(code, inst, target_id, value, object)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.failed_set_error(inst, target_id, "C: xsSet"));
                     }
                 } else if !self.mop_delete(code, inst, target_id)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_delete_error(target_id));
                 }
                 index += 1;
             }
             let mut index = length;
             while index > new_length {
                 if length - index >= GENERIC_SPLICE_CAP {
-                    return Err(Halt::Unsupported("splice:oversized-delete-tail"));
+                    return Err(Step::Host(Halt::Refused("splice:oversized-delete-tail")));
                 }
                 index -= 1;
                 let id = self.array_generic_index_id(index);
                 if !self.mop_delete(code, inst, id)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_delete_error(id));
                 }
             }
         } else if insert_count > actual_delete_count {
             let mut index = length - actual_delete_count;
             while index > actual_start {
                 if length - actual_delete_count - index >= GENERIC_SPLICE_CAP {
-                    return Err(Halt::Unsupported("splice:oversized-move"));
+                    return Err(Step::Host(Halt::Refused("splice:oversized-move")));
                 }
                 index -= 1;
                 let source_id = self.array_generic_index_id(index + actual_delete_count);
@@ -43519,10 +44470,10 @@ impl Interp {
                 if self.mop_has(code, inst, source_id)? {
                     let value = self.mop_get(code, inst, source_id, object)?;
                     if !self.mop_set(code, inst, target_id, value, object)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.failed_set_error(inst, target_id, "C: xsSet"));
                     }
                 } else if !self.mop_delete(code, inst, target_id)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_delete_error(target_id));
                 }
             }
         }
@@ -43530,7 +44481,7 @@ impl Interp {
         for (offset, value) in arguments.into_iter().skip(2).enumerate() {
             let id = self.array_generic_index_id(actual_start + offset as u64);
             if !self.mop_set(code, inst, id, value, object)? {
-                return Err(self.catchable_type_error());
+                return Err(self.failed_set_error(inst, id, "C: xsSet"));
             }
         }
         if !self.mop_set(
@@ -43540,7 +44491,7 @@ impl Interp {
             Self::array_index_number(new_length),
             object,
         )? {
-            return Err(self.catchable_type_error());
+            return Err(self.failed_set_error(inst, length_id, "C: xsSet"));
         }
         Ok(removed_receiver)
     }
@@ -43555,7 +44506,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
@@ -43598,7 +44549,7 @@ impl Interp {
         let mut steps = 0u64;
         while count > 0 {
             if steps >= GENERIC_COPY_WITHIN_CAP {
-                return Err(Halt::Unsupported("copyWithin:oversized-array-like"));
+                return Err(Step::Host(Halt::Refused("copyWithin:oversized-array-like")));
             }
             if backwards {
                 source -= 1;
@@ -43609,10 +44560,10 @@ impl Interp {
             if self.mop_has(code, inst, source_id)? {
                 let value = self.mop_get(code, inst, source_id, object)?;
                 if !self.mop_set(code, inst, target_id, value, object)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(inst, target_id, "C: xsSet"));
                 }
             } else if !self.mop_delete(code, inst, target_id)? {
-                return Err(self.catchable_type_error());
+                return Err(self.failed_delete_error(target_id));
             }
             if !backwards {
                 source += 1;
@@ -43634,7 +44585,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let value = self
             .stack
             .get(base + 4)
@@ -43677,11 +44628,11 @@ impl Interp {
         const GENERIC_FILL_CAP: u64 = 1 << 24;
         for index in start..end {
             if index - start >= GENERIC_FILL_CAP {
-                return Err(Halt::Unsupported("fill:oversized-array-like"));
+                return Err(Step::Host(Halt::Refused("fill:oversized-array-like")));
             }
             let id = self.array_generic_index_id(index);
             if !self.mop_set(code, inst, id, value, object)? {
-                return Err(self.catchable_type_error());
+                return Err(self.failed_set_error(inst, id, "C: xsSet"));
             }
         }
         Ok(object)
@@ -43702,15 +44653,8 @@ impl Interp {
     ///
     /// The coercion is observable, so this repeats the body rather than
     /// calling `ToNumber` a second time to inspect it.
-    fn string_last_index_of_position(&mut self, code: &[u8], v: Slot) -> Result<f64, Halt> {
-        let num = self.to_number_value(code, v)?;
-        // Same ToNumber (not ToNumeric) boundary as the array helper: a BigInt,
-        // including one produced by a guest `valueOf`/`@@toPrimitive`, is a
-        // catchable TypeError rather than a position.
-        if num.kind == Kind::BigInt {
-            return Err(self.catchable_type_error());
-        }
-        let n = to_number(&num);
+    fn string_last_index_of_position(&mut self, code: &[u8], v: Slot) -> Result<f64, Step> {
+        let n = self.to_number_f64(code, v)?;
         if n.is_nan() {
             Ok(f64::INFINITY)
         } else if n.is_infinite() {
@@ -43720,16 +44664,8 @@ impl Interp {
         }
     }
 
-    fn array_to_integer_or_infinity(&mut self, code: &[u8], v: Slot) -> Result<f64, Halt> {
-        let num = self.to_number_value(code, v)?;
-        // `to_number_value` is the shared ToNumeric primitive and deliberately
-        // preserves BigInt. Array/String index operations require ToNumber,
-        // whose BigInt boundary is a TypeError (including an object whose
-        // valueOf/@@toPrimitive produces a BigInt).
-        if num.kind == Kind::BigInt {
-            return Err(self.catchable_type_error());
-        }
-        let n = to_number(&num);
+    fn array_to_integer_or_infinity(&mut self, code: &[u8], v: Slot) -> Result<f64, Step> {
+        let n = self.to_number_f64(code, v)?;
         if n.is_nan() {
             Ok(0.0)
         } else if n.is_infinite() {
@@ -43763,10 +44699,14 @@ impl Interp {
     /// `IsArray(O)`, including transparent Proxy recursion and the revoked
     /// Proxy `TypeError`. Arguments objects share compact indexed storage with
     /// Arrays in IronHorse, but are not Arrays for `ArraySpeciesCreate`.
-    fn array_generic_is_array(&mut self, mut o: crate::value::SlotIndex) -> Result<bool, Halt> {
+    fn array_generic_is_array(&mut self, mut o: crate::value::SlotIndex) -> Result<bool, Step> {
         loop {
             if self.proxies.contains_key(&o) {
-                let (target, _) = self.proxy_target_handler(o)?;
+                let data = self.proxies.get(&o).expect("proxy checked above");
+                if data.revoked {
+                    return Err(self.catchable_type_error_msg("revoked proxy".into()));
+                }
+                let target = data.target;
                 o = target;
                 continue;
             }
@@ -43783,7 +44723,7 @@ impl Interp {
         code: &[u8],
         original: crate::value::SlotIndex,
         length: u64,
-    ) -> Result<crate::value::SlotIndex, Halt> {
+    ) -> Result<crate::value::SlotIndex, Step> {
         let mut constructor = Slot::undefined();
         if self.array_generic_is_array(original)? {
             let constructor_id = self.intern_key("constructor");
@@ -43792,7 +44732,7 @@ impl Interp {
             if constructor.kind == Kind::Reference {
                 let species_id = self
                     .well_known_symbol_property_id("species")
-                    .ok_or(Halt::Unsupported("array-species:symbol"))?;
+                    .ok_or(Step::Host(Halt::NotImplemented("array-species:symbol")))?;
                 let Payload::Reference(c) = constructor.value else {
                     unreachable!()
                 };
@@ -43810,14 +44750,14 @@ impl Interp {
             // compact u32-backed Array representation.  A custom species is
             // constructed with the full ToLength-domain Number.
             if length > u32::MAX as u64 {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg("invalid length".into()));
             }
             let result = self.new_array();
             self.arrays.get_mut(&result).unwrap().length = length as u32;
             return Ok(result);
         }
         if !self.is_constructor_value(constructor) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("invalid constructor".into()));
         }
         let value = self.construct_value(
             code,
@@ -43827,7 +44767,7 @@ impl Interp {
         )?;
         match value.value {
             Payload::Reference(result) if value.kind == Kind::Reference => Ok(result),
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.catchable_type_error_msg("invalid constructor".into())),
         }
     }
 
@@ -43839,7 +44779,7 @@ impl Interp {
         target: crate::value::SlotIndex,
         index: u64,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         // The id is minted here, before the compact arm that does not read it,
         // because the 256 raw units per element `intern_key` charges are what
         // `flat_map_retains_calibrated_dense_metering` measured against the
@@ -43888,7 +44828,8 @@ impl Interp {
         if self.mop_define_own_property(code, target, id, descriptor)? {
             Ok(())
         } else {
-            Err(self.catchable_type_error())
+            // XS mxDefineIndex passes XS_NO_ID (0) to fxDefineAll.
+            Err(self.catchable_type_error_msg("define 0: not configurable".into()))
         }
     }
 
@@ -43903,7 +44844,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let argument = self
             .stack
             .get(base + 4)
@@ -43921,7 +44862,7 @@ impl Interp {
         let source_len = self.array_generic_length(code, source)?;
         let (depth, mapper) = if method == NativeMethod::ArrayFlatMap {
             if !self.is_callable_value(argument) {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("callback: not a function".into()));
             }
             (1.0, Some((argument, this_arg)))
         } else {
@@ -43964,7 +44905,7 @@ impl Interp {
         depth: f64,
         mapper: Option<(Slot, Slot)>,
         source_receiver: Slot,
-    ) -> Result<u64, Halt> {
+    ) -> Result<u64, Step> {
         // One light frame of the native-recursion budget per nested array:
         // a self-containing array under `flat(Infinity)` halts with
         // `Halt::StackOverflow` (XS recurses `fxFlattenIntoArray` on its C
@@ -43994,7 +44935,7 @@ impl Interp {
         depth: f64,
         mapper: Option<(Slot, Slot)>,
         source_receiver: Slot,
-    ) -> Result<u64, Halt> {
+    ) -> Result<u64, Step> {
         const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
         const GENERIC_FLAT_LINEAR_CAP: u64 = 1 << 24;
 
@@ -44010,7 +44951,7 @@ impl Interp {
                     Some(None) => break,
                     None => {
                         if linear_steps >= GENERIC_FLAT_LINEAR_CAP {
-                            return Err(Halt::Unsupported("flat:oversized-array-like"));
+                            return Err(Step::Host(Halt::Refused("flat:oversized-array-like")));
                         }
                         linear_steps += 1;
                         self.array_generic_has(code, source, source_index)?
@@ -44060,6 +45001,8 @@ impl Interp {
             }
 
             if target_index >= MAX_SAFE_INTEGER {
+                // This spec guard has no matching XS diagnostic: the pinned
+                // flat helper uses txIndex without a safe-integer guard.
                 return Err(self.catchable_type_error());
             }
             self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
@@ -44078,7 +45021,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         value: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let Payload::Reference(object) = value.value else {
             return Ok(false);
         };
@@ -44087,7 +45030,9 @@ impl Interp {
         }
         let spread_id = self
             .well_known_symbol_property_id("isConcatSpreadable")
-            .ok_or(Halt::Unsupported("concat:isConcatSpreadable-symbol"))?;
+            .ok_or(Step::Host(Halt::NotImplemented(
+                "concat:isConcatSpreadable-symbol",
+            )))?;
         let spread = self.mop_get(code, object, spread_id, value)?;
         if spread.kind != Kind::Undefined {
             return Ok(self.truthy(&spread));
@@ -44104,7 +45049,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(original) = object.value else {
             unreachable!("ToObject result")
@@ -44180,7 +45125,7 @@ impl Interp {
                     }
                     None => {
                         if linear_steps >= GENERIC_CONCAT_CAP {
-                            return Err(Halt::Unsupported("concat:oversized-spreadable"));
+                            return Err(Step::Host(Halt::Refused("concat:oversized-spreadable")));
                         }
                         linear_steps += 1;
                         self.array_generic_has(code, source, k)?
@@ -44203,7 +45148,7 @@ impl Interp {
             Self::array_index_number(n),
             receiver,
         )? {
-            return Err(self.catchable_type_error());
+            return Err(self.failed_set_error(result, length_id, "C: xsSet"));
         }
         Ok(receiver)
     }
@@ -44217,7 +45162,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let Payload::Reference(original) = object.value else {
             unreachable!("ToObject result")
@@ -44275,7 +45220,7 @@ impl Interp {
                 }
                 None => {
                     if linear_steps >= GENERIC_SLICE_CAP {
-                        return Err(Halt::Unsupported("slice:oversized-array-like"));
+                        return Err(Step::Host(Halt::Refused("slice:oversized-array-like")));
                     }
                     linear_steps += 1;
                     self.array_generic_has(code, original, source)?
@@ -44299,7 +45244,7 @@ impl Interp {
             Self::array_index_number(count),
             receiver,
         )? {
-            return Err(self.catchable_type_error());
+            return Err(self.failed_set_error(result, length_id, "C: xsSet"));
         }
         Ok(receiver)
     }
@@ -44409,13 +45354,24 @@ impl Interp {
         m: NativeMethod,
         this: Slot,
         base: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let o = match this.value {
             Payload::Reference(o) if this.kind == Kind::Reference => o,
             _ if this.kind == Kind::Null || this.kind == Kind::Undefined => {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    if this.kind == Kind::Null {
+                        "cannot coerce null to object"
+                    } else {
+                        "cannot coerce undefined to object"
+                    }
+                    .into(),
+                ));
             }
-            _ => return Err(Halt::Unsupported(Self::array_generic_skip_reason(m))),
+            _ => {
+                return Err(Step::Host(Halt::NotImplemented(
+                    Self::array_generic_skip_reason(m),
+                )))
+            }
         };
         let callback = self
             .stack
@@ -44429,7 +45385,7 @@ impl Interp {
             .unwrap_or_else(Slot::undefined);
         let len = self.array_generic_length(code, o)?;
         if !self.is_callable_value(callback) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("callback: not a function".into()));
         }
         // Allocating methods cannot short-circuit, so decline pathological
         // array-like lengths before a case spends seconds walking empty keys.
@@ -44450,7 +45406,9 @@ impl Interp {
                 Some(None) => break,
                 None => {
                     if linear_steps >= GENERIC_ITER_CAP {
-                        return Err(Halt::Unsupported(Self::array_generic_skip_reason(m)));
+                        return Err(Step::Host(Halt::NotImplemented(
+                            Self::array_generic_skip_reason(m),
+                        )));
                     }
                     linear_steps += 1;
                     self.array_generic_has(code, o, k)?
@@ -44487,15 +45445,24 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // `ToObject(this)`.
         let o = match this.value {
             Payload::Reference(o) if this.kind == Kind::Reference => o,
             _ => {
                 if this.kind == Kind::Null || this.kind == Kind::Undefined {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Null {
+                            "cannot coerce null to object"
+                        } else {
+                            "cannot coerce undefined to object"
+                        }
+                        .into(),
+                    ));
                 }
-                return Err(Halt::Unsupported(Self::array_generic_skip_reason(m)));
+                return Err(Step::Host(Halt::NotImplemented(
+                    Self::array_generic_skip_reason(m),
+                )));
             }
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
@@ -44525,14 +45492,14 @@ impl Interp {
         // this generic path existed — never a new failure. The cap is far above
         // any real test's iteration count.
         const GENERIC_ITER_CAP: u64 = 1 << 24;
-        let over_cap = Halt::Unsupported(Self::array_generic_skip_reason(m));
+        let over_cap = Step::Host(Halt::NotImplemented(Self::array_generic_skip_reason(m)));
 
         match m {
             NativeMethod::ArrayForEach => {
                 let callback = arg0;
                 let this_arg = arg1;
                 if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 let mut k = 0u64;
                 let mut linear_steps = 0u64;
@@ -44566,7 +45533,7 @@ impl Interp {
                 let callback = arg0;
                 let this_arg = arg1;
                 if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 let mut k = 0u64;
                 let mut linear_steps = 0u64;
@@ -44620,10 +45587,10 @@ impl Interp {
                 let predicate = arg0;
                 let this_arg = arg1;
                 if !self.is_callable_value(predicate) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 let mut iters: u64 = 0;
-                let step = |slf: &mut Self, k: u64| -> Result<Option<Slot>, Halt> {
+                let step = |slf: &mut Self, k: u64| -> Result<Option<Slot>, Step> {
                     slf.meter.tick_builtin_some(1);
                     let kv = slf.array_generic_get(code, o, k)?;
                     let cb_args = [kv, Self::array_index_number(k), recv];
@@ -44670,7 +45637,7 @@ impl Interp {
                 let right = m == NativeMethod::ArrayReduceRight;
                 let callback = arg0;
                 if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
                 // The XS differential oracle mis-handles a fold over an
                 // array-like whose `length` exceeds the 2^32 array-index space
@@ -44717,7 +45684,9 @@ impl Interp {
                     }
                     match seed {
                         Some(s) => s,
-                        None => return Err(self.catchable_type_error()),
+                        None => {
+                            return Err(self.catchable_type_error_msg("no initial value".into()))
+                        }
                     }
                 };
                 while cursor < len {
@@ -44883,7 +45852,9 @@ impl Interp {
                 }
                 self.array_generic_get(code, o, k as u64)
             }
-            _ => Err(Halt::Unsupported(Self::array_generic_skip_reason(m))),
+            _ => Err(Step::Host(Halt::NotImplemented(
+                Self::array_generic_skip_reason(m),
+            ))),
         }
     }
 
@@ -44972,7 +45943,7 @@ impl Interp {
         code: &[u8],
         buffer: Slot,
         buffer_ref: crate::value::SlotIndex,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let default_ref = *self
             .intrinsics
             .get("ArrayBuffer")
@@ -44985,7 +45956,7 @@ impl Interp {
         }
         let constructor_ref = match constructor.value {
             Payload::Reference(reference) if constructor.kind == Kind::Reference => reference,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("no constructor".into())),
         };
         let species_id = self
             .well_known_symbol_property_id("species")
@@ -44997,7 +45968,7 @@ impl Interp {
             species
         };
         if !self.is_constructor_value(selected) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("no constructor".into()));
         }
         Ok(selected)
     }
@@ -45012,12 +45983,15 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
-        let source = self
-            .array_buffer_ref(this)
-            .ok_or_else(|| self.catchable_type_error())?;
-        if self.shared_buffers.contains(&source) || self.detached_buffers.contains(&source) {
-            return Err(self.catchable_type_error());
+    ) -> Result<Slot, Step> {
+        let source = self.array_buffer_ref(this).ok_or_else(|| {
+            self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+        })?;
+        if self.shared_buffers.contains(&source) {
+            return Err(self.catchable_type_error_msg("this: not an ArrayBuffer instance".into()));
+        }
+        if self.detached_buffers.contains(&source) {
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
         }
         let length = self.array_buffers[&source].length;
         let start_arg = self
@@ -45053,16 +46027,21 @@ impl Interp {
         )?;
         let result_ref = self
             .array_buffer_ref(result)
-            .ok_or_else(|| self.catchable_type_error())?;
-        if self.shared_buffers.contains(&result_ref)
-            || self.detached_buffers.contains(&result_ref)
-            || result_ref == source
-            || self.array_buffers[&result_ref].length < new_length
-        {
-            return Err(self.catchable_type_error());
+            .ok_or_else(|| self.catchable_type_error_msg("not an ArrayBuffer instance".into()))?;
+        if self.shared_buffers.contains(&result_ref) {
+            return Err(self.catchable_type_error_msg("not an ArrayBuffer instance".into()));
+        }
+        if result_ref == source {
+            return Err(self.catchable_type_error_msg("same ArrayBuffer instance".into()));
+        }
+        if self.array_buffers[&result_ref].length < new_length {
+            return Err(self.catchable_type_error_msg("smaller ArrayBuffer instance".into()));
+        }
+        if self.detached_buffers.contains(&result_ref) {
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
         }
         if self.detached_buffers.contains(&source) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
         }
 
         let current_length = self.array_buffers[&source].length;
@@ -45088,12 +46067,12 @@ impl Interp {
         code: &[u8],
         this: Slot,
         new_length_arg: Slot,
-    ) -> Result<Slot, Halt> {
-        let source = self
-            .array_buffer_ref(this)
-            .ok_or_else(|| self.catchable_type_error())?;
+    ) -> Result<Slot, Step> {
+        let source = self.array_buffer_ref(this).ok_or_else(|| {
+            self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+        })?;
         if self.shared_buffers.contains(&source) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("this: not an ArrayBuffer instance".into()));
         }
         let old_length = self.array_buffers[&source].length;
         let new_length = if new_length_arg.kind == Kind::Undefined {
@@ -45103,7 +46082,7 @@ impl Interp {
         };
         // `ToIndex` above is observable and can detach the source.
         if self.detached_buffers.contains(&source) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
         }
 
         let copy_length = old_length.min(new_length);
@@ -45123,16 +46102,16 @@ impl Interp {
 
     /// `ValidateTypedArray(this)`: enforce the receiver brand and reject a
     /// view whose backing ArrayBuffer has been detached.
-    fn validate_typed_array(&mut self, this: Slot) -> Result<TypedArrayData, Halt> {
+    fn validate_typed_array(&mut self, this: Slot) -> Result<TypedArrayData, Step> {
         let ta = match this.value {
             Payload::Reference(r) if this.kind == Kind::Reference => {
                 self.typed_arrays.get(&r).copied()
             }
             _ => None,
         }
-        .ok_or_else(|| self.catchable_type_error())?;
+        .ok_or_else(|| self.catchable_type_error_msg("this: not a TypedArray instance".into()))?;
         if self.detached_buffers.contains(&ta.buffer) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
         }
         Ok(ta)
     }
@@ -45156,12 +46135,12 @@ impl Interp {
         code: &[u8],
         value: Slot,
         length: u32,
-    ) -> Result<u32, Halt> {
+    ) -> Result<u32, Step> {
         let n = self.array_to_integer_or_infinity(code, value)?;
         Ok(Self::typed_array_relative_index(n, length))
     }
 
-    fn typed_array_accessor(&mut self, method: NativeMethod, this: Slot) -> Result<Slot, Halt> {
+    fn typed_array_accessor(&mut self, method: NativeMethod, this: Slot) -> Result<Slot, Step> {
         let ta = match this.value {
             Payload::Reference(r) if this.kind == Kind::Reference => {
                 self.typed_arrays.get(&r).copied()
@@ -45176,7 +46155,9 @@ impl Interp {
                 None => Slot::undefined(),
             });
         }
-        let ta = ta.ok_or_else(|| self.catchable_type_error())?;
+        let ta = ta.ok_or_else(|| {
+            self.catchable_type_error_msg("this: not a TypedArray instance".into())
+        })?;
         self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
         let out_of_bounds = self.detached_buffers.contains(&ta.buffer);
         Ok(match method {
@@ -45212,22 +46193,30 @@ impl Interp {
         method: NativeMethod,
         this: Slot,
         value: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
+        let name = match method {
+            NativeMethod::IteratorConstructorSetter => "constructor",
+            NativeMethod::IteratorToStringTagSetter => "Symbol(toStringTag)",
+            _ => unreachable!("only Iterator prototype setters dispatch here"),
+        };
         let inst = match this.value {
             Payload::Reference(inst) if this.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg(format!("set {name}: not an object"))),
         };
         if inst == self.iterator_proto {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(format!("set {name}: not writable")));
         }
         let id = match method {
             NativeMethod::IteratorConstructorSetter => self.intern_key_unmetered("constructor"),
             NativeMethod::IteratorToStringTagSetter => self
                 .well_known_symbol_property_id("toStringTag")
-                .ok_or(Halt::Unsupported("Iterator.setter:missing-toStringTag"))?,
+                .ok_or(Step::Host(Halt::EngineInvariant(
+                    "Iterator.setter:missing-toStringTag",
+                )))?,
             _ => unreachable!("only Iterator prototype setters dispatch here"),
         };
-        let accepted = if self.mop_get_own_property(code, inst, id)?.is_some() {
+        let existing = self.mop_get_own_property(code, inst, id)?.is_some();
+        let accepted = if existing {
             // `SetterThatIgnoresPrototypeProperties` step 5 is an ordinary
             // `Set`, so a receiver carrying its own copy of this very accessor
             // re-enters this native unboundedly -- without ever passing through
@@ -45254,7 +46243,12 @@ impl Interp {
             )?
         };
         if !accepted {
-            return Err(self.catchable_type_error());
+            let reason = if existing {
+                "not writable"
+            } else {
+                "not extensible"
+            };
+            return Err(self.catchable_type_error_msg(format!("set {name}: {reason}")));
         }
         Ok(Slot::undefined())
     }
@@ -45270,7 +46264,7 @@ impl Interp {
         comparator: Slot,
         x: Slot,
         y: Slot,
-    ) -> Result<std::cmp::Ordering, Halt> {
+    ) -> Result<std::cmp::Ordering, Step> {
         if x.kind == Kind::Undefined {
             return Ok(if y.kind == Kind::Undefined {
                 std::cmp::Ordering::Equal
@@ -45283,11 +46277,7 @@ impl Interp {
         }
         if comparator.kind != Kind::Undefined {
             let result = self.call_any(code, comparator, Slot::undefined(), &[x, y])?;
-            let number = self.to_number_value(code, result)?;
-            if number.kind == Kind::BigInt {
-                return Err(self.catchable_type_error());
-            }
-            let number = to_number(&number);
+            let number = self.to_number_f64(code, result)?;
             return Ok(if number < 0.0 {
                 std::cmp::Ordering::Less
             } else if number > 0.0 {
@@ -45310,7 +46300,7 @@ impl Interp {
         code: &[u8],
         comparator: Slot,
         mut values: Vec<Slot>,
-    ) -> Result<Vec<Slot>, Halt> {
+    ) -> Result<Vec<Slot>, Step> {
         if values.len() < 2 {
             return Ok(values);
         }
@@ -45366,7 +46356,7 @@ impl Interp {
         this: Slot,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let args: Vec<Slot> = (0..argc)
             .map(|index| {
                 self.stack
@@ -45406,7 +46396,7 @@ impl Interp {
                     length as f64 + relative
                 };
                 if !actual.is_finite() || actual < 0.0 || actual >= length as f64 {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg("invalid index".into()));
                 }
                 (length, Some(actual as u64), 0, 0, 0)
             }
@@ -45434,9 +46424,9 @@ impl Interp {
                 let result_length = length
                     .checked_sub(skip)
                     .and_then(|remaining| remaining.checked_add(insertions))
-                    .ok_or_else(|| self.catchable_type_error())?;
+                    .ok_or_else(|| self.catchable_type_error_msg("unsafe integer".into()))?;
                 if result_length > 9_007_199_254_740_991 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("unsafe integer".into()));
                 }
                 (result_length, None, start, skip, insertions)
             }
@@ -45446,7 +46436,7 @@ impl Interp {
         // ArrayCreate rejects lengths above the Array length domain before
         // any source index getter is observed.
         if result_length > u32::MAX as u64 {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg("array overflow".into()));
         }
         const ARRAY_COPY_CAP: u64 = 1 << 24;
         let source_reads = match method {
@@ -45455,12 +46445,12 @@ impl Interp {
             _ => unreachable!(),
         };
         if source_reads > ARRAY_COPY_CAP {
-            return Err(Halt::Unsupported(match method {
+            return Err(Step::Host(Halt::Refused(match method {
                 NativeMethod::ArrayWith => "Array.prototype.with:oversized-array-like",
                 NativeMethod::ArrayToReversed => "Array.prototype.toReversed:oversized-array-like",
                 NativeMethod::ArrayToSpliced => "Array.prototype.toSpliced:oversized-array-like",
                 _ => unreachable!(),
-            }));
+            })));
         }
 
         let result = self.new_array();
@@ -45520,7 +46510,7 @@ impl Interp {
         argc: usize,
         code: &[u8],
         copying: bool,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let comparator = if argc > 0 {
             self.stack
                 .get(base + 4)
@@ -45531,7 +46521,7 @@ impl Interp {
         };
         // Comparator validation precedes `ToObject(this)` in both algorithms.
         if comparator.kind != Kind::Undefined && !self.is_callable_value(comparator) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("compare: not a function".into()));
         }
         let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
@@ -45543,7 +46533,7 @@ impl Interp {
         // performs this check before `toSorted` observes any indexed getter.
         let result = if copying {
             if length > u32::MAX as u64 {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg("array overflow".into()));
             }
             let result = self.new_array();
             self.arrays.get_mut(&result).unwrap().length = length as u32;
@@ -45557,11 +46547,11 @@ impl Interp {
         // practical range while completing ordinary JavaScript arrays.
         const ARRAY_SORT_CAP: u64 = 1 << 24;
         if length > ARRAY_SORT_CAP {
-            return Err(Halt::Unsupported(if copying {
+            return Err(Step::Host(Halt::Refused(if copying {
                 "Array.prototype.toSorted:oversized-array-like"
             } else {
                 "Array.prototype.sort:oversized-array-like"
-            }));
+            })));
         }
 
         let mut values = Vec::with_capacity(length as usize);
@@ -45583,13 +46573,13 @@ impl Interp {
         for (index, value) in values.iter().copied().enumerate() {
             let id = self.array_generic_index_id(index as u64);
             if !self.mop_set(code, inst, id, value, object)? {
-                return Err(self.catchable_type_error());
+                return Err(self.failed_set_error(inst, id, "C: xsSet"));
             }
         }
         for index in values.len() as u64..length {
             let id = self.array_generic_index_id(index);
             if !self.mop_delete(code, inst, id)? {
-                return Err(self.catchable_type_error());
+                return Err(self.failed_delete_error(id));
             }
         }
         Ok(object)
@@ -45605,7 +46595,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let object = self.array_to_object(this)?;
         let inst = match object.value {
             Payload::Reference(inst) => inst,
@@ -45658,7 +46648,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let ta = self.validate_typed_array(this)?;
         let locales = if argc > 0 {
             self.stack
@@ -45705,16 +46695,24 @@ impl Interp {
         code: &[u8],
         constructor: Slot,
         length: u64,
-    ) -> Result<(Slot, TypedArrayData), Halt> {
+        from: bool,
+    ) -> Result<(Slot, TypedArrayData), Step> {
         let result = self.construct_value(
             code,
             constructor,
             &[Slot::number(length as f64)],
             constructor,
         )?;
+        if from
+            && !matches!(result.value, Payload::Reference(r) if result.kind == Kind::Reference && self.typed_arrays.contains_key(&r))
+        {
+            return Err(self.catchable_type_error_msg("result: not a TypedArray instance".into()));
+        }
         let ta = self.validate_typed_array(result)?;
         if u64::from(ta.length) < length {
-            return Err(self.catchable_type_error());
+            return Err(
+                self.catchable_type_error_msg("result: too small TypedArray instance".into())
+            );
         }
         Ok((result, ta))
     }
@@ -45731,9 +46729,16 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if !self.is_constructor_value(constructor) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                if method == NativeMethod::TypedArrayFrom {
+                    "this: not a constructor"
+                } else {
+                    "new: not a constructor"
+                }
+                .into(),
+            ));
         }
         let args: Vec<Slot> = (0..argc)
             .map(|i| {
@@ -45752,10 +46757,17 @@ impl Interp {
             } else if self.is_callable_value(mapfn) {
                 true
             } else {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("map: not a function".into()));
             };
             if matches!(items.kind, Kind::Null | Kind::Undefined) {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    if items.kind == Kind::Null {
+                        "cannot coerce null to object"
+                    } else {
+                        "cannot coerce undefined to object"
+                    }
+                    .into(),
+                ));
             }
 
             let iterator_id = self
@@ -45789,14 +46801,16 @@ impl Interp {
                 && iterator_method.kind != Kind::Null
                 && !self.is_callable_value(iterator_method)
             {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("call: not a function".into()));
             }
 
             if iterator_method.kind != Kind::Undefined && iterator_method.kind != Kind::Null {
                 let iterator = self.call_any(code, iterator_method, items, &[])?;
                 let iterator_inst = match iterator.value {
                     Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg("iterator: not an object".into()))
+                    }
                 };
                 let next_id = self.intern_key("next");
                 let value_id = self.intern_key("value");
@@ -45805,20 +46819,27 @@ impl Interp {
                 self.done_id = Some(done_id);
                 let next = self.mop_get(code, iterator_inst, next_id, iterator)?;
                 if !self.is_callable_value(next) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("call: not a function".into()));
                 }
                 let mut values = Vec::new();
                 for _ in 0..1_000_000u32 {
                     let step = self.call_any(code, next, iterator, &[])?;
                     let step_inst = match step.value {
                         Payload::Reference(inst) if step.kind == Kind::Reference => inst,
-                        _ => return Err(self.catchable_type_error()),
+                        _ => {
+                            return Err(self
+                                .catchable_type_error_msg("iterator result: not an object".into()))
+                        }
                     };
                     let done = self.mop_get(code, step_inst, done_id, step)?;
                     if self.truthy(&done) {
                         let length = values.len() as u64;
-                        let (result, ta) =
-                            self.typed_array_static_create(code, constructor, length)?;
+                        let (result, ta) = self.typed_array_static_create(
+                            code,
+                            constructor,
+                            length,
+                            method == NativeMethod::TypedArrayFrom,
+                        )?;
                         for (index, mut value) in values.into_iter().enumerate() {
                             if mapping {
                                 value = self.call_any(
@@ -45834,7 +46855,7 @@ impl Interp {
                     }
                     values.push(self.mop_get(code, step_inst, value_id, step)?);
                 }
-                return Err(Halt::StepLimit(self.n_dispatched));
+                return Err(Step::Host(Halt::StepLimit(self.n_dispatched)));
             }
 
             let array_like = match items.value {
@@ -45850,7 +46871,12 @@ impl Interp {
             };
             let length_value = self.arraylike_length(code, array_like_inst, array_like)?;
             let length = self.to_length_value(code, length_value)?;
-            let (result, ta) = self.typed_array_static_create(code, constructor, length)?;
+            let (result, ta) = self.typed_array_static_create(
+                code,
+                constructor,
+                length,
+                method == NativeMethod::TypedArrayFrom,
+            )?;
             let length = u32::try_from(length)
                 .expect("successful TypedArrayCreate length fits the internal view width");
             for index in 0..length {
@@ -45866,7 +46892,12 @@ impl Interp {
         }
 
         let length = args.len() as u64;
-        let (result, ta) = self.typed_array_static_create(code, constructor, length)?;
+        let (result, ta) = self.typed_array_static_create(
+            code,
+            constructor,
+            length,
+            method == NativeMethod::TypedArrayFrom,
+        )?;
         for (index, value) in args.into_iter().enumerate() {
             self.typed_array_element_set(code, ta, index as u32, value)?;
         }
@@ -45884,7 +46915,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let ta = self.validate_typed_array(this)?;
         let separator = self
             .stack
@@ -45918,7 +46949,7 @@ impl Interp {
     /// `TypedArraySpeciesCreate(exemplar, argumentsList)`: resolve an own or
     /// inherited `constructor[Symbol.species]`, fall back to the exemplar's
     /// concrete intrinsic constructor, construct a branded attached view, and
-    /// enforce the Number-vs-BigInt content domain. A one-length construction
+    /// validate the resulting view. A one-length construction
     /// also requires the result to be at least that long (`TypedArrayCreate`).
     fn typed_array_species_create(
         &mut self,
@@ -45927,7 +46958,7 @@ impl Interp {
         source: TypedArrayData,
         args: &[Slot],
         minimum_length: Option<u32>,
-    ) -> Result<(Slot, TypedArrayData), Halt> {
+    ) -> Result<(Slot, TypedArrayData), Step> {
         let default_constructor = self
             .intrinsics
             .get(TYPED_ARRAY_TYPES[source.kind as usize].name)
@@ -45943,11 +46974,13 @@ impl Interp {
         } else {
             let constructor_ref = match constructor.value {
                 Payload::Reference(reference) if constructor.kind == Kind::Reference => reference,
-                _ => return Err(self.catchable_type_error()),
+                _ => return Err(self.catchable_type_error_msg("no constructor".into())),
             };
             let species_id = self
                 .well_known_symbol_property_id("species")
-                .ok_or(Halt::Unsupported("typed-array-species:symbol"))?;
+                .ok_or(Step::Host(Halt::NotImplemented(
+                    "typed-array-species:symbol",
+                )))?;
             let species = self.mop_get(code, constructor_ref, species_id, constructor)?;
             constructor = if species.kind == Kind::Null || species.kind == Kind::Undefined {
                 default_constructor
@@ -45956,7 +46989,7 @@ impl Interp {
             };
         }
         if !self.is_constructor_value(constructor) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("no constructor".into()));
         }
         let result = self.construct_value(code, constructor, args, constructor)?;
         let result_ref = match result.value {
@@ -45964,11 +46997,16 @@ impl Interp {
             _ => return Err(self.catchable_type_error()),
         };
         let target = self.validate_typed_array(result)?;
+        // Preserve the spec content-domain guard. Pinned XS defers this to
+        // element coercion, so empty/mapped cross-domain species can succeed;
+        // there is no corresponding XS diagnostic for this earlier error.
         if (source.kind <= 1) != (target.kind <= 1) {
             return Err(self.catchable_type_error());
         }
         if minimum_length.is_some_and(|minimum| target.length < minimum) {
-            return Err(self.catchable_type_error());
+            return Err(
+                self.catchable_type_error_msg("result: too small TypedArray instance".into())
+            );
         }
         debug_assert!(self.typed_arrays.contains_key(&result_ref));
         Ok((result, target))
@@ -45985,14 +47023,16 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let exemplar = match this.value {
             Payload::Reference(reference)
                 if this.kind == Kind::Reference && self.typed_arrays.contains_key(&reference) =>
             {
                 reference
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg("this: not a TypedArray instance".into()))
+            }
         };
         // `subarray` intentionally performs its begin/end coercions even for a
         // detached branded view; construction over the detached buffer is the
@@ -46061,7 +47101,7 @@ impl Interp {
             return Ok(result);
         }
         if self.detached_buffers.contains(&source.buffer) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("detached buffer".into()));
         }
         if source.kind == target.kind {
             let size = TYPED_ARRAY_TYPES[source.kind as usize].size as usize;
@@ -46101,7 +47141,7 @@ impl Interp {
         this: Slot,
         base: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let source = self.validate_typed_array(this)?;
         let exemplar = match this.value {
             Payload::Reference(reference) => reference,
@@ -46118,7 +47158,7 @@ impl Interp {
             .copied()
             .unwrap_or_else(Slot::undefined);
         if !self.is_callable_value(callback) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("callback: not a function".into()));
         }
 
         if method == NativeMethod::TypedArrayMap {
@@ -46177,7 +47217,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let typed_array = self.validate_typed_array(this)?;
         let compare = self
             .stack
@@ -46186,7 +47226,7 @@ impl Interp {
             .unwrap_or_else(Slot::undefined);
         let custom = argc > 0 && compare.kind != Kind::Undefined;
         if custom && !self.is_callable_value(compare) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("compare: not a function".into()));
         }
         let mut values = Vec::with_capacity(typed_array.length as usize);
         for index in 0..typed_array.length {
@@ -46208,13 +47248,9 @@ impl Interp {
                 let ordering = if custom {
                     let result =
                         self.run_callback(code, compare, Slot::undefined(), &[value, previous])?;
-                    let number = self.to_number_value(code, result)?;
-                    if number.kind == Kind::BigInt {
-                        return Err(self.catchable_type_error());
-                    }
-                    let number = to_number(&number);
+                    let number = self.to_number_f64(code, result)?;
                     if self.detached_buffers.contains(&typed_array.buffer) {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("detached buffer".into()));
                     }
                     if number < 0.0 {
                         std::cmp::Ordering::Less
@@ -46281,7 +47317,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let ta = self.validate_typed_array(this)?;
         let length = ta.length;
         let arg0 = self
@@ -46296,7 +47332,7 @@ impl Interp {
             .unwrap_or_else(Slot::undefined);
 
         if matches!(operation, 0..=4 | 8..=9) && !self.is_callable_value(arg0) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("callback: not a function".into()));
         }
 
         match operation {
@@ -46427,7 +47463,7 @@ impl Interp {
                 let mut accumulator = if argc >= 2 {
                     arg1
                 } else if length == 0 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("no initial value".into()));
                 } else {
                     let value = self.ta_indexed_element_get(ta, index_at(cursor) as f64);
                     cursor += 1;
@@ -46446,7 +47482,9 @@ impl Interp {
                 }
                 Ok(accumulator)
             }
-            _ => Err(Halt::Unsupported("TypedArray.prototype:readonly-operation")),
+            _ => Err(Step::Host(Halt::NotImplemented(
+                "TypedArray.prototype:readonly-operation",
+            ))),
         }
     }
 
@@ -46460,7 +47498,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let arg = |this: &Self, i: usize| {
             this.stack
                 .get(base + 4 + i)
@@ -46480,7 +47518,7 @@ impl Interp {
                     self.typed_array_index_arg(code, arg(self, 2), ta.length)?
                 };
                 if self.detached_buffers.contains(&ta.buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
                 let count = end.saturating_sub(from).min(ta.length.saturating_sub(to));
                 if count > 0 {
@@ -46508,7 +47546,7 @@ impl Interp {
                     self.typed_array_index_arg(code, arg(self, 2), ta.length)?
                 };
                 if self.detached_buffers.contains(&ta.buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
                 let buffer = self.array_buffers[&ta.buffer];
                 for i in start..end {
@@ -46539,26 +47577,28 @@ impl Interp {
             }
             NativeMethod::TypedArraySet => {
                 let offset_number = self.array_to_integer_or_infinity(code, arg(self, 1))?;
-                if offset_number < 0.0
-                    || offset_number == f64::INFINITY
-                    || offset_number > u32::MAX as f64
-                {
-                    return Err(self.catchable_range_error());
+                if offset_number < 0.0 {
+                    return Err(self.catchable_range_error_msg("byteLength < 0".into()));
+                }
+                if offset_number > i32::MAX as f64 {
+                    return Err(self.catchable_range_error_msg("byteLength too big".into()));
                 }
                 let offset = offset_number as u32;
                 if self.detached_buffers.contains(&ta.buffer) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
                 }
                 let source = arg(self, 0);
 
                 if let Payload::Reference(src_ref) = source.value {
                     if source.kind == Kind::Reference && self.typed_arrays.contains_key(&src_ref) {
                         let src = self.validate_typed_array(source)?;
+                        // Keep the spec's content-domain guard; pinned XS only
+                        // rejects when an element conversion encounters the mismatch.
                         if (ta.kind <= 1) != (src.kind <= 1) {
                             return Err(self.catchable_type_error());
                         }
                         if src.length > ta.length.saturating_sub(offset) || offset > ta.length {
-                            return Err(self.catchable_range_error());
+                            return Err(self.catchable_range_error_msg("invalid offset".into()));
                         }
                         if ta.kind == src.kind {
                             // Same element type copies raw bytes, preserving NaN
@@ -46598,16 +47638,15 @@ impl Interp {
 
                     if source.kind == Kind::Reference {
                         let raw_len = self.arraylike_length(code, src_ref, source)?;
-                        let len_number = self.to_number_value(code, raw_len)?;
-                        let src_len = to_length_u64(to_number(&len_number));
+                        let src_len = to_length_u64(self.to_number_f64(code, raw_len)?);
                         if src_len > ta.length.saturating_sub(offset) as u64 || offset > ta.length {
-                            return Err(self.catchable_range_error());
+                            return Err(self.catchable_range_error_msg("invalid offset".into()));
                         }
                         for i in 0..src_len {
                             let value = self.arraylike_index(code, src_ref, i, source)?;
                             let bytes = self.typed_array_element_bytes(code, ta.kind, value)?;
                             if self.detached_buffers.contains(&ta.buffer) {
-                                return Err(self.catchable_type_error());
+                                return Err(self.catchable_type_error_msg("detached buffer".into()));
                             }
                             let target_buffer = self.array_buffers[&ta.buffer];
                             let pos = ta.offset as usize + (offset as usize + i as usize) * size;
@@ -46621,19 +47660,26 @@ impl Interp {
                 // string's boxed exotic object exposes UTF-16 indices and a
                 // `length`; every other primitive wrapper has length 0.
                 if matches!(source.kind, Kind::Null | Kind::Undefined) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        if source.kind == Kind::Null {
+                            "cannot coerce null to object"
+                        } else {
+                            "cannot coerce undefined to object"
+                        }
+                        .into(),
+                    ));
                 }
                 if let Payload::String(string) = source.value {
                     let src_len = self.str_len(string) as u32;
                     if src_len > ta.length.saturating_sub(offset) || offset > ta.length {
-                        return Err(self.catchable_range_error());
+                        return Err(self.catchable_range_error_msg("invalid offset".into()));
                     }
                     for i in 0..src_len {
                         let value = self.string_index_get(string, i);
                         self.typed_array_element_set(code, ta, offset + i, value)?;
                     }
                 } else if offset > ta.length {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg("invalid offset".into()));
                 }
                 Ok(Slot::undefined())
             }
@@ -46687,16 +47733,30 @@ impl Interp {
         code: &[u8],
         kind: u8,
         value: Slot,
-    ) -> Result<Vec<u8>, Halt> {
+    ) -> Result<Vec<u8>, Step> {
         if kind <= 1 {
             let primitive = self.to_primitive(code, value, false)?;
             let u = match primitive.value {
                 Payload::BigInt(_) | Payload::Boolean(_) => {
                     self.slot_to_bigint_u64(primitive).unwrap()
                 }
-                Payload::String(off) => parse_bigint_string_u64(&self.str_text(off))
-                    .ok_or_else(|| self.catchable_syntax_error())?,
-                _ => return Err(self.catchable_type_error()),
+                Payload::String(off) => {
+                    parse_bigint_string_u64(&self.str_text(off)).ok_or_else(|| {
+                        self.catchable_syntax_error_with_message(
+                            "cannot coerce string to bigint".into(),
+                        )
+                    })?
+                }
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        match primitive.kind {
+                            Kind::Integer | Kind::Number => "cannot coerce number to bigint",
+                            Kind::Symbol => "cannot coerce symbol to bigint",
+                            _ => "cannot coerce to bigint",
+                        }
+                        .into(),
+                    ))
+                }
             };
             return Ok(u.to_le_bytes().to_vec());
         }
@@ -46710,11 +47770,25 @@ impl Interp {
                 _ => unreachable!(),
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => Slot::number(to_number(&primitive)),
-            Kind::BigInt | Kind::Symbol => return Err(self.catchable_type_error()),
+            Kind::BigInt | Kind::Symbol => {
+                let target = match kind {
+                    4..=6 => "integer",
+                    7..=9 => "unsigned",
+                    _ => "number",
+                };
+                let symbol = if primitive.kind == Kind::Symbol {
+                    " symbol"
+                } else {
+                    ""
+                };
+                return Err(
+                    self.catchable_type_error_msg(format!("cannot coerce{symbol} to {target}"))
+                );
+            }
             _ => return Err(self.catchable_type_error()),
         };
         let n = numeric_of(&number).unwrap_or(f64::NAN);
-        encode_element_le(kind, n).ok_or(Halt::Unsupported("typed-array-set:bigint"))
+        encode_element_le(kind, n).ok_or(Step::Host(Halt::NotImplemented("typed-array-set:bigint")))
     }
 
     /// Coerce `value` to this element type and write TypedArray element
@@ -46725,7 +47799,7 @@ impl Interp {
         ta: TypedArrayData,
         index: u32,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         let le = self.typed_array_element_bytes(code, ta.kind, value)?;
         let size = le.len();
         let buf = self.array_buffers[&ta.buffer];
@@ -46836,7 +47910,7 @@ impl Interp {
         ta: TypedArrayData,
         n: f64,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if ta.kind <= 1 {
             // ToBigInt(value) — the low 64 bits are the two's-complement store.
             let u = self.to_bigint_low64(code, value)?;
@@ -46861,14 +47935,28 @@ impl Interp {
                 _ => unreachable!(),
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => to_number(&primitive),
-            Kind::BigInt | Kind::Symbol => return Err(self.catchable_type_error()),
+            Kind::BigInt | Kind::Symbol => {
+                let target = match ta.kind {
+                    4..=6 => "integer",
+                    7..=9 => "unsigned",
+                    _ => "number",
+                };
+                let symbol = if primitive.kind == Kind::Symbol {
+                    " symbol"
+                } else {
+                    ""
+                };
+                return Err(
+                    self.catchable_type_error_msg(format!("cannot coerce{symbol} to {target}"))
+                );
+            }
             _ => return Err(self.catchable_type_error()),
         };
         if let Some(index) = self.ta_valid_index(ta, n) {
             let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
             let base = ta.offset as usize + index as usize * size;
             let le = encode_element_le(ta.kind, num)
-                .ok_or(Halt::Unsupported("typed-array-set:bigint"))?;
+                .ok_or(Step::Host(Halt::NotImplemented("typed-array-set:bigint")))?;
             let buf = self.array_buffers[&ta.buffer];
             let out = self.chunks.slice_mut(buf.data, base + size);
             out[base..base + size].copy_from_slice(&le);
@@ -46919,7 +48007,7 @@ impl Interp {
         ta: TypedArrayData,
         n: f64,
         desc: OrdinaryDescriptor,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.ta_valid_index(ta, n).is_none() {
             return Ok(false);
         }
@@ -46949,7 +48037,7 @@ impl Interp {
         receiver: Slot,
         key: Slot,
         value: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let robj = match receiver.value {
             Payload::Reference(r) if receiver.kind == Kind::Reference => r,
             _ => return Ok(false),
@@ -46984,7 +48072,7 @@ impl Interp {
     /// then: a BigInt takes its low limbs; a Boolean is `1n`/`0n`; a String
     /// parses as a `StringIntegerLiteral` (a non-integer body throws
     /// `SyntaxError`); a Number/Symbol/`undefined`/`null` throws `TypeError`.
-    fn to_bigint_low64(&mut self, code: &[u8], value: Slot) -> Result<u64, Halt> {
+    fn to_bigint_low64(&mut self, code: &[u8], value: Slot) -> Result<u64, Step> {
         let primitive = self.to_primitive(code, value, false)?;
         match primitive.kind {
             Kind::BigInt => Ok(self
@@ -46994,18 +48082,27 @@ impl Interp {
             Kind::String => {
                 let text = match primitive.value {
                     Payload::String(off) => self.str_text(off),
-                    _ => return Err(Halt::EngineInvariant("to-bigint:string")),
+                    _ => return Err(Step::Host(Halt::EngineInvariant("to-bigint:string"))),
                 };
                 // `StringToBigInt`: an integer body (decimal or `0x`/`0o`/`0b`,
                 // empty ⇒ `0n`) reduced to the low 64 bits; a non-integer body
                 // (a fraction, exponent, `n` suffix, or junk) is a SyntaxError.
                 match parse_bigint_string_u64(&text) {
                     Some(u) => Ok(u),
-                    None => Err(self.catchable_syntax_error()),
+                    None => Err(self.catchable_syntax_error_with_message(
+                        "cannot coerce string to bigint".into(),
+                    )),
                 }
             }
             // A Number, a Symbol, undefined, and null are each a TypeError.
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.catchable_type_error_msg(
+                match primitive.kind {
+                    Kind::Integer | Kind::Number => "cannot coerce number to bigint",
+                    Kind::Symbol => "cannot coerce symbol to bigint",
+                    _ => "cannot coerce to bigint",
+                }
+                .into(),
+            )),
         }
     }
 
@@ -47018,7 +48115,7 @@ impl Interp {
     /// honest skip (never a wrong answer). `op`: 0 add, 1 and, 2
     /// compareExchange, 3 exchange, 4 load, 5 or, 6 store, 7 sub, 8 xor, 9
     /// isLockFree, ≥10 wait/notify/waitAsync.
-    fn atomics_dispatch(&mut self, op: u8, base: usize) -> Result<Slot, Halt> {
+    fn atomics_dispatch(&mut self, op: u8, base: usize) -> Result<Slot, Step> {
         let a0 = self
             .stack
             .get(base + 4)
@@ -47051,24 +48148,26 @@ impl Interp {
         // `wait`/`notify`/`waitAsync`: the blocking-agent surface a
         // single-agent host cannot model — a standards-grounded host exclusion.
         if op >= 10 {
-            return Err(Halt::Unsupported("atomics:wait-notify"));
+            return Err(Step::Host(Halt::Refused("atomics:wait-notify")));
         }
 
         // ValidateIntegerTypedArray: an integer-element TypedArray receiver.
         let inst = match a0.value {
             Payload::Reference(r) if self.typed_arrays.contains_key(&r) => r,
-            _ => return Err(Halt::Unsupported("atomics:non-typedarray")),
+            _ => return Err(Step::Host(Halt::NotImplemented("atomics:non-typedarray"))),
         };
         let ta = self.typed_arrays[&inst];
         // Int8/16/32 (4/5/6), Uint8/16/32 (7/8/9), and BigInt64/BigUint64
         // (0/1). Uint8Clamped (10) and the float views (2/3) self-name.
         if !((4..=9).contains(&ta.kind) || ta.kind <= 1) {
-            return Err(Halt::Unsupported("atomics:non-integer-typedarray"));
+            return Err(Step::Host(Halt::NotImplemented(
+                "atomics:non-integer-typedarray",
+            )));
         }
         // ValidateAtomicAccess: ToIndex(index) in `[0, length)`.
         let idx = match self.element_value_to_number(a1) {
             Some(v) if v >= 0.0 && v.fract() == 0.0 && (v as u64) < ta.length as u64 => v as u32,
-            _ => return Err(Halt::Unsupported("atomics:access-index")),
+            _ => return Err(Step::Host(Halt::NotImplemented("atomics:access-index"))),
         };
         let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;
         let data = self.array_buffers[&ta.buffer].data;
@@ -47086,8 +48185,8 @@ impl Interp {
             let bytes = self.chunks.payload(data);
             old_bytes.copy_from_slice(&bytes[bpos..bpos + size]);
         }
-        let old_slot =
-            decode_element_le(ta.kind, &old_bytes).ok_or(Halt::Unsupported("atomics:decode"))?;
+        let old_slot = decode_element_le(ta.kind, &old_bytes)
+            .ok_or(Step::Host(Halt::NotImplemented("atomics:decode")))?;
 
         // `load(ta, idx)`: no write.
         if op == 4 {
@@ -47100,15 +48199,15 @@ impl Interp {
         if op == 2 {
             let expected = self
                 .element_value_to_number(a2)
-                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
             let replacement = self
                 .element_value_to_number(a3)
-                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
             let exp_bytes = encode_element_le(ta.kind, expected.trunc())
-                .ok_or(Halt::Unsupported("atomics:encode"))?;
+                .ok_or(Step::Host(Halt::NotImplemented("atomics:encode")))?;
             if exp_bytes == old_bytes {
                 let le = encode_element_le(ta.kind, replacement.trunc())
-                    .ok_or(Halt::Unsupported("atomics:encode"))?;
+                    .ok_or(Step::Host(Halt::NotImplemented("atomics:encode")))?;
                 let out = self.chunks.slice_mut(data, bpos + size);
                 out[bpos..bpos + size].copy_from_slice(&le);
             }
@@ -47120,7 +48219,7 @@ impl Interp {
         // other op returns the prior element value.
         let v = self
             .element_value_to_number(a2)
-            .ok_or(Halt::Unsupported("atomics:coerce"))?;
+            .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
         let v_i = v.trunc() as i64;
         let old_i = element_slot_to_i64(old_slot);
         let (new_i, ret): (i64, Slot) = match op {
@@ -47131,10 +48230,10 @@ impl Interp {
             6 => (v_i, Slot::number(v.trunc())),
             7 => (old_i.wrapping_sub(v_i), old_slot),
             8 => (old_i ^ v_i, old_slot),
-            _ => return Err(Halt::Unsupported("atomics:op")),
+            _ => return Err(Step::Host(Halt::NotImplemented("atomics:op"))),
         };
-        let le =
-            encode_element_le(ta.kind, new_i as f64).ok_or(Halt::Unsupported("atomics:encode"))?;
+        let le = encode_element_le(ta.kind, new_i as f64)
+            .ok_or(Step::Host(Halt::NotImplemented("atomics:encode")))?;
         let out = self.chunks.slice_mut(data, bpos + size);
         out[bpos..bpos + size].copy_from_slice(&le);
         self.meter.tick_raw(ATOMICS_OP_METERING);
@@ -47155,7 +48254,7 @@ impl Interp {
         bpos: usize,
         a2: Slot,
         a3: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let mut old_b = [0u8; 8];
         {
             let bytes = self.chunks.payload(data);
@@ -47174,10 +48273,10 @@ impl Interp {
         if op == 2 {
             let expected = self
                 .slot_to_bigint_u64(a2)
-                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
             let replacement = self
                 .slot_to_bigint_u64(a3)
-                .ok_or(Halt::Unsupported("atomics:coerce"))?;
+                .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
             if old_u == expected {
                 let out = self.chunks.slice_mut(data, bpos + 8);
                 out[bpos..bpos + 8].copy_from_slice(&replacement.to_le_bytes());
@@ -47189,7 +48288,7 @@ impl Interp {
 
         let v = self
             .slot_to_bigint_u64(a2)
-            .ok_or(Halt::Unsupported("atomics:coerce"))?;
+            .ok_or(Step::Host(Halt::NotImplemented("atomics:coerce")))?;
         let new_u: u64 = match op {
             0 => old_u.wrapping_add(v),
             1 => old_u & v,
@@ -47198,7 +48297,7 @@ impl Interp {
             6 => v,
             7 => old_u.wrapping_sub(v),
             8 => old_u ^ v,
-            _ => return Err(Halt::Unsupported("atomics:op")),
+            _ => return Err(Step::Host(Halt::NotImplemented("atomics:op"))),
         };
         let out = self.chunks.slice_mut(data, bpos + 8);
         out[bpos..bpos + 8].copy_from_slice(&new_u.to_le_bytes());
@@ -47262,7 +48361,7 @@ impl Interp {
         abs: u32,
         kind: u8,
         little: bool,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let size = TYPED_ARRAY_TYPES[kind as usize].size as usize;
         let buf = self.array_buffers[&buffer];
         let bytes = self.chunks.payload(buf.data);
@@ -47270,7 +48369,7 @@ impl Interp {
         if !little {
             b.reverse();
         }
-        decode_element_le(kind, &b).ok_or(Halt::Unsupported("data-view-get:bigint"))
+        decode_element_le(kind, &b).ok_or(Step::Host(Halt::NotImplemented("data-view-get:bigint")))
     }
 
     /// Coerce `value` to the raw endianness-ordered bytes of a numeric
@@ -47285,22 +48384,8 @@ impl Interp {
         kind: u8,
         value: Slot,
         little: bool,
-    ) -> Result<Vec<u8>, Halt> {
-        let primitive = self.to_primitive(code, value, false)?;
-        let number = match primitive.kind {
-            Kind::Integer | Kind::Number => primitive,
-            Kind::String => match primitive.value {
-                Payload::String(off) => {
-                    Slot::number(string_to_number(self.str_text(off).as_bytes(), true))
-                }
-                _ => unreachable!(),
-            },
-            Kind::Boolean | Kind::Null | Kind::Undefined => Slot::number(to_number(&primitive)),
-            Kind::BigInt | Kind::Symbol => return Err(self.catchable_type_error()),
-            _ => return Err(self.catchable_type_error()),
-        };
-        let n = numeric_of(&number).unwrap_or(f64::NAN);
-        let mut le = encode_element_le(kind, n).ok_or(Halt::Unsupported("data-view-set:bigint"))?;
+    ) -> Result<Vec<u8>, Step> {
+        let mut le = self.typed_array_element_bytes(code, kind, value)?;
         if !little {
             le.reverse();
         }
@@ -47352,14 +48437,8 @@ impl Interp {
         code: &[u8],
         value: Slot,
         little: bool,
-    ) -> Result<[u8; 8], Halt> {
-        let primitive = self.to_primitive(code, value, false)?;
-        let u = match primitive.value {
-            Payload::BigInt(_) | Payload::Boolean(_) => self.slot_to_bigint_u64(primitive).unwrap(),
-            Payload::String(off) => parse_bigint_string_u64(&self.str_text(off))
-                .ok_or_else(|| self.catchable_syntax_error())?,
-            _ => return Err(self.catchable_type_error()),
-        };
+    ) -> Result<[u8; 8], Step> {
+        let u = self.to_bigint_low64(code, value)?;
         let mut le = u.to_le_bytes();
         if !little {
             le.reverse();
@@ -47439,23 +48518,14 @@ impl Interp {
     /// ceiling — a byte length above the max chunk size cannot be a backing
     /// store). Returns the clamped `u32`, or a `Halt` (a `Resume` to the catch
     /// target, or an escaping `Throw`) the caller propagates with `?`.
-    fn to_index_arg(&mut self, code: &[u8], value: Slot) -> Result<u32, Halt> {
-        // `ToNumber` of a Symbol or BigInt is a TypeError — a catchable throw.
-        if matches!(value.kind, Kind::Symbol | Kind::BigInt) {
-            return Err(self.catchable_type_error());
-        }
-        let number = self.to_number_value(code, value)?;
-        // A reference whose `valueOf`/`toString` yielded a BigInt still throws.
-        if number.kind == Kind::BigInt {
-            return Err(self.catchable_type_error());
-        }
-        let n = to_number(&number);
-        // ToIntegerOrInfinity: NaN → 0, truncate toward zero.
+    fn to_index_arg(&mut self, code: &[u8], value: Slot) -> Result<u32, Step> {
+        let n = self.to_number_f64(code, value)?;
         let t = if n.is_nan() { 0.0 } else { n.trunc() };
-        // ToIndex forbids a negative result; XS's backing store forbids one
-        // above the 0x7FFFFFFF chunk ceiling — both are RangeError.
-        if t < 0.0 || t > 0x7FFF_FFFFu32 as f64 {
-            return Err(self.catchable_range_error());
+        if t < 0.0 {
+            return Err(self.catchable_range_error_msg("byteLength < 0".into()));
+        }
+        if t > 0x7FFF_FFFFu32 as f64 {
+            return Err(self.catchable_range_error_msg("byteLength too big".into()));
         }
         Ok(t as u32)
     }
@@ -47589,7 +48659,7 @@ impl Interp {
     /// body's terminating opcode. In particular a derived constructor may
     /// return an object directly, but otherwise must have initialized `this`
     /// with `super()` and may not return a different primitive.
-    fn end_completion(&mut self, op: Opcode) -> Result<Slot, Halt> {
+    fn end_completion(&mut self, op: Opcode) -> Result<Slot, Step> {
         // An arrow frame may carry `mxFrameHasTarget` solely so its lexical
         // `new.target` is observable. It is still an ordinary call: XS's
         // `END_ARROW` always returns `mxFrameResult` and never substitutes the
@@ -47606,13 +48676,15 @@ impl Interp {
                     Ok(self.result)
                 } else if self.result.kind == Kind::Undefined {
                     if self.this_val.kind == Kind::Uninitialized {
-                        let error = self.build_error("ReferenceError", 0, 0);
+                        let error =
+                            self.internal_error("ReferenceError", "this: not initialized".into());
                         Err(self.raise_js(error))
                     } else {
                         Ok(self.this_val)
                     }
                 } else {
-                    let error = self.build_error("TypeError", 0, 0);
+                    let error =
+                        self.internal_error("TypeError", "result: invalid constructor".into());
                     Err(self.raise_js(error))
                 }
             }
@@ -47702,28 +48774,25 @@ impl Interp {
     /// object instead of seeing an uncatchable host-side `Unsupported` halt.
     ///
     /// The result is always a control transfer for the enclosing dispatch
-    /// loop to consume: `Halt::Resume(target)` when a handler caught the
+    /// loop to consume: `Step::Unwound(target)` when a handler caught the
     /// value (the loop that OWNS the handler's frame resumes there, which
     /// [`dispatch_halt!`]'s depth test decides), or `Halt::Throw` when the
     /// chain is empty and the throw escapes to the host. Yielding the caught
     /// case as `Resume` rather than a bare `Ok(target)` is what makes the
     /// depth test unskippable: a raise site cannot assign the target to its
     /// own `pc` without going through the macro.
-    fn raise_js(&mut self, value: Slot) -> Halt {
+    fn raise_js(&mut self, value: Slot) -> Step {
         self.exception = value;
         match self.unwind_to_jump() {
-            Some(target) => Halt::Resume(target),
+            Some(target) => Step::Unwound(target),
             None => {
                 // Uncaught: the host-escape leaves the machine
                 // post-throw ([`Self::unwind_to_jump`] disarmed the
                 // pending new-target for every escape path, W6-15). The
-                // text is a diagnostic (see [`Self::render_uncaught`]): a
-                // value the renderer refuses gets the stub, never a halt.
+                // value travels through native catches without rendering;
+                // only finish_step renders an uncaught host escape.
                 self.meter_host_escape();
-                Halt::Throw {
-                    value,
-                    rendered: self.render_or_stub(&value),
-                }
+                Step::Threw { value }
             }
         }
     }
@@ -47733,7 +48802,7 @@ impl Interp {
     /// `mxTypeError("...")` texts (`invalid object`, `invalid descriptor`,
     /// `cannot coerce null to object`, …), which the oracle's
     /// `String(exception)` reports verbatim.
-    fn catchable_type_error_msg(&mut self, message: String) -> Halt {
+    fn catchable_type_error_msg(&mut self, message: String) -> Step {
         let error = self.internal_error("TypeError", message);
         self.raise_js(error)
     }
@@ -47741,7 +48810,7 @@ impl Interp {
     /// Raise a realm-local TypeError from a native helper. The dispatch loop
     /// consumes `Resume` and continues at the catch/finally target; an uncaught
     /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
-    fn catchable_type_error(&mut self) -> Halt {
+    fn catchable_type_error(&mut self) -> Step {
         let error = self.build_error("TypeError", 0, 0);
         self.raise_js(error)
     }
@@ -47752,7 +48821,7 @@ impl Interp {
     /// observes a realm-correct `SyntaxError` object (so `instanceof
     /// SyntaxError` and `assert.throws(SyntaxError, …)` hold) rather than an
     /// uncatchable host `Unsupported` halt.
-    fn catchable_syntax_error(&mut self) -> Halt {
+    fn catchable_syntax_error(&mut self) -> Step {
         let error = self.build_error("SyntaxError", 0, 0);
         self.raise_js(error)
     }
@@ -47762,7 +48831,7 @@ impl Interp {
     /// pinned oracle's exact `String(exception)` for an early error the source
     /// bridge (eval / dynamic `Function`) rejects. An empty message falls back
     /// to the bare form.
-    fn catchable_syntax_error_with_message(&mut self, message: String) -> Halt {
+    fn catchable_syntax_error_with_message(&mut self, message: String) -> Step {
         if message.is_empty() {
             return self.catchable_syntax_error();
         }
@@ -48556,10 +49625,10 @@ impl Interp {
     /// reads the item (or `undefined` for a hole / past the end); a named key
     /// reads the (own-or-inherited) property. Meters no built-in step, like
     /// `GET_PROPERTY`.
-    fn property_at_get(&mut self, code: &[u8], obj: Slot, key: Slot) -> Result<Slot, Halt> {
+    fn property_at_get(&mut self, code: &[u8], obj: Slot, key: Slot) -> Result<Slot, Step> {
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
-            _ => return Err(Halt::EngineInvariant("get_property_at:key")),
+            _ => return Err(Step::Host(Halt::EngineInvariant("get_property_at:key"))),
         };
         // A primitive string indexed by number yields its one-unit character;
         // a named key boxes to `%String.prototype%` (methods / `.length`).
@@ -48809,7 +49878,7 @@ impl Interp {
     /// too — `fxAt` only takes its index branch for a canonical index — so
     /// `o["k" + i]` exhausting the id space stays the engine's documented
     /// limit rather than something this split pretends to fix).
-    fn to_read_key(&mut self, code: &[u8], key: Slot) -> Result<ReadKey, Halt> {
+    fn to_read_key(&mut self, code: &[u8], key: Slot) -> Result<ReadKey, Step> {
         if let Payload::At(id, index) = key.value {
             if id != crate::value::XS_NO_ID {
                 return Ok(ReadKey::Id(id));
@@ -48825,14 +49894,18 @@ impl Interp {
                 Payload::Reference(descriptor) => {
                     Ok(ReadKey::Id(self.intern_symbol_key(descriptor)))
                 }
-                _ => Err(Halt::EngineInvariant(
+                _ => Err(Step::Host(Halt::EngineInvariant(
                     "to_read_key:symbol-without-descriptor",
-                )),
+                ))),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
-            _ => return Err(Halt::EngineInvariant("to_read_key:non-string-key")),
+            _ => {
+                return Err(Step::Host(Halt::EngineInvariant(
+                    "to_read_key:non-string-key",
+                )))
+            }
         };
         // A canonical array-index string is what XS's `fxAt` turns into
         // `(XS_NO_ID, index)`; uninterned, it stays an index here too.
@@ -48850,7 +49923,7 @@ impl Interp {
     /// The key as the string/symbol slot a Proxy trap is handed. An `Index`
     /// spells its own canonical numeric string, exactly as XS's `fxKeyAt`
     /// does for `XS_NO_ID`, without interning it.
-    fn read_key_slot(&mut self, key: ReadKey) -> Result<Slot, Halt> {
+    fn read_key_slot(&mut self, key: ReadKey) -> Result<Slot, Step> {
         match key {
             ReadKey::Id(id) => self.property_key_slot(id),
             ReadKey::Index(index) => {
@@ -48877,7 +49950,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         index: u32,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // Charged against the native-recursion budget like every other MOP
         // entry point: forwarding down a chain of untrapped proxies recurses
         // here, and an unbudgeted recursion overflows the real stack and
@@ -48893,7 +49966,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         index: u32,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let mut cur = inst;
         while !cur.is_null() {
             if self.proxies.contains_key(&cur) {
@@ -48942,8 +50015,8 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         index: u32,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Slot, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "get")?;
         let trap = match self.proxy_trap(code, handler, "get")? {
             Some(trap) => trap,
             None => return self.uninterned_index_get(code, target, index, receiver),
@@ -48971,7 +50044,7 @@ impl Interp {
         code: &[u8],
         o: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.proxies.contains_key(&o) {
             return Ok(self
                 .uninterned_index_own_descriptor(code, o, index)?
@@ -49005,7 +50078,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<(bool, u64), Halt> {
+    ) -> Result<(bool, u64), Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             let mut current = inst;
             let mut frames = 0u64;
@@ -49033,7 +50106,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
         // Budget-charged for the same reason as [`Self::uninterned_index_get`],
         // and to match `mop_get_own_property`, the id-keyed twin.
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
@@ -49046,7 +50119,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
         if self.proxies.contains_key(&inst) {
             return self.uninterned_index_proxy_own_descriptor(code, inst, index);
         }
@@ -49095,7 +50168,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             if vm.proxies.contains_key(&inst) {
                 return vm.uninterned_index_proxy_delete(code, inst, index);
@@ -49143,8 +50216,8 @@ impl Interp {
         code: &[u8],
         proxy: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "has")?;
         let trap = match self.proxy_trap(code, handler, "has")? {
             Some(trap) => trap,
             None => return Ok(self.uninterned_index_has(code, target, index)?.0),
@@ -49161,10 +50234,14 @@ impl Interp {
             let key_id = self.refresh_read_key(ReadKey::Index(index));
             if let Some(d) = self.mop_get_own_property_read(code, target, key_id)? {
                 if d.configurable == Some(false) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).has: false for non-configurable property".into(),
+                    ));
                 }
                 if !self.mop_is_extensible(code, target)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).has: false for property of not extensible object".into(),
+                    ));
                 }
             }
         }
@@ -49177,8 +50254,8 @@ impl Interp {
         code: &[u8],
         proxy: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "getOwnPropertyDescriptor")?;
         let trap = match self.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
             Some(trap) => trap,
             None => return self.uninterned_index_own_descriptor(code, target, index),
@@ -49192,8 +50269,8 @@ impl Interp {
         code: &[u8],
         proxy: crate::value::SlotIndex,
         index: u32,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "deleteProperty")?;
         let trap = match self.proxy_trap(code, handler, "deleteProperty")? {
             Some(trap) => trap,
             None => return self.uninterned_index_delete(code, target, index),
@@ -49208,7 +50285,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         key: ReadKey,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         match key {
             ReadKey::Id(id) => self.mop_get(code, inst, id, receiver),
             ReadKey::Index(index) => self.uninterned_index_get(code, inst, index, receiver),
@@ -49221,7 +50298,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         key: ReadKey,
-    ) -> Result<(bool, u64), Halt> {
+    ) -> Result<(bool, u64), Step> {
         match key {
             ReadKey::Id(id) => self.mop_has_with_recursions(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_has(code, inst, index),
@@ -49234,7 +50311,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         key: ReadKey,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
         match key {
             ReadKey::Id(id) => self.mop_get_own_property(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_own_descriptor(code, inst, index),
@@ -49263,7 +50340,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         key: ReadKey,
         desc: OrdinaryDescriptor,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let index = match key {
             ReadKey::Id(id) => return self.mop_define_own_property(code, inst, id, desc),
             ReadKey::Index(index) => index,
@@ -49324,11 +50401,71 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         key: ReadKey,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         match key {
             ReadKey::Id(id) => self.mop_delete(code, inst, id),
             ReadKey::Index(index) => self.uninterned_index_delete(code, inst, index),
         }
+    }
+
+    /// Diagnose XS's super setter without repeating guest getters or traps.
+    /// A data property on the home prototype leads XS to the receiver's own
+    /// property. Keep spec-only rejections bare when XS would instead succeed.
+    fn failed_super_set_error(
+        &mut self,
+        base: crate::value::SlotIndex,
+        id: u16,
+        receiver: Slot,
+    ) -> Step {
+        let mut current = base;
+        while !current.is_null() {
+            if self.proxies.contains_key(&current) {
+                return self.catchable_type_error();
+            }
+            let descriptor = self
+                .ordinary_get_own_descriptor(current, id)
+                .or_else(|| self.exotic_own_descriptor(current, id));
+            if let Some(descriptor) = descriptor {
+                if descriptor.is_accessor() {
+                    if descriptor
+                        .set
+                        .is_none_or(|setter| setter.kind == Kind::Undefined)
+                    {
+                        let name = self.property_debug_name(id);
+                        return self.catchable_type_error_msg(format!("set {name}: no setter"));
+                    }
+                    return self.catchable_type_error();
+                }
+                break;
+            }
+            current = self.instance_prototype(current);
+        }
+        let Payload::Reference(object) = receiver.value else {
+            return self.catchable_type_error();
+        };
+        if receiver.kind != Kind::Reference || self.proxies.contains_key(&object) {
+            return self.catchable_type_error();
+        }
+        let descriptor = self
+            .ordinary_get_own_descriptor(object, id)
+            .or_else(|| self.exotic_own_descriptor(object, id));
+        let reason = match descriptor {
+            Some(descriptor) if descriptor.is_accessor() => {
+                if descriptor
+                    .set
+                    .is_none_or(|setter| setter.kind == Kind::Undefined)
+                {
+                    "no setter"
+                } else {
+                    return self.catchable_type_error();
+                }
+            }
+            Some(descriptor) if descriptor.writable == Some(false) => "not writable",
+            None if !self.instance_extensible(object) => "not extensible",
+            _ => return self.catchable_type_error(),
+        };
+        let name = self.property_debug_name(id);
+        self.catchable_type_error_msg(format!("set {name}: {reason}"))
     }
 
     /// Write a computed (`AT`-key) property. `define` distinguishes
@@ -49343,7 +50480,7 @@ impl Interp {
         key: Slot,
         value: Slot,
         define: bool,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         // `null[k] = v` / `undefined[k] = v`: `fxToInstance` throws (review F007).
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
@@ -49366,7 +50503,7 @@ impl Interp {
         };
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
-            _ => return Err(Halt::EngineInvariant("set_property_at:key")),
+            _ => return Err(Step::Host(Halt::EngineInvariant("set_property_at:key"))),
         };
         if self.proxies.contains_key(&inst) {
             // `p[k] = v` (or a computed define) routes through the proxy's
@@ -49387,6 +50524,8 @@ impl Interp {
                 self.proxy_define_own_property(code, inst, key_id, desc)?;
             } else {
                 let accepted = self.proxy_set(code, inst, key_id, value, obj)?;
+                // The spec rejects a false strict Proxy Set; pinned XS ignores
+                // that trap result here, so it has no matching diagnostic.
                 if !accepted && self.strict {
                     return Err(self.catchable_type_error());
                 }
@@ -49446,7 +50585,7 @@ impl Interp {
                     } else {
                         let accepted = self.ordinary_set(code, inst, key_id, value, obj)?;
                         if !accepted && self.strict {
-                            return Err(self.catchable_type_error());
+                            return Err(self.failed_set_error(inst, key_id, "set"));
                         }
                     }
                 } else if !define
@@ -49459,7 +50598,16 @@ impl Interp {
                             && !self.arrays[&inst].items().contains_key(&index))
                 {
                     if self.strict {
-                        return Err(self.catchable_type_error());
+                        let reason = if self.arrays[&inst]
+                            .items()
+                            .get(&index)
+                            .is_some_and(|item| item.flag & XS_DONT_SET_FLAG != 0)
+                        {
+                            "not writable"
+                        } else {
+                            "not extensible"
+                        };
+                        return Err(self.catchable_type_error_msg(format!("set ?: {reason}")));
                     }
                 } else {
                     self.array_item_set(inst, index, value, define);
@@ -49492,7 +50640,7 @@ impl Interp {
             // same-value exception is considered.
             if !define && !self.array_length_writable(inst) {
                 if self.strict {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("set length: not writable".into()));
                 }
                 return Ok(());
             }
@@ -49505,6 +50653,8 @@ impl Interp {
                 },
             )?;
             if !accepted && self.strict {
+                // Preserve the spec's failed length-shrink error. XS's array
+                // length setter ignores fxSetArrayLength's false return.
                 return Err(self.catchable_type_error());
             }
             Ok(())
@@ -49778,25 +50928,34 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         descriptor: OrdinaryDescriptor,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let requested_nonwritable = descriptor.writable == Some(false);
         let new_length = if let Some(value) = descriptor.value {
             // ArraySetLength performs ToUint32(value) and then ToNumber(value)
             // as two distinct observable coercions. For an object value this
             // deliberately invokes valueOf/toString twice, in that order.
-            let uint32_number = to_number(&self.to_number_value(code, value)?);
+            let primitive = self.to_primitive(code, value, false)?;
+            if primitive.kind == Kind::Symbol {
+                return Err(
+                    self.catchable_type_error_msg("cannot coerce symbol to unsigned".into())
+                );
+            }
+            if primitive.kind == Kind::BigInt {
+                return Err(self.catchable_type_error_msg("cannot coerce to unsigned".into()));
+            }
+            let uint32_number = self.to_number_f64(code, primitive)?;
             let new_len = if !uint32_number.is_finite() || uint32_number == 0.0 {
                 0
             } else {
                 uint32_number.trunc().rem_euclid(4_294_967_296.0) as u32
             };
-            let number = to_number(&self.to_number_value(code, value)?);
+            let number = self.to_number_f64(code, value)?;
             if !number.is_finite()
                 || number < 0.0
                 || number != new_len as f64
                 || number.fract() != 0.0
             {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg("invalid length".into()));
             }
             Some((new_len, number))
         } else {
@@ -50051,7 +51210,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
         descriptor: OrdinaryDescriptor,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let name = self.string_key_name(id);
         if name.as_deref() == Some("length") && !self.arguments_objects.contains(&inst) {
             return self.array_define_length(code, inst, descriptor);
@@ -50084,7 +51243,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Option<String>, Halt> {
+    ) -> Result<Option<String>, Step> {
         let Some(tag_id) = self.well_known_symbol_property_id("toStringTag") else {
             return Ok(None);
         };
@@ -50173,7 +51332,7 @@ impl Interp {
     /// the allocation constants; computron parity over a transitive walk into
     /// ironhorse's sparse intrinsics is structurally unavailable, so the corpus is
     /// result-gated (the freeze *result* is faithful).
-    fn do_harden(&mut self, code: &[u8], arg0: Slot) -> Result<Slot, Halt> {
+    fn do_harden(&mut self, code: &[u8], arg0: Slot) -> Result<Slot, Step> {
         if arg0.kind != Kind::Reference {
             return Ok(arg0);
         }
@@ -50237,10 +51396,10 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         list: &mut Vec<crate::value::SlotIndex>,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         self.meter.tick_raw(HARDEN_OBJECT_BASE_METERING);
         if !self.mop_prevent_extensions(code, inst)? {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("extensible object".into()));
         }
         let skip_indexes = self.typed_arrays.contains_key(&inst);
         for key in self.mop_own_keys(code, inst)? {
@@ -50274,7 +51433,7 @@ impl Interp {
             // The descriptor read can run a proxy trap that names this index.
             let read_key = self.refresh_read_key(read_key);
             if !self.mop_define_own_property_read(code, inst, read_key, frozen)? {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("cannot configure property".into()));
             }
         }
 
@@ -50311,7 +51470,7 @@ impl Interp {
     /// separately marks mutable internal data read-only; IronHorse persists
     /// that state on the instance head because its internal data is side-table
     /// backed. Returns `x`.
-    fn do_petrify(&mut self, code: &[u8], arg0: Slot) -> Result<Slot, Halt> {
+    fn do_petrify(&mut self, code: &[u8], arg0: Slot) -> Result<Slot, Step> {
         if arg0.kind != Kind::Reference {
             return Ok(arg0);
         }
@@ -50321,7 +51480,7 @@ impl Interp {
         };
         self.meter.tick_raw(PETRIFY_OBJECT_BASE_METERING);
         if !self.mop_prevent_extensions(code, inst)? {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("extensible object".into()));
         }
         let skip_indexes = self.typed_arrays.contains_key(&inst)
             || self
@@ -50354,7 +51513,7 @@ impl Interp {
             };
             let read_key = self.refresh_read_key(read_key);
             if !self.mop_define_own_property_read(code, inst, read_key, frozen)? {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("cannot configure property".into()));
             }
         }
         if self.array_buffers.contains_key(&inst)
@@ -50676,7 +51835,7 @@ impl Interp {
     /// deliberately rejects native callees (`callback:non-user-function`). The
     /// native path builds the `[THIS, FUNCTION, RESULT, FRAME]` frame the call
     /// opcode would, dispatches with zero arguments, and pops the pushed result.
-    fn invoke_getter(&mut self, code: &[u8], getter: Slot, receiver: Slot) -> Result<Slot, Halt> {
+    fn invoke_getter(&mut self, code: &[u8], getter: Slot, receiver: Slot) -> Result<Slot, Step> {
         if let Payload::Reference(f) = getter.value {
             // A `.call`/`.apply` or promise-resolving function used as an
             // accessor takes the abstract dispatcher, exactly as it does at
@@ -50717,7 +51876,7 @@ impl Interp {
         setter: Slot,
         receiver: Slot,
         value: Slot,
-    ) -> Result<(), Halt> {
+    ) -> Result<(), Step> {
         if let Payload::Reference(f) = setter.value {
             // The getter's rule, for the same reason.
             if self.needs_abstract_call(f, self.method_of(f)) {
@@ -50753,7 +51912,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let mut current = inst;
         loop {
             if let Some(descriptor) = self.ordinary_get_own_descriptor(current, id) {
@@ -50813,7 +51972,7 @@ impl Interp {
         id: u16,
         value: Slot,
         receiver: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let mut current = inst;
         loop {
             // Functions keep their `length`, `name`, and (when constructable)
@@ -50946,14 +52105,14 @@ impl Interp {
     /// `new Proxy(target, handler)` / `Proxy.revocable` core: validate both
     /// operands are objects and mint the exotic (ECMA-262 10.5.1
     /// ProxyCreate). Returns the proxy reference slot.
-    fn make_proxy(&mut self, target: Slot, handler: Slot) -> Result<Slot, Halt> {
+    fn make_proxy(&mut self, target: Slot, handler: Slot) -> Result<Slot, Step> {
         let target_inst = match target.value {
             Payload::Reference(t) if target.kind == Kind::Reference => t,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
         };
         let handler_inst = match handler.value {
             Payload::Reference(h) if handler.kind == Kind::Reference => h,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("handler: not an object".into())),
         };
         // A proxy instance has no identity prototype of its own (null proto);
         // its `[[Get]]`/`[[GetPrototypeOf]]` come from the traps/target.
@@ -50976,10 +52135,11 @@ impl Interp {
     fn proxy_target_handler(
         &mut self,
         proxy: crate::value::SlotIndex,
-    ) -> Result<(crate::value::SlotIndex, crate::value::SlotIndex), Halt> {
+        name: &str,
+    ) -> Result<(crate::value::SlotIndex, crate::value::SlotIndex), Step> {
         match self.proxies.get(&proxy) {
             Some(data) if !data.revoked => Ok((data.target, data.handler)),
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.catchable_type_error_msg(format!("(proxy).{name}: no handler"))),
         }
     }
 
@@ -50990,7 +52150,7 @@ impl Interp {
         code: &[u8],
         handler: crate::value::SlotIndex,
         name: &str,
-    ) -> Result<Option<Slot>, Halt> {
+    ) -> Result<Option<Slot>, Step> {
         let id = self.intern_key(name);
         let hslot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let m = self.mop_get(code, handler, id, hslot)?;
@@ -50998,7 +52158,7 @@ impl Interp {
             return Ok(None);
         }
         if !self.is_callable_value(m) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(format!("(proxy).{name}: not a function")));
         }
         Ok(Some(m))
     }
@@ -51013,7 +52173,7 @@ impl Interp {
         func: Slot,
         this: Slot,
         initial_args: &[Slot],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // The bound-function fold and the `Function.prototype.call`/`apply`
         // trampolines below each redispatch to another callable. They loop
         // here rather than recurse: neither enters a charged frame, so a chain
@@ -51028,7 +52188,7 @@ impl Interp {
             let args: &[Slot] = owned_args.as_deref().unwrap_or(initial_args);
             let f = match func.value {
                 Payload::Reference(f) if func.kind == Kind::Reference => f,
-                _ => return Err(self.catchable_type_error()),
+                _ => return Err(self.catchable_type_error_msg("call: not a function".into())),
             };
             if self.proxies.contains_key(&f) {
                 return self.proxy_call(code, f, this, args);
@@ -51087,7 +52247,7 @@ impl Interp {
             }
             let fi = match self.functions.get(&f) {
                 Some(fi) => fi,
-                None => return Err(self.catchable_type_error()),
+                None => return Err(self.catchable_type_error_msg("call: not a function".into())),
             };
             let native = fi.native;
             let method = fi.method;
@@ -51100,7 +52260,9 @@ impl Interp {
             // them too.
             if method == Some(NativeMethod::FunctionCall) {
                 if !self.is_callable_value(this) {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg("this: not a Function instance".into())
+                    );
                 }
                 let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
                 let forwarded: Vec<Slot> = args.get(1..).unwrap_or_default().to_vec();
@@ -51114,18 +52276,24 @@ impl Interp {
             }
             if method == Some(NativeMethod::FunctionApply) {
                 if !self.is_callable_value(this) {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg("this: not a Function instance".into())
+                    );
                 }
                 let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
                 let arg_array = args.get(1).copied().unwrap_or_else(Slot::undefined);
-                let (forwarded, array_read_meter) =
-                    if arg_array.kind == Kind::Undefined || arg_array.kind == Kind::Null {
-                        (Vec::new(), 0)
-                    } else {
-                        let forwarded = self.arraylike_to_vec(code, arg_array)?;
-                        let meter = self.apply_arraylike_metering(arg_array, forwarded.len());
-                        (forwarded, meter)
-                    };
+                let (forwarded, array_read_meter) = if arg_array.kind == Kind::Undefined
+                    || arg_array.kind == Kind::Null
+                {
+                    (Vec::new(), 0)
+                } else {
+                    if arg_array.kind != Kind::Reference {
+                        return Err(self.catchable_type_error_msg("argArray: not an object".into()));
+                    }
+                    let forwarded = self.arraylike_to_vec(code, arg_array)?;
+                    let meter = self.apply_arraylike_metering(arg_array, forwarded.len());
+                    (forwarded, meter)
+                };
                 self.meter
                     .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
                 func = this;
@@ -51172,13 +52340,13 @@ impl Interp {
         func: Slot,
         args: &[Slot],
         new_target: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let f = match func.value {
             Payload::Reference(f) if func.kind == Kind::Reference => f,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
         };
         if !self.is_constructor_value(func) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
         }
         if self.proxies.contains_key(&f) {
             return self.proxy_construct(code, f, args, new_target);
@@ -51186,7 +52354,7 @@ impl Interp {
         if let Some(n) = self.native_of(f) {
             let target = match new_target.value {
                 Payload::Reference(target) if new_target.kind == Kind::Reference => target,
-                _ => return Err(self.catchable_type_error()),
+                _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
             };
             let base = self.stack.len();
             self.push(Slot::of(Kind::Uninitialized, Payload::None)); // THIS = construct flag
@@ -51223,7 +52391,7 @@ impl Interp {
         func: Slot,
         args: &[Slot],
         new_target: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let f = match func.value {
             Payload::Reference(f) if self.functions.contains_key(&f) => f,
             _ => return Err(self.catchable_type_error()),
@@ -51233,7 +52401,9 @@ impl Interp {
             || self.bound_functions.contains_key(&f)
         {
             // Only a plain user constructor is driven here.
-            return Err(Halt::Unsupported("proxy:construct-nonuser-target"));
+            return Err(Step::Host(Halt::NotImplemented(
+                "proxy:construct-nonuser-target",
+            )));
         }
         let _ = new_target;
         let argc = args.len();
@@ -51246,7 +52416,6 @@ impl Interp {
         }
         let body_start = self.enter_call(argc, 0, true)?;
         let return_depth = self.call_stack.len();
-        self.callback_return_depth = None;
         let callee_seg = self.callee_segment(f);
         let seg_buf = if callee_seg == self.active_segment {
             None
@@ -51264,17 +52433,26 @@ impl Interp {
         let outcome = self.dispatch_at(body_code, body_start, return_depth);
         self.active_segment = saved_segment;
         match outcome {
-            Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
-            Halt::Return => Ok(self.pop()),
+            Step::Returned => Ok(self.pop()),
             other => Err(other),
         }
     }
 
     /// `CreateListFromArrayLike(value, «String, Symbol»)` (ECMA-262 7.3.18) —
     /// read `length`, then each indexed element, rejecting a non-string/symbol.
-    fn proxy_key_list(&mut self, code: &[u8], value: Slot) -> Result<Vec<Slot>, Halt> {
+    fn proxy_key_list(&mut self, code: &[u8], value: Slot) -> Result<Vec<Slot>, Step> {
         let inst = match value.value {
             Payload::Reference(i) if value.kind == Kind::Reference => i,
+            _ if value.kind == Kind::Null => {
+                return Err(self.catchable_type_error_msg("cannot coerce null to object".into()))
+            }
+            _ if value.kind == Kind::Undefined => {
+                return Err(
+                    self.catchable_type_error_msg("cannot coerce undefined to object".into())
+                )
+            }
+            // The pinned XS boxes other primitives here; retain the ECMA
+            // object requirement until that semantic divergence is resolved.
             _ => return Err(self.catchable_type_error()),
         };
         let length = self.arraylike_length(code, inst, value)?;
@@ -51283,7 +52461,9 @@ impl Interp {
         for i in 0..len {
             let element = self.arraylike_index(code, inst, i, value)?;
             if element.kind != Kind::String && element.kind != Kind::Symbol {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "(proxy).ownKeys: key is neither string nor symbol".into(),
+                ));
             }
             out.push(element);
         }
@@ -51297,7 +52477,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if let Some(a) = self
             .arrays
             .get(&inst)
@@ -51324,7 +52504,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         i: u64,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if let Some(item) = self
             .arrays
             .get(&inst)
@@ -51364,7 +52544,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         i: u64,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         match self.array_generic_index_read_key(inst, i) {
             Some(key) => self.mop_get_read(code, inst, key, receiver),
             None => Ok(Slot::undefined()),
@@ -51378,7 +52558,7 @@ impl Interp {
     /// setter cannot intercept a new own property. Once an entry has been
     /// obtained, every abrupt entry-processing completion closes the iterator;
     /// failures while advancing the iterator itself do not.
-    fn object_from_entries(&mut self, code: &[u8], iterable: Slot) -> Result<Slot, Halt> {
+    fn object_from_entries(&mut self, code: &[u8], iterable: Slot) -> Result<Slot, Step> {
         let saved_jumps = std::mem::take(&mut self.jumps);
         let outcome = self.object_from_entries_inner(code, iterable);
         self.jumps = saved_jumps;
@@ -51393,11 +52573,13 @@ impl Interp {
         &mut self,
         code: &[u8],
         iterable: Slot,
-    ) -> Result<Result<Slot, Slot>, Halt> {
+    ) -> Result<Result<Slot, Slot>, Step> {
         let result = self.slots.alloc(Slot::instance(self.object_proto));
 
         if matches!(iterable.kind, Kind::Null | Kind::Undefined) {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "invalid iterable".into())
+            ));
         }
 
         let value_id = self.intern_key("value");
@@ -51445,7 +52627,9 @@ impl Interp {
             && iterator_method.kind != Kind::Null
             && !self.is_callable_value(iterator_method)
         {
-            return Ok(Err(self.build_error("TypeError", 0, 0)));
+            return Ok(Err(
+                self.internal_error("TypeError", "call: not a function".into())
+            ));
         }
 
         let mut next_method = Slot::undefined();
@@ -51460,13 +52644,21 @@ impl Interp {
             };
             let inst = match iterator.value {
                 Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
-                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => {
+                    return Ok(Err(
+                        self.internal_error("TypeError", "iterator: not an object".into())
+                    ))
+                }
             };
             let next_id = self.intern_key("next");
             next_method =
                 match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
                     Ok(method) if self.is_callable_value(method) => method,
-                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                    Ok(_) => {
+                        return Ok(Err(
+                            self.internal_error("TypeError", "call: not a function".into())
+                        ))
+                    }
                     Err(error) => return Ok(Err(error)),
                 };
             Some(iterator)
@@ -51475,7 +52667,11 @@ impl Interp {
         };
         let iterator = match iterator {
             Some(iterator) => iterator,
-            None => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            None => {
+                return Ok(Err(
+                    self.internal_error("TypeError", "call: not a function".into())
+                ))
+            }
         };
 
         for _ in 0..1_000_000u64 {
@@ -51495,7 +52691,12 @@ impl Interp {
             };
             let step_inst = match step.value {
                 Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
-                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                _ => {
+                    return Ok(Err(self.internal_error(
+                        "TypeError",
+                        "iterator result: not an object".into(),
+                    )))
+                }
             };
             let done =
                 match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
@@ -51513,7 +52714,7 @@ impl Interp {
             let entry_inst = match entry.value {
                 Payload::Reference(inst) if entry.kind == Kind::Reference => inst,
                 _ => {
-                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.internal_error("TypeError", "item: not an object".into());
                     let error = self.array_from_close(code, iterator, error)?;
                     return Ok(Err(error));
                 }
@@ -51550,13 +52751,15 @@ impl Interp {
                 configurable: Some(true),
                 ..OrdinaryDescriptor::default()
             };
+            // The fresh ordinary result cannot reject an all-true data
+            // descriptor. XS does not expose an error diagnostic for this guard.
             if !self.ordinary_define_own_property(result, id, descriptor) {
                 let error = self.build_error("TypeError", 0, 0);
                 let error = self.array_from_close(code, iterator, error)?;
                 return Ok(Err(error));
             }
         }
-        Err(Halt::StepLimit(self.n_dispatched))
+        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
 
     // ---- the `mop_*` dispatchers: an object's internal method, proxy-aware ---
@@ -51576,7 +52779,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_get_prototype_inner(code, inst)
         })
@@ -51586,7 +52789,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_get_prototype(code, inst);
         }
@@ -51627,7 +52830,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         proto: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_set_prototype_inner(code, inst, proto)
         })
@@ -51638,7 +52841,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         proto: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_set_prototype(code, inst, proto);
         }
@@ -51674,7 +52877,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_is_extensible_inner(code, inst)
         })
@@ -51684,7 +52887,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_is_extensible(code, inst);
         }
@@ -51696,7 +52899,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_prevent_extensions_inner(code, inst)
         })
@@ -51706,7 +52909,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_prevent_extensions(code, inst);
         }
@@ -51724,10 +52927,10 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         frozen: bool,
-    ) -> Result<bool, Halt> {
+    ) -> Result<(), Step> {
         self.meter.tick_raw(INTEGRITY_APPLY_KEYS_BASE_METERING);
         if !self.mop_prevent_extensions(code, inst)? {
-            return Ok(false);
+            return Err(self.catchable_type_error_msg("extensible object".into()));
         }
         let keys = self.mop_own_keys(code, inst)?;
         let proxy = self.proxies.contains_key(&inst);
@@ -51777,10 +52980,10 @@ impl Interp {
             // index; refresh before the define.
             let key = self.refresh_read_key(key);
             if !self.mop_define_own_property_read(code, inst, key, desc)? {
-                return Ok(false);
+                return Err(self.catchable_type_error_msg("cannot configure property".into()));
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// `TestIntegrityLevel(O, sealed|frozen)` (ECMA-262 7.3.16).
@@ -51789,7 +52992,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         frozen: bool,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.meter.tick_raw(IS_EXTENSIBLE_RESIDUAL_METERING);
         if self.mop_is_extensible(code, inst)? {
             return Ok(false);
@@ -51815,7 +53018,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_get_own_property_inner(code, inst, id)
         })
@@ -51826,7 +53029,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_get_own_property(code, inst, id);
         }
@@ -51854,12 +53057,19 @@ impl Interp {
         code: &[u8],
         this: Slot,
         arg0: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         // `? ToObject(this)`: `null`/`undefined` throw (XS's `fxToInstance`); a
         // primitive boxes to its wrapper, whose own-property set is computed
         // directly below without materializing the wrapper.
         if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                if this.kind == Kind::Null {
+                    "cannot coerce null to object"
+                } else {
+                    "cannot coerce undefined to object"
+                }
+                .into(),
+            ));
         }
         // `? ToPropertyKey(V)` (XS's `fxAt`): a symbol resolves to its stable
         // key id; a non-index string interns as a name; any other primitive
@@ -51901,7 +53111,7 @@ impl Interp {
     /// read live before a throwing `Set` on the target. Nullish sources are
     /// skipped; every other primitive is boxed through the same ToObject path
     /// used by generic Array methods.
-    fn object_assign(&mut self, code: &[u8], target: Slot, sources: &[Slot]) -> Result<Slot, Halt> {
+    fn object_assign(&mut self, code: &[u8], target: Slot, sources: &[Slot]) -> Result<Slot, Step> {
         let to = self.array_to_object(target)?;
         let Payload::Reference(target_inst) = to.value else {
             unreachable!("ToObject target")
@@ -51939,7 +53149,7 @@ impl Interp {
                 let key = self.refresh_read_key(key);
                 let id = self.read_key_intern(key);
                 if !self.mop_set(code, target_inst, id, value, to)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.failed_set_error(target_inst, id, "C: xsSet"));
                 }
             }
         }
@@ -51958,7 +53168,7 @@ impl Interp {
         code: &[u8],
         o: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         // A Proxy routes through its `getOwnProperty` trap and the invariant
         // checks the MOP enforces.
         if self.proxies.contains_key(&o) {
@@ -52054,7 +53264,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
         desc: OrdinaryDescriptor,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_define_own_property_inner(code, inst, id, desc)
         })
@@ -52066,7 +53276,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
         desc: OrdinaryDescriptor,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_define_own_property(code, inst, id, desc);
         }
@@ -52099,7 +53309,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         Ok(self.mop_has_with_recursions(code, inst, id)?.0)
     }
 
@@ -52117,7 +53327,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<(bool, u64), Halt> {
+    ) -> Result<(bool, u64), Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_has_with_recursions_inner(code, inst, id)
         })
@@ -52128,7 +53338,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<(bool, u64), Halt> {
+    ) -> Result<(bool, u64), Step> {
         let mut current = inst;
         let mut frames = 0u64;
         loop {
@@ -52163,7 +53373,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if let Some(context) = self
             .array_iterator_proxy_get_context
             .filter(|context| context.target == inst && context.id == id)
@@ -52205,7 +53415,7 @@ impl Interp {
         meter_terminal_wrapper: bool,
         meter_forwarded_target: bool,
         after_active_trap: bool,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_get_with_proxy_metering_inner(
                 code,
@@ -52231,7 +53441,7 @@ impl Interp {
         meter_terminal_wrapper: bool,
         meter_forwarded_target: bool,
         after_active_trap: bool,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_get_with_metering(
                 code,
@@ -52433,6 +53643,80 @@ impl Interp {
     }
 
     /// `O.[[Set]](P, V, Receiver)`.
+    /// XS fxIDToString (xsSymbol.c), used by native property diagnostics.
+    /// Index keys carry XS_NO_ID in XS, and therefore print `?`, not the index.
+    fn property_debug_name(&self, id: u16) -> String {
+        let name = if let Some(name) = self.string_key_name(id) {
+            if string_to_index(&name).is_some() {
+                "?".to_string()
+            } else {
+                name
+            }
+        } else if let Some((&descriptor, _)) =
+            self.symbol_key_ids.iter().find(|(_, key)| **key == id)
+        {
+            let description = match self.slots.get(descriptor).value {
+                Payload::String(offset) => self.str_text(offset),
+                _ => String::new(),
+            };
+            format!("[{description}]")
+        } else {
+            "?".to_string()
+        };
+        // nameBuffer[256] is populated by snprintf, including a final NUL.
+        let bytes = name.as_bytes();
+        let end = bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(bytes.len())
+            .min(255);
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    }
+
+    /// Explain an ordinary [[Set]] rejection without invoking another getter
+    /// or Proxy trap. XS native setters use fxSetAll's caller-specific prefix.
+    fn failed_set_error(&mut self, inst: crate::value::SlotIndex, id: u16, prefix: &str) -> Step {
+        let error = self.failed_set_error_value(inst, id, prefix);
+        self.raise_js(error)
+    }
+
+    fn failed_set_error_value(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        prefix: &str,
+    ) -> Slot {
+        let mut current = inst;
+        let mut reason = "not extensible";
+        while !current.is_null() {
+            if self.proxies.contains_key(&current) {
+                // A false Proxy set result has different behavior in the
+                // pinned XS C setter; do not fabricate a parity diagnostic.
+                return self.internal_error("TypeError", String::new());
+            }
+            let descriptor = self
+                .ordinary_get_own_descriptor(current, id)
+                .or_else(|| self.exotic_own_descriptor(current, id));
+            if let Some(descriptor) = descriptor {
+                if descriptor.is_accessor() {
+                    reason = "no setter";
+                } else if descriptor.writable == Some(false) {
+                    reason = "not writable";
+                }
+                break;
+            }
+            current = self.instance_prototype(current);
+        }
+        let name = self.property_debug_name(id);
+        self.internal_error("TypeError", format!("{prefix} {name}: {reason}"))
+    }
+
+    /// XS fxDeleteAll reports a failed native deletion by key identity.
+    fn failed_delete_error(&mut self, id: u16) -> Step {
+        let name = self.property_debug_name(id);
+        self.catchable_type_error_msg(format!("delete {name}: not configurable"))
+    }
+
     fn mop_set(
         &mut self,
         code: &[u8],
@@ -52440,7 +53724,7 @@ impl Interp {
         id: u16,
         value: Slot,
         receiver: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.mop_set_inner(code, inst, id, value, receiver)
         })
@@ -52453,7 +53737,7 @@ impl Interp {
         id: u16,
         value: Slot,
         receiver: Slot,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_set(code, inst, id, value, receiver);
         }
@@ -52486,7 +53770,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_delete_inner(code, inst, id))
     }
 
@@ -52495,7 +53779,7 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_delete(code, inst, id);
         }
@@ -52543,7 +53827,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Vec<Slot>, Halt> {
+    ) -> Result<Vec<Slot>, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_own_keys_inner(code, inst))
     }
 
@@ -52551,7 +53835,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Vec<Slot>, Halt> {
+    ) -> Result<Vec<Slot>, Step> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_own_keys(code, inst);
         }
@@ -52755,8 +54039,8 @@ impl Interp {
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
-    ) -> Result<Slot, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Slot, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "getPrototypeOf")?;
         // Inline GetMethod here because its non-callable rejection has a
         // distinct XS meter outcome from a throwing getter. Other proxy traps
         // continue to share `proxy_trap`.
@@ -52774,7 +54058,9 @@ impl Interp {
         if !self.is_callable_value(trap) {
             self.meter
                 .untick_raw(PROXY_GET_PROTOTYPE_NONCALLABLE_CREDIT);
-            return Err(self.catchable_type_error());
+            return Err(
+                self.catchable_type_error_msg("(proxy).getPrototypeOf: not a function".into())
+            );
         };
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let result = match self.invoke_value(code, trap, handler_slot, &[target_slot]) {
@@ -52786,7 +54072,9 @@ impl Interp {
         };
         if result.kind != Kind::Reference && result.kind != Kind::Null {
             self.meter.tick_raw(PROXY_GET_PROTOTYPE_PRIMITIVE_METERING);
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "(proxy).getPrototypeOf: neither object nor null".into(),
+            ));
         }
         if self.mop_is_extensible(code, target)? {
             self.meter.tick_raw(PROXY_GET_PROTOTYPE_TRAP_METERING);
@@ -52796,7 +54084,9 @@ impl Interp {
         if !self.same_value(result, target_proto) {
             self.meter
                 .tick_raw(PROXY_GET_PROTOTYPE_INVARIANT_REJECT_METERING);
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "(proxy).getPrototypeOf: different prototype for non-extensible object".into(),
+            ));
         }
         self.meter
             .tick_raw(PROXY_GET_PROTOTYPE_FIXED_SUCCESS_METERING);
@@ -52809,8 +54099,8 @@ impl Interp {
         code: &[u8],
         proxy: crate::value::SlotIndex,
         proto: Slot,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "setPrototypeOf")?;
         let trap = match self.proxy_trap(code, handler, "setPrototypeOf")? {
             Some(t) => t,
             None => return self.mop_set_prototype(code, target, proto),
@@ -52826,7 +54116,10 @@ impl Interp {
         }
         let target_proto = self.mop_get_prototype(code, target)?;
         if !self.same_value(proto, target_proto) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "(proxy).setPrototypeOf: true for non-extensible object with different prototype"
+                    .into(),
+            ));
         }
         Ok(true)
     }
@@ -52836,8 +54129,8 @@ impl Interp {
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "isExtensible")?;
         let trap = match self.proxy_trap(code, handler, "isExtensible")? {
             Some(t) => t,
             None => return self.mop_is_extensible(code, target),
@@ -52848,7 +54141,14 @@ impl Interp {
         let boolean = self.truthy(&result);
         let target_result = self.mop_is_extensible(code, target)?;
         if boolean != target_result {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                if boolean {
+                    "(proxy).isExtensible: true for non-extensible object"
+                } else {
+                    "(proxy).isExtensible: false for extensible object"
+                }
+                .into(),
+            ));
         }
         Ok(boolean)
     }
@@ -52858,8 +54158,8 @@ impl Interp {
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "preventExtensions")?;
         let trap = match self.proxy_trap(code, handler, "preventExtensions")? {
             Some(t) => t,
             None => return self.mop_prevent_extensions(code, target),
@@ -52869,7 +54169,9 @@ impl Interp {
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
         let boolean = self.truthy(&result);
         if boolean && self.mop_is_extensible(code, target)? {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "(proxy).preventExtensions: true for extensible object".into(),
+            ));
         }
         Ok(boolean)
     }
@@ -52880,8 +54182,8 @@ impl Interp {
         code: &[u8],
         proxy: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "getOwnPropertyDescriptor")?;
         let trap = match self.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
             Some(t) => t,
             None => return self.mop_get_own_property(code, target, id),
@@ -52901,13 +54203,13 @@ impl Interp {
         handler: crate::value::SlotIndex,
         trap: Slot,
         key_id: ReadKey,
-    ) -> Result<Option<OrdinaryDescriptor>, Halt> {
+    ) -> Result<Option<OrdinaryDescriptor>, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.read_key_slot(key_id)?;
         let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key])?;
         if trap_result.kind != Kind::Undefined && trap_result.kind != Kind::Reference {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("descriptor: not an object".into()));
         }
         // The trap may have named this index mid-flight (see
         // `refresh_read_key`); a stale `Index` would miss the very property
@@ -52919,10 +54221,10 @@ impl Interp {
                 None => return Ok(None),
                 Some(d) => {
                     if d.configurable == Some(false) {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("(proxy).getOwnPropertyDescriptor: no descriptor for non-configurable property".into()));
                     }
                     if !self.mop_is_extensible(code, target)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("(proxy).getOwnPropertyDescriptor: no descriptor for existent property of non-extensible object".into()));
                     }
                     return Ok(None);
                 }
@@ -52930,18 +54232,23 @@ impl Interp {
         }
         let obj = match trap_result.value {
             Payload::Reference(o) => o,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("descriptor: not an object".into())),
         };
         let result_desc = self.descriptor_from_object(code, obj)?;
         let result_desc = complete_descriptor(result_desc);
         let extensible = self.mop_is_extensible(code, target)?;
         if !self.is_compatible_descriptor(extensible, &result_desc, target_desc.as_ref()) {
-            return Err(self.catchable_type_error());
+            let message = if target_desc.is_some() {
+                "(proxy).getOwnPropertyDescriptor: incompatible descriptor for existent property"
+            } else {
+                "(proxy).getOwnPropertyDescriptor: descriptor for non-existent property of non-extensible object"
+            };
+            return Err(self.catchable_type_error_msg(message.into()));
         }
         if result_desc.configurable == Some(false) {
             match &target_desc {
-                None => return Err(self.catchable_type_error()),
-                Some(d) if d.configurable != Some(false) => return Err(self.catchable_type_error()),
+                None => return Err(self.catchable_type_error_msg("(proxy).getOwnPropertyDescriptor: non-configurable descriptor for non-existent property".into())),
+                Some(d) if d.configurable != Some(false) => return Err(self.catchable_type_error_msg("(proxy).getOwnPropertyDescriptor: non-configurable descriptor for configurable property".into())),
                 Some(d) => {
                     // A non-configurable non-writable target data property may
                     // not be reported writable.
@@ -52950,7 +54257,7 @@ impl Interp {
                         && d.is_data()
                         && d.writable == Some(true)
                     {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("(proxy).getOwnPropertyDescriptor: true with non-writable descriptor for non-configurable writable property".into()));
                     }
                 }
             }
@@ -52965,8 +54272,8 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         id: u16,
         desc: OrdinaryDescriptor,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "defineProperty")?;
         let trap = match self.proxy_trap(code, handler, "defineProperty")? {
             Some(t) => t,
             None => return self.mop_define_own_property(code, target, id, desc),
@@ -52984,23 +54291,26 @@ impl Interp {
         let setting_config_false = desc.configurable == Some(false);
         match &target_desc {
             None => {
-                if !extensible || setting_config_false {
-                    return Err(self.catchable_type_error());
+                if !extensible {
+                    return Err(self.catchable_type_error_msg("(proxy).defineProperty: true with descriptor for non-existent property of non-extensible object".into()));
+                }
+                if setting_config_false {
+                    return Err(self.catchable_type_error_msg("(proxy).defineProperty: true with non-configurable descriptor for non-existent property".into()));
                 }
             }
             Some(d) => {
                 if !self.is_compatible_descriptor(extensible, &desc, Some(d)) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("(proxy).defineProperty: true with incompatible descriptor for existent property".into()));
                 }
                 if setting_config_false && d.configurable != Some(false) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("(proxy).defineProperty: true with non-configurable descriptor for configurable property".into()));
                 }
                 if d.is_data()
                     && d.configurable == Some(false)
                     && d.writable == Some(true)
                     && desc.writable == Some(false)
                 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("(proxy).defineProperty: true with non-writable descriptor for non-configurable writable property".into()));
                 }
             }
         }
@@ -53013,8 +54323,8 @@ impl Interp {
         code: &[u8],
         proxy: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "has")?;
         let trap = match self.proxy_trap(code, handler, "has")? {
             Some(t) => t,
             None => return self.mop_has(code, target, id),
@@ -53027,10 +54337,14 @@ impl Interp {
         if !boolean {
             if let Some(d) = self.mop_get_own_property(code, target, id)? {
                 if d.configurable == Some(false) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).has: false for non-configurable property".into(),
+                    ));
                 }
                 if !self.mop_is_extensible(code, target)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).has: false for property of not extensible object".into(),
+                    ));
                 }
             }
         }
@@ -53044,7 +54358,7 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         id: u16,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.proxy_get_with_metering(
             code,
             proxy,
@@ -53067,8 +54381,8 @@ impl Interp {
         meter_terminal_wrapper: bool,
         meter_forwarded_target: bool,
         after_active_trap: bool,
-    ) -> Result<Slot, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Slot, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "get")?;
         let trap = match self.proxy_trap(code, handler, "get")? {
             Some(t) => t,
             None => {
@@ -53115,7 +54429,7 @@ impl Interp {
         proxy_trap_metering: u64,
         meter_forwarded_target: bool,
         meter_terminal_wrapper: bool,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if meter_forwarded_target {
             self.meter.tick_raw(
                 if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING {
@@ -53162,13 +54476,18 @@ impl Interp {
                     && d.writable == Some(false)
                     && !self.same_value(trap_result, d.value.unwrap_or_else(Slot::undefined))
                 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).get: different value for non-configurable, non-writable property"
+                            .into(),
+                    ));
                 }
                 if d.is_accessor()
                     && d.get.map(|g| g.kind == Kind::Undefined).unwrap_or(true)
                     && trap_result.kind != Kind::Undefined
                 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).get: different getter for non-configurable property".into(),
+                    ));
                 }
             }
         }
@@ -53183,8 +54502,8 @@ impl Interp {
         id: u16,
         value: Slot,
         receiver: Slot,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "set")?;
         let trap = match self.proxy_trap(code, handler, "set")? {
             Some(t) => t,
             None => return self.mop_set(code, target, id, value, receiver),
@@ -53207,10 +54526,13 @@ impl Interp {
                     && d.writable == Some(false)
                     && !self.same_value(value, d.value.unwrap_or_else(Slot::undefined))
                 {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("(proxy).set: true for non-configurable, non-writable property with different value".into()));
                 }
                 if d.is_accessor() && d.set.map(|s| s.kind == Kind::Undefined).unwrap_or(true) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).set: true for non-configurable property with different setter"
+                            .into(),
+                    ));
                 }
             }
         }
@@ -53223,8 +54545,8 @@ impl Interp {
         code: &[u8],
         proxy: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<bool, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<bool, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "deleteProperty")?;
         let trap = match self.proxy_trap(code, handler, "deleteProperty")? {
             Some(t) => t,
             None => return self.mop_delete(code, target, id),
@@ -53243,7 +54565,7 @@ impl Interp {
         handler: crate::value::SlotIndex,
         trap: Slot,
         key_id: ReadKey,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.read_key_slot(key_id)?;
@@ -53260,10 +54582,14 @@ impl Interp {
             None => Ok(true),
             Some(d) => {
                 if d.configurable == Some(false) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).deleteProperty: true for non-configurable property".into(),
+                    ));
                 }
                 if !self.mop_is_extensible(code, target)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).deleteProperty: true for non-extensible object".into(),
+                    ));
                 }
                 Ok(true)
             }
@@ -53275,8 +54601,8 @@ impl Interp {
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
-    ) -> Result<Vec<Slot>, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Vec<Slot>, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "ownKeys")?;
         let trap = match self.proxy_trap(code, handler, "ownKeys")? {
             Some(t) => t,
             None => return self.mop_own_keys(code, target),
@@ -53297,7 +54623,7 @@ impl Interp {
         for k in &trap_keys {
             let key = self.to_read_key(code, *k)?;
             if seen.contains(&key) {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("(proxy).ownKeys: duplicate key".into()));
             }
             seen.push(key);
         }
@@ -53334,7 +54660,11 @@ impl Interp {
                 Some(pos) => {
                     unchecked.remove(pos);
                 }
-                None => return Err(self.catchable_type_error()),
+                None => {
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).ownKeys: no key for non-configurable property".into(),
+                    ))
+                }
             }
         }
         if extensible {
@@ -53345,11 +54675,17 @@ impl Interp {
                 Some(pos) => {
                     unchecked.remove(pos);
                 }
-                None => return Err(self.catchable_type_error()),
+                None => {
+                    return Err(self.catchable_type_error_msg(
+                        "(proxy).ownKeys: no key for property of non-extensible object".into(),
+                    ))
+                }
             }
         }
         if !unchecked.is_empty() {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "(proxy).ownKeys: key for non-existent property of non-extensible object".into(),
+            ));
         }
         Ok(trap_keys)
     }
@@ -53363,7 +54699,7 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.proxy_call_inner(code, proxy, this, args)
         })
@@ -53375,8 +54711,8 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         this: Slot,
         args: &[Slot],
-    ) -> Result<Slot, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Slot, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "apply")?;
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let trap = match self.proxy_trap(code, handler, "apply")? {
             Some(t) => t,
@@ -53421,7 +54757,7 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         args: &[Slot],
         new_target: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.proxy_construct_inner(code, proxy, args, new_target)
         })
@@ -53433,8 +54769,8 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         args: &[Slot],
         new_target: Slot,
-    ) -> Result<Slot, Halt> {
-        let (target, handler) = self.proxy_target_handler(proxy)?;
+    ) -> Result<Slot, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "construct")?;
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let trap = match self.proxy_trap(code, handler, "construct")? {
             Some(t) => t,
@@ -53449,7 +54785,7 @@ impl Interp {
             &[target_slot, arg_array, new_target],
         )?;
         if result.kind != Kind::Reference {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("(proxy).construct: not an object".into()));
         }
         Ok(result)
     }
@@ -53464,7 +54800,7 @@ impl Interp {
         base: usize,
         argc: usize,
         code: &[u8],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let proxy_slot = Slot::of(Kind::Reference, Payload::Reference(proxy));
         let arg = |slf: &Self, i: usize| -> Slot {
             slf.stack
@@ -53478,7 +54814,7 @@ impl Interp {
             }
             NativeMethod::ObjectPreventExtensions => {
                 if !self.mop_prevent_extensions(code, proxy)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("extensible object".into()));
                 }
                 Ok(proxy_slot)
             }
@@ -53559,29 +54895,30 @@ impl Interp {
                 let id = self.to_property_id(code, arg(self, 1))?;
                 let descref = match arg(self, 2).value {
                     Payload::Reference(d) if arg(self, 2).kind == Kind::Reference => d,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("invalid descriptor".into())),
                 };
                 let desc = self.descriptor_from_object(code, descref)?;
                 if !self.mop_define_own_property(code, proxy, id, desc)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                 }
                 Ok(proxy_slot)
             }
             NativeMethod::ObjectDefineProperties => {
+                if arg(self, 1).kind == Kind::Undefined {
+                    return Err(self.catchable_type_error_msg("invalid properties".into()));
+                }
                 let props = self.array_to_object(arg(self, 1))?;
                 let Payload::Reference(props) = props.value else {
                     unreachable!("ToObject returns a reference")
                 };
                 if !self.define_properties_from_object(code, proxy, props)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("invalid descriptor".into()));
                 }
                 Ok(proxy_slot)
             }
             NativeMethod::ObjectSeal | NativeMethod::ObjectFreeze => {
                 let frozen = matches!(m, NativeMethod::ObjectFreeze);
-                if !self.set_integrity_level(code, proxy, frozen)? {
-                    return Err(self.catchable_type_error());
-                }
+                self.set_integrity_level(code, proxy, frozen)?;
                 Ok(proxy_slot)
             }
             NativeMethod::ObjectIsSealed | NativeMethod::ObjectIsFrozen => {
@@ -53592,7 +54929,9 @@ impl Interp {
             }
             _ => {
                 let _ = argc;
-                Err(Halt::Unsupported("Object-static:unexpected-proxy"))
+                Err(Step::Host(Halt::EngineInvariant(
+                    "Object-static:unexpected-proxy",
+                )))
             }
         }
     }
@@ -53687,7 +55026,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         descriptor: crate::value::SlotIndex,
-    ) -> Result<OrdinaryDescriptor, Halt> {
+    ) -> Result<OrdinaryDescriptor, Step> {
         let mut out = OrdinaryDescriptor::default();
         for name in [
             "enumerable",
@@ -53715,23 +55054,36 @@ impl Interp {
                 "configurable" => out.configurable = Some(self.truthy(&value)),
                 "value" => out.value = Some(value),
                 "writable" => out.writable = Some(self.truthy(&value)),
-                "get" => {
-                    if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error_msg("getter is not callable".into()));
-                    }
-                    out.get = Some(value);
-                }
-                "set" => {
-                    if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error_msg("setter is not callable".into()));
-                    }
-                    out.set = Some(value);
-                }
+                "get" => out.get = Some(value),
+                "set" => out.set = Some(value),
                 _ => unreachable!(),
             }
         }
-        if out.is_accessor() && out.is_data() {
-            return Err(self.catchable_type_error_msg("invalid property descriptor".into()));
+        // XS fxDescriptorToSlot reads every field before validating getter
+        // and setter combinations, so later accessors can still throw first.
+        for (name, accessor) in [("get", out.get), ("set", out.set)] {
+            if let Some(value) = accessor {
+                if out.value.is_some() {
+                    return Err(self.catchable_type_error_msg(format!(
+                        "descriptor: {name} and value properties"
+                    )));
+                }
+                if out.writable.is_some() {
+                    return Err(self.catchable_type_error_msg(format!(
+                        "descriptor: {name} and writable properties"
+                    )));
+                }
+                if value.kind == Kind::Null {
+                    return Err(
+                        self.catchable_type_error_msg("cannot coerce null to object".into())
+                    );
+                }
+                if value.kind != Kind::Undefined && !self.is_callable_value(value) {
+                    return Err(
+                        self.catchable_type_error_msg(format!("descriptor.{name}: not a function"))
+                    );
+                }
+            }
         }
         Ok(out)
     }
@@ -53741,7 +55093,7 @@ impl Interp {
     /// Keeping the resulting string slot separate from interning lets callers
     /// apply receiver-specific checks (canonical numeric indices and the
     /// boot-default soundness gate) before the name enters `symbol_ids`.
-    fn to_property_key(&mut self, code: &[u8], key: Slot) -> Result<Slot, Halt> {
+    fn to_property_key(&mut self, code: &[u8], key: Slot) -> Result<Slot, Step> {
         if key.kind == Kind::Symbol {
             return Ok(key);
         }
@@ -53752,7 +55104,7 @@ impl Interp {
         Ok(self.to_string_slot_metered(primitive))
     }
 
-    fn to_property_id(&mut self, code: &[u8], key: Slot) -> Result<u16, Halt> {
+    fn to_property_id(&mut self, code: &[u8], key: Slot) -> Result<u16, Step> {
         if let Payload::At(id, index) = key.value {
             return Ok(if id == crate::value::XS_NO_ID {
                 self.intern_key(&index.to_string())
@@ -53767,16 +55119,20 @@ impl Interp {
                 // A `Kind::Symbol` slot always carries its descriptor
                 // reference; anything else is a port invariant break, not
                 // guest behavior.
-                _ => Err(Halt::EngineInvariant(
+                _ => Err(Step::Host(Halt::EngineInvariant(
                     "to_property_id:symbol-without-descriptor",
-                )),
+                ))),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
             // `to_property_key` returns a string or a symbol; anything else
             // is a port invariant break.
-            _ => return Err(Halt::EngineInvariant("to_property_id:non-string-key")),
+            _ => {
+                return Err(Step::Host(Halt::EngineInvariant(
+                    "to_property_id:non-string-key",
+                )))
+            }
         };
         let id = self.intern_key(&name);
         // A runtime-computed key can be the first observation of a standard
@@ -53790,7 +55146,7 @@ impl Interp {
         Ok(id)
     }
 
-    fn property_key_slot(&mut self, id: u16) -> Result<Slot, Halt> {
+    fn property_key_slot(&mut self, id: u16) -> Result<Slot, Step> {
         if let Some((&descriptor, _)) = self
             .symbol_key_ids
             .iter()
@@ -53802,7 +55158,9 @@ impl Interp {
             .symbol_ids
             .iter()
             .find_map(|(name, property_id)| (*property_id == id).then(|| name.clone()))
-            .ok_or(Halt::Unsupported("ordinary-ownKeys:unknown-key"))?;
+            .ok_or(Step::Host(Halt::EngineInvariant(
+                "ordinary-ownKeys:unknown-key",
+            )))?;
         let offset = self.alloc_str_text(name.as_bytes());
         Ok(Slot::of(Kind::String, Payload::String(offset)))
     }
@@ -53812,7 +55170,7 @@ impl Interp {
         code: &[u8],
         target: crate::value::SlotIndex,
         descriptors: crate::value::SlotIndex,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let receiver = Slot::of(Kind::Reference, Payload::Reference(descriptors));
         let keys = self.mop_own_keys(code, descriptors)?;
         let mut pending = Vec::with_capacity(keys.len());
@@ -53827,7 +55185,7 @@ impl Interp {
             let value = self.mop_get(code, descriptors, id, receiver)?;
             let descriptor_object = match value.value {
                 Payload::Reference(object) if value.kind == Kind::Reference => object,
-                _ => return Err(self.catchable_type_error()),
+                _ => return Err(self.catchable_type_error_msg("descriptor: not an object".into())),
             };
             pending.push((id, self.descriptor_from_object(code, descriptor_object)?));
         }
@@ -54044,7 +55402,7 @@ impl Interp {
         off: crate::value::ChunkOffset,
         id: u16,
         receiver: Slot,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if Some(id) == self.length_id {
             // `length` is O(1) over UTF-16 storage: half the stored byte payload.
             return Ok(Slot::integer(self.str_len(off) as i32));
@@ -54174,7 +55532,7 @@ impl Interp {
         code: &[u8],
         obj: crate::value::SlotIndex,
         id: u16,
-    ) -> Result<bool, Halt> {
+    ) -> Result<bool, Step> {
         let (present, frames) = self.mop_has_with_recursions(code, obj, id)?;
         self.meter.tick_raw(WITH_SCOPABLE_HAS_METERING);
         self.meter
@@ -54306,7 +55664,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         name: u16,
-    ) -> Result<Option<crate::value::SlotIndex>, Halt> {
+    ) -> Result<Option<crate::value::SlotIndex>, Step> {
         if self.env.kind != Kind::Reference {
             return Ok(None);
         }
@@ -54514,10 +55872,12 @@ impl Interp {
     // unsupported rather than producing a spurious `NaN`. (A reference
     // operand ToPrimitives to `NaN` for a plain object, which matches XS,
     // so it is left on the numeric path.)
-    fn binary_arith(&mut self, code: &[u8], op: ArithOp) -> Result<(), Halt> {
+    fn binary_arith(&mut self, code: &[u8], op: ArithOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::EngineInvariant("arithmetic:stack-underflow"));
+            return Err(Step::Host(Halt::EngineInvariant(
+                "arithmetic:stack-underflow",
+            )));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -54535,30 +55895,45 @@ impl Interp {
                 }
                 None => {}
             }
-            return Err(self.catchable_type_error());
+            return Err(Step::Host(Halt::EngineInvariant(
+                "bigint:missing-binary-result",
+            )));
         }
         self.push(apply_arith(op, &a, &b));
         Ok(())
     }
 
-    fn binary_bit(&mut self, code: &[u8], op: BitOp) -> Result<(), Halt> {
+    fn binary_bit(&mut self, code: &[u8], op: BitOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::EngineInvariant("bitwise:stack-underflow"));
+            return Err(Step::Host(Halt::EngineInvariant("bitwise:stack-underflow")));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
-        let a = self.to_number_value(code, a_value)?;
-        let b = self.to_number_value(code, b_value)?;
+        let (a, b) = if op == BitOp::Shr {
+            (
+                self.to_number_value(code, a_value)?,
+                self.to_number_value(code, b_value)?,
+            )
+        } else {
+            (
+                self.to_numeric_integer_value(code, a_value)?,
+                self.to_numeric_integer_value(code, b_value)?,
+            )
+        };
         self.stack.truncate(n - 2);
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
             let (Payload::BigInt(a_off), Payload::BigInt(b_off)) = (a.value, b.value) else {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(if a.kind == Kind::BigInt {
+                    "cannot coerce right operand to bigint".into()
+                } else {
+                    "cannot coerce left operand to bigint".into()
+                }));
             };
             if op == BitOp::Shr {
                 // BigInt has no unsigned-right-shift operation. Both operands
                 // have nevertheless completed ToNumeric before this TypeError.
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("no such operation".into()));
             }
             let result = match op {
                 BitOp::And | BitOp::Or | BitOp::Xor => self.bigint_bitwise(op, a_off, b_off),
@@ -54598,10 +55973,12 @@ impl Interp {
     /// string/numeric pair needs `ToNumber(string)` (or `ToPrimitive` of a
     /// reference), outside the covered subset, so it returns `Err` and the
     /// caller self-names unsupported.
-    fn relational(&mut self, code: &[u8], op: RelOp) -> Result<(), Halt> {
+    fn relational(&mut self, code: &[u8], op: RelOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::EngineInvariant("comparison:stack-underflow"));
+            return Err(Step::Host(Halt::EngineInvariant(
+                "comparison:stack-underflow",
+            )));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -54702,7 +56079,7 @@ impl Interp {
     /// loose string↔{number,boolean} applies `ToNumber` after any object
     /// operand has already gone through `ToPrimitive`. Non-string kinds keep
     /// the existing primitive/reference-identity comparison.
-    fn equality(&mut self, code: &[u8], strict: bool, negate: bool) -> Result<(), Halt> {
+    fn equality(&mut self, code: &[u8], strict: bool, negate: bool) -> Result<(), Step> {
         let mut b = self.pop();
         let mut a = self.pop();
         // Abstract Equality Comparison converts an object operand to a
@@ -54773,7 +56150,7 @@ impl Interp {
                 if strict {
                     false // `===` across types is false without coercion
                 } else {
-                    return Err(Halt::Unsupported("equal")); // `==` needs ToNumber(string)
+                    return Err(Step::Host(Halt::NotImplemented("equal"))); // `==` needs ToNumber(string)
                 }
             }
             // BigInt `===`/`==`. Both BigInt: compare sign+magnitude
@@ -54841,7 +56218,7 @@ impl Interp {
                 if strict {
                     false
                 } else {
-                    return Err(Halt::Unsupported("equal"));
+                    return Err(Step::Host(Halt::NotImplemented("equal")));
                 }
             }
             _ => {
@@ -54864,12 +56241,12 @@ impl Interp {
         method: Slot,
         receiver: Slot,
         args: &[Slot],
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         if !self.is_callable_value(method) {
             // GetMethod/Call requires a callable conversion hook. A present
             // non-callable `@@toPrimitive`, `valueOf`, or `toString` throws a
             // realm-local TypeError that surrounding JS can catch.
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("call: not a function".into()));
         }
         self.invoke_value(code, method, receiver, args)
     }
@@ -54878,7 +56255,7 @@ impl Interp {
     /// `valueOf`/`toString` fallback order.  The hint is `true` for string and
     /// `false` for number; default-hint callers use
     /// [`Self::to_primitive_default`].
-    fn to_primitive(&mut self, code: &[u8], value: Slot, string_hint: bool) -> Result<Slot, Halt> {
+    fn to_primitive(&mut self, code: &[u8], value: Slot, string_hint: bool) -> Result<Slot, Step> {
         let hint = if string_hint {
             PrimitiveHint::String
         } else {
@@ -54890,7 +56267,7 @@ impl Interp {
     /// `ToPrimitive(value)` with the ECMAScript default hint. Date objects use
     /// the string fallback order; ordinary objects use the number order, and a
     /// guest `@@toPrimitive` observes the literal `"default"` hint.
-    fn to_primitive_default(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+    fn to_primitive_default(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
         self.to_primitive_with_hint(code, value, PrimitiveHint::Default)
     }
 
@@ -54899,7 +56276,7 @@ impl Interp {
         code: &[u8],
         value: Slot,
         hint: PrimitiveHint,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let inst = match value.value {
             Payload::Reference(inst) if value.kind == Kind::Reference => inst,
             _ => return Ok(value),
@@ -54940,7 +56317,7 @@ impl Interp {
                     if result.kind != Kind::Reference {
                         return Ok(result);
                     }
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("cannot coerce to primitive".into()));
                 }
             }
         }
@@ -54957,7 +56334,7 @@ impl Interp {
         code: &[u8],
         value: Slot,
         string_hint: bool,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let inst = match value.value {
             Payload::Reference(inst) if value.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
@@ -54997,7 +56374,11 @@ impl Interp {
                 return Ok(result);
             }
         }
-        Err(self.catchable_type_error())
+        Err(self.catchable_type_error_msg(if string_hint {
+            "cannot coerce object to string".into()
+        } else {
+            "cannot coerce object to number".into()
+        }))
     }
 
     /// `ToNumeric` after `ToPrimitive`, retaining XS's integer fast kind where
@@ -55005,7 +56386,7 @@ impl Interp {
     /// ECMAScript number, and raising the required catchable TypeError for a
     /// Symbol. Callers whose abstract operation is specifically `ToNumber`
     /// reject the preserved BigInt at their boundary.
-    fn to_number_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+    fn to_number_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
         let primitive = self.to_primitive(code, value, false)?;
         match primitive.kind {
             Kind::Integer | Kind::Number => Ok(primitive),
@@ -55018,17 +56399,30 @@ impl Interp {
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => Ok(Slot::number(to_number(&primitive))),
             Kind::BigInt => Ok(primitive),
-            Kind::Symbol => Err(self.catchable_type_error()),
-            _ => Err(Halt::EngineInvariant("to_numeric:non-value-kind")),
+            Kind::Symbol => {
+                Err(self.catchable_type_error_msg("cannot coerce symbol to number".into()))
+            }
+            _ => Err(Step::Host(Halt::EngineInvariant(
+                "to_numeric:non-value-kind",
+            ))),
         }
+    }
+
+    /// XS bitwise coercion uses ToInteger diagnostics while preserving BigInt.
+    fn to_numeric_integer_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
+        let primitive = self.to_primitive(code, value, false)?;
+        if primitive.kind == Kind::Symbol {
+            return Err(self.catchable_type_error_msg("cannot coerce symbol to integer".into()));
+        }
+        self.to_number_value(code, primitive)
     }
 
     /// ECMAScript `ToNumber`: run the shared observable primitive conversion,
     /// then reject the BigInt value that `ToNumeric` deliberately preserves.
-    fn to_number_f64(&mut self, code: &[u8], value: Slot) -> Result<f64, Halt> {
+    fn to_number_f64(&mut self, code: &[u8], value: Slot) -> Result<f64, Step> {
         let number = self.to_number_value(code, value)?;
         if number.kind == Kind::BigInt {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("cannot coerce to number".into()));
         }
         Ok(to_number(&number))
     }
@@ -55038,10 +56432,10 @@ impl Interp {
     /// (unsupported); a string operand means concatenation
     /// ([`Self::concat_add`]); otherwise the numeric fast path
     /// ([`Self::binary_arith`]).
-    fn op_add(&mut self, code: &[u8]) -> Result<(), Halt> {
+    fn op_add(&mut self, code: &[u8]) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Halt::EngineInvariant("add:stack-underflow"));
+            return Err(Step::Host(Halt::EngineInvariant("add:stack-underflow")));
         }
         let a = self.to_primitive_default(code, self.stack[n - 2])?;
         let b = self.to_primitive_default(code, self.stack[n - 1])?;
@@ -55050,7 +56444,7 @@ impl Interp {
         // with a Number throws the catchable TypeError from ToNumeric.
         if a.kind == Kind::String || b.kind == Kind::String {
             if a.kind == Kind::Symbol || b.kind == Kind::Symbol {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg("cannot coerce symbol to string".into()));
             }
             self.stack.truncate(n - 2);
             self.concat_add(a, b);
@@ -55062,7 +56456,9 @@ impl Interp {
                 self.push(r);
                 return Ok(());
             }
-            return Err(self.catchable_type_error());
+            return Err(Step::Host(Halt::EngineInvariant(
+                "bigint:missing-binary-result",
+            )));
         }
         self.stack.truncate(n - 2);
         self.push(a);
@@ -55250,7 +56646,7 @@ impl Interp {
     }
 
     /// The BigInt primitive carried by a primitive or boxed receiver.
-    fn bigint_this_value(&mut self, this: Slot) -> Result<Slot, Halt> {
+    fn bigint_this_value(&mut self, this: Slot) -> Result<Slot, Step> {
         if this.kind == Kind::BigInt {
             return Ok(this);
         }
@@ -55260,13 +56656,13 @@ impl Interp {
                 .get(&owner)
                 .copied()
                 .filter(|value| value.kind == Kind::BigInt)
-                .ok_or_else(|| self.catchable_type_error()),
-            _ => Err(self.catchable_type_error()),
+                .ok_or_else(|| self.catchable_type_error_msg("this: not a bigint".into())),
+            _ => Err(self.catchable_type_error_msg("this: not a bigint".into())),
         }
     }
 
     /// The Symbol primitive carried by a primitive or boxed receiver.
-    fn symbol_this_value(&mut self, this: Slot) -> Result<Slot, Halt> {
+    fn symbol_this_value(&mut self, this: Slot) -> Result<Slot, Step> {
         if this.kind == Kind::Symbol {
             return Ok(this);
         }
@@ -55276,31 +56672,27 @@ impl Interp {
                 .get(&owner)
                 .copied()
                 .filter(|value| value.kind == Kind::Symbol)
-                .ok_or_else(|| self.catchable_type_error()),
-            _ => Err(self.catchable_type_error()),
+                .ok_or_else(|| self.catchable_type_error_msg("this: not a symbol".into())),
+            _ => Err(self.catchable_type_error_msg("this: not a symbol".into())),
         }
     }
 
     /// `ToIndex(bits)` for `BigInt.asIntN` / `BigInt.asUintN`.
-    fn to_bigint_width(&mut self, code: &[u8], value: Slot) -> Result<u64, Halt> {
-        if matches!(value.kind, Kind::Symbol | Kind::BigInt) {
-            return Err(self.catchable_type_error());
-        }
-        let number = self.to_number_value(code, value)?;
-        if matches!(number.kind, Kind::Symbol | Kind::BigInt) {
-            return Err(self.catchable_type_error());
-        }
-        let n = to_number(&number);
+    fn to_bigint_width(&mut self, code: &[u8], value: Slot) -> Result<u64, Step> {
+        let n = self.to_number_f64(code, value)?;
         let integer = if n.is_nan() { 0.0 } else { n.trunc() };
-        if integer < 0.0 || !integer.is_finite() || integer > 9_007_199_254_740_991.0 {
-            return Err(self.catchable_range_error());
+        if integer < 0.0 {
+            return Err(self.catchable_range_error_msg("index < 0".into()));
+        }
+        if !integer.is_finite() || integer > 9_007_199_254_740_991.0 {
+            return Err(self.catchable_range_error_msg("invalid index".into()));
         }
         Ok(integer as u64)
     }
 
     /// The general `ToBigInt` operation used by the width-limiting statics.
     /// Unlike the public `BigInt()` constructor, this rejects Number values.
-    fn to_bigint_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+    fn to_bigint_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
         let primitive = self.to_primitive(code, value, false)?;
         match primitive.kind {
             Kind::BigInt => Ok(primitive),
@@ -55313,11 +56705,21 @@ impl Interp {
                     Payload::String(off) => self.str_text(off),
                     _ => return Err(self.catchable_syntax_error()),
                 };
-                let (negative, magnitude) =
-                    parse_bigint_string(&text).ok_or_else(|| self.catchable_syntax_error())?;
+                let (negative, magnitude) = parse_bigint_string(&text).ok_or_else(|| {
+                    self.catchable_syntax_error_with_message(
+                        "cannot coerce string to bigint".into(),
+                    )
+                })?;
                 Ok(self.make_bigint(negative, magnitude))
             }
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.catchable_type_error_msg(
+                match primitive.kind {
+                    Kind::Integer | Kind::Number => "cannot coerce number to bigint",
+                    Kind::Symbol => "cannot coerce symbol to bigint",
+                    _ => "cannot coerce to bigint",
+                }
+                .into(),
+            )),
         }
     }
 
@@ -55325,7 +56727,7 @@ impl Interp {
     /// a sign bit for `asIntN`. Widths that would require an adversarially
     /// large positive result are named unsupported; widths wider than an
     /// already-representable value return that value without allocation.
-    fn bigint_as_n(&mut self, value: Slot, bits: u64, signed: bool) -> Result<Slot, Halt> {
+    fn bigint_as_n(&mut self, value: Slot, bits: u64, signed: bool) -> Result<Slot, Step> {
         const MAX_BIGINT_WIDTH_BITS: u64 = 64 * 1024;
 
         let Payload::BigInt(off) = value.value else {
@@ -55356,7 +56758,7 @@ impl Interp {
             }
         }
         if bits > MAX_BIGINT_WIDTH_BITS {
-            return Err(Halt::Unsupported("BigInt.asN:result-too-large"));
+            return Err(Step::Host(Halt::Refused("BigInt.asN:result-too-large")));
         }
 
         let limb_count = bits.div_ceil(32) as usize;
@@ -55391,7 +56793,7 @@ impl Interp {
     /// bases `0`, `1`, and `-1` accept arbitrarily wide positive exponents;
     /// other bases are bounded by projected result bits so adversarial source
     /// cannot turn one opcode into an unbounded host allocation.
-    fn bigint_pow(&mut self, base: Slot, exponent: Slot) -> Result<Slot, Halt> {
+    fn bigint_pow(&mut self, base: Slot, exponent: Slot) -> Result<Slot, Step> {
         // `bi_mul_mag` is the straightforward quadratic limb multiply. Keep
         // the largest admitted result small enough that one guest opcode
         // cannot monopolize the host before the next meter check.
@@ -55400,12 +56802,16 @@ impl Interp {
         let (Payload::BigInt(base_off), Payload::BigInt(exponent_off)) =
             (base.value, exponent.value)
         else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(if base.kind == Kind::BigInt {
+                "cannot coerce right operand to bigint".into()
+            } else {
+                "cannot coerce left operand to bigint".into()
+            }));
         };
         let (base_negative, base_magnitude) = self.read_bigint(base_off);
         let (exponent_negative, exponent_magnitude) = self.read_bigint(exponent_off);
         if exponent_negative {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg("negative exponent".into()));
         }
         if bi_is_zero(&exponent_magnitude) {
             return Ok(self.make_bigint(false, vec![1]));
@@ -55421,7 +56827,7 @@ impl Interp {
         let exponent = if exponent_magnitude.len() == 1 {
             exponent_magnitude[0]
         } else {
-            return Err(Halt::Unsupported("exponentiation:result-too-large"));
+            return Err(Step::Host(Halt::Refused("exponentiation:result-too-large")));
         };
         let top = *base_magnitude
             .last()
@@ -55429,9 +56835,9 @@ impl Interp {
         let base_bits = (base_magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize);
         let projected_bits = base_bits
             .checked_mul(exponent as usize)
-            .ok_or(Halt::Unsupported("exponentiation:result-too-large"))?;
+            .ok_or(Step::Host(Halt::Refused("exponentiation:result-too-large")))?;
         if projected_bits > MAX_BIGINT_POW_BITS {
-            return Err(Halt::Unsupported("exponentiation:result-too-large"));
+            return Err(Step::Host(Halt::Refused("exponentiation:result-too-large")));
         }
 
         let mut power = base_magnitude;
@@ -55526,7 +56932,7 @@ impl Interp {
         op: ArithOp,
         a_off: crate::value::ChunkOffset,
         b_off: crate::value::ChunkOffset,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         let (na, ma) = self.read_bigint(a_off);
         let (nb, mb) = self.read_bigint(b_off);
         let (neg, mag) = match op {
@@ -55535,7 +56941,7 @@ impl Interp {
             ArithOp::Mul => bi_mul(na, &ma, nb, &mb),
             ArithOp::Div | ArithOp::Mod => {
                 if bi_is_zero(&mb) {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg("zero divider".into()));
                 }
                 let (quotient, remainder) = bi_div_rem_mag(&ma, &mb);
                 if op == ArithOp::Div {
@@ -55609,13 +57015,17 @@ impl Interp {
     /// If `a`/`b` involve a BigInt, dispatch the op: both BigInt → BigInt
     /// arithmetic; a BigInt mixed with any non-BigInt → catchable TypeError.
     /// Returns `Ok(None)` when neither is a BigInt.
-    fn try_bigint_binop(&mut self, op: ArithOp, a: Slot, b: Slot) -> Result<Option<Slot>, Halt> {
+    fn try_bigint_binop(&mut self, op: ArithOp, a: Slot, b: Slot) -> Result<Option<Slot>, Step> {
         if a.kind != Kind::BigInt && b.kind != Kind::BigInt {
             return Ok(None);
         }
         match (a.value, b.value) {
             (Payload::BigInt(x), Payload::BigInt(y)) => Ok(Some(self.bigint_arith(op, x, y)?)),
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.catchable_type_error_msg(if a.kind == Kind::BigInt {
+                "cannot coerce right operand to bigint".into()
+            } else {
+                "cannot coerce left operand to bigint".into()
+            })),
         }
     }
 
@@ -55697,7 +57107,7 @@ impl Interp {
         op: BitOp,
         value: crate::value::ChunkOffset,
         count: crate::value::ChunkOffset,
-    ) -> Result<Slot, Halt> {
+    ) -> Result<Slot, Step> {
         const MAX_BIGINT_SHIFT_RESULT_BITS: usize = 64 * 1024;
 
         let (negative, magnitude) = self.read_bigint(value);
@@ -55710,7 +57120,7 @@ impl Interp {
         if shifts_left {
             let max_shift = MAX_BIGINT_SHIFT_RESULT_BITS.saturating_sub(value_bits);
             let shift = bi_usize_up_to(&count_magnitude, max_shift)
-                .ok_or(Halt::Unsupported("bigint-shift:result-too-large"))?;
+                .ok_or(Step::Host(Halt::Refused("bigint-shift:result-too-large")))?;
             return Ok(self.make_bigint(negative, bi_shl_bits(&magnitude, shift)));
         }
 
@@ -57314,14 +58724,14 @@ fn round_half_even(x: f64) -> f64 {
 }
 
 /// A `&'static str` naming an unmodeled native **call** for
-/// [`Halt::Unsupported`], so the differential runner records the skip
+/// [`Halt::NotImplemented`], so the differential runner records the skip
 /// attributed to the specific built-in (never a silent mis-execution).
 fn temporal_set_time_args(
     interp: &mut Interp,
     record: &mut TemporalPlainRecord,
     args: &[Slot],
     start: usize,
-) -> Result<(), Halt> {
+) -> Result<(), Step> {
     let mut out = [0u32; 6];
     for (n, field) in out.iter_mut().enumerate() {
         let value = args.get(start + n).copied().unwrap_or_else(Slot::undefined);
@@ -59480,6 +60890,44 @@ mod tests {
     }
 
     #[test]
+    fn internal_transfers_cannot_be_reported_as_host_completions() {
+        let mut interp = Interp::new();
+        for step in [
+            Step::Yielded(Slot::undefined()),
+            Step::Awaited(Slot::undefined()),
+            Step::AsyncYielded(Slot::undefined()),
+            Step::Unwound(42),
+        ] {
+            assert_eq!(
+                interp.finish_step(&[], step),
+                Halt::EngineInvariant("dispatch:control-transfer-escaped")
+            );
+        }
+        assert_eq!(interp.finish_step(&[], Step::Returned), Halt::Return);
+        assert_eq!(
+            interp.finish_step(&[], Step::Host(Halt::MeterAbort)),
+            Halt::MeterAbort
+        );
+        let value = Slot::number(42.0);
+        assert_eq!(
+            interp.finish_step(&[], Step::Threw { value }),
+            Halt::Throw {
+                value,
+                rendered: "42".into()
+            }
+        );
+    }
+
+    #[test]
+    fn program_return_cannot_complete_a_callback_activation() {
+        let mut interp = Interp::new();
+        assert_eq!(
+            interp.dispatch_at(&[b(Opcode::XS_CODE_RETURN)], 0, 1),
+            Step::Host(Halt::EngineInvariant("return:non-program-frame"))
+        );
+    }
+
+    #[test]
     fn side_ref_undercount_blocks_quiescence_and_page_freeing() {
         let mut interp = Interp::new();
         assert!(interp.is_quiescent());
@@ -59937,15 +61385,15 @@ mod tests {
         // live instances (~1.4 KB each) accumulated to ~2.8 GB and tripped
         // libFuzzer's 2048 MB rss_limit. `step_async`'s `Halt::Return` arm now
         // detects the un-popped driver (`call_stack.len() >= return_depth`) and
-        // degrades to a named `Halt::Unsupported`, so the run halts in a
+        // degrades to a named `Halt::NotImplemented`, so the run halts in a
         // constant two dispatches with the single pre-`RETURN` instance and
         // never spins. Even the full fuzz step budget returns instantly.
         let mut interp = Interp::new();
         let out = interp.run_bounded(&[193u8, 169], 2_000_000);
         assert_eq!(
             out.halt,
-            Halt::EngineInvariant("async:non-boundary-return"),
-            "malformed async `RETURN` body must degrade to a named skip"
+            Halt::EngineInvariant("return:non-program-frame"),
+            "malformed async `RETURN` must fail at the dispatch boundary"
         );
         assert!(
             out.dispatched < 1000,
@@ -60152,7 +61600,7 @@ mod tests {
         // must (a) decode (`from_u8` is dense), (b) resolve an instruction
         // length on a well-formed instruction, and (c) DISPATCH to a
         // defined effect — either it executes (the implemented subset and
-        // the pure stubs) or it halts `Halt::Unsupported` naming itself.
+        // the pure stubs) or it halts `Halt::NotImplemented` naming itself.
         // It must NEVER panic and NEVER fall through to `Halt::Decode` on a
         // well-formed single instruction: a stubbed opcode either steps
         // with faithful stack/frame/meter effects (where its semantics need
@@ -60194,24 +61642,11 @@ mod tests {
                 | Halt::Throw { .. }
                 | Halt::MeterAbort
                 | Halt::StepLimit(_)
-                | Halt::Unsupported(_)
+                | Halt::NotImplemented(_)
+                | Halt::Refused(_)
                 | Halt::EngineInvariant(_)
                 | Halt::StackOverflow(_) => {}
                 Halt::Decode(_) => unreachable!("handled above"),
-                // `Yield` is produced only inside a `resume_generator` nested
-                // dispatch and consumed there; it never escapes to a top-level
-                // `run` outcome.
-                Halt::Yield(_) => unreachable!("yield escaped a generator resume"),
-                // `Await` is produced only inside a `step_async` nested dispatch
-                // and consumed there; it never escapes to a top-level outcome.
-                Halt::Await(_) => unreachable!("await escaped a step_async resume"),
-                Halt::AsyncYield(_) => {
-                    unreachable!("yield escaped an async-generator resume")
-                }
-                Halt::Resume(_) => unreachable!("catch resume escaped a nested dispatch"),
-                // `Panic` is constructed only at the thread/FFI or `Machine`
-                // seam (a caught Rust panic), never by the interpreter's own
-                // dispatch, so it cannot reach a top-level `run` outcome here.
                 Halt::Panic(_) => unreachable!("engine-fault panic escaped the FFI/Machine seam"),
             }
         }

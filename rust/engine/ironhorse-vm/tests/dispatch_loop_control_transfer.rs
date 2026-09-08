@@ -1,203 +1,206 @@
-//! Source-level lock on how the bytecode dispatch loop consumes a control
-//! transfer (architecture review F001 / F006).
-//!
-//! `raise_js` unwinds the jump chain and hands back the handler's resume
-//! pc. Whether THIS dispatch loop may resume there depends on whose frame
-//! the handler lives in: a handler below the loop's `return_depth`
-//! belongs to an enclosing Rust-level dispatch (the caller of a native
-//! `forEach` callback, a getter, a generator driver), and resuming it
-//! from the inner loop runs the outer frame's handler against the inner
-//! frame's state — `end:frame-underflow`, or a caller pc decoded against
-//! the callee's buffer. That depth test lives in exactly one place, the
-//! `dispatch_halt!` macro; a hand-expanded `match self.raise_js(error)
-//! { Ok(target) => { pc = target; … } }` arm silently skips it, which is
-//! how eleven raise sites diverged from the `THROW` opcode's own arm.
-//!
-//! This test parses `interp.rs` and refuses any raise inside
-//! `dispatch_at_inner` that does not go through the macro, in the same
-//! shape as `gc_visitation_registry.rs`: textual, so it kills the
-//! forgot-the-depth-test class outright for every future raise site.
+//! Source locks for F001/F006: every native raise uses the shared dispatch
+//! macros, and only the owning activation consumes an unwind. The shared lexer
+//! makes the checks independent of variable names, spacing, and comments.
+
+use ironhorse_vm::source_scan::{code_only, token_body, token_positions, tokens, Token};
 
 const SRC: &str = include_str!("../src/interp.rs");
 
-/// The body (including braces) of the function that starts at the first
-/// occurrence of `marker`.
-fn fn_body(marker: &str) -> &'static str {
-    let i = SRC
-        .find(marker)
-        .unwrap_or_else(|| panic!("marker not found: {marker}"));
-    let j = i + SRC[i..].find('{').expect("fn body opens");
-    let bytes = SRC.as_bytes();
-    let mut depth = 0usize;
-    let mut k = j;
-    loop {
-        match bytes[k] {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return &SRC[j..=k];
-                }
+fn unwrapped_raises(code: &[Token<'_>]) -> Vec<usize> {
+    code.iter()
+        .enumerate()
+        .filter_map(|(at, token)| {
+            if (token.text == "raise_js" || token.text.starts_with("catchable_"))
+                && code.get(at + 1).is_some_and(|t| t.text == "(")
+            {
+                // `dispatch_halt!(receiver.raise(...), ...)`: whitespace and
+                // comments are absent, but identifier boundaries remain intact.
+                let wrapped = at >= 5
+                    && code[at - 5].text == "dispatch_halt"
+                    && code[at - 4].text == "!"
+                    && code[at - 3].text == "("
+                    && code[at - 1].text == ".";
+                (!wrapped).then_some(at)
+            } else {
+                None
             }
-            _ => {}
-        }
-        k += 1;
-    }
+        })
+        .collect()
 }
 
-/// Strip `//` comments so commented-out code never satisfies or trips a
-/// check.
-fn strip_comments(s: &str) -> String {
-    s.lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// All deliberate loop exits construct their private Step explicitly. A raw
+/// `return transfer` can silently bypass unwind ownership regardless of the
+/// identifier chosen for the native helper's error.
+fn raw_returns(code: &[Token<'_>]) -> Vec<usize> {
+    token_positions(code, "return")
+        .into_iter()
+        .filter(|at| {
+            ![
+                "Step::Returned",
+                "Step::Host(",
+                "Step::Yielded(",
+                "Step::Awaited(",
+                "Step::AsyncYielded(",
+            ]
+            .iter()
+            .any(|variant| token_positions(&code[at + 1..], variant).first() == Some(&0))
+        })
+        .collect()
 }
 
-/// The 1-based line of byte offset `at` within `hay`, for messages.
-fn line_of(hay: &str, at: usize) -> usize {
-    hay[..at].matches('\n').count() + 1
+fn unguarded_unwinds(code: &[Token<'_>]) -> Vec<usize> {
+    let guard = "if self.call_stack.len() < return_depth {";
+    let guard_len = tokens(guard).len();
+    token_positions(code, "return Step::Unwound(")
+        .into_iter()
+        .filter(|&at| {
+            at < guard_len || token_positions(&code[at - guard_len..at], guard).is_empty()
+        })
+        .collect()
 }
 
-/// Every byte offset of `needle` in `hay`.
-fn occurrences(hay: &str, needle: &str) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    while let Some(p) = hay[start..].find(needle) {
-        out.push(start + p);
-        start += p + needle.len();
-    }
-    out
-}
-
-/// The non-whitespace text immediately before offset `at`, at most `n`
-/// bytes of it.
-fn preceding_text(hay: &str, at: usize, n: usize) -> &str {
-    let trimmed = hay[..at].trim_end();
-    &trimmed[trimmed.len().saturating_sub(n)..]
-}
-
-fn dispatch_loop() -> String {
-    strip_comments(fn_body("fn dispatch_at_inner("))
+fn macro_ownership_and_metering(code: &[Token<'_>]) -> bool {
+    [
+        "Step::Unwound(target) if $machine.call_stack.len() < $return_depth => { return Step::Unwound(target); }",
+        "Step::Unwound(target) => { $program_counter = target; if $machine.check_meter() == MeterCheck::Abort { return Step::Host(Halt::MeterAbort); } continue; }",
+    ].iter().all(|pattern| token_positions(code, pattern).len() == 1)
 }
 
 #[test]
-fn raise_js_yields_a_halt_so_no_site_can_hand_expand_the_caught_arm() {
-    // The signature is the mechanism: a `Result<usize, Halt>` invited every
-    // site to match `Ok(target)` and assign `pc` itself.
-    let sig = fn_body("fn raise_js(");
-    let decl_start = SRC.find("fn raise_js(").unwrap();
-    let decl = &SRC[decl_start..decl_start + sig.len().min(200)];
-    let head = SRC[decl_start..].split('{').next().unwrap();
-    assert!(
-        head.contains("-> Halt"),
-        "raise_js must return a bare Halt (Resume or Throw), got: {head}"
+fn raise_js_yields_a_private_step() {
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    assert_eq!(
+        token_positions(&code, "fn raise_js(&mut self, value: Slot) -> Step {").len(),
+        1
     );
-    let _ = decl;
-    let src = strip_comments(SRC);
-    assert!(
-        !src.contains("match self.raise_js("),
-        "a hand-expanded `match self.raise_js(` arm remains at line {}; \
-         route it through dispatch_halt! (in the loop) or return the Halt",
-        src.find("match self.raise_js(")
-            .map(|p| line_of(&src, p))
-            .unwrap_or(0)
-    );
+    assert!(token_positions(&code, "match self.raise_js(").is_empty());
 }
 
 #[test]
 fn every_raise_in_the_dispatch_loop_goes_through_dispatch_halt() {
-    let body = dispatch_loop();
-    // Every raise helper by name fragment, independent of the receiver
-    // spelling (`self.`, a reflowed `self\n    .`, a closure's `machine.`).
-    let raisers = ["raise_js(", "catchable_"];
-    let mut bad = Vec::new();
-    let mut seen = 0usize;
-    for raiser in raisers {
-        for at in occurrences(&body, raiser) {
-            seen += 1;
-            // The text before the call with whitespace and the receiver
-            // removed must be the macro's opening.
-            let before: String = body[..at].chars().filter(|c| !c.is_whitespace()).collect();
-            let before = before
-                .strip_suffix("self.")
-                .or_else(|| before.strip_suffix("machine."))
-                .unwrap_or(&before);
-            if !before.ends_with("dispatch_halt!(") {
-                bad.push(format!(
-                    "  loop line {}: `{}` preceded by `{}`",
-                    line_of(&body, at),
-                    raiser,
-                    &before[before.len().saturating_sub(24)..]
-                ));
-            }
-        }
-    }
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
     assert!(
-        seen > 20,
-        "expected the dispatch loop to raise in many places; found {seen} \
-         (did the marker or the helper names move?)"
+        body.iter()
+            .filter(|t| t.text.starts_with("catchable_") || t.text == "raise_js")
+            .count()
+            > 20
     );
     assert!(
-        bad.is_empty(),
-        "raise sites in dispatch_at_inner that bypass dispatch_halt! (they skip \
-         the return_depth test and the catch-landing meter check):\n{}",
-        bad.join("\n")
+        unwrapped_raises(body).is_empty(),
+        "a raise bypasses the dispatch macro"
     );
 }
 
 #[test]
 fn no_native_result_is_propagated_out_of_the_loop_by_hand() {
-    // `Err(halt) => return halt` on a native's result is the F006 shape: a
-    // `Halt::Resume` produced by a throwing setter / `toString` / `valueOf`
-    // under a live guest `try` leaves the loop as the crank's outcome, and
-    // the guest handler is silently skipped. Every fallible native call in
-    // the loop goes through `dispatch_result!` / `dispatch_halt!`.
-    let body = dispatch_loop();
-    let mut bad = Vec::new();
-    // `Err(halt) => return halt`, `if let Err(h) = … { return h; }`, and a
-    // hand-expanded `Err(Halt::Resume(..))` arm are all the same class.
-    for needle in [
-        "=> return halt",
-        "=> return h,",
-        "=> return h\n",
-        "return halt;",
-        "return h;",
-        "Err(Halt::Resume(",
-    ] {
-        for at in occurrences(&body, needle) {
-            bad.push(format!(
-                "  loop line {}: `{}`",
-                line_of(&body, at),
-                needle.trim()
-            ));
-        }
-    }
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    let bad = raw_returns(body);
     assert!(
         bad.is_empty(),
-        "hand-propagated native results in dispatch_at_inner (an internal \
-         `Resume` can escape as the host's result):\n{}",
-        bad.join("\n")
+        "unclassified raw returns at lines {:?}",
+        bad.iter()
+            .map(|at| source[..body[*at].start].matches('\n').count() + 1)
+            .collect::<Vec<_>>()
+    );
+    assert!(token_positions(body, "Err(Step::Unwound(").is_empty());
+    // This tail loop returns Step: `break halt` is just as dangerous as
+    // `return halt`, but bypasses a return-only source check. No dispatch
+    // opcode needs a Rust break, so reject every spelling (including labels).
+    assert!(
+        token_positions(body, "break").is_empty(),
+        "dispatch must not exit via break"
     );
 }
 
 #[test]
-fn a_resume_leaves_the_dispatch_loop_only_after_the_depth_test() {
-    // The `THROW`/`RETHROW`/rejected-`await` arms unwind inline; the only
-    // legitimate `return Halt::Resume(..)` in the loop is theirs, guarded by
-    // the same `call_stack.len() < return_depth` test the macro applies.
-    let body = dispatch_loop();
-    let mut bad = Vec::new();
-    for at in occurrences(&body, "return Halt::Resume(") {
-        let window = preceding_text(&body, at, 80);
-        if !window.contains("self.call_stack.len() < return_depth") {
-            bad.push(format!("  loop line {}", line_of(&body, at)));
-        }
-    }
-    assert!(
-        bad.is_empty(),
-        "`return Halt::Resume` without the return_depth guard in \
-         dispatch_at_inner:\n{}",
-        bad.join("\n")
+fn an_unwind_leaves_dispatch_only_after_the_depth_test() {
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    assert!(token_positions(body, "Step::Unwound(").is_empty());
+    assert!(unguarded_unwinds(body).is_empty());
+    let halt_macro = &code[token_body(&code, "macro_rules! dispatch_halt")];
+    assert!(macro_ownership_and_metering(halt_macro));
+    let result_macro = &code[token_body(&code, "macro_rules! dispatch_result")];
+    assert_eq!(
+        token_positions(
+            result_macro,
+            "Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth)"
+        )
+        .len(),
+        1
     );
+}
+
+#[test]
+fn control_scan_rejects_renamed_and_obscured_raw_returns() {
+    for source in [
+        "Err(transfer) => return transfer,",
+        "Err(transfer) => { return /* explanation */ transfer; }",
+        "let url = \"https://example\"; return transfer;",
+        "return\ntransfer;",
+        "let Step = transfer; return Step;",
+    ] {
+        let source = code_only(source);
+        assert_eq!(raw_returns(&tokens(&source)).len(), 1, "{source}");
+    }
+    for source in [
+        "Err(transfer) => break transfer,",
+        "break /* comment */ transfer;",
+        "break 'dispatch transfer;",
+    ] {
+        let source = code_only(source);
+        assert_eq!(
+            token_positions(&tokens(&source), "break").len(),
+            1,
+            "{source}"
+        );
+    }
+    for source in [
+        "return self.catchable_type_error();",
+        "match self /* comment */ . raise_js(value) { transfer => return transfer }",
+    ] {
+        let source = code_only(source);
+        assert_eq!(unwrapped_raises(&tokens(&source)).len(), 1, "{source}");
+    }
+    let mutated = SRC.replacen(
+        "Err(halt) => dispatch_halt!(halt, pc, self, return_depth),",
+        "Err(halt) => break halt,",
+        1,
+    );
+    assert_ne!(
+        mutated, SRC,
+        "mutation must replace a live propagation site"
+    );
+    let mutated = code_only(&mutated);
+    let code = tokens(&mutated);
+    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    assert_eq!(token_positions(body, "break").len(), 1);
+    let source = code_only(
+        "dispatch_halt /* comment */ ! (self . catchable_type_error(), pc, self, return_depth)",
+    );
+    assert!(unwrapped_raises(&tokens(&source)).is_empty());
+}
+
+#[test]
+fn control_scan_rejects_missing_depth_and_meter_guards() {
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let body = &code[token_body(&code, "macro_rules! dispatch_halt")];
+    let macro_source = &source[body[0].start..body.last().unwrap().start + 1];
+    for (before, after) in [
+        ("if $machine.call_stack.len() < $return_depth", ""),
+        ("$machine.check_meter()", "MeterCheck::Continue"),
+    ] {
+        assert!(macro_source.contains(before));
+        let mutated = macro_source.replace(before, after);
+        assert!(!macro_ownership_and_metering(&tokens(&mutated)), "{before}");
+    }
+    let source = code_only("if unrelated { return Step /* comment */ :: Unwound(target); }");
+    assert_eq!(unguarded_unwinds(&tokens(&source)).len(), 1);
 }

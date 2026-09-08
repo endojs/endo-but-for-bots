@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/String/prototype/anchor tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/String/prototype/anchor/B.2.3.2.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/anchor/B.2.3.2.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/anchor/attr-tostring-err.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/anchor/attr-tostring-err.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/anchor/length.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/anchor/length.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/anchor/name.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/anchor/name.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/anchor/not-a-constructor.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/anchor/not-a-constructor.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/anchor/prop-desc.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/anchor/prop-desc.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/anchor/this-val-tostring-err.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/anchor/this-val-tostring-err.js strict skip:shared-test262-failure

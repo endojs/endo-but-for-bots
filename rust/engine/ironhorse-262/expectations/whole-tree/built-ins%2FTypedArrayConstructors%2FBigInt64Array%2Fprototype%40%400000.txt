@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/BigInt64Array/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/BYTES_PER_ELEMENT.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: BYTES_PER_ELEMENT descriptor should not be enumerable; BYTES_PER_ELEMENT descriptor should not be writable; BYTES_PER_ELEMENT descriptor should not be configurable"
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/BYTES_PER_ELEMENT.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: BYTES_PER_ELEMENT descriptor should not be enumerable; BYTES_PER_ELEMENT descriptor should not be writable; BYTES_PER_ELEMENT descriptor should not be configurable"
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/constructor.js sloppy pass
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/constructor.js strict pass
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/not-typedarray-object.js sloppy pass
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/not-typedarray-object.js strict pass
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/proto.js sloppy pass
+built-ins/TypedArrayConstructors/BigInt64Array/prototype/proto.js strict pass

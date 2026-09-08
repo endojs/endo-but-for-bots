@@ -25,7 +25,7 @@ use crate::opcode::*;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
     /// A genuine syntax error — the same outcome XS reports through
-    /// `fxCompileRegExp` returning 0. The string is a short reason.
+    /// `fxCompileRegExp` returning 0. The string includes the consumed-pattern diagnostic context.
     Syntax(String),
     /// A pin feature this stage has not ported yet. Named, never a wrong
     /// answer (the stage's honest-skip bar).
@@ -237,7 +237,7 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
             b'y' if parser_flags & XS_REGEXP_Y == 0 => parser_flags |= XS_REGEXP_Y,
             b'd' if parser_flags & XS_REGEXP_D == 0 => parser_flags |= XS_REGEXP_D,
             b'v' if parser_flags & (XS_REGEXP_U | XS_REGEXP_V) == 0 => parser_flags |= XS_REGEXP_V,
-            _ => return Err(CompileError::Syntax("invalid flags".into())),
+            _ => return Err(CompileError::Syntax(" invalid flags".into())),
         }
     }
     let mut pattern_bytes = pattern.as_bytes().to_vec();
@@ -298,7 +298,7 @@ impl Compiler {
         for node in &self.nodes {
             if let Kind::CaptureReference { capture_index, .. } = &node.kind {
                 if *capture_index >= 0 && *capture_index >= self.capture_index {
-                    return Err(self.error("invalid reference number"));
+                    return Err(self.error(&format!("invalid reference number \\{capture_index}")));
                 }
             }
         }
@@ -307,7 +307,7 @@ impl Compiler {
         // (a dangling groupname — a `SyntaxError`).
         for name in &self.named_refs {
             if !self.capture_names.iter().any(|n| n == name) {
-                return Err(self.error("invalid reference name"));
+                return Err(self.error(&format!("invalid reference name \\k<{name}>")));
             }
         }
         // Resolve each `\k<name>` reference to its group's name slot. The
@@ -406,7 +406,18 @@ impl Compiler {
     }
 
     fn error(&self, msg: &str) -> CompileError {
-        CompileError::Syntax(msg.to_string())
+        // xsre.c fxPatternParserError retains at most 80 consumed UTF-8 bytes,
+        // dropping whole code points, before appending the diagnostic reason.
+        let end = self.offset.min(self.pattern.len().saturating_sub(1));
+        let mut start = 0;
+        while end - start > 80 {
+            let (_, next) = utf8_decode(&self.pattern, start);
+            start = next;
+        }
+        let context = String::from_utf8_lossy(&self.pattern[start..end]);
+        let message = format!("{context} {msg}");
+        let bytes = message.as_bytes();
+        CompileError::Syntax(String::from_utf8_lossy(&bytes[..bytes.len().min(255)]).into_owned())
     }
 
     /// Parse one nesting level (a group or a `v`-mode nested class) with
@@ -1057,7 +1068,7 @@ impl Compiler {
             || c == b'_' as i64)
         {
             if result.len() == 127 {
-                return Err(self.error("property name overflow"));
+                return Err(self.error("name overflow"));
             }
             result.push(self.character as u8 as char);
             self.next()?;
@@ -1865,8 +1876,8 @@ impl Compiler {
                         _ => None,
                     };
                     if let Some(bit) = bit {
-                        if add & bit != 0 || remove & bit != 0 {
-                            return Err(self.error("duplicate inline modifier"));
+                        if (if removing { remove } else { add }) & bit != 0 {
+                            return Err(self.error("invalid modifiers"));
                         }
                         if removing {
                             remove |= bit;
@@ -1885,10 +1896,10 @@ impl Compiler {
                 }
                 // `(?:...)`-terminated, at least one flag total (`(?-:a)` — both
                 // empty — is `mxInvalidModifiers`), and disjoint add/remove
-                // (the per-flag duplicate check above already enforces that). An
+                // (checked after consuming both lists, as XS does). An
                 // empty *remove* after `-` is legal (`(?i-:a)`), matching XS.
-                if self.character != b':' as i64 || (add | remove) == 0 {
-                    return Err(self.error("invalid inline modifiers"));
+                if self.character != b':' as i64 || (add | remove) == 0 || (add & remove) != 0 {
+                    return Err(self.error("invalid modifiers"));
                 }
                 self.next()?;
                 let outer_flags = self.flags;
@@ -2505,7 +2516,7 @@ mod recursion_bounds {
                 );
                 let past = compile(&nested(open, close, limit + 1), flags).map(|_| ());
                 assert!(
-                    matches!(&past, Err(CompileError::Syntax(m)) if m == "too much nesting"),
+                    matches!(&past, Err(CompileError::Syntax(m)) if m.ends_with(" too much nesting")),
                     "{open}…{close} one past the limit must be refused: {past:?}"
                 );
             }

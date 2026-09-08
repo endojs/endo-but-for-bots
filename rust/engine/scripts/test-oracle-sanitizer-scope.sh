@@ -39,6 +39,16 @@ check_probe() {
 }
 
 check_probe xs-undefined c/moddable/xs/sources/xsRun.c undefined none
+# Read the build's path rather than repeating it: moving the generated lexer
+# outside the existing upstream boundary must fail this executable regression.
+lexical_overlay_path=$(sed -n 's/^const LEXICAL_OVERLAY_PATH: \&str = "\([^"]*\)";$/\1/p' \
+  "$script_directory/../xs-oracle/build.rs")
+if [[ -z $lexical_overlay_path || $lexical_overlay_path == *$'\n'* ]]; then
+  echo 'Expected exactly one generated lexer path in xs-oracle/build.rs.' >&2
+  exit 1
+fi
+check_probe generated-xs-undefined "cargo-out/$lexical_overlay_path" undefined none
+check_probe generated-xs-address "cargo-out/$lexical_overlay_path" address 'AddressSanitizer: heap-buffer-overflow'
 check_probe shim-undefined rust/engine/xs-oracle/csrc/xs_shim.c undefined 'runtime error:'
 check_probe platform-undefined rust/endo/xsnap/xsnap-platform.c undefined 'runtime error:'
 check_probe xs-address c/moddable/xs/sources/xsRun.c address 'AddressSanitizer: heap-buffer-overflow'

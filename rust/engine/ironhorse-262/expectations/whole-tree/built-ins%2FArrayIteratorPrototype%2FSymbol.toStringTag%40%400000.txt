@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/ArrayIteratorPrototype/Symbol.toStringTag tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ArrayIteratorPrototype/Symbol.toStringTag/property-descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"Array Iterator\"», «string\"Iterator\"») to be true"
+built-ins/ArrayIteratorPrototype/Symbol.toStringTag/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"Array Iterator\"», «string\"Iterator\"») to be true"
+built-ins/ArrayIteratorPrototype/Symbol.toStringTag/value-direct.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"Array Iterator\"», «string\"Iterator\"») to be true"
+built-ins/ArrayIteratorPrototype/Symbol.toStringTag/value-direct.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"Array Iterator\"», «string\"Iterator\"») to be true"
+built-ins/ArrayIteratorPrototype/Symbol.toStringTag/value-from-to-string.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Array Iterator]\"», «string\"[object Iterator]\"») to be true"
+built-ins/ArrayIteratorPrototype/Symbol.toStringTag/value-from-to-string.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Array Iterator]\"», «string\"[object Iterator]\"») to be true"

@@ -366,10 +366,10 @@ fn small_state_stays_small_with_a_large_free_list() {
     let small_len = store.read_small_state().unwrap().len();
     assert!(
         // The Promise/RegExp/ArrayBuffer species getters, matchAll iterator
-        // natives, and ArrayBuffer slice metadata add only fixed boot state;
-        // keep a tight constant ceiling while allowing those constant-sized
-        // rows.
-        small_len < 600,
+        // natives, ArrayBuffer slice metadata, and the eagerly linked Error
+        // name/message keys add only fixed boot state. Keep a tight constant
+        // ceiling while allowing those constant-sized rows.
+        small_len < 640,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len

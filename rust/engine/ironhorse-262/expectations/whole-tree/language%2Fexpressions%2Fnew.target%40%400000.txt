@@ -1,0 +1,29 @@
+# engine=ironhorse features=default corpus=language/expressions/new.target tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/new.target/asi.js sloppy pass
+language/expressions/new.target/asi.js strict pass
+language/expressions/new.target/escaped-new.js sloppy pass
+language/expressions/new.target/escaped-new.js strict pass
+language/expressions/new.target/escaped-target.js sloppy pass
+language/expressions/new.target/escaped-target.js strict pass
+language/expressions/new.target/unary-expr.js sloppy pass
+language/expressions/new.target/unary-expr.js strict pass
+language/expressions/new.target/value-via-call.js sloppy pass
+language/expressions/new.target/value-via-call.js strict pass
+language/expressions/new.target/value-via-fpapply.js sloppy pass
+language/expressions/new.target/value-via-fpapply.js strict pass
+language/expressions/new.target/value-via-fpcall.js sloppy pass
+language/expressions/new.target/value-via-fpcall.js strict pass
+language/expressions/new.target/value-via-member.js sloppy pass
+language/expressions/new.target/value-via-member.js strict pass
+language/expressions/new.target/value-via-new.js sloppy pass
+language/expressions/new.target/value-via-new.js strict pass
+language/expressions/new.target/value-via-reflect-apply.js sloppy pass
+language/expressions/new.target/value-via-reflect-apply.js strict pass
+language/expressions/new.target/value-via-reflect-construct.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget explicitly defined Expected SameValue(«function [\"f\"] (){[native code]}», «function [\"customNewTarget\"] (){[native code]}») to be true"
+language/expressions/new.target/value-via-reflect-construct.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget explicitly defined Expected SameValue(«function [\"f\"] (){[native code]}», «function [\"customNewTarget\"] (){[native code]}») to be true"
+language/expressions/new.target/value-via-super-call.js sloppy pass
+language/expressions/new.target/value-via-super-call.js strict pass
+language/expressions/new.target/value-via-super-property.js sloppy pass
+language/expressions/new.target/value-via-super-property.js strict pass
+language/expressions/new.target/value-via-tagged-template.js sloppy pass
+language/expressions/new.target/value-via-tagged-template.js strict pass

@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/DisposableStack/prototype/dispose tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DisposableStack/prototype/dispose/disposes-resources-in-reverse-order.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/disposes-resources-in-reverse-order.js strict pass
+built-ins/DisposableStack/prototype/dispose/does-not-reinvoke-disposers-if-already-disposed.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/does-not-reinvoke-disposers-if-already-disposed.js strict pass
+built-ins/DisposableStack/prototype/dispose/does-not-throw-if-already-disposed.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/does-not-throw-if-already-disposed.js strict pass
+built-ins/DisposableStack/prototype/dispose/length.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/length.js strict pass
+built-ins/DisposableStack/prototype/dispose/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be dispose; name value should be dispose"
+built-ins/DisposableStack/prototype/dispose/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be dispose; name value should be dispose"
+built-ins/DisposableStack/prototype/dispose/not-a-constructor.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/not-a-constructor.js strict pass
+built-ins/DisposableStack/prototype/dispose/prop-desc.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/prop-desc.js strict pass
+built-ins/DisposableStack/prototype/dispose/returns-undefined.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/returns-undefined.js strict pass
+built-ins/DisposableStack/prototype/dispose/sets-state-to-disposed.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/sets-state-to-disposed.js strict pass
+built-ins/DisposableStack/prototype/dispose/this-does-not-have-internal-disposablestate-throws.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/this-does-not-have-internal-disposablestate-throws.js strict pass
+built-ins/DisposableStack/prototype/dispose/this-not-object-throws.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/this-not-object-throws.js strict pass
+built-ins/DisposableStack/prototype/dispose/throws-error-as-is-if-only-one-error-during-disposal.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a MyError but got a Error"
+built-ins/DisposableStack/prototype/dispose/throws-error-as-is-if-only-one-error-during-disposal.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a MyError but got a Error"
+built-ins/DisposableStack/prototype/dispose/throws-suppressederror-if-multiple-errors-during-disposal.js sloppy pass
+built-ins/DisposableStack/prototype/dispose/throws-suppressederror-if-multiple-errors-during-disposal.js strict pass

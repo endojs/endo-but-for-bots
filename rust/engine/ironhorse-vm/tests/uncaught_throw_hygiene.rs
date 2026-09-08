@@ -48,4 +48,8 @@ fn an_uncaught_super_argument_throw_does_not_poison_the_next_cranks_new_target()
         result, "true",
         "the stale super target leaked into the next crank's new.target"
     );
+    assert!(
+        m.is_quiescent(),
+        "the next crank must retire abandoned frames"
+    );
 }

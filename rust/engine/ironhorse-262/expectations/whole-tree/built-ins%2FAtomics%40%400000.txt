@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"Atomics\"») to be true"
+built-ins/Atomics/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"Atomics\"») to be true"
+built-ins/Atomics/prop-desc.js sloppy pass
+built-ins/Atomics/prop-desc.js strict pass
+built-ins/Atomics/proto.js sloppy pass
+built-ins/Atomics/proto.js strict pass

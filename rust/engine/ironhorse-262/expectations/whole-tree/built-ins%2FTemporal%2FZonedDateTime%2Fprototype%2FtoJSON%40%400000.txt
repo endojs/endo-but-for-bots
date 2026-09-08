@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/toJSON tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/balance-negative-time-units.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/balance-negative-time-units.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/negative-epochnanoseconds.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/negative-epochnanoseconds.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/offset.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/offset.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/year-format.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toJSON/year-format.js strict skip:oracle-host-missing-temporal

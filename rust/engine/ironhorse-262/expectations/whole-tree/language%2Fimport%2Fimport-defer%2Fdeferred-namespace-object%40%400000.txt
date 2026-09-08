@@ -1,0 +1,6 @@
+# engine=ironhorse features=default corpus=language/import/import-defer/deferred-namespace-object tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-defer/deferred-namespace-object/exotic-object-behavior.js sloppy skip:module:compiler-rejected
+language/import/import-defer/deferred-namespace-object/identity.js sloppy skip:module:compiler-rejected
+language/import/import-defer/deferred-namespace-object/json-module.js sloppy skip:module:compiler-rejected
+language/import/import-defer/deferred-namespace-object/reexport-deferred-ns-evaluation.js sloppy skip:unsupported-opcode:module:static-linking
+language/import/import-defer/deferred-namespace-object/to-string-tag.js sloppy skip:module:compiler-rejected

@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=language/import/import-defer/errors/get-other-while-evaluating tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-defer/errors/get-other-while-evaluating/main.js sloppy skip:unsupported-opcode:module:static-linking

@@ -1,0 +1,200 @@
+# engine=ironhorse features=default corpus=language/expressions/class/elements tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/class/elements/private-field-as-function.js sloppy pass
+language/expressions/class/elements/private-field-as-function.js strict pass
+language/expressions/class/elements/private-field-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-field-on-nested-class.js strict pass
+language/expressions/class/elements/private-fields-proxy-default-handler-throws.js sloppy pass
+language/expressions/class/elements/private-fields-proxy-default-handler-throws.js strict pass
+language/expressions/class/elements/private-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-getter-access-on-inner-arrow-function.js sloppy pass
+language/expressions/class/elements/private-getter-access-on-inner-arrow-function.js strict pass
+language/expressions/class/elements/private-getter-access-on-inner-function.js sloppy pass
+language/expressions/class/elements/private-getter-access-on-inner-function.js strict pass
+language/expressions/class/elements/private-getter-is-not-a-own-property.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/expressions/class/elements/private-getter-is-not-a-own-property.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/expressions/class/elements/private-getter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-getter-on-nested-class.js strict pass
+language/expressions/class/elements/private-getter-shadowed-by-field-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-getter-shadowed-by-field-on-nested-class.js strict pass
+language/expressions/class/elements/private-getter-shadowed-by-getter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-getter-shadowed-by-getter-on-nested-class.js strict pass
+language/expressions/class/elements/private-getter-shadowed-by-method-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-getter-shadowed-by-method-on-nested-class.js strict pass
+language/expressions/class/elements/private-getter-shadowed-by-setter-on-nested-class.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: [[Get]] operation of an accessor without getter Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/elements/private-getter-shadowed-by-setter-on-nested-class.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: [[Get]] operation of an accessor without getter Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/elements/private-indirect-eval-contains-arguments.js sloppy pass
+language/expressions/class/elements/private-indirect-eval-err-contains-newtarget.js sloppy pass
+language/expressions/class/elements/private-indirect-eval-err-contains-newtarget.js strict pass
+language/expressions/class/elements/private-literal-name-init-err-contains-arguments.js sloppy pass
+language/expressions/class/elements/private-literal-name-init-err-contains-arguments.js strict pass
+language/expressions/class/elements/private-literal-name-init-err-contains-super.js sloppy pass
+language/expressions/class/elements/private-literal-name-init-err-contains-super.js strict pass
+language/expressions/class/elements/private-method-access-on-inner-arrow-function.js sloppy pass
+language/expressions/class/elements/private-method-access-on-inner-arrow-function.js strict pass
+language/expressions/class/elements/private-method-access-on-inner-function.js sloppy pass
+language/expressions/class/elements/private-method-access-on-inner-function.js strict pass
+language/expressions/class/elements/private-method-comparison.js sloppy pass
+language/expressions/class/elements/private-method-comparison.js strict pass
+language/expressions/class/elements/private-method-get-and-call.js sloppy pass
+language/expressions/class/elements/private-method-get-and-call.js strict pass
+language/expressions/class/elements/private-method-is-not-a-own-property.js sloppy pass
+language/expressions/class/elements/private-method-is-not-a-own-property.js strict pass
+language/expressions/class/elements/private-method-length.js sloppy pass
+language/expressions/class/elements/private-method-length.js strict pass
+language/expressions/class/elements/private-method-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-method-on-nested-class.js strict pass
+language/expressions/class/elements/private-method-referenced-from-static-method.js sloppy pass
+language/expressions/class/elements/private-method-referenced-from-static-method.js strict pass
+language/expressions/class/elements/private-method-shadowed-by-field-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-method-shadowed-by-field-on-nested-class.js strict pass
+language/expressions/class/elements/private-method-shadowed-by-getter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-method-shadowed-by-getter-on-nested-class.js strict pass
+language/expressions/class/elements/private-method-shadowed-by-setter-on-nested-class.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: [[Get]] operation of an accessor without getter Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/elements/private-method-shadowed-by-setter-on-nested-class.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: [[Get]] operation of an accessor without getter Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/elements/private-method-shadowed-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-method-shadowed-on-nested-class.js strict pass
+language/expressions/class/elements/private-setter-access-on-inner-arrow-function.js sloppy pass
+language/expressions/class/elements/private-setter-access-on-inner-arrow-function.js strict pass
+language/expressions/class/elements/private-setter-access-on-inner-function.js sloppy pass
+language/expressions/class/elements/private-setter-access-on-inner-function.js strict pass
+language/expressions/class/elements/private-setter-is-not-a-own-property.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/expressions/class/elements/private-setter-is-not-a-own-property.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/expressions/class/elements/private-setter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-setter-on-nested-class.js strict pass
+language/expressions/class/elements/private-setter-shadowed-by-field-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-setter-shadowed-by-field-on-nested-class.js strict pass
+language/expressions/class/elements/private-setter-shadowed-by-getter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-setter-shadowed-by-getter-on-nested-class.js strict pass
+language/expressions/class/elements/private-setter-shadowed-by-method-on-nested-class.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: invalid [[Set]] operation in a private method Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/elements/private-setter-shadowed-by-method-on-nested-class.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: invalid [[Set]] operation in a private method Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/class/elements/private-setter-shadowed-by-setter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-setter-shadowed-by-setter-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-async-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-async-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-async-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-async-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-field-shadowed-by-field-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-field-shadowed-by-field-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-field-shadowed-by-getter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-field-shadowed-by-getter-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-field-shadowed-by-method-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-field-shadowed-by-method-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-field-shadowed-by-setter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-field-shadowed-by-setter-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-field-usage-inside-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-field-usage-inside-nested-class.js strict pass
+language/expressions/class/elements/private-static-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-method-length.js sloppy pass
+language/expressions/class/elements/private-static-method-length.js strict pass
+language/expressions/class/elements/private-static-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/expressions/class/elements/private-static-method-shadowed-by-field-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-method-shadowed-by-field-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-method-shadowed-by-getter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-method-shadowed-by-getter-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-method-shadowed-by-method-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-method-shadowed-by-method-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-method-shadowed-by-setter-on-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-method-shadowed-by-setter-on-nested-class.js strict pass
+language/expressions/class/elements/private-static-method-usage-inside-nested-class.js sloppy pass
+language/expressions/class/elements/private-static-method-usage-inside-nested-class.js strict pass
+language/expressions/class/elements/private-ternary-init-err-contains-arguments.js sloppy pass
+language/expressions/class/elements/private-ternary-init-err-contains-arguments.js strict pass
+language/expressions/class/elements/private-ternary-init-err-contains-super.js sloppy pass
+language/expressions/class/elements/private-ternary-init-err-contains-super.js strict pass
+language/expressions/class/elements/private-typeof-init-err-contains-arguments.js sloppy pass
+language/expressions/class/elements/private-typeof-init-err-contains-arguments.js strict pass
+language/expressions/class/elements/private-typeof-init-err-contains-super.js sloppy pass
+language/expressions/class/elements/private-typeof-init-err-contains-super.js strict pass
+language/expressions/class/elements/prod-private-getter-before-super-return-in-constructor.js sloppy pass
+language/expressions/class/elements/prod-private-getter-before-super-return-in-constructor.js strict pass
+language/expressions/class/elements/prod-private-getter-before-super-return-in-field-initializer.js sloppy pass
+language/expressions/class/elements/prod-private-getter-before-super-return-in-field-initializer.js strict pass
+language/expressions/class/elements/prod-private-method-before-super-return-in-constructor.js sloppy pass
+language/expressions/class/elements/prod-private-method-before-super-return-in-constructor.js strict pass
+language/expressions/class/elements/prod-private-method-before-super-return-in-field-initializer.js sloppy pass
+language/expressions/class/elements/prod-private-method-before-super-return-in-field-initializer.js strict pass
+language/expressions/class/elements/prod-private-setter-before-super-return-in-constructor.js sloppy pass
+language/expressions/class/elements/prod-private-setter-before-super-return-in-constructor.js strict pass
+language/expressions/class/elements/prod-private-setter-before-super-return-in-field-initializer.js sloppy pass
+language/expressions/class/elements/prod-private-setter-before-super-return-in-field-initializer.js strict pass
+language/expressions/class/elements/redeclaration-symbol.js sloppy pass
+language/expressions/class/elements/redeclaration-symbol.js strict pass
+language/expressions/class/elements/redeclaration.js sloppy pass
+language/expressions/class/elements/redeclaration.js strict pass
+language/expressions/class/elements/regular-definitions-computed-names.js sloppy pass
+language/expressions/class/elements/regular-definitions-computed-names.js strict pass
+language/expressions/class/elements/regular-definitions-computed-symbol-names.js sloppy pass
+language/expressions/class/elements/regular-definitions-computed-symbol-names.js strict pass
+language/expressions/class/elements/regular-definitions-grammar-privatename-identifier-semantics-stringvalue.js sloppy pass
+language/expressions/class/elements/regular-definitions-grammar-privatename-identifier-semantics-stringvalue.js strict pass
+language/expressions/class/elements/regular-definitions-literal-names-asi.js sloppy pass
+language/expressions/class/elements/regular-definitions-literal-names-asi.js strict pass
+language/expressions/class/elements/regular-definitions-literal-names.js sloppy pass
+language/expressions/class/elements/regular-definitions-literal-names.js strict pass
+language/expressions/class/elements/regular-definitions-private-field-usage.js sloppy pass
+language/expressions/class/elements/regular-definitions-private-field-usage.js strict pass
+language/expressions/class/elements/regular-definitions-private-method-getter-usage.js sloppy pass
+language/expressions/class/elements/regular-definitions-private-method-getter-usage.js strict pass
+language/expressions/class/elements/regular-definitions-private-method-usage.js sloppy pass
+language/expressions/class/elements/regular-definitions-private-method-usage.js strict pass
+language/expressions/class/elements/regular-definitions-private-names.js sloppy pass
+language/expressions/class/elements/regular-definitions-private-names.js strict pass
+language/expressions/class/elements/regular-definitions-rs-field-identifier-initializer.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-field-identifier-initializer.js strict pass
+language/expressions/class/elements/regular-definitions-rs-field-identifier.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-field-identifier.js strict pass
+language/expressions/class/elements/regular-definitions-rs-private-getter-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-private-getter-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-private-getter.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-private-getter.js strict pass
+language/expressions/class/elements/regular-definitions-rs-private-method-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-private-method-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-private-method.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-private-method.js strict pass
+language/expressions/class/elements/regular-definitions-rs-private-setter-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-private-setter-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-private-setter.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-private-setter.js strict pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier-initializer-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier-initializer-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier-initializer.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier-initializer.js strict pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-privatename-identifier.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-async-generator-method-privatename-identifier-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-async-generator-method-privatename-identifier-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-async-generator-method-privatename-identifier.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-async-generator-method-privatename-identifier.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-async-method-privatename-identifier-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-async-method-privatename-identifier-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-async-method-privatename-identifier.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-async-method-privatename-identifier.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-generator-method-privatename-identifier-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-generator-method-privatename-identifier-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-generator-method-privatename-identifier.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-generator-method-privatename-identifier.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-method-privatename-identifier-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-method-privatename-identifier-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-method-privatename-identifier.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-method-privatename-identifier.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-alt-by-classname.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-alt-by-classname.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-by-classname.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-by-classname.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt-by-classname.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer-alt.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier-initializer.js strict pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier.js sloppy pass
+language/expressions/class/elements/regular-definitions-rs-static-privatename-identifier.js strict pass
+language/expressions/class/elements/regular-definitions-static-private-fields.js sloppy pass
+language/expressions/class/elements/regular-definitions-static-private-fields.js strict pass

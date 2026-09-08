@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/Uint8Array/prototype/setFromHex tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Uint8Array/prototype/setFromHex/descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setFromHex should be an own property"
+built-ins/Uint8Array/prototype/setFromHex/descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setFromHex should be an own property"
+built-ins/Uint8Array/prototype/setFromHex/detached-buffer.js sloppy pass
+built-ins/Uint8Array/prototype/setFromHex/detached-buffer.js strict pass
+built-ins/Uint8Array/prototype/setFromHex/illegal-characters.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/prototype/setFromHex/illegal-characters.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/prototype/setFromHex/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/setFromHex/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/setFromHex/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/setFromHex/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/setFromHex/nonconstructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Uint8Array/prototype/setFromHex/nonconstructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Uint8Array/prototype/setFromHex/results.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/prototype/setFromHex/results.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/prototype/setFromHex/string-coercion.js sloppy pass
+built-ins/Uint8Array/prototype/setFromHex/string-coercion.js strict pass
+built-ins/Uint8Array/prototype/setFromHex/subarray.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/prototype/setFromHex/subarray.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/prototype/setFromHex/target-size.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/prototype/setFromHex/target-size.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/prototype/setFromHex/throws-when-string-length-is-odd.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Uint8Array has length 0 Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/prototype/setFromHex/throws-when-string-length-is-odd.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Uint8Array has length 0 Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/prototype/setFromHex/throws-when-target-is-backed-by-immutable-arraybuffer.js sloppy skip:shared-test262-failure
+built-ins/Uint8Array/prototype/setFromHex/throws-when-target-is-backed-by-immutable-arraybuffer.js strict skip:shared-test262-failure
+built-ins/Uint8Array/prototype/setFromHex/writes-up-to-error.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/prototype/setFromHex/writes-up-to-error.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"

@@ -2058,17 +2058,18 @@ reconciliation is recorded here, with its lock.
   did that conversion wholesale: every engine throw routes through
   `raise_js` (which sets `self.exception` and finds the handler), the
   unwind restores the establishing frame's activation (`leave_call`
-  per crossed frame, stack/locals/env cuts), and `Halt::Resume`
+  per crossed frame, stack/locals/env cuts), and `Step::Unwound`
   propagates the handler's resume point out through the Rust-level
   dispatch nesting to the loop that owns the handler's frame. (That
   "wholesale" claim was recorded here while 29 native sites still built
   `Halt::Throw` inline, uncatchable and with `self.exception` unset —
   the architecture review's F004/F005, a known-fixed item found open.
-  It now holds by construction: `Halt::Throw` carries the thrown value,
-  so an inline site has nothing to construct it from, and
-  `ironhorse-vm/tests/throw_construction_sites.rs` locks the three
-  places a `Throw` may be built.) The
-  floor would now BLOCK correct cross-frame catches, so it is removed;
+  The private `Step::Threw` now carries the thrown value through nested dispatch
+  and native catches; only the host boundary constructs and renders `Halt::Throw`.
+  `ironhorse-vm/tests/throw_construction_sites.rs` locks both construction sets.
+  Public `Halt` has no catch or suspension transfers, and the typed activation return
+  replaces the `callback_return_depth` side channel and its snapshot classification.)
+  The floor would now BLOCK correct cross-frame catches, so it is removed;
   `nested_run_unwind_floor.rs` re-pins the STRONGER property — the
   driver's catch catches and the program completes with the thrown
   value, full XS agreement. What survives from the wave-5 work is the

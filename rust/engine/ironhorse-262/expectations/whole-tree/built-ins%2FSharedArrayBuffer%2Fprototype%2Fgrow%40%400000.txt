@@ -1,0 +1,31 @@
+# engine=ironhorse features=default corpus=built-ins/SharedArrayBuffer/prototype/grow tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/SharedArrayBuffer/prototype/grow/descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: grow should be an own property"
+built-ins/SharedArrayBuffer/prototype/grow/descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: grow should be an own property"
+built-ins/SharedArrayBuffer/prototype/grow/extensible.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/SharedArrayBuffer/prototype/grow/extensible.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/SharedArrayBuffer/prototype/grow/grow-larger-size.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/grow-larger-size.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/grow-same-size.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/grow-same-size.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/grow-smaller-size.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/grow-smaller-size.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/grow/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/grow/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/grow/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/grow/new-length-excessive.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/new-length-excessive.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/new-length-negative.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/new-length-negative.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/new-length-non-number.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/new-length-non-number.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/grow/nonconstructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/SharedArrayBuffer/prototype/grow/nonconstructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/SharedArrayBuffer/prototype/grow/this-is-not-arraybuffer-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/SharedArrayBuffer/prototype/grow/this-is-not-arraybuffer-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/SharedArrayBuffer/prototype/grow/this-is-not-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/SharedArrayBuffer/prototype/grow/this-is-not-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/SharedArrayBuffer/prototype/grow/this-is-not-resizable-arraybuffer-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/SharedArrayBuffer/prototype/grow/this-is-not-resizable-arraybuffer-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/SharedArrayBuffer/prototype/grow/this-is-sharedarraybuffer.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/grow/this-is-sharedarraybuffer.js strict pass

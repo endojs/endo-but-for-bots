@@ -1,0 +1,29 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/lastIndexOf/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/fromIndex-infinity.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/fromIndex-infinity.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/fromIndex-minus-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/fromIndex-minus-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/get-length-uses-internal-arraylength.js sloppy pass
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/get-length-uses-internal-arraylength.js strict pass
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/length-zero-returns-minus-one.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/length-zero-returns-minus-one.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/no-arg.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/no-arg.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/return-abrupt-from-this-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/return-abrupt-from-this-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/return-abrupt-tointeger-fromindex-symbol.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/return-abrupt-tointeger-fromindex-symbol.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/return-abrupt-tointeger-fromindex.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/return-abrupt-tointeger-fromindex.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/search-found-returns-index.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/search-found-returns-index.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/search-not-found-returns-minus-one.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/search-not-found-returns-minus-one.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/tointeger-fromindex.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/lastIndexOf/BigInt/tointeger-fromindex.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

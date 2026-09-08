@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/String/prototype/trimRight tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/String/prototype/trimRight/length.js sloppy pass
+annexB/built-ins/String/prototype/trimRight/length.js strict pass
+annexB/built-ins/String/prototype/trimRight/name.js sloppy pass
+annexB/built-ins/String/prototype/trimRight/name.js strict pass
+annexB/built-ins/String/prototype/trimRight/prop-desc.js sloppy pass
+annexB/built-ins/String/prototype/trimRight/prop-desc.js strict pass
+annexB/built-ins/String/prototype/trimRight/reference-trimEnd.js sloppy pass
+annexB/built-ins/String/prototype/trimRight/reference-trimEnd.js strict pass

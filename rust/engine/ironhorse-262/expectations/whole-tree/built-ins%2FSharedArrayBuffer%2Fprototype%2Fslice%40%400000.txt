@@ -1,0 +1,65 @@
+# engine=ironhorse features=default corpus=built-ins/SharedArrayBuffer/prototype/slice tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/SharedArrayBuffer/prototype/slice/context-is-not-arraybuffer-object.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/context-is-not-arraybuffer-object.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/context-is-not-object.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/context-is-not-object.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: slice should be an own property"
+built-ins/SharedArrayBuffer/prototype/slice/descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: slice should be an own property"
+built-ins/SharedArrayBuffer/prototype/slice/end-default-if-absent.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/end-default-if-absent.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/end-default-if-undefined.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/end-default-if-undefined.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/end-exceeds-length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/end-exceeds-length.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/extensible.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/SharedArrayBuffer/prototype/slice/extensible.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/SharedArrayBuffer/prototype/slice/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/slice/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/slice/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/slice/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/SharedArrayBuffer/prototype/slice/negative-end.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/negative-end.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/negative-start.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/negative-start.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/nonconstructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/SharedArrayBuffer/prototype/slice/nonconstructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/SharedArrayBuffer/prototype/slice/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/SharedArrayBuffer/prototype/slice/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/SharedArrayBuffer/prototype/slice/number-conversion.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/number-conversion.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-constructor-is-not-object.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/species-constructor-is-not-object.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/species-constructor-is-undefined.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-constructor-is-undefined.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-is-not-constructor.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/species-is-not-constructor.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/species-is-not-object.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/species-is-not-object.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/species-is-null.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-is-null.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-is-undefined.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-is-undefined.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-larger-arraybuffer.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-larger-arraybuffer.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-not-arraybuffer.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-not-arraybuffer.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-same-arraybuffer.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-same-arraybuffer.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-smaller-arraybuffer.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/species-returns-smaller-arraybuffer.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/species.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/species.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-default-if-absent.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-default-if-absent.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-default-if-undefined.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-default-if-undefined.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-exceeds-end.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-exceeds-end.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-exceeds-length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/start-exceeds-length.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/this-is-arraybuffer.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/slice/this-is-arraybuffer.js strict pass
+built-ins/SharedArrayBuffer/prototype/slice/tointeger-conversion-end.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/tointeger-conversion-end.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/tointeger-conversion-start.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/slice/tointeger-conversion-start.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"

@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/Symbol.iterator.js sloppy pass
+built-ins/Array/prototype/Symbol.iterator.js strict pass
+built-ins/Array/prototype/constructor.js sloppy pass
+built-ins/Array/prototype/constructor.js strict pass
+built-ins/Array/prototype/exotic-array.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number3») to be true"
+built-ins/Array/prototype/exotic-array.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number3») to be true"
+built-ins/Array/prototype/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number0») to be true"
+built-ins/Array/prototype/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number0») to be true"
+built-ins/Array/prototype/methods-called-as-functions.js sloppy pass
+built-ins/Array/prototype/methods-called-as-functions.js strict pass
+built-ins/Array/prototype/prop-desc.js sloppy pass
+built-ins/Array/prototype/prop-desc.js strict pass
+built-ins/Array/prototype/proto.js sloppy pass
+built-ins/Array/prototype/proto.js strict pass

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Math/E tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/E/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: E descriptor should not be enumerable; E descriptor should not be writable; E descriptor should not be configurable"
+built-ins/Math/E/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: E descriptor should not be enumerable; E descriptor should not be writable; E descriptor should not be configurable"
+built-ins/Math/E/value.js sloppy pass
+built-ins/Math/E/value.js strict pass

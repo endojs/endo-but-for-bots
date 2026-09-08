@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/Object/setPrototypeOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/setPrototypeOf/bigint.js sloppy pass
+built-ins/Object/setPrototypeOf/bigint.js strict pass
+built-ins/Object/setPrototypeOf/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Object/setPrototypeOf/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Object/setPrototypeOf/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be setPrototypeOf; name value should be setPrototypeOf"
+built-ins/Object/setPrototypeOf/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be setPrototypeOf; name value should be setPrototypeOf"
+built-ins/Object/setPrototypeOf/not-a-constructor.js sloppy pass
+built-ins/Object/setPrototypeOf/not-a-constructor.js strict pass
+built-ins/Object/setPrototypeOf/o-not-obj-coercible.js sloppy pass
+built-ins/Object/setPrototypeOf/o-not-obj-coercible.js strict pass
+built-ins/Object/setPrototypeOf/o-not-obj.js sloppy pass
+built-ins/Object/setPrototypeOf/o-not-obj.js strict pass
+built-ins/Object/setPrototypeOf/property-descriptor.js sloppy pass
+built-ins/Object/setPrototypeOf/property-descriptor.js strict pass
+built-ins/Object/setPrototypeOf/proto-not-obj.js sloppy pass
+built-ins/Object/setPrototypeOf/proto-not-obj.js strict pass
+built-ins/Object/setPrototypeOf/set-error.js sloppy pass
+built-ins/Object/setPrototypeOf/set-error.js strict pass
+built-ins/Object/setPrototypeOf/set-failure-cycle.js sloppy pass
+built-ins/Object/setPrototypeOf/set-failure-cycle.js strict pass
+built-ins/Object/setPrototypeOf/set-failure-non-extensible.js sloppy pass
+built-ins/Object/setPrototypeOf/set-failure-non-extensible.js strict pass
+built-ins/Object/setPrototypeOf/success.js sloppy pass
+built-ins/Object/setPrototypeOf/success.js strict pass

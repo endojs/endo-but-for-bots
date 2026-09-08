@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=language/computed-property-names/to-name-side-effects tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/computed-property-names/to-name-side-effects/class.js sloppy pass
+language/computed-property-names/to-name-side-effects/class.js strict pass
+language/computed-property-names/to-name-side-effects/numbers-class.js sloppy pass
+language/computed-property-names/to-name-side-effects/numbers-class.js strict pass
+language/computed-property-names/to-name-side-effects/numbers-object.js sloppy pass
+language/computed-property-names/to-name-side-effects/numbers-object.js strict pass
+language/computed-property-names/to-name-side-effects/object.js sloppy pass
+language/computed-property-names/to-name-side-effects/object.js strict pass

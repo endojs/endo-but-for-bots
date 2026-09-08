@@ -1,0 +1,35 @@
+# engine=ironhorse features=default corpus=built-ins/GeneratorFunction tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/GeneratorFunction/extensibility.js sloppy pass
+built-ins/GeneratorFunction/extensibility.js strict pass
+built-ins/GeneratorFunction/has-instance.js sloppy pass
+built-ins/GeneratorFunction/has-instance.js strict pass
+built-ins/GeneratorFunction/instance-construct-throws.js sloppy skip:unsupported-opcode:generator:new-target
+built-ins/GeneratorFunction/instance-construct-throws.js strict skip:unsupported-opcode:generator:new-target
+built-ins/GeneratorFunction/instance-length.js sloppy pass
+built-ins/GeneratorFunction/instance-length.js strict pass
+built-ins/GeneratorFunction/instance-name.js sloppy pass
+built-ins/GeneratorFunction/instance-name.js strict pass
+built-ins/GeneratorFunction/instance-prototype.js sloppy pass
+built-ins/GeneratorFunction/instance-prototype.js strict pass
+built-ins/GeneratorFunction/instance-restricted-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/GeneratorFunction/instance-restricted-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/GeneratorFunction/instance-yield-expr-in-param.js sloppy pass
+built-ins/GeneratorFunction/instance-yield-expr-in-param.js strict pass
+built-ins/GeneratorFunction/invoked-as-constructor-no-arguments.js sloppy pass
+built-ins/GeneratorFunction/invoked-as-constructor-no-arguments.js strict pass
+built-ins/GeneratorFunction/invoked-as-function-multiple-arguments.js sloppy pass
+built-ins/GeneratorFunction/invoked-as-function-multiple-arguments.js strict pass
+built-ins/GeneratorFunction/invoked-as-function-no-arguments.js sloppy pass
+built-ins/GeneratorFunction/invoked-as-function-no-arguments.js strict pass
+built-ins/GeneratorFunction/invoked-as-function-single-argument.js sloppy pass
+built-ins/GeneratorFunction/invoked-as-function-single-argument.js strict pass
+built-ins/GeneratorFunction/is-a-constructor.js sloppy skip:unsupported-opcode:Iterator.helper
+built-ins/GeneratorFunction/is-a-constructor.js strict skip:unsupported-opcode:Iterator.helper
+built-ins/GeneratorFunction/length.js sloppy pass
+built-ins/GeneratorFunction/length.js strict pass
+built-ins/GeneratorFunction/name.js sloppy pass
+built-ins/GeneratorFunction/name.js strict pass
+built-ins/GeneratorFunction/proto-from-ctor-realm-prototype.js sloppy skip:shared-positive-test-failure
+built-ins/GeneratorFunction/proto-from-ctor-realm-prototype.js strict skip:shared-positive-test-failure
+built-ins/GeneratorFunction/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/GeneratorFunction/proto-from-ctor-realm.js strict skip:shared-positive-test-failure

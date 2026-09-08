@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/prototype/hasIndices tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/prototype/hasIndices/cross-realm.js sloppy fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
+built-ins/RegExp/prototype/hasIndices/cross-realm.js strict fail:"error-message-differs:TypeError: oracle=\"TypeError: call: not a function\" ironhorse=\"TypeError: cannot coerce undefined to object\""
+built-ins/RegExp/prototype/hasIndices/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/prop-desc.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/prop-desc.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/this-val-invalid-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/this-val-invalid-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/this-val-non-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/this-val-non-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/this-val-regexp-prototype.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/this-val-regexp-prototype.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/hasIndices/this-val-regexp.js sloppy pass
+built-ins/RegExp/prototype/hasIndices/this-val-regexp.js strict pass

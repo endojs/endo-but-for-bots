@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/ctors/no-args tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/ctors/no-args/custom-proto-access-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors/no-args/custom-proto-access-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors/no-args/new-instance-extensibility.js sloppy pass
+built-ins/TypedArrayConstructors/ctors/no-args/new-instance-extensibility.js strict pass
+built-ins/TypedArrayConstructors/ctors/no-args/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/ctors/no-args/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/ctors/no-args/returns-object.js sloppy pass
+built-ins/TypedArrayConstructors/ctors/no-args/returns-object.js strict pass
+built-ins/TypedArrayConstructors/ctors/no-args/undefined-newtarget-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors/no-args/undefined-newtarget-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors/no-args/use-custom-proto-if-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"Float64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors/no-args/use-custom-proto-if-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"Float64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors/no-args/use-default-proto-if-custom-proto-is-not-object.js sloppy pass
+built-ins/TypedArrayConstructors/ctors/no-args/use-default-proto-if-custom-proto-is-not-object.js strict pass

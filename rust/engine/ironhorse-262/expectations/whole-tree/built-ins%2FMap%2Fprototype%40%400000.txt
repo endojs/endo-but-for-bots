@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Map/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Map/prototype/Symbol.iterator.js sloppy pass
+built-ins/Map/prototype/Symbol.iterator.js strict pass
+built-ins/Map/prototype/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"Map\"») to be true"
+built-ins/Map/prototype/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"Map\"») to be true"
+built-ins/Map/prototype/constructor.js sloppy pass
+built-ins/Map/prototype/constructor.js strict pass
+built-ins/Map/prototype/descriptor.js sloppy pass
+built-ins/Map/prototype/descriptor.js strict pass

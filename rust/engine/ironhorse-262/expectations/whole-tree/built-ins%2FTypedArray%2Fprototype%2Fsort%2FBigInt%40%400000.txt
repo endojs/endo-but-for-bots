@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/sort/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/sort/BigInt/arraylength-internal.js sloppy pass
+built-ins/TypedArray/prototype/sort/BigInt/arraylength-internal.js strict pass
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-call-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-call-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-calls.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-calls.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-is-undefined.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-is-undefined.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-nonfunction-call-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/comparefn-nonfunction-call-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/return-abrupt-from-this-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/return-abrupt-from-this-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/return-same-instance.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/return-same-instance.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/sortcompare-with-no-tostring.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/sortcompare-with-no-tostring.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/sorted-values.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/sort/BigInt/sorted-values.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

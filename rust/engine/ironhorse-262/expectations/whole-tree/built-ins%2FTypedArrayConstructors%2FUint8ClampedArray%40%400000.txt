@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/Uint8ClampedArray tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/Uint8ClampedArray/BYTES_PER_ELEMENT.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[BYTES_PER_ELEMENT] to have enumerable:false."
+built-ins/TypedArrayConstructors/Uint8ClampedArray/BYTES_PER_ELEMENT.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[BYTES_PER_ELEMENT] to have enumerable:false."
+built-ins/TypedArrayConstructors/Uint8ClampedArray/constructor.js sloppy pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/constructor.js strict pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/is-a-constructor.js sloppy pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/is-a-constructor.js strict pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/length.js sloppy pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/length.js strict pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/name.js sloppy pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/name.js strict pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/proto.js sloppy pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/proto.js strict pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/prototype.js sloppy pass
+built-ins/TypedArrayConstructors/Uint8ClampedArray/prototype.js strict pass

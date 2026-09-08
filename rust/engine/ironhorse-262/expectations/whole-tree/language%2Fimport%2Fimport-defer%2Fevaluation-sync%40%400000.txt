@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=language/import/import-defer/evaluation-sync tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-defer/evaluation-sync/import-defer-does-not-evaluate.js sloppy skip:module:compiler-rejected
+language/import/import-defer/evaluation-sync/module-imported-defer-and-eager.js sloppy skip:module:compiler-rejected

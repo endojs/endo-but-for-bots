@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/prototype/Symbol.toPrimitive tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/prototype/Symbol.toPrimitive/length.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/length.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/name.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/name.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/prop-desc.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/prop-desc.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/redefined-symbol-wrapper-ordinary-toprimitive.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/redefined-symbol-wrapper-ordinary-toprimitive.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/removed-symbol-wrapper-ordinary-toprimitive.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/removed-symbol-wrapper-ordinary-toprimitive.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-non-obj.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-non-obj.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-obj-non-symbol-wrapper.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-obj-non-symbol-wrapper.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-obj-symbol-wrapper.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-obj-symbol-wrapper.js strict pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-symbol.js sloppy pass
+built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-symbol.js strict pass

@@ -12,7 +12,7 @@
 //! computron agreement is advisory telemetry, not asserted here.
 //!
 //! The re-entrant `Reflect.apply`/`Reflect.construct` are NOT exercised here:
-//! they self-name an honest `Halt::Unsupported` this child (their
+//! they self-name an honest `Halt::NotImplemented` this child (their
 //! spread-argument trampoline metering is a later increment), so a dual-run of
 //! them would not `BothComplete` on ironhorse — the gap is documented, not tested.
 

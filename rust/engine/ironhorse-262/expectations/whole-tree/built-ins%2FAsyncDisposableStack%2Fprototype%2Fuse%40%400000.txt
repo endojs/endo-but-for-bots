@@ -1,0 +1,49 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncDisposableStack/prototype/use tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncDisposableStack/prototype/use/Symbol.asyncDispose-getter.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/Symbol.asyncDispose-getter.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/Symbol.dispose-getter.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/Symbol.dispose-getter.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/adds-async-disposable-value.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/adds-async-disposable-value.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/adds-sync-disposable-value.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/adds-sync-disposable-value.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/allows-null-value.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/allows-null-value.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/allows-undefined-value.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/allows-undefined-value.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.asyncDispose-property-once.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.asyncDispose-property-once.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-after-trying-Symbol.asyncDispose.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-after-trying-Symbol.asyncDispose.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-once.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/gets-value-Symbol.dispose-property-once.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/AsyncDisposableStack/prototype/use/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/AsyncDisposableStack/prototype/use/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be use; name value should be use"
+built-ins/AsyncDisposableStack/prototype/use/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be use; name value should be use"
+built-ins/AsyncDisposableStack/prototype/use/not-a-constructor.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/not-a-constructor.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/prop-desc.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/prop-desc.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/puts-value-on-top-of-stack.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/puts-value-on-top-of-stack.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/returns-value.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/returns-value.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/this-does-not-have-internal-asyncdisposablestate-throws.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/this-does-not-have-internal-asyncdisposablestate-throws.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/this-not-object-throws.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/this-not-object-throws.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-disposed.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.asyncDispose-property-is-null-or-undefined.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.asyncDispose-property-is-null-or-undefined.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.asyncDispose-property-not-callable.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.asyncDispose-property-not-callable.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-is-null-or-undefined.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-is-null-or-undefined.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-not-callable.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-Symbol.dispose-property-not-callable.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-missing-Symbol.asyncDispose-and-Symbol.dispose.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-missing-Symbol.asyncDispose-and-Symbol.dispose.js strict pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-not-object.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/use/throws-if-value-not-object.js strict pass

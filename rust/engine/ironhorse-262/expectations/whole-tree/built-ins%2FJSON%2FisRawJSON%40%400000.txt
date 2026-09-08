@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/JSON/isRawJSON tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/JSON/isRawJSON/basic.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/JSON/isRawJSON/basic.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/JSON/isRawJSON/builtin.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: JSON.isRawJSON is extensible"
+built-ins/JSON/isRawJSON/builtin.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: JSON.isRawJSON is extensible"
+built-ins/JSON/isRawJSON/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/JSON/isRawJSON/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/JSON/isRawJSON/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/JSON/isRawJSON/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/JSON/isRawJSON/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/JSON/isRawJSON/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/JSON/isRawJSON/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isRawJSON should be an own property"
+built-ins/JSON/isRawJSON/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isRawJSON should be an own property"

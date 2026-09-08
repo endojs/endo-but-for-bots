@@ -19,6 +19,7 @@
 # Usage:
 #   full-run.sh [--test262-dir DIR] [--subtree PREFIX] [--output DIR]
 #               [--jobs N] [--oracle on|off] [--no-fetch]
+#               [--expectations-dir DIR | --update-expectations-dir DIR]
 #
 #   --test262-dir DIR  an existing test262 checkout (a root with test/ and
 #                      harness/). Default: clone tc39/test262 at the pinned
@@ -30,7 +31,12 @@
 #   --jobs N           batch parallelism. Default: min(nproc/2, 8). This bounds
 #                      peak memory (concurrent oracle processes).
 #   --oracle on|off    gate on the XS oracle (default on).
+#   --case-timeout N   per-case wall-clock seconds, 1..3600 (default 60).
+#                      The batch watchdog remains an independent outer bound.
 #   --no-fetch         do not clone; require --test262-dir.
+#   --expectations-dir DIR  gate every batch against committed shards + manifest.
+#   --update-expectations-dir DIR  generate shards in a new output directory;
+#                          write its manifest only after a complete sweep.
 #
 # NOTE: an indicative run at 14f26d0a6 on a 32-vCPU host with jobs=16 and the
 # XS oracle enabled took 16m30s; later watchdog/quarantine changes and slower runners
@@ -55,7 +61,10 @@ subtree=""
 output="$engine_directory/target/test262-report"
 jobs=""
 oracle="on"
+case_timeout=60
 allow_fetch="yes"
+expectations_dir=""
+update_expectations_dir=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -64,7 +73,10 @@ while [ $# -gt 0 ]; do
     --output) output="$2"; shift 2 ;;
     --jobs) jobs="$2"; shift 2 ;;
     --oracle) oracle="$2"; shift 2 ;;
+    --case-timeout) case_timeout="${2:-}"; [ "$#" -ge 2 ] || { echo "full-run: --case-timeout needs seconds (1..3600)" >&2; exit 2; }; shift 2 ;;
     --no-fetch) allow_fetch="no"; shift ;;
+    --expectations-dir) expectations_dir="$2"; shift 2 ;;
+    --update-expectations-dir) update_expectations_dir="$2"; shift 2 ;;
     -h|--help) sed -n '2,/^set -euo pipefail$/{ /^set -euo pipefail$/d; p; }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "full-run.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -83,9 +95,35 @@ fi
 if [ "$jobs" -gt 64 ]; then
   echo "full-run: --jobs must not exceed 64" >&2; exit 2
 fi
+case "$case_timeout" in
+  ''|*[!0-9]*) echo "full-run: --case-timeout needs seconds (1..3600)" >&2; exit 2 ;;
+esac
+# Reject oversized decimal text before shell arithmetic can overflow.
+if [ "${#case_timeout}" -gt 4 ]; then
+  echo "full-run: --case-timeout needs seconds (1..3600)" >&2; exit 2
+fi
+case_timeout=$((10#$case_timeout))
+if [ "$case_timeout" -lt 1 ] || [ "$case_timeout" -gt 3600 ]; then
+  echo "full-run: --case-timeout needs seconds (1..3600)" >&2; exit 2
+fi
 if [ "$oracle" != "on" ] && [ "$oracle" != "off" ]; then
   echo "full-run: --oracle must be on or off" >&2; exit 2
 fi
+
+if [ -n "$expectations_dir" ] && [ -n "$update_expectations_dir" ]; then
+  echo "full-run: choose either comparison or generation of expectation shards" >&2; exit 2
+fi
+if [ -n "$expectations_dir" ] && [ ! -f "$expectations_dir/manifest.txt" ]; then
+  echo "full-run: expectation directory needs a committed manifest.txt" >&2; exit 2
+fi
+if [ -n "$update_expectations_dir" ]; then
+  if [ -f "$update_expectations_dir/manifest.txt" ]; then
+    echo "full-run: generate into a new directory, then review the complete baseline diff" >&2; exit 2
+  fi
+  mkdir -p "$update_expectations_dir"
+fi
+# shellcheck source=expectation-shards.sh
+source "$here/expectation-shards.sh"
 
 mkdir -p "$output"
 results="$output/results"
@@ -200,8 +238,8 @@ host="redacted"
 oracle_flag=""; [ "$oracle" = "off" ] && oracle_flag="--no-oracle"
 ses_mode="none"
 scope="whole-corpus"; [ -n "$subtree" ] && scope="subtree=$subtree"
-config="oracle=$oracle max-cases-per-batch=$batch_size jobs=$jobs subtree=${subtree:-<all>}"
-command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $oracle"
+config="oracle=$oracle max-cases-per-batch=$batch_size jobs=$jobs case-timeout=$case_timeout subtree=${subtree:-<all>}"
+command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $oracle --case-timeout $case_timeout"
 
 # The run identity every batch is stamped with: the fingerprint of the
 # result-affecting inputs. Reusing a results dir after ANY of these changes
@@ -210,7 +248,13 @@ command_line="full-run.sh --subtree ${subtree:-<all>} --jobs $jobs --oracle $ora
 # The XS oracle's source pin (moddable_sha) is part of the identity: it is the
 # gate that decides every case's verdict, so bumping c/moddable must re-run the
 # affected batches rather than retain results scored against the old oracle.
-run_id="test262=$test262_sha;endo=$endo_sha;oracle=$oracle;moddable=$moddable_sha;ses=$ses_mode;cap=$batch_size;scope=${subtree:-<all>}"
+run_id="test262=$test262_sha;endo=$endo_sha;oracle=$oracle;moddable=$moddable_sha;ses=$ses_mode;cap=$batch_size;case-timeout=$case_timeout;scope=${subtree:-<all>}"
+if [ -n "$expectations_dir" ]; then
+  expectations_digest=$(expectation_shards_digest "$expectations_dir")
+  run_id="$run_id;expectations=$expectations_digest"
+elif [ -n "$update_expectations_dir" ]; then
+  run_id="$run_id;expectations=generate:$(canonical_path "$update_expectations_dir")"
+fi
 
 provenance="$output/provenance.json"
 
@@ -222,6 +266,9 @@ discovery_file="$output/discovery.txt"
 pending_file="$output/pending.txt"
 if ! "$report_binary" discover "${discover_arguments[@]}" > "$discovery_file"; then
   echo "full-run: batch discovery failed" >&2; exit 2
+fi
+if [ -n "$expectations_dir" ]; then
+  validate_expectation_shards "$expectations_dir" "$discovery_file" "$report_binary" || exit 2
 fi
 if ! "$report_binary" plan --results "$results" --run-id "$run_id" "${discover_arguments[@]}" > "$pending_file"; then
   echo "full-run: resume planning failed" >&2; exit 2
@@ -258,7 +305,8 @@ else
 fi
 attempts="$output/attempts/$run_key"
 quarantines="$output/quarantines/$run_key"
-mkdir -p "$logs" "$attempts" "$quarantines"
+ratchets="$output/ratchets/$run_key"
+mkdir -p "$logs" "$attempts" "$quarantines" "$ratchets"
 # The per-batch attempt cap. Quarantine (below) fires once a batch has failed
 # this many times. The cap counts attempts ACROSS invocations (persisted in
 # `$attempts/<batch>`) AND is retried in-process within one invocation, so the
@@ -281,6 +329,16 @@ run_one_batch() {
   [ -f "$attempt_file" ] && read -r attempt < "$attempt_file" || true
   case "$attempt" in ''|*[!0-9]*) attempt=0 ;; esac
   expected_count=$("$report_binary" batch-count --test262-dir "$test262_dir" --batch "$batch")
+  expectation_arguments=()
+  expectation_part=""
+  expectation_final=""
+  if [ -n "$expectations_dir" ]; then
+    expectation_arguments=(--strict-skip-reasons --expectations "$(expectation_shard_name "$expectations_dir" "$batch" "$report_binary")")
+  elif [ -n "$update_expectations_dir" ]; then
+    expectation_final=$(expectation_shard_name "$update_expectations_dir" "$batch" "$report_binary")
+    expectation_part="$expectation_final.part"
+    expectation_arguments=(--update-expectations "$expectation_part")
+  fi
   status=0
   # Retry the batch in-process up to the cap so ONE invocation can reach the
   # quarantine path rather than leaving a permanently-pending batch that fails
@@ -290,10 +348,11 @@ run_one_batch() {
     attempt=$((attempt + 1))
     printf '%s\n' "$attempt" > "$attempt_file"
     rm -f "$part"
+    [ -z "$expectation_part" ] || rm -f "$expectation_part"
     status=0
     "$xst_binary" --direct-only --batch-size "$batch_size" --batch-index "$((10#$batch_index))" \
-      $oracle_flag --run-id "$run_id" --json "$part" --test262-dir "$test262_dir" \
-      "$test_root/$directory" >"$log" 2>&1 &
+      $oracle_flag --case-timeout "$case_timeout" --run-id "$run_id" --json "$part" --test262-dir "$test262_dir" \
+      "${expectation_arguments[@]}" "$test_root/$directory" >"$log" 2>&1 &
     worker=$!
     (
       # timer starts EMPTY, never 0: a TERM that lands after the trap is installed
@@ -326,6 +385,25 @@ run_one_batch() {
     # promoted.
     if "$report_binary" validate --batch "$part" --run-id "$run_id" \
         --expected-count "$expected_count" >>"$log" 2>&1; then
+      # A valid JSON report is independent of the ratchet exit status. Keep
+      # mismatch evidence and finish the report, but do not turn exit 1/2 into
+      # a successful expectation gate merely by promoting that JSON.
+      if [ -n "$expectations_dir" ]; then
+        if [ "$status" -ne 0 ]; then
+          printf 'exit-status:%s\n' "$status" > "$ratchets/$basename"
+        else
+          rm -f "$ratchets/$basename"
+        fi
+      fi
+      if [ -n "$update_expectations_dir" ]; then
+        # Exit 1 may be an ordinary observed failure being recorded. An
+        # interrupted/erroring worker must not promote a partial baseline.
+        if [ "$status" -gt 1 ] || [ ! -f "$expectation_part" ]; then
+          rm -f "$part" "$expectation_part"
+          continue
+        fi
+        mv -f "$expectation_part" "$expectation_final"
+      fi
       mv -f "$part" "$final"
       return 0
     fi
@@ -345,8 +423,9 @@ run_one_batch() {
     rm -f "$part"
   fi
 }
-export -f run_one_batch
-export xst_binary report_binary results test262_dir test_root oracle_flag batch_size run_id logs attempts quarantines
+export -f run_one_batch expectation_shard_name
+export xst_binary report_binary results test262_dir test_root oracle_flag case_timeout batch_size run_id logs attempts quarantines ratchets expectations_dir update_expectations_dir
+export GARDEN_TEST262_TIP="$test262_sha"
 
 if [ "${#pending[@]}" -gt 0 ]; then
   printf '%s\n' "${pending[@]}" | xargs -P "$jobs" -I{} bash -c 'run_one_batch "$@"' _ {} || true
@@ -406,6 +485,22 @@ done
 "$report_binary" aggregate --results "$results" --provenance "$provenance" \
   --plan "$discovery_file" --expected-total "$expected_total" \
   --json "$output/report.json" --html "$output/report.html"
+
+if [ -n "$update_expectations_dir" ]; then
+  if [ "$completion" != "complete" ]; then
+    echo "full-run: incomplete sweep cannot generate a baseline manifest" >&2; exit 1
+  fi
+  cp "$discovery_file" "$update_expectations_dir/manifest.txt"
+  if ! validate_expectation_shards "$update_expectations_dir" "$discovery_file" "$report_binary"; then
+    rm -f "$update_expectations_dir/manifest.txt"
+    exit 1
+  fi
+fi
+if [ -n "$expectations_dir" ]; then
+  if [ "$completion" != "complete" ] || find "$ratchets" -type f -print -quit | grep -q .; then
+    echo "full-run: expectation gate failed; inspect per-batch logs and ratchets" >&2; exit 1
+  fi
+fi
 
 echo "full-run: done." >&2
 echo "  report.json: $output/report.json" >&2

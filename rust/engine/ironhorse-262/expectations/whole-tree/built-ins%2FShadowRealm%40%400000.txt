@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/ShadowRealm tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ShadowRealm/constructor.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/descriptor.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/extensibility.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/instance-extensibility.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/instance.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/length.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/name.js sloppy skip:feature:ShadowRealm
+built-ins/ShadowRealm/proto.js sloppy skip:feature:ShadowRealm

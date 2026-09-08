@@ -303,7 +303,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // generation 19; format unchanged.
         // Re-pinned for format 13 (ASYN) and boot generation 21: SES
         // intrinsic reflection changes the boot heap and linked surfaces.
-        "9a258493722cb2b4d656832ee9f04164dc35e025d00abed48d1990fe542b048a",
+        // W1 installs Error prototype name/message data independently of
+        // guest symbol use, with their required non-enumerable attributes.
+        // This changes linked heap content; the format is unchanged.
+        "a6ccd4817d71fdf406cf01539c588090defb63ac0a088ad6893154e09be4e9f8",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -502,7 +505,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // generation 19. Schema and format remain unchanged.
         // Re-pinned with the blob for format 13 and boot generation 21,
         // plus schema 24 adding the async-activation small-state section.
-        "869d192fd050a1d49214cda1e5303c471a981494a5dee0c4815eacf8f7417250",
+        // Re-pinned with the blob for W1's eagerly linked, non-enumerable
+        // Error prototype data. Schema and format remain unchanged.
+        "348a430bedb6a41908eaaf7b110b8a276f64abbad38dbae65a115eb0e53ee667",
         "epoch-3 seal chain"
     );
 }

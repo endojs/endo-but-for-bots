@@ -1,0 +1,45 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainTime/prototype/with tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainTime/prototype/with/argument-not-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/argument-not-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/copy-properties-not-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/copy-properties-not-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/PlainTime/prototype/with/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainTime/prototype/with/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/prototype/with/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/prototype/with/options-invalid.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/options-invalid.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/options-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/options-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/options-read-before-algorithmic-validation.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/options-read-before-algorithmic-validation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/options-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/options-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/options-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/options-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/order-of-operations.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/order-of-operations.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/overflow-invalid-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/overflow-invalid-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/overflow-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/overflow-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/overflow-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/overflow-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/plaintimelike-invalid.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/plaintimelike-invalid.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/prototype/with/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/subclassing-ignored.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/subclassing-ignored.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/throws-if-time-is-invalid-when-overflow-is-reject.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/with/throws-if-time-is-invalid-when-overflow-is-reject.js strict skip:oracle-host-missing-temporal

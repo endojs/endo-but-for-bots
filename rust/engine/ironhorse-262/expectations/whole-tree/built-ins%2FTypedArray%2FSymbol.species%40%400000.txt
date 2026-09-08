@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/Symbol.species tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/Symbol.species/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/Symbol.species/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/Symbol.species/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/Symbol.species/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/Symbol.species/prop-desc.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/Symbol.species/prop-desc.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/Symbol.species/result.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/Symbol.species/result.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"

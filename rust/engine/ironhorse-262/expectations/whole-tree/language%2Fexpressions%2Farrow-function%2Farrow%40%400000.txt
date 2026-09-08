@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=language/expressions/arrow-function/arrow tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/arrow-function/arrow/binding-tests-1.js sloppy pass
+language/expressions/arrow-function/arrow/binding-tests-2.js sloppy pass
+language/expressions/arrow-function/arrow/binding-tests-3.js sloppy pass
+language/expressions/arrow-function/arrow/capturing-closure-variables-1.js sloppy pass
+language/expressions/arrow-function/arrow/capturing-closure-variables-1.js strict pass
+language/expressions/arrow-function/arrow/capturing-closure-variables-2.js sloppy pass
+language/expressions/arrow-function/arrow/concisebody-lookahead-assignmentexpression-1.js sloppy pass
+language/expressions/arrow-function/arrow/concisebody-lookahead-assignmentexpression-1.js strict pass
+language/expressions/arrow-function/arrow/concisebody-lookahead-assignmentexpression-2.js sloppy pass
+language/expressions/arrow-function/arrow/concisebody-lookahead-assignmentexpression-2.js strict pass

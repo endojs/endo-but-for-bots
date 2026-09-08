@@ -1,0 +1,109 @@
+# engine=ironhorse features=default corpus=built-ins/parseFloat tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/parseFloat/15.1.2.3-2-1.js sloppy pass
+built-ins/parseFloat/15.1.2.3-2-1.js strict pass
+built-ins/parseFloat/S15.1.2.3_A1_T1.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A1_T1.js strict pass
+built-ins/parseFloat/S15.1.2.3_A1_T2.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A1_T2.js strict pass
+built-ins/parseFloat/S15.1.2.3_A1_T3.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A1_T3.js strict pass
+built-ins/parseFloat/S15.1.2.3_A1_T4.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A1_T4.js strict pass
+built-ins/parseFloat/S15.1.2.3_A1_T5.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A1_T5.js strict pass
+built-ins/parseFloat/S15.1.2.3_A1_T6.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A1_T6.js strict pass
+built-ins/parseFloat/S15.1.2.3_A1_T7.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A1_T7.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T1.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A2_T1.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T10.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1.1680 "
+built-ins/parseFloat/S15.1.2.3_A2_T10.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1.1680 "
+built-ins/parseFloat/S15.1.2.3_A2_T10_U180E.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A2_T10_U180E.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T2.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A2_T2.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: parseFloat(\"\\u00A01.1\") === parseFloat(\"1.1\"). Actual: NaN"
+built-ins/parseFloat/S15.1.2.3_A2_T3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: parseFloat(\"\\u00A01.1\") === parseFloat(\"1.1\"). Actual: NaN"
+built-ins/parseFloat/S15.1.2.3_A2_T4.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A2_T4.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T5.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A2_T5.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T6.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A2_T6.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T7.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A2_T7.js strict pass
+built-ins/parseFloat/S15.1.2.3_A2_T8.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: parseFloat(\"\\u20281.1\") === parseFloat(\"1.1\"). Actual: NaN"
+built-ins/parseFloat/S15.1.2.3_A2_T8.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: parseFloat(\"\\u20281.1\") === parseFloat(\"1.1\"). Actual: NaN"
+built-ins/parseFloat/S15.1.2.3_A2_T9.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: parseFloat(\"\\u20291.1\") === parseFloat(\"1.1\"). Actual: NaN"
+built-ins/parseFloat/S15.1.2.3_A2_T9.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: parseFloat(\"\\u20291.1\") === parseFloat(\"1.1\"). Actual: NaN"
+built-ins/parseFloat/S15.1.2.3_A3_T1.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A3_T1.js strict pass
+built-ins/parseFloat/S15.1.2.3_A3_T2.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A3_T2.js strict pass
+built-ins/parseFloat/S15.1.2.3_A3_T3.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A3_T3.js strict pass
+built-ins/parseFloat/S15.1.2.3_A4_T1.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A4_T1.js strict pass
+built-ins/parseFloat/S15.1.2.3_A4_T2.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A4_T2.js strict pass
+built-ins/parseFloat/S15.1.2.3_A4_T3.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A4_T3.js strict pass
+built-ins/parseFloat/S15.1.2.3_A4_T4.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A4_T4.js strict pass
+built-ins/parseFloat/S15.1.2.3_A4_T5.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A4_T5.js strict pass
+built-ins/parseFloat/S15.1.2.3_A4_T6.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A4_T6.js strict pass
+built-ins/parseFloat/S15.1.2.3_A4_T7.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A4_T7.js strict pass
+built-ins/parseFloat/S15.1.2.3_A5_T1.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A5_T1.js strict pass
+built-ins/parseFloat/S15.1.2.3_A5_T2.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A5_T2.js strict pass
+built-ins/parseFloat/S15.1.2.3_A5_T3.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A5_T3.js strict pass
+built-ins/parseFloat/S15.1.2.3_A5_T4.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A5_T4.js strict pass
+built-ins/parseFloat/S15.1.2.3_A6.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A6.js strict pass
+built-ins/parseFloat/S15.1.2.3_A7.5.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/parseFloat/S15.1.2.3_A7.5.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/parseFloat/S15.1.2.3_A7.6.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A7.6.js strict pass
+built-ins/parseFloat/S15.1.2.3_A7.7.js sloppy pass
+built-ins/parseFloat/S15.1.2.3_A7.7.js strict pass
+built-ins/parseFloat/not-a-constructor.js sloppy pass
+built-ins/parseFloat/not-a-constructor.js strict pass
+built-ins/parseFloat/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseFloat name descriptor value should be parseFloat; parseFloat name value should be parseFloat"
+built-ins/parseFloat/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseFloat name descriptor value should be parseFloat; parseFloat name value should be parseFloat"
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-minus-dd-nsl-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-minus-dd-nsl-dd.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-minus-dds-nsl-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-minus-dds-nsl-dd.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-plus-dd-nsl-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-plus-dd-nsl-dd.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-plus-dds-nsl-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-dot-dd-ep-sign-plus-dds-nsl-dd.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-nsl-dd-one-of.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dd-nsl-dd-one-of.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dds-dot-dd-nsl-dd-ep-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dds-dot-dd-nsl-dd-ep-dd.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dds-nsl-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dds-nsl-dd.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dd-nsl-dd-ep.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dd-nsl-dd-ep.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dd-nsl-dds-ep.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dd-nsl-dds-ep.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dds-nsl-dd-ep.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dds-nsl-dd-ep.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dds-nsl-dds-ep.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-dot-dds-nsl-dds-ep.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-nzd-nsl-dd-one-of.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-nzd-nsl-dd-one-of.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-nzd-nsl-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-nzd-nsl-dd.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-nzd-nsl-dds.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-nzd-nsl-dds.js strict pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-sign-plus-dds-nsl-dd.js sloppy pass
+built-ins/parseFloat/tonumber-numeric-separator-literal-sign-plus-dds-nsl-dd.js strict pass

@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/Promise/Symbol.species tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Promise/Symbol.species/length.js sloppy pass
+built-ins/Promise/Symbol.species/length.js strict pass
+built-ins/Promise/Symbol.species/prop-desc.js sloppy pass
+built-ins/Promise/Symbol.species/prop-desc.js strict pass
+built-ins/Promise/Symbol.species/return-value.js sloppy pass
+built-ins/Promise/Symbol.species/return-value.js strict pass
+built-ins/Promise/Symbol.species/symbol-species-name.js sloppy pass
+built-ins/Promise/Symbol.species/symbol-species-name.js strict pass
+built-ins/Promise/Symbol.species/symbol-species.js sloppy pass
+built-ins/Promise/Symbol.species/symbol-species.js strict pass

@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/GeneratorFunction/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/GeneratorFunction/prototype/Symbol.toStringTag.js sloppy pass
+built-ins/GeneratorFunction/prototype/Symbol.toStringTag.js strict pass
+built-ins/GeneratorFunction/prototype/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
+built-ins/GeneratorFunction/prototype/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
+built-ins/GeneratorFunction/prototype/extensibility.js sloppy pass
+built-ins/GeneratorFunction/prototype/extensibility.js strict pass
+built-ins/GeneratorFunction/prototype/not-callable.js sloppy pass
+built-ins/GeneratorFunction/prototype/not-callable.js strict pass
+built-ins/GeneratorFunction/prototype/prop-desc.js sloppy pass
+built-ins/GeneratorFunction/prototype/prop-desc.js strict pass
+built-ins/GeneratorFunction/prototype/prototype.js sloppy pass
+built-ins/GeneratorFunction/prototype/prototype.js strict pass

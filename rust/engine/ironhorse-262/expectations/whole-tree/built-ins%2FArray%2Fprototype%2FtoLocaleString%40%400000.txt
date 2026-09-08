@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/toLocaleString/S15.4.4.3_A1_T1.js sloppy pass
+built-ins/Array/prototype/toLocaleString/S15.4.4.3_A1_T1.js strict pass
+built-ins/Array/prototype/toLocaleString/S15.4.4.3_A3_T1.js sloppy pass
+built-ins/Array/prototype/toLocaleString/S15.4.4.3_A3_T1.js strict pass
+built-ins/Array/prototype/toLocaleString/invoke-element-tolocalestring.js sloppy pass
+built-ins/Array/prototype/toLocaleString/invoke-element-tolocalestring.js strict pass
+built-ins/Array/prototype/toLocaleString/length.js sloppy pass
+built-ins/Array/prototype/toLocaleString/length.js strict pass
+built-ins/Array/prototype/toLocaleString/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toLocaleString; name value should be toLocaleString"
+built-ins/Array/prototype/toLocaleString/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toLocaleString; name value should be toLocaleString"
+built-ins/Array/prototype/toLocaleString/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/toLocaleString/not-a-constructor.js strict pass
+built-ins/Array/prototype/toLocaleString/primitive_this_value.js strict pass
+built-ins/Array/prototype/toLocaleString/primitive_this_value_getter.js strict pass
+built-ins/Array/prototype/toLocaleString/prop-desc.js sloppy pass
+built-ins/Array/prototype/toLocaleString/prop-desc.js strict pass
+built-ins/Array/prototype/toLocaleString/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/toLocaleString/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

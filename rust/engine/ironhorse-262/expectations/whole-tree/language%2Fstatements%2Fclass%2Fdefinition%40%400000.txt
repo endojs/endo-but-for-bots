@@ -1,0 +1,131 @@
+# engine=ironhorse features=default corpus=language/statements/class/definition tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/definition/accessors.js sloppy pass
+language/statements/class/definition/accessors.js strict pass
+language/statements/class/definition/basics.js sloppy pass
+language/statements/class/definition/basics.js strict pass
+language/statements/class/definition/class-method-returns-promise.js sloppy pass
+language/statements/class/definition/class-method-returns-promise.js strict pass
+language/statements/class/definition/constructable-but-no-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/constructable-but-no-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/constructor-property.js sloppy pass
+language/statements/class/definition/constructor-property.js strict pass
+language/statements/class/definition/constructor-strict-by-default.js sloppy pass
+language/statements/class/definition/constructor-strict-by-default.js strict pass
+language/statements/class/definition/constructor.js sloppy pass
+language/statements/class/definition/constructor.js strict pass
+language/statements/class/definition/early-errors-class-async-method-duplicate-parameters.js sloppy pass
+language/statements/class/definition/early-errors-class-async-method-duplicate-parameters.js strict pass
+language/statements/class/definition/early-errors-class-method-NSPL-with-USD.js sloppy pass
+language/statements/class/definition/early-errors-class-method-NSPL-with-USD.js strict pass
+language/statements/class/definition/early-errors-class-method-arguments-in-formal-parameters.js sloppy pass
+language/statements/class/definition/early-errors-class-method-arguments-in-formal-parameters.js strict pass
+language/statements/class/definition/early-errors-class-method-await-in-formals-default.js sloppy pass
+language/statements/class/definition/early-errors-class-method-await-in-formals-default.js strict pass
+language/statements/class/definition/early-errors-class-method-await-in-formals.js sloppy pass
+language/statements/class/definition/early-errors-class-method-await-in-formals.js strict pass
+language/statements/class/definition/early-errors-class-method-body-contains-super-call.js sloppy pass
+language/statements/class/definition/early-errors-class-method-body-contains-super-call.js strict pass
+language/statements/class/definition/early-errors-class-method-duplicate-parameters.js sloppy pass
+language/statements/class/definition/early-errors-class-method-duplicate-parameters.js strict pass
+language/statements/class/definition/early-errors-class-method-eval-in-formal-parameters.js sloppy pass
+language/statements/class/definition/early-errors-class-method-eval-in-formal-parameters.js strict pass
+language/statements/class/definition/early-errors-class-method-formals-body-duplicate.js sloppy pass
+language/statements/class/definition/early-errors-class-method-formals-body-duplicate.js strict pass
+language/statements/class/definition/early-errors-class-method-formals-contains-super-call.js sloppy pass
+language/statements/class/definition/early-errors-class-method-formals-contains-super-call.js strict pass
+language/statements/class/definition/fn-length-static-precedence-order.js sloppy pass
+language/statements/class/definition/fn-length-static-precedence-order.js strict pass
+language/statements/class/definition/fn-length-static-precedence.js sloppy pass
+language/statements/class/definition/fn-length-static-precedence.js strict pass
+language/statements/class/definition/fn-name-accessor-get.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be get id; name value should be get id"
+language/statements/class/definition/fn-name-accessor-get.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be get id; name value should be get id"
+language/statements/class/definition/fn-name-accessor-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set id; name value should be set id"
+language/statements/class/definition/fn-name-accessor-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set id; name value should be set id"
+language/statements/class/definition/fn-name-gen-method.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
+language/statements/class/definition/fn-name-gen-method.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be [test262]; name value should be [test262]"
+language/statements/class/definition/fn-name-method.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
+language/statements/class/definition/fn-name-method.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be id; name value should be id"
+language/statements/class/definition/fn-name-static-precedence-order.js sloppy pass
+language/statements/class/definition/fn-name-static-precedence-order.js strict pass
+language/statements/class/definition/fn-name-static-precedence.js sloppy pass
+language/statements/class/definition/fn-name-static-precedence.js strict pass
+language/statements/class/definition/getters-non-configurable-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/getters-non-configurable-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/getters-prop-desc.js sloppy pass
+language/statements/class/definition/getters-prop-desc.js strict pass
+language/statements/class/definition/getters-restricted-ids.js sloppy pass
+language/statements/class/definition/getters-restricted-ids.js strict pass
+language/statements/class/definition/implicit-constructor.js sloppy pass
+language/statements/class/definition/implicit-constructor.js strict pass
+language/statements/class/definition/invalid-extends.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/invalid-extends.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/methods-async-super-call-body.js sloppy pass
+language/statements/class/definition/methods-async-super-call-body.js strict pass
+language/statements/class/definition/methods-async-super-call-param.js sloppy pass
+language/statements/class/definition/methods-async-super-call-param.js strict pass
+language/statements/class/definition/methods-gen-no-yield.js sloppy pass
+language/statements/class/definition/methods-gen-no-yield.js strict pass
+language/statements/class/definition/methods-gen-return.js sloppy pass
+language/statements/class/definition/methods-gen-return.js strict pass
+language/statements/class/definition/methods-gen-yield-as-expression-with-rhs.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-expression-with-rhs.js strict pass
+language/statements/class/definition/methods-gen-yield-as-expression-without-rhs.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-expression-without-rhs.js strict pass
+language/statements/class/definition/methods-gen-yield-as-function-expression-binding-identifier.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-function-expression-binding-identifier.js strict pass
+language/statements/class/definition/methods-gen-yield-as-generator-method-binding-identifier.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-generator-method-binding-identifier.js strict pass
+language/statements/class/definition/methods-gen-yield-as-identifier-in-nested-function.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-identifier-in-nested-function.js strict pass
+language/statements/class/definition/methods-gen-yield-as-literal-property-name.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-literal-property-name.js strict pass
+language/statements/class/definition/methods-gen-yield-as-logical-or-expression.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-logical-or-expression.js strict pass
+language/statements/class/definition/methods-gen-yield-as-parameter.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-parameter.js strict pass
+language/statements/class/definition/methods-gen-yield-as-property-name.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-property-name.js strict pass
+language/statements/class/definition/methods-gen-yield-as-statement.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-statement.js strict pass
+language/statements/class/definition/methods-gen-yield-as-yield-operand.js sloppy pass
+language/statements/class/definition/methods-gen-yield-as-yield-operand.js strict pass
+language/statements/class/definition/methods-gen-yield-newline.js sloppy pass
+language/statements/class/definition/methods-gen-yield-newline.js strict pass
+language/statements/class/definition/methods-gen-yield-star-after-newline.js sloppy pass
+language/statements/class/definition/methods-gen-yield-star-after-newline.js strict pass
+language/statements/class/definition/methods-gen-yield-star-before-newline.js sloppy pass
+language/statements/class/definition/methods-gen-yield-star-before-newline.js strict pass
+language/statements/class/definition/methods-gen-yield-weak-binding.js sloppy pass
+language/statements/class/definition/methods-gen-yield-weak-binding.js strict pass
+language/statements/class/definition/methods-named-eval-arguments.js sloppy pass
+language/statements/class/definition/methods-named-eval-arguments.js strict pass
+language/statements/class/definition/methods-restricted-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/methods-restricted-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/methods.js sloppy pass
+language/statements/class/definition/methods.js strict pass
+language/statements/class/definition/numeric-property-names.js sloppy pass
+language/statements/class/definition/numeric-property-names.js strict pass
+language/statements/class/definition/prototype-getter.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+language/statements/class/definition/prototype-getter.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+language/statements/class/definition/prototype-property.js sloppy pass
+language/statements/class/definition/prototype-property.js strict pass
+language/statements/class/definition/prototype-setter.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/prototype-setter.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/prototype-wiring.js sloppy pass
+language/statements/class/definition/prototype-wiring.js strict pass
+language/statements/class/definition/setters-non-configurable-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/setters-non-configurable-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/setters-prop-desc.js sloppy pass
+language/statements/class/definition/setters-prop-desc.js strict pass
+language/statements/class/definition/setters-restricted-ids.js sloppy pass
+language/statements/class/definition/setters-restricted-ids.js strict pass
+language/statements/class/definition/side-effects-in-extends.js sloppy pass
+language/statements/class/definition/side-effects-in-extends.js strict pass
+language/statements/class/definition/side-effects-in-property-define.js sloppy pass
+language/statements/class/definition/side-effects-in-property-define.js strict pass
+language/statements/class/definition/this-access-restriction-2.js sloppy pass
+language/statements/class/definition/this-access-restriction-2.js strict pass
+language/statements/class/definition/this-access-restriction.js sloppy pass
+language/statements/class/definition/this-access-restriction.js strict pass
+language/statements/class/definition/this-check-ordering.js sloppy pass
+language/statements/class/definition/this-check-ordering.js strict pass

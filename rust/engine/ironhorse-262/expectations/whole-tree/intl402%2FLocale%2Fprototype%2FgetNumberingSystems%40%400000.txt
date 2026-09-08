@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/getNumberingSystems tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/getNumberingSystems/branding.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getNumberingSystems/branding.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getNumberingSystems/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getNumberingSystems/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getNumberingSystems/output-array.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getNumberingSystems/output-array.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getNumberingSystems/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getNumberingSystems/prop-desc.js strict skip:oracle-host-missing-global:Intl

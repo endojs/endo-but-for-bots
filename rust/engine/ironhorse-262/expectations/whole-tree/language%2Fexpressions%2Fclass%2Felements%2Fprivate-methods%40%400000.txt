@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=language/expressions/class/elements/private-methods tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/class/elements/private-methods/prod-private-async-generator.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"
+language/expressions/class/elements/private-methods/prod-private-async-generator.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"
+language/expressions/class/elements/private-methods/prod-private-async-method.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"
+language/expressions/class/elements/private-methods/prod-private-async-method.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"
+language/expressions/class/elements/private-methods/prod-private-generator.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"
+language/expressions/class/elements/private-methods/prod-private-generator.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"
+language/expressions/class/elements/private-methods/prod-private-method-initialize-order.js sloppy pass
+language/expressions/class/elements/private-methods/prod-private-method-initialize-order.js strict pass
+language/expressions/class/elements/private-methods/prod-private-method.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"
+language/expressions/class/elements/private-methods/prod-private-method.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#m\"») to be true"

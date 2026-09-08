@@ -1,0 +1,89 @@
+# engine=ironhorse features=default corpus=built-ins/Iterator/prototype/includes tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Iterator/prototype/includes/argument-effect-order.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/argument-effect-order.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/argument-validation-failure-closes-underlying.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/argument-validation-failure-closes-underlying.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/basic-match-and-miss.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/basic-match-and-miss.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/callable.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/callable.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/closes-on-match.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/closes-on-match.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/exhaustion-does-not-call-return.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/exhaustion-does-not-call-return.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/get-next-method-only-once.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/get-next-method-only-once.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/get-next-method-throws.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/get-next-method-throws.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/get-return-method-throws.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/get-return-method-throws.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/infinite-iterator.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/infinite-iterator.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/is-function.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Iterator/prototype/includes/is-function.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Iterator/prototype/includes/iterator-already-exhausted.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/iterator-already-exhausted.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/iterator-has-no-return.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/iterator-has-no-return.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/iterator-return-method-throws.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/iterator-return-method-throws.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/length.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/length.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/name.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/name.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/next-method-returns-non-object.js sloppy pass
+built-ins/Iterator/prototype/includes/next-method-returns-non-object.js strict pass
+built-ins/Iterator/prototype/includes/next-method-returns-throwing-done.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/next-method-returns-throwing-done.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/next-method-returns-throwing-value-done.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/next-method-returns-throwing-value-done.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/next-method-returns-throwing-value.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/next-method-returns-throwing-value.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/next-method-throws.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/next-method-throws.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/non-constructible.js sloppy pass
+built-ins/Iterator/prototype/includes/non-constructible.js strict pass
+built-ins/Iterator/prototype/includes/object-identity.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/object-identity.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/prop-desc.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/prop-desc.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/proto.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/proto.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/result-is-boolean.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/result-is-boolean.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/samevaluezero-nan.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/samevaluezero-nan.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/samevaluezero-zeroes.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/samevaluezero-zeroes.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-default.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-default.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-max-safe-integer.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-max-safe-integer.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-nan-typeerror.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-nan-typeerror.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-negative-infinity-rangeerror.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/skipped-elements-negative-infinity-rangeerror.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/skipped-elements-negative-integral-rangeerror.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/skipped-elements-negative-integral-rangeerror.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/skipped-elements-no-coercion.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: iterator closed when skippedElements validation fails Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-no-coercion.js strict fail:"abort-value-differs: oracle=\"Test262Error: iterator closed when skippedElements validation fails Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-non-integral-typeerror.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: closed on -0.1 Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-non-integral-typeerror.js strict fail:"abort-value-differs: oracle=\"Test262Error: closed on -0.1 Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-not-a-number.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: boolean: iterator closed Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-not-a-number.js strict fail:"abort-value-differs: oracle=\"Test262Error: boolean: iterator closed Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/includes/skipped-elements-positive-infinity.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-positive-infinity.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-positive-integral.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-positive-integral.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-too-large-rangeerror.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/skipped-elements-too-large-rangeerror.js strict skip:shared-test262-failure
+built-ins/Iterator/prototype/includes/skipped-elements-zero-and-negative-zero.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/skipped-elements-zero-and-negative-zero.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/symbol-identity.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/symbol-identity.js strict skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/this-non-callable-next.js sloppy pass
+built-ins/Iterator/prototype/includes/this-non-callable-next.js strict pass
+built-ins/Iterator/prototype/includes/this-non-object.js sloppy pass
+built-ins/Iterator/prototype/includes/this-non-object.js strict pass
+built-ins/Iterator/prototype/includes/this-plain-iterator.js sloppy skip:shared-positive-test-failure
+built-ins/Iterator/prototype/includes/this-plain-iterator.js strict skip:shared-positive-test-failure

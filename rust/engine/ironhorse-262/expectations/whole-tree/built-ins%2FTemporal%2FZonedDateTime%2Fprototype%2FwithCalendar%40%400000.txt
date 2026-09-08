@@ -1,0 +1,33 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/withCalendar tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-case-insensitive.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-case-insensitive.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-invalid-iso-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-invalid-iso-string.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-iso-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-iso-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-string.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-temporal-object.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-temporal-object.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-time-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-time-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/calendar-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/missing-argument.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/missing-argument.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/subclassing-ignored.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/withCalendar/subclassing-ignored.js strict skip:oracle-host-missing-temporal

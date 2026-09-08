@@ -492,7 +492,7 @@ fn json_stringify_nesting_is_bounded() {
 
 #[test]
 fn flat_over_a_self_containing_array_is_bounded() {
-    // Formerly a private cap answering `Halt::Unsupported("flat:recursion-depth")`;
+    // Formerly a private cap answering `Halt::NotImplemented("flat:recursion-depth")`;
     // now the one budget, answering the abort XS reaches on its C stack.
     assert_stack_overflow(
         &on_contract_stack("var a = []; a[0] = a; a.flat(Infinity)".into()),

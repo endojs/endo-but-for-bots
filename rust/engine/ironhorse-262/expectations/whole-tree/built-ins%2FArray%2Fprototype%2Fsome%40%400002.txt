@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/some tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/some/15.4.4.17-8-11.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-11.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-12.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-12.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-13.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-13.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-2.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-2.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-3.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-3.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-4.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-4.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-5.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-5.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-6.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-6.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-7.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-7.js strict pass
+built-ins/Array/prototype/some/15.4.4.17-8-8.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-8-8.js strict pass
+built-ins/Array/prototype/some/call-with-boolean.js sloppy skip:unsupported-opcode:some/every:non-dense-array
+built-ins/Array/prototype/some/call-with-boolean.js strict skip:unsupported-opcode:some/every:non-dense-array
+built-ins/Array/prototype/some/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/some/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/some/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/some/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/some/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be some; name value should be some"
+built-ins/Array/prototype/some/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be some; name value should be some"
+built-ins/Array/prototype/some/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/some/not-a-constructor.js strict pass
+built-ins/Array/prototype/some/prop-desc.js sloppy pass
+built-ins/Array/prototype/some/prop-desc.js strict pass
+built-ins/Array/prototype/some/resizable-buffer-grow-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/some/resizable-buffer-grow-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/some/resizable-buffer-shrink-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/some/resizable-buffer-shrink-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/some/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/some/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

@@ -50,10 +50,22 @@ gitignored `rust/engine/target/`.
   Each batch gets a wall-clock watchdog, so an unmetered oracle call cannot
   hold a worker forever. `--jobs` bounds the number of concurrent oracle
   processes; the script does not claim a per-process memory ceiling.
+  Full sweeps use `--case-timeout 60` by default; this can be set to 1–3600
+  seconds, but cannot be disabled.
+  Generated RegExp subjects and other heavy cases can legitimately exceed the
+  standalone `endot-ih` CLI's unchanged 10-second default on shared CI runners.
+  A timeout still triggers bounded Ironhorse-only attribution, and retains the
+  exact `ironhorse-hang` failure or `oracle-nontermination` skip reason.
+  Attribution can consume one additional per-case bound; the batch watchdog
+  remains an independent outer limit.
+  The selected case bound appears in report provenance and resume identity,
+  so changing it reruns cached batches.
+  Regenerate expectations from actual runs at the selected bound; do not edit
+  timeout reasons or classify a slow run as success without a verdict.
 - **Resumable, and bound to a run identity.** Each batch writes one JSON file
   atomically (`.part` then rename) and is **stamped with a run identity** - the
   fingerprint of the result-affecting inputs (test262 SHA, engine SHA, oracle
-  mode, SES mode, batch cap, scope). An interrupted run leaves the completed
+  mode, SES mode, batch cap, case timeout, scope). An interrupted run leaves the completed
   files on disk; re-running the same command runs only what is missing. Reusing
   an output directory after **any** of those inputs changes re-runs the affected
   batches rather than silently retaining a stale/foreign result, and aggregation
@@ -127,3 +139,22 @@ sweep invocation — the CI dispatch runs the script once. After the cap the bat
 is quarantined as infrastructure and the report marks completion as `incomplete`
 instead of blocking publication forever; completion is derived from the
 aggregated case records (a `quarantine:` reason), not a side marker file.
+
+### Committed expectation shards
+
+The nightly full-tree run uses `--expectations-dir` to score every case/mode
+against the committed `expectations/whole-tree` directory.
+The directory contains the exact discovery manifest and a text list per batch.
+A changed manifest or shard inventory fails before workers run; a new or changed
+failure, failure-to-skip transition, or strict skip-reason change fails after the
+report is assembled.
+The per-batch ratchet exit status is retained even when the JSON report is valid.
+Quarantines remain useful reporting evidence, but always fail an expectation gate.
+
+Use `--update-expectations-dir` with a new destination to produce a reviewable
+replacement baseline.
+Generation retains each completed batch's list for resume, but writes the manifest
+only after all batches complete without quarantine.
+Do not generate and compare in the same invocation.
+Baseline content participates in comparison resume identity, preventing old report
+files from bypassing an updated expectation list.

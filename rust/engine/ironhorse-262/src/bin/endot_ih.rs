@@ -30,9 +30,10 @@
 //! lights up automatically when that guest surface lands.
 //!
 //! Positional paths are subtrees under the located test262 root; a bare path
-//! defaults under `language/` for back-compat with `test262-language`. Exit
-//! code is nonzero on any failure (a divergence, an over-acceptance, a
-//! meter-exact-gate or determinism violation), so CI/nightly can gate.
+//! defaults under `language/` for back-compat with `test262-language`. Without
+//! a committed expectation list, any failure produces a nonzero exit. With a
+//! list, exact known failures are accepted and every gating ratchet drift
+//! (including changed failure reasons) produces a nonzero exit.
 //!
 //! Memory note (inherited from `test262-language`): the XS oracle
 //! accumulates process memory across the tens of thousands of machine
@@ -197,6 +198,10 @@ fn main() {
     }
 
     let mut files = Vec::new();
+    let mut corpus_paths = Vec::new();
+    let canonical_root = root
+        .canonicalize()
+        .unwrap_or_else(|error| fail(&format!("cannot resolve corpus root: {error}")));
     for sub in &subtrees {
         // A positional that already names an existing filesystem path (a case
         // file or a directory of cases — e.g. the generated `test/ironhorse`
@@ -210,6 +215,23 @@ fn main() {
         } else {
             root.join("language").join(sub)
         };
+        // Header scope is relative to the corpus root, not the machine's
+        // checkout path. Whole-tree workers pass absolute batch directories;
+        // their committed lists must validate on another host too.
+        let scope = target
+            .canonicalize()
+            .ok()
+            .and_then(|path| {
+                path.strip_prefix(&canonical_root).ok().map(|relative| {
+                    if relative.as_os_str().is_empty() {
+                        ".".to_string()
+                    } else {
+                        relative.to_string_lossy().replace('\\', "/")
+                    }
+                })
+            })
+            .unwrap_or_else(|| sub.clone());
+        corpus_paths.push(scope);
         let found = if batch_index.is_some() {
             Vec::new()
         } else if target.is_file() {
@@ -320,7 +342,10 @@ fn main() {
         }
     }
 
-    let mut gate_failed = !rep.met_bar();
+    // A committed list can quarantine exact known failures. Without a list,
+    // retain the ordinary zero-failure bar; with one, every outcome (including
+    // its failure reason) is judged by the ratchet below.
+    let mut gate_failed = rep.total == 0 || (expectations_path.is_none() && !rep.met_bar());
 
     // Expectation-list mode (design `designs/test262-fixture-consolidation.md`):
     // `--update-expectations` writes the observed run as the committed list;
@@ -330,7 +355,7 @@ fn main() {
     let expected_header = Header {
         engine: "ironhorse".to_string(),
         features: features_label(&cfg.features_include),
-        corpus: corpus_label(&subtrees),
+        corpus: corpus_label(&corpus_paths),
         tip: std::env::var("GARDEN_TEST262_TIP").unwrap_or_else(|_| "unknown".to_string()),
     };
     if let Some(path) = &update_expectations {
@@ -386,7 +411,14 @@ fn main() {
         }
     }
 
-    if !gate_failed {
+    if !gate_failed && expectations_path.is_some() {
+        println!(
+            "EXPECTATIONS MET: {} covered, {} expected failure(s) (of {} total)",
+            rep.covered,
+            rep.failures.len(),
+            rep.total
+        );
+    } else if !gate_failed {
         println!(
             "BAR MET: {} covered, 0 failed (of {} total; {} skipped by named reason)",
             rep.covered,

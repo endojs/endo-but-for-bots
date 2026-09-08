@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/toTemporalInstant tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/toTemporalInstant/length.js sloppy skip:shared-positive-test-failure
+built-ins/Date/prototype/toTemporalInstant/length.js strict skip:shared-positive-test-failure
+built-ins/Date/prototype/toTemporalInstant/name.js sloppy skip:shared-positive-test-failure
+built-ins/Date/prototype/toTemporalInstant/name.js strict skip:shared-positive-test-failure
+built-ins/Date/prototype/toTemporalInstant/not-a-constructor.js sloppy skip:shared-test262-failure
+built-ins/Date/prototype/toTemporalInstant/not-a-constructor.js strict skip:shared-test262-failure
+built-ins/Date/prototype/toTemporalInstant/prop-desc.js sloppy skip:shared-test262-failure
+built-ins/Date/prototype/toTemporalInstant/prop-desc.js strict skip:shared-test262-failure
+built-ins/Date/prototype/toTemporalInstant/this-value-invalid-date.js sloppy skip:shared-test262-failure
+built-ins/Date/prototype/toTemporalInstant/this-value-invalid-date.js strict skip:shared-test262-failure
+built-ins/Date/prototype/toTemporalInstant/this-value-non-date.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Date/prototype/toTemporalInstant/this-value-non-date.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Date/prototype/toTemporalInstant/this-value-non-object.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Date/prototype/toTemporalInstant/this-value-non-object.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Date/prototype/toTemporalInstant/this-value-valid-date.js sloppy skip:shared-positive-test-failure
+built-ins/Date/prototype/toTemporalInstant/this-value-valid-date.js strict skip:shared-positive-test-failure

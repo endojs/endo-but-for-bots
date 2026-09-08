@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/constructor/prop-desc.js sloppy pass
+built-ins/Date/prototype/constructor/prop-desc.js strict pass

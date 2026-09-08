@@ -1,0 +1,55 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/internals/Set/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/internals/Set/BigInt/bigint-tobigint64.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/bigint-tobigint64.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/bigint-tobiguint64.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/bigint-tobiguint64.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/boolean-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/boolean-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer-key-is-not-numeric-index.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer-key-is-not-numeric-index.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer-key-is-symbol.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer-key-is-symbol.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer-realm.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer-realm.js strict skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/indexed-value.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/indexed-value.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-prototype-chain-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: receiver[1] should not be created (receiver: regular array) (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-prototype-chain-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: receiver[1] should not be created (receiver: regular array) (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-reflect-set.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-reflect-set.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-minus-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-minus-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-canonical-index.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-canonical-index.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-integer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-integer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-numeric-index-set-throws.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-numeric-index-set-throws.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-numeric-index.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-not-numeric-index.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-symbol.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-symbol.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-prototype-chain-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setting receiver[0] should throw in strict mode (receiver: non-extensible empty object) Expected a TypeError to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-prototype-chain-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setting receiver[0] should throw in strict mode (receiver: non-extensible empty object) Expected a TypeError to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-reflect-set.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-reflect-set.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/null-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/null-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/number-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/number-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/string-nan-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/string-nan-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/string-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/string-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/symbol-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/symbol-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/tonumber-value-detached-buffer.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/tonumber-value-detached-buffer.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/tonumber-value-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/tonumber-value-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/undefined-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/BigInt/undefined-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

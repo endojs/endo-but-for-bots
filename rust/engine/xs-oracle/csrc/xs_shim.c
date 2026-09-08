@@ -51,6 +51,7 @@ typedef struct {
 	 * against the port must not read a divergence from the truncation — the
 	 * differential check skips such a case honestly (finding 493390fc0397). */
 	txU4 result_len;
+	txS4 exit_status; /* original fxAbort status; zero for ordinary JS throws */
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
@@ -94,6 +95,15 @@ static void fx_endor_detachArrayBuffer(txMachine *the)
 	mxTypeError("this is no ArrayBuffer instance");
 }
 
+/* Classify only resource exits, not guest rejection/exception exits. Keeping
+ * this beside XS's headers avoids duplicating its enum numbering in Rust. */
+int xs_oracle_is_resource_abort(txS4 status)
+{
+	return (status == XS_NOT_ENOUGH_MEMORY_EXIT)
+		|| (status == XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)
+		|| (status == XS_NATIVE_STACK_OVERFLOW_EXIT);
+}
+
 /*
  * Best-effort stringification of the caught mxException into `buf`.
  * Every mxCatch in this shim wants the thrown value as text, but
@@ -106,8 +116,6 @@ static void fx_endor_detachArrayBuffer(txMachine *the)
  */
 static void endor_error_from_exception(txMachine *the, char *buf, size_t max)
 {
-	if (mxException.kind == XS_UNDEFINED_KIND)
-		return;
 	mxTry(the) {
 		mxPush(mxException);
 		fxToString(the, the->stack);
@@ -437,6 +445,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 		}
 		mxCatch(the) {
 			out->ok = 0;
+			out->exit_status = the->exitStatus;
 			/* Ordinary JS throws are freed by fxRunScript. fxAbort instead
 			 * sets exitStatus and jumps straight here, bypassing that free. */
 			if (the->exitStatus)
@@ -614,6 +623,7 @@ int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
 			if (the->exitStatus)
 				fxDeleteScript(script);
 			out->ok = 0;
+			out->exit_status = the->exitStatus;
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
@@ -693,6 +703,7 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 				 * returns C_NULL when errorCount is nonzero and there is no
 				 * console). Report a rejection, not a machine failure. */
 				out->ok = 0;
+				out->exit_status = the->exitStatus;
 				strncpy(out->error, "SyntaxError: module parse failed",
 					ENDOR_ERROR_MAX - 1);
 				out->error[ENDOR_ERROR_MAX - 1] = 0;
@@ -700,6 +711,7 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 		}
 		mxCatch(the) {
 			out->ok = 0;
+			out->exit_status = the->exitStatus;
 			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
@@ -727,6 +739,8 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
  * into another thread's machine. `__thread` scopes the latch to the
  * running machine's thread. */
 static __thread txSlot *gEndorModuleLatch = C_NULL;
+/* Undefined is a valid rejection reason, so it cannot encode fulfillment. */
+static __thread txBoolean gEndorModuleRejected = 0;
 
 static void xs_oracle_module_fulfilled(txMachine *the)
 {
@@ -735,8 +749,10 @@ static void xs_oracle_module_fulfilled(txMachine *the)
 
 static void xs_oracle_module_rejected(txMachine *the)
 {
-	if (gEndorModuleLatch)
+	if (gEndorModuleLatch) {
+		gEndorModuleRejected = 1;
 		*gEndorModuleLatch = *mxArgv(0);
+	}
 }
 
 /*
@@ -787,6 +803,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 	EndorOracleResult *out)
 {
 	txMachine *the;
+	volatile txBoolean rendering_rejection = 0;
 	memset(out, 0, sizeof(*out));
 
 	the = xs_oracle_create_machine("xs-oracle-run-module");
@@ -804,6 +821,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 		mxPushUndefined();
 		latch = the->stack;
 		gEndorModuleLatch = latch;
+		gEndorModuleRejected = 0;
 
 		mxTry(the) {
 			char path[C_PATH_MAX];
@@ -882,17 +900,15 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
 
-			if (latch->kind != XS_UNDEFINED_KIND) {
+			if (gEndorModuleRejected) {
 				/* The import promise rejected: stringify the latched reason. */
 				out->ok = 0;
-				mxPushSlot(latch);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string,
-						ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
+				out->exit_status = the->exitStatus;
+				/* Rendering may throw or exhaust the stack; it must not
+				 * replace the original rejection's recorded status. */
+				rendering_rejection = 1;
+				mxException = *latch;
+				endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 			}
 			else {
 				/* Fulfilled: the graph evaluated. Read the guest-observable
@@ -913,13 +929,23 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 		mxCatch(the) {
 			/* A synchronous throw escaping fxRunImport (before the promise
 			 * machinery caught it) is still a normal rejection outcome. */
-			out->computrons = the->meterIndex >> 16;
-			out->meter_raw = (txU4)the->meterIndex;
-			out->ok = 0;
-			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
+			if (rendering_rejection) {
+				/* fxExitToHost skips nested mxTry frames on resource abort.
+				 * Keep the already captured guest rejection and its meter. */
+				strncpy(out->error, "(exception stringification threw)", ENDOR_ERROR_MAX - 1);
+				out->error[ENDOR_ERROR_MAX - 1] = 0;
+			}
+			else {
+				out->computrons = the->meterIndex >> 16;
+				out->meter_raw = (txU4)the->meterIndex;
+				out->ok = 0;
+				out->exit_status = the->exitStatus;
+				endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
+			}
 		}
 	}
 	gEndorModuleLatch = C_NULL;
+	gEndorModuleRejected = 0;
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;

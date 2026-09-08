@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/Object/getOwnPropertySymbols tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/getOwnPropertySymbols/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Object/getOwnPropertySymbols/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Object/getOwnPropertySymbols/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertySymbols; name value should be getOwnPropertySymbols"
+built-ins/Object/getOwnPropertySymbols/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertySymbols; name value should be getOwnPropertySymbols"
+built-ins/Object/getOwnPropertySymbols/non-object-argument-invalid.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/non-object-argument-invalid.js strict pass
+built-ins/Object/getOwnPropertySymbols/non-object-argument-valid.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/non-object-argument-valid.js strict pass
+built-ins/Object/getOwnPropertySymbols/not-a-constructor.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/not-a-constructor.js strict pass
+built-ins/Object/getOwnPropertySymbols/object-contains-symbol-property-with-description.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/object-contains-symbol-property-with-description.js strict pass
+built-ins/Object/getOwnPropertySymbols/object-contains-symbol-property-without-description.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/object-contains-symbol-property-without-description.js strict pass
+built-ins/Object/getOwnPropertySymbols/order-after-define-property.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/order-after-define-property.js strict pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-absent-not-configurable-string-key.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-absent-not-configurable-string-key.js strict pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-duplicate-string-entry.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-duplicate-string-entry.js strict pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-not-extensible-absent-string-key.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-not-extensible-absent-string-key.js strict pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-not-extensible-extra-string-key.js sloppy pass
+built-ins/Object/getOwnPropertySymbols/proxy-invariant-not-extensible-extra-string-key.js strict pass

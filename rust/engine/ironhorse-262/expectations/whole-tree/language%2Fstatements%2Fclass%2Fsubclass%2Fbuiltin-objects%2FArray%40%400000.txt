@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/Array tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/Array/contructor-calls-super-multiple-arguments.js sloppy pass
+language/statements/class/subclass/builtin-objects/Array/contructor-calls-super-multiple-arguments.js strict pass
+language/statements/class/subclass/builtin-objects/Array/contructor-calls-super-single-argument.js sloppy pass
+language/statements/class/subclass/builtin-objects/Array/contructor-calls-super-single-argument.js strict pass
+language/statements/class/subclass/builtin-objects/Array/length.js sloppy pass
+language/statements/class/subclass/builtin-objects/Array/length.js strict pass
+language/statements/class/subclass/builtin-objects/Array/regular-subclassing.js sloppy pass
+language/statements/class/subclass/builtin-objects/Array/regular-subclassing.js strict pass
+language/statements/class/subclass/builtin-objects/Array/super-must-be-called.js sloppy pass
+language/statements/class/subclass/builtin-objects/Array/super-must-be-called.js strict pass

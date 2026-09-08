@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/Number tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/Number/regular-subclassing.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/statements/class/subclass/builtin-objects/Number/regular-subclassing.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+language/statements/class/subclass/builtin-objects/Number/super-must-be-called.js sloppy pass
+language/statements/class/subclass/builtin-objects/Number/super-must-be-called.js strict pass

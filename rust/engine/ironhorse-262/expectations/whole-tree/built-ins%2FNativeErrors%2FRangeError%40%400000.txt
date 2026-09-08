@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/NativeErrors/RangeError tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/NativeErrors/RangeError/constructor.js sloppy pass
+built-ins/NativeErrors/RangeError/constructor.js strict pass
+built-ins/NativeErrors/RangeError/instance-proto.js sloppy pass
+built-ins/NativeErrors/RangeError/instance-proto.js strict pass
+built-ins/NativeErrors/RangeError/is-a-constructor.js sloppy pass
+built-ins/NativeErrors/RangeError/is-a-constructor.js strict pass
+built-ins/NativeErrors/RangeError/is-error-object.js sloppy pass
+built-ins/NativeErrors/RangeError/is-error-object.js strict pass
+built-ins/NativeErrors/RangeError/length.js sloppy pass
+built-ins/NativeErrors/RangeError/length.js strict pass
+built-ins/NativeErrors/RangeError/name.js sloppy pass
+built-ins/NativeErrors/RangeError/name.js strict pass
+built-ins/NativeErrors/RangeError/prop-desc.js sloppy pass
+built-ins/NativeErrors/RangeError/prop-desc.js strict pass
+built-ins/NativeErrors/RangeError/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/NativeErrors/RangeError/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/NativeErrors/RangeError/proto.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/NativeErrors/RangeError/proto.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/NativeErrors/RangeError/prototype.js sloppy pass
+built-ins/NativeErrors/RangeError/prototype.js strict pass

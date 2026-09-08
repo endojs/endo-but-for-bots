@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=built-ins/Iterator/from tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Iterator/from/callable.js sloppy pass
+built-ins/Iterator/from/callable.js strict pass
+built-ins/Iterator/from/get-next-method-only-once.js sloppy pass
+built-ins/Iterator/from/get-next-method-only-once.js strict pass
+built-ins/Iterator/from/get-next-method-throws.js sloppy pass
+built-ins/Iterator/from/get-next-method-throws.js strict pass
+built-ins/Iterator/from/get-return-method-when-call-return.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Iterator/from/get-return-method-when-call-return.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Iterator/from/is-function.js sloppy pass
+built-ins/Iterator/from/is-function.js strict pass
+built-ins/Iterator/from/iterable-primitives.js sloppy pass
+built-ins/Iterator/from/iterable-primitives.js strict pass
+built-ins/Iterator/from/iterable-to-iterator-fallback.js sloppy pass
+built-ins/Iterator/from/iterable-to-iterator-fallback.js strict pass
+built-ins/Iterator/from/length.js sloppy pass
+built-ins/Iterator/from/length.js strict pass
+built-ins/Iterator/from/name.js sloppy pass
+built-ins/Iterator/from/name.js strict pass
+built-ins/Iterator/from/non-constructible.js sloppy pass
+built-ins/Iterator/from/non-constructible.js strict pass
+built-ins/Iterator/from/primitives.js sloppy skip:non-primitive-completion
+built-ins/Iterator/from/primitives.js strict skip:non-primitive-completion
+built-ins/Iterator/from/prop-desc.js sloppy pass
+built-ins/Iterator/from/prop-desc.js strict pass
+built-ins/Iterator/from/proto.js sloppy pass
+built-ins/Iterator/from/proto.js strict pass
+built-ins/Iterator/from/result-proto.js sloppy pass
+built-ins/Iterator/from/result-proto.js strict pass
+built-ins/Iterator/from/return-method-calls-base-return-method.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Iterator/from/return-method-calls-base-return-method.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Iterator/from/return-method-returns-iterator-result.js sloppy pass
+built-ins/Iterator/from/return-method-returns-iterator-result.js strict pass
+built-ins/Iterator/from/return-method-throws-for-invalid-this.js sloppy pass
+built-ins/Iterator/from/return-method-throws-for-invalid-this.js strict pass
+built-ins/Iterator/from/supports-iterable.js sloppy pass
+built-ins/Iterator/from/supports-iterable.js strict pass
+built-ins/Iterator/from/supports-iterator.js sloppy pass
+built-ins/Iterator/from/supports-iterator.js strict pass

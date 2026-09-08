@@ -1,0 +1,67 @@
+# engine=ironhorse features=default corpus=built-ins/Object/isSealed tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/isSealed/15.2.3.11-0-1.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-0-1.js strict pass
+built-ins/Object/isSealed/15.2.3.11-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Object/isSealed/15.2.3.11-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Object/isSealed/15.2.3.11-1.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-1.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-1.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-1.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-10.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-10.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-11.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-11.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-12.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-12.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-13.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-13.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-14.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-14.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-15.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-15.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-16.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-16.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-17.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-17.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-18.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-18.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-19.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-19.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-2.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-2.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-20.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-20.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-21.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-21.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-22.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-22.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-23.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-23.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-24.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-24.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-25.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-25.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-26.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-26.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-27.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-27.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-3.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-3.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-4.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-4.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-5.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-5.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-6.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-6.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-7.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-7.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-8.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-8.js strict pass
+built-ins/Object/isSealed/15.2.3.11-4-9.js sloppy pass
+built-ins/Object/isSealed/15.2.3.11-4-9.js strict pass
+built-ins/Object/isSealed/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isSealed; name value should be isSealed"
+built-ins/Object/isSealed/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isSealed; name value should be isSealed"
+built-ins/Object/isSealed/not-a-constructor.js sloppy pass
+built-ins/Object/isSealed/not-a-constructor.js strict pass
+built-ins/Object/isSealed/proxy-no-ownkeys-returned-keys-order.js sloppy pass
+built-ins/Object/isSealed/proxy-no-ownkeys-returned-keys-order.js strict pass

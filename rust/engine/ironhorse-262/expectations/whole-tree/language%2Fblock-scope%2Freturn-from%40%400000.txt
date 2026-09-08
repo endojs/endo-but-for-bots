@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/block-scope/return-from tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/block-scope/return-from/block-const.js sloppy pass
+language/block-scope/return-from/block-const.js strict pass
+language/block-scope/return-from/block-let.js sloppy pass
+language/block-scope/return-from/block-let.js strict pass

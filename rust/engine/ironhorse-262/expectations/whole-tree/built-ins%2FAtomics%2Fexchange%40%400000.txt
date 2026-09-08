@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/exchange tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/exchange/bad-range.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/exchange/bad-range.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/exchange/descriptor.js sloppy pass
+built-ins/Atomics/exchange/descriptor.js strict pass
+built-ins/Atomics/exchange/expected-return-value.js sloppy pass
+built-ins/Atomics/exchange/expected-return-value.js strict pass
+built-ins/Atomics/exchange/good-views.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/exchange/good-views.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/exchange/immutable-buffer.js sloppy skip:shared-test262-failure
+built-ins/Atomics/exchange/immutable-buffer.js strict skip:shared-test262-failure
+built-ins/Atomics/exchange/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
+built-ins/Atomics/exchange/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
+built-ins/Atomics/exchange/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be exchange; name value should be exchange"
+built-ins/Atomics/exchange/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be exchange; name value should be exchange"
+built-ins/Atomics/exchange/non-shared-bufferdata.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Atomics/exchange/non-shared-bufferdata.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Atomics/exchange/non-shared-int-views-throws.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/exchange/non-shared-int-views-throws.js strict skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/exchange/non-views.js sloppy skip:unsupported-opcode:atomics:non-typedarray
+built-ins/Atomics/exchange/non-views.js strict skip:unsupported-opcode:atomics:non-typedarray
+built-ins/Atomics/exchange/not-a-constructor.js sloppy pass
+built-ins/Atomics/exchange/not-a-constructor.js strict pass
+built-ins/Atomics/exchange/validate-arraytype-before-index-coercion.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/exchange/validate-arraytype-before-index-coercion.js strict skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/exchange/validate-arraytype-before-value-coercion.js sloppy skip:unsupported-opcode:atomics:non-integer-typedarray
+built-ins/Atomics/exchange/validate-arraytype-before-value-coercion.js strict skip:unsupported-opcode:atomics:non-integer-typedarray

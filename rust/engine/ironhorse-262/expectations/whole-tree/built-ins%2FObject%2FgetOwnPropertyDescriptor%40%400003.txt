@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Object/getOwnPropertyDescriptor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-94.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-94.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-96.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-96.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-97.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-97.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-98.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-98.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-99.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-99.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Object/getOwnPropertyDescriptor/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Object/getOwnPropertyDescriptor/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptor; name value should be getOwnPropertyDescriptor"
+built-ins/Object/getOwnPropertyDescriptor/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getOwnPropertyDescriptor; name value should be getOwnPropertyDescriptor"
+built-ins/Object/getOwnPropertyDescriptor/not-a-constructor.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/not-a-constructor.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/primitive-string.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/primitive-string.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/primitive-symbol.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/primitive-symbol.js strict pass

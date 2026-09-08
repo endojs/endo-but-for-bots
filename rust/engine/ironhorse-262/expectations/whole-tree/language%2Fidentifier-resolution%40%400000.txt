@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=language/identifier-resolution tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/identifier-resolution/S10.2.2_A1_T1.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T1.js strict pass
+language/identifier-resolution/S10.2.2_A1_T2.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T2.js strict pass
+language/identifier-resolution/S10.2.2_A1_T3.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T3.js strict pass
+language/identifier-resolution/S10.2.2_A1_T4.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T4.js strict pass
+language/identifier-resolution/S10.2.2_A1_T5.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T6.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T7.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T8.js sloppy pass
+language/identifier-resolution/S10.2.2_A1_T9.js sloppy pass
+language/identifier-resolution/S11.1.2_A1_T1.js sloppy pass
+language/identifier-resolution/S11.1.2_A1_T1.js strict pass
+language/identifier-resolution/S11.1.2_A1_T2.js sloppy pass
+language/identifier-resolution/S11.1.2_A1_T2.js strict pass
+language/identifier-resolution/assign-to-global-undefined.js strict skip:negative-oracle-unexpected
+language/identifier-resolution/static-init-invalid-await.js sloppy pass
+language/identifier-resolution/static-init-invalid-await.js strict pass
+language/identifier-resolution/unscopables.js sloppy pass
+language/identifier-resolution/unscopables.js strict pass

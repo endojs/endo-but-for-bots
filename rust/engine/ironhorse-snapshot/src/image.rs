@@ -4285,6 +4285,25 @@ pub(crate) fn check_image_slot_bounds(
     for row in &lang.promise_cluster.functions {
         owned(row.function)?;
         owned(row.promise)?;
+        if row.guard == u32::MAX {
+            // The private capability record has two capture fields. Before
+            // its first call both are Uninitialized; afterward neither is.
+            // Enforce this when container heap records are present. Lazy store
+            // metadata validation passes an empty heap; VM adoption validates
+            // the pair there, together with field-name/record ownership.
+            if let Some(first) = heap
+                .get(row.promise as usize)
+                .and_then(|home| heap.get(home.next.0 as usize))
+            {
+                if let Some(second) = heap.get(first.next.0 as usize) {
+                    if (first.kind == Kind::Uninitialized) != (second.kind == Kind::Uninitialized) {
+                        return Err(SnapshotError::Corrupt(
+                            "promise cluster: mixed capability executor state",
+                        ));
+                    }
+                }
+            }
+        }
         let offset = row.name_chunk as usize;
         if offset < CHUNK_HEADER || offset > chunk_len {
             return Err(OOC);

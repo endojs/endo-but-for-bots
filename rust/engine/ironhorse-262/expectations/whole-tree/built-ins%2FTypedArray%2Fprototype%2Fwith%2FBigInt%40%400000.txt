@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/with/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/with/BigInt/early-type-coercion-bigint.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/with/BigInt/early-type-coercion-bigint.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with BigInt64Array and makePassthrough.)"

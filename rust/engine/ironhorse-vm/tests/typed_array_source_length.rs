@@ -61,7 +61,7 @@ fn an_over_long_source_is_refused_before_it_is_materialized() {
             assert!(!completed, "an over-long source must not construct");
             assert_eq!(
                 halt,
-                Halt::Unsupported("native-call:TypedArray:bad-length"),
+                Halt::NotImplemented("native-call:TypedArray:bad-length"),
                 "and must name the length as the reason"
             );
             probe.join().expect("probe thread");
@@ -139,7 +139,7 @@ fn inherited_iterator_overrides_do_not_take_the_snapshot_path() {
     ] {
         assert_eq!(
             run(source).halt,
-            Halt::Unsupported("native-call:TypedArray:from-array-like"),
+            Halt::NotImplemented("native-call:TypedArray:from-array-like"),
             "{source}",
         );
     }
@@ -153,7 +153,7 @@ fn runtime_next_key_does_not_hide_the_intrinsic_iterator() {
     );
     assert_eq!(
         run("var p=Object.getPrototypeOf([][Symbol.iterator]()); delete p.next; new Uint8Array([1,2])").halt,
-        Halt::Unsupported("native-call:TypedArray:from-array-like"),
+        Halt::NotImplemented("native-call:TypedArray:from-array-like"),
         "pending installation must not restore an explicitly deleted next",
     );
 }

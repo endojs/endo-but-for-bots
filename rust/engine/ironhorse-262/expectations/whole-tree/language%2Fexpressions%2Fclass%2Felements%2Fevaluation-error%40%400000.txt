@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=language/expressions/class/elements/evaluation-error tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/class/elements/evaluation-error/computed-name-referenceerror.js sloppy pass
+language/expressions/class/elements/evaluation-error/computed-name-referenceerror.js strict pass
+language/expressions/class/elements/evaluation-error/computed-name-toprimitive-err.js sloppy pass
+language/expressions/class/elements/evaluation-error/computed-name-toprimitive-err.js strict pass
+language/expressions/class/elements/evaluation-error/computed-name-toprimitive-returns-noncallable.js sloppy pass
+language/expressions/class/elements/evaluation-error/computed-name-toprimitive-returns-noncallable.js strict pass
+language/expressions/class/elements/evaluation-error/computed-name-toprimitive-returns-nonobject.js sloppy pass
+language/expressions/class/elements/evaluation-error/computed-name-toprimitive-returns-nonobject.js strict pass
+language/expressions/class/elements/evaluation-error/computed-name-tostring-err.js sloppy pass
+language/expressions/class/elements/evaluation-error/computed-name-tostring-err.js strict pass
+language/expressions/class/elements/evaluation-error/computed-name-valueof-err.js sloppy pass
+language/expressions/class/elements/evaluation-error/computed-name-valueof-err.js strict pass

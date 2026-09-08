@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/StringIteratorPrototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/StringIteratorPrototype/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"Iterator\"», «string\"String Iterator\"») to be true"
+built-ins/StringIteratorPrototype/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"Iterator\"», «string\"String Iterator\"») to be true"
+built-ins/StringIteratorPrototype/ancestry.js sloppy pass
+built-ins/StringIteratorPrototype/ancestry.js strict pass

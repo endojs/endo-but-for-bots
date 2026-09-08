@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/Duration/prototype/total tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/Duration/prototype/total/dst-balancing-result.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/dst-balancing-result.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/dst-day-length.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/dst-day-length.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/dst-rounding-result.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/dst-rounding-result.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-dst-back-transition.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-dst-back-transition.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-infinity-throws-rangeerror.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-string-datetime.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-string-datetime.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-sub-minute-offset.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/total/relativeto-sub-minute-offset.js strict skip:oracle-host-missing-global:Temporal

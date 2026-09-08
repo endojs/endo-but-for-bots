@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/RegExp/prototype/Symbol.split tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/RegExp/prototype/Symbol.split/Symbol.match-getter-recompiles-source.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"\\\"», «\\\"a\\\"») to be true\" ironhorse=\"Test262Error: string\\\"\\\"», «string\\\"a\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/Symbol.split/Symbol.match-getter-recompiles-source.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"\\\"», «\\\"a\\\"») to be true\" ironhorse=\"Test262Error: string\\\"\\\"», «string\\\"a\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/Symbol.split/toint32-limit-recompiles-source.js sloppy pass
+annexB/built-ins/RegExp/prototype/Symbol.split/toint32-limit-recompiles-source.js strict pass

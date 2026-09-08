@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/CharacterClassEscapes tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/CharacterClassEscapes/character-class-digit-class-escape-negative-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-digit-class-escape-negative-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-digit-class-escape-positive-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-digit-class-escape-positive-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-digit-class-escape-negative-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-digit-class-escape-negative-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-digit-class-escape-positive-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-digit-class-escape-positive-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-whitespace-class-escape-negative-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-whitespace-class-escape-negative-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-whitespace-class-escape-positive-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-whitespace-class-escape-positive-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-word-class-escape-negative-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-word-class-escape-negative-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-word-class-escape-positive-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-non-word-class-escape-positive-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-whitespace-class-escape-negative-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-whitespace-class-escape-negative-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-whitespace-class-escape-positive-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-whitespace-class-escape-positive-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-word-class-escape-negative-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-word-class-escape-negative-cases.js strict pass
+built-ins/RegExp/CharacterClassEscapes/character-class-word-class-escape-positive-cases.js sloppy pass
+built-ins/RegExp/CharacterClassEscapes/character-class-word-class-escape-positive-cases.js strict pass

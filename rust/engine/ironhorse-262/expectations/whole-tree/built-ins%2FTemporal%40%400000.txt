@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/getOwnPropertyNames.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/getOwnPropertyNames.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/keys.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/keys.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/prop-desc.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected SameValue(«\"undefined\"», «\"object\"») to be true"
+built-ins/Temporal/prop-desc.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected SameValue(«\"undefined\"», «\"object\"») to be true"

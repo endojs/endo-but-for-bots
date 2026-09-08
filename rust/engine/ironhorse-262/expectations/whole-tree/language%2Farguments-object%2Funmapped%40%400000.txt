@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=language/arguments-object/unmapped tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/arguments-object/unmapped/Symbol.iterator.js sloppy pass
+language/arguments-object/unmapped/via-params-dflt.js sloppy pass
+language/arguments-object/unmapped/via-params-dflt.js strict pass
+language/arguments-object/unmapped/via-params-dstr.js sloppy pass
+language/arguments-object/unmapped/via-params-dstr.js strict pass
+language/arguments-object/unmapped/via-params-rest.js sloppy pass
+language/arguments-object/unmapped/via-params-rest.js strict pass
+language/arguments-object/unmapped/via-strict.js strict pass

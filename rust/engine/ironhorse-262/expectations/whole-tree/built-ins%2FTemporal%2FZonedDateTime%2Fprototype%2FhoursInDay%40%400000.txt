@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/hoursInDay tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/get-start-of-day-throws.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/get-start-of-day-throws.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/next-day-out-of-range.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/next-day-out-of-range.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/prop-desc.js strict skip:oracle-host-missing-global:Temporal

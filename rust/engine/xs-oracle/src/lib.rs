@@ -35,6 +35,7 @@ struct XsOracleResultRaw {
     /// fixed `result` buffer. Greater than `RESULT_BUF_CAP - 1` means `result`
     /// holds a truncated prefix.
     result_len: u32,
+    exit_status: i32,
 }
 
 impl Default for XsOracleResultRaw {
@@ -50,11 +51,13 @@ impl Default for XsOracleResultRaw {
             result: [0u8; RESULT_BUF_CAP],
             error: [0u8; 256],
             result_len: 0,
+            exit_status: 0,
         }
     }
 }
 
 extern "C" {
+    fn xs_oracle_is_resource_abort(status: i32) -> c_int;
     fn xs_oracle_run(source: *const c_char, source_len: u32, out: *mut XsOracleResultRaw) -> c_int;
     fn xs_oracle_compile_module(
         source: *const c_char,
@@ -234,6 +237,15 @@ pub struct OracleOutcome {
     /// Raw run-only meterIndex (16.16 fixed point), for diagnosing
     /// fractional (built-in step) metering.
     pub meter_raw: u32,
+    /// Original XS machine abort status; zero for ordinary guest exceptions.
+    pub exit_status: i32,
+}
+
+/// Whether an explicit XS abort status means memory or stack exhaustion.
+/// Guest unhandled exceptions/rejections and ordinary throws are excluded.
+pub fn is_resource_abort(status: i32) -> bool {
+    // Safety: the C function only compares its integer against XS enum values.
+    unsafe { xs_oracle_is_resource_abort(status) != 0 }
 }
 
 /// Compile `source` to XS bytecode and run it on XS.
@@ -282,6 +294,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
+        exit_status: raw.exit_status,
     };
 
     // Safety: frees the heap buffers the shim allocated; we have copied
@@ -322,6 +335,7 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
+        exit_status: raw.exit_status,
     };
     // Safety: frees the shim's heap buffers; copied out above.
     unsafe { xs_oracle_free(raw as *mut _) };
@@ -378,6 +392,8 @@ pub struct ModuleOutcome {
     pub compiled: bool,
     /// The parse error message when the C parser surfaced one directly.
     pub error: String,
+    /// Original XS machine abort status; zero for ordinary guest exceptions.
+    pub exit_status: i32,
 }
 
 /// Compile `source` as a **Module** goal on XS and return its bytecode
@@ -438,6 +454,7 @@ pub fn compile_module(source: &str) -> Option<ModuleOutcome> {
         symbols,
         compiled: raw.ok != 0 && emitted_module_record,
         error: cstr_field(&raw.error),
+        exit_status: raw.exit_status,
     };
 
     // Safety: frees the heap buffers the shim allocated; we have copied
@@ -472,6 +489,8 @@ pub struct ModuleRunOutcome {
     pub computrons: u64,
     /// Raw meterIndex (16.16 fixed point).
     pub meter_raw: u32,
+    /// Original XS machine abort status; zero for ordinary guest exceptions.
+    pub exit_status: i32,
 }
 
 /// Link and evaluate the module rooted at `dir`/`main_rel` on XS and
@@ -508,6 +527,7 @@ pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRun
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
+        exit_status: raw.exit_status,
     };
     // Safety: frees any heap buffers the shim allocated (none on this path).
     unsafe { xs_oracle_free(&mut raw as *mut _) };
@@ -686,6 +706,19 @@ mod tests {
         let o = regexp("(", "", "abc", 0).expect("machine");
         assert!(!o.compiled);
         assert!(!o.error.is_empty(), "should carry an error message");
+    }
+
+    #[test]
+    fn regexp_literal_rejection_preserves_its_diagnostic() {
+        // Exercise the lexer -> fxReportParserError path, not the RegExp
+        // constructor. Its formerly overlapping snprintf erased this message
+        // on glibc and changed the differential harness's skip disposition.
+        let outcome = run(r"/\1/;").expect("oracle machine");
+        assert!(!outcome.completed);
+        assert_eq!(
+            outcome.error,
+            r"SyntaxError: \1 invalid reference number \1"
+        );
     }
 
     #[test]

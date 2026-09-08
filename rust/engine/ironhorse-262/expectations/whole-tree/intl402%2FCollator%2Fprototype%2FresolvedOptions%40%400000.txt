@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=intl402/Collator/prototype/resolvedOptions tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Collator/prototype/resolvedOptions/basic.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/basic.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/builtin.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/builtin.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/ignorePunctuation-default.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/ignorePunctuation-default.js strict skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/ignorePunctuation-not-default.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/ignorePunctuation-not-default.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/length.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/length.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/order.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/order.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/Collator/prototype/resolvedOptions/resolved-case-first-unicode-extensions-and-options.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/resolved-case-first-unicode-extensions-and-options.js strict skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/resolved-collation-unicode-extensions-and-options.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/resolved-collation-unicode-extensions-and-options.js strict skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/resolved-numeric-unicode-extensions-and-options.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Collator/prototype/resolvedOptions/resolved-numeric-unicode-extensions-and-options.js strict skip:oracle-host-missing-global:Intl

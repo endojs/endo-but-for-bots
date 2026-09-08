@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/split tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/split/cross-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Symbol/split/cross-realm.js strict skip:shared-positive-test-failure
+built-ins/Symbol/split/prop-desc.js sloppy pass
+built-ins/Symbol/split/prop-desc.js strict pass

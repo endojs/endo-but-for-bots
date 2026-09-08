@@ -1,0 +1,12 @@
+# engine=ironhorse features=default corpus=language/expressions/comma tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/comma/S11.14_A1.js sloppy pass
+language/expressions/comma/S11.14_A1.js strict pass
+language/expressions/comma/S11.14_A2.1_T1.js sloppy pass
+language/expressions/comma/S11.14_A2.1_T1.js strict pass
+language/expressions/comma/S11.14_A2.1_T2.js sloppy pass
+language/expressions/comma/S11.14_A2.1_T2.js strict pass
+language/expressions/comma/S11.14_A2.1_T3.js sloppy pass
+language/expressions/comma/S11.14_A2.1_T3.js strict pass
+language/expressions/comma/S11.14_A3.js sloppy pass
+language/expressions/comma/S11.14_A3.js strict pass
+language/expressions/comma/tco-final.js sloppy skip:feature:tail-call-optimization

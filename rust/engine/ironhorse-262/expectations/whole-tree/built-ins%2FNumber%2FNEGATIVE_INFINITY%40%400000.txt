@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Number/NEGATIVE_INFINITY tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Number/NEGATIVE_INFINITY/S15.7.3.5_A1.js sloppy pass
+built-ins/Number/NEGATIVE_INFINITY/S15.7.3.5_A1.js strict pass
+built-ins/Number/NEGATIVE_INFINITY/S15.7.3.5_A2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[NEGATIVE_INFINITY] to have writable:false."
+built-ins/Number/NEGATIVE_INFINITY/S15.7.3.5_A2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[NEGATIVE_INFINITY] to have writable:false."
+built-ins/Number/NEGATIVE_INFINITY/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[NEGATIVE_INFINITY] to have enumerable:false."
+built-ins/Number/NEGATIVE_INFINITY/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[NEGATIVE_INFINITY] to have enumerable:false."
+built-ins/Number/NEGATIVE_INFINITY/value.js sloppy pass
+built-ins/Number/NEGATIVE_INFINITY/value.js strict pass

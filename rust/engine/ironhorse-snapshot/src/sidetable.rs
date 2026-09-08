@@ -44,8 +44,6 @@
 //! - `resume_status` — the generator/async resume signal, meaningful only
 //!   mid-`resume`; a *suspended* generator's state is the `generators` row
 //!   (tracked, Pending), not this register.
-//! - `callback_return_depth` — the return-depth sentinel while a property
-//!   accessor or other callback is executing; no callback spans a crank.
 //! - `env` — the active `with`/eval environment head; live only inside a
 //!   `with` body or eval frame, all of which close before a crank returns
 //!   (SUSPENDED environments live in `SavedFrame.env`, inside their row).
@@ -802,7 +800,6 @@ mod tests {
             "locals",
             "id_map",
             "resume_status",
-            "callback_return_depth",
             "env",
             "direct_eval_hoist",
             "eval_program_hoist",

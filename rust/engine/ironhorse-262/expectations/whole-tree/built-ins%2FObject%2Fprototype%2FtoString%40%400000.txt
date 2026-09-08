@@ -1,0 +1,83 @@
+# engine=ironhorse features=default corpus=built-ins/Object/prototype/toString tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/prototype/toString/Object.prototype.toString.call-arguments.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-arguments.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-array.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-array.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-bigint.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-bigint.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-boolean.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-boolean.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-date.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-date.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-error.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-error.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-function.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-function.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-null.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-null.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-number.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-number.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-object.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-object.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-regexp.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Object]\"», «string\"[object RegExp]\"») to be true"
+built-ins/Object/prototype/toString/Object.prototype.toString.call-regexp.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Object]\"», «string\"[object RegExp]\"») to be true"
+built-ins/Object/prototype/toString/Object.prototype.toString.call-string.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-string.js strict pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-undefined.js sloppy pass
+built-ins/Object/prototype/toString/Object.prototype.toString.call-undefined.js strict pass
+built-ins/Object/prototype/toString/direct-invocation.js sloppy pass
+built-ins/Object/prototype/toString/direct-invocation.js strict pass
+built-ins/Object/prototype/toString/get-symbol-tag-err.js sloppy pass
+built-ins/Object/prototype/toString/get-symbol-tag-err.js strict pass
+built-ins/Object/prototype/toString/length.js sloppy pass
+built-ins/Object/prototype/toString/length.js strict pass
+built-ins/Object/prototype/toString/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toString; name value should be toString"
+built-ins/Object/prototype/toString/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toString; name value should be toString"
+built-ins/Object/prototype/toString/no-prototype-property.js sloppy pass
+built-ins/Object/prototype/toString/no-prototype-property.js strict pass
+built-ins/Object/prototype/toString/not-a-constructor.js sloppy pass
+built-ins/Object/prototype/toString/not-a-constructor.js strict pass
+built-ins/Object/prototype/toString/prop-desc.js sloppy pass
+built-ins/Object/prototype/toString/prop-desc.js strict pass
+built-ins/Object/prototype/toString/proxy-array.js sloppy pass
+built-ins/Object/prototype/toString/proxy-array.js strict pass
+built-ins/Object/prototype/toString/proxy-function-async.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Function]\"», «string\"[object AsyncFunction]\"») to be true"
+built-ins/Object/prototype/toString/proxy-function-async.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Function]\"», «string\"[object AsyncFunction]\"») to be true"
+built-ins/Object/prototype/toString/proxy-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Function]\"», «string\"[object AsyncFunction]\"») to be true"
+built-ins/Object/prototype/toString/proxy-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Function]\"», «string\"[object AsyncFunction]\"») to be true"
+built-ins/Object/prototype/toString/proxy-revoked-during-get-call.js sloppy pass
+built-ins/Object/prototype/toString/proxy-revoked-during-get-call.js strict pass
+built-ins/Object/prototype/toString/proxy-revoked.js sloppy pass
+built-ins/Object/prototype/toString/proxy-revoked.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-array-builtin.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Iterator]\"», «string\"[object Array Iterator]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-array-builtin.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Iterator]\"», «string\"[object Array Iterator]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-generators-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-generators-builtin.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-map-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-map-builtin.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-non-str-bigint.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object BigInt]\"», «string\"[object Object]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-non-str-bigint.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object BigInt]\"», «string\"[object Object]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-non-str-builtin.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Symbol]\"», «string\"[object Object]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-non-str-builtin.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Symbol]\"», «string\"[object Object]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-non-str-proxy-function.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-non-str-proxy-function.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-non-str.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-non-str.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-override-bigint.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object BigInt]\"», «string\"[object test262]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-override-bigint.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object BigInt]\"», «string\"[object test262]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-override-instances.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-override-instances.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-override-primitives.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Boolean]\"», «string\"[object test262]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-override-primitives.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Boolean]\"», «string\"[object test262]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-promise-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-promise-builtin.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-set-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-set-builtin.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-str.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-str.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-string-builtin.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Iterator]\"», «string\"[object String Iterator]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-string-builtin.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Iterator]\"», «string\"[object String Iterator]\"») to be true"
+built-ins/Object/prototype/toString/symbol-tag-weakmap-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-weakmap-builtin.js strict pass
+built-ins/Object/prototype/toString/symbol-tag-weakset-builtin.js sloppy pass
+built-ins/Object/prototype/toString/symbol-tag-weakset-builtin.js strict pass

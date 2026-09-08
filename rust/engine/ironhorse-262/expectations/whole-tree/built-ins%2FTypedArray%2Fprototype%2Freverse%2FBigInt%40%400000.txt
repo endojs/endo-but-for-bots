@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/reverse/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/reverse/BigInt/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/reverse/BigInt/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/reverse/BigInt/get-length-uses-internal-arraylength.js sloppy pass
+built-ins/TypedArray/prototype/reverse/BigInt/get-length-uses-internal-arraylength.js strict pass
+built-ins/TypedArray/prototype/reverse/BigInt/preserves-non-numeric-properties.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/reverse/BigInt/preserves-non-numeric-properties.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/reverse/BigInt/return-abrupt-from-this-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/reverse/BigInt/return-abrupt-from-this-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/reverse/BigInt/returns-original-object.js sloppy pass
+built-ins/TypedArray/prototype/reverse/BigInt/returns-original-object.js strict pass
+built-ins/TypedArray/prototype/reverse/BigInt/reverts.js sloppy pass
+built-ins/TypedArray/prototype/reverse/BigInt/reverts.js strict pass

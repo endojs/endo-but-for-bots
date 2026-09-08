@@ -1,0 +1,24 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/preventExtensions tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/preventExtensions/call-parameters.js sloppy pass
+built-ins/Proxy/preventExtensions/call-parameters.js strict pass
+built-ins/Proxy/preventExtensions/null-handler.js sloppy pass
+built-ins/Proxy/preventExtensions/null-handler.js strict pass
+built-ins/Proxy/preventExtensions/return-false.js sloppy pass
+built-ins/Proxy/preventExtensions/return-false.js strict pass
+built-ins/Proxy/preventExtensions/return-is-abrupt.js sloppy pass
+built-ins/Proxy/preventExtensions/return-is-abrupt.js strict pass
+built-ins/Proxy/preventExtensions/return-true-target-is-extensible.js sloppy pass
+built-ins/Proxy/preventExtensions/return-true-target-is-extensible.js strict pass
+built-ins/Proxy/preventExtensions/return-true-target-is-not-extensible.js sloppy pass
+built-ins/Proxy/preventExtensions/return-true-target-is-not-extensible.js strict pass
+built-ins/Proxy/preventExtensions/trap-is-missing-target-is-proxy.js sloppy pass
+built-ins/Proxy/preventExtensions/trap-is-missing-target-is-proxy.js strict pass
+built-ins/Proxy/preventExtensions/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/preventExtensions/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/preventExtensions/trap-is-not-callable.js sloppy pass
+built-ins/Proxy/preventExtensions/trap-is-not-callable.js strict pass
+built-ins/Proxy/preventExtensions/trap-is-null-target-is-proxy.js sloppy pass
+built-ins/Proxy/preventExtensions/trap-is-null-target-is-proxy.js strict pass
+built-ins/Proxy/preventExtensions/trap-is-undefined-target-is-proxy.js sloppy skip:unsupported-opcode:module:static-linking
+built-ins/Proxy/preventExtensions/trap-is-undefined.js sloppy pass
+built-ins/Proxy/preventExtensions/trap-is-undefined.js strict pass

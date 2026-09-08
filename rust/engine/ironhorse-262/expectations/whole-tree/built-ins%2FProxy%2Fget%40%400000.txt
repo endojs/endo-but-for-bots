@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/get tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/get/accessor-get-is-undefined-throws.js sloppy pass
+built-ins/Proxy/get/accessor-get-is-undefined-throws.js strict pass
+built-ins/Proxy/get/call-parameters.js sloppy pass
+built-ins/Proxy/get/call-parameters.js strict pass
+built-ins/Proxy/get/not-same-value-configurable-false-writable-false-throws.js sloppy pass
+built-ins/Proxy/get/not-same-value-configurable-false-writable-false-throws.js strict pass
+built-ins/Proxy/get/null-handler.js sloppy pass
+built-ins/Proxy/get/null-handler.js strict pass
+built-ins/Proxy/get/return-is-abrupt.js sloppy pass
+built-ins/Proxy/get/return-is-abrupt.js strict pass
+built-ins/Proxy/get/return-trap-result-accessor-property.js sloppy pass
+built-ins/Proxy/get/return-trap-result-accessor-property.js strict pass
+built-ins/Proxy/get/return-trap-result-configurable-false-writable-true.js sloppy pass
+built-ins/Proxy/get/return-trap-result-configurable-false-writable-true.js strict pass
+built-ins/Proxy/get/return-trap-result-configurable-true-assessor-get-undefined.js sloppy pass
+built-ins/Proxy/get/return-trap-result-configurable-true-assessor-get-undefined.js strict pass
+built-ins/Proxy/get/return-trap-result-configurable-true-writable-false.js sloppy pass
+built-ins/Proxy/get/return-trap-result-configurable-true-writable-false.js strict pass
+built-ins/Proxy/get/return-trap-result-same-value-configurable-false-writable-false.js sloppy pass
+built-ins/Proxy/get/return-trap-result-same-value-configurable-false-writable-false.js strict pass
+built-ins/Proxy/get/return-trap-result.js sloppy pass
+built-ins/Proxy/get/return-trap-result.js strict pass
+built-ins/Proxy/get/trap-is-missing-target-is-proxy.js sloppy pass
+built-ins/Proxy/get/trap-is-missing-target-is-proxy.js strict pass
+built-ins/Proxy/get/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/get/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/get/trap-is-not-callable.js sloppy pass
+built-ins/Proxy/get/trap-is-not-callable.js strict pass
+built-ins/Proxy/get/trap-is-null-target-is-proxy.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Proxy/get/trap-is-null-target-is-proxy.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Proxy/get/trap-is-undefined-no-property.js sloppy pass
+built-ins/Proxy/get/trap-is-undefined-no-property.js strict pass
+built-ins/Proxy/get/trap-is-undefined-receiver.js sloppy pass
+built-ins/Proxy/get/trap-is-undefined-receiver.js strict pass
+built-ins/Proxy/get/trap-is-undefined-target-is-proxy.js sloppy pass
+built-ins/Proxy/get/trap-is-undefined-target-is-proxy.js strict pass
+built-ins/Proxy/get/trap-is-undefined.js sloppy pass
+built-ins/Proxy/get/trap-is-undefined.js strict pass

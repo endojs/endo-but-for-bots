@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/prototype/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"Symbol\"») to be true"
+built-ins/Symbol/prototype/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"Symbol\"») to be true"
+built-ins/Symbol/prototype/constructor.js sloppy pass
+built-ins/Symbol/prototype/constructor.js strict pass
+built-ins/Symbol/prototype/intrinsic.js sloppy pass
+built-ins/Symbol/prototype/intrinsic.js strict pass

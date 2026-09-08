@@ -3,26 +3,26 @@
 //! sites.
 //!
 //! The exemption from the oracle is granted at the differential instruments'
-//! discard sites by `halt_labels::is_declined_label`, so an `Unsupported`
+//! discard sites by the category-specific halt-label predicates, so a declined
 //! halt whose label is not registered there is a finding, however it was
 //! constructed. That closes the channel. This test does the complementary
 //! job: it parses the engine-side crates' sources and pins, mechanically,
 //! that
 //!
-//! 1. every literal `Halt::Unsupported("…")` label is in
-//!    `DECLINED_LABELS`, and every literal `Halt::EngineInvariant("…")`
+//! 1. every literal `Halt::NotImplemented("…")` label is in
+//!    `NOT_IMPLEMENTED_LABELS`, and every literal `Halt::EngineInvariant("…")`
 //!    label is in `ENGINE_INVARIANT_LABELS` — so a new label fails the build
 //!    until it is deliberately classified, and a stale registry entry is
 //!    removed rather than left as a silent exemption;
-//! 2. the two label-returning helpers the dynamic `Unsupported(…)` sites
+//! 2. the two label-returning helpers the dynamic `NotImplemented(…)` sites
 //!    route through (`native_unsupported_name`, `array_generic_skip_reason`)
-//!    return only the literals in `DECLINED_HELPER_LABELS`, and every other
+//!    return only the literals in `NOT_IMPLEMENTED_HELPER_LABELS`, and every other
 //!    non-literal argument is one of the enumerated [`DECLINED_DYNAMIC_FORMS`];
-//! 3. the variants are only ever spelled `Halt::Unsupported(` /
+//! 3. the variants are only ever spelled `Halt::NotImplemented(` /
 //!    `Halt::EngineInvariant(` — never imported, aliased (a `Halt::{…}` or
 //!    `Halt::*` group anywhere), or taken as a function value — so the scan
 //!    sees every construction;
-//! 4. no `Halt::Unsupported(` site sits within eight lines below a value-stack
+//! 4. no `Halt::NotImplemented(` site sits within eight lines below a value-stack
 //!    or frame-depth scrutinee (`stack.len()`, `checked_sub(`,
 //!    `call_stack.len()`): an underflow guard is an engine
 //!    invariant, whatever label it carries, and the opcode-mnemonic form used
@@ -47,13 +47,16 @@ use ironhorse_vm::source_scan::{
     balanced_args, code_only, literal_end, marker_positions, rs_files, string_literals,
 };
 
-use ironhorse_vm::halt_labels::{DECLINED_HELPER_LABELS, DECLINED_LABELS, ENGINE_INVARIANT_LABELS};
+use ironhorse_vm::halt_labels::{
+    ENGINE_INVARIANT_LABELS, NOT_IMPLEMENTED_HELPER_LABELS, NOT_IMPLEMENTED_LABELS, REFUSED_LABELS,
+};
 
-/// The non-literal argument forms a `Halt::Unsupported(…)` construction may
-/// take, whitespace-collapsed. Each names a family whose labels are pinned
+/// The non-literal argument forms a `Halt::NotImplemented(…)` construction may
+/// take, normalized for whitespace and optional trailing commas. Each names
+/// a family whose labels are pinned
 /// elsewhere: opcode mnemonics (`other.name()` at the dispatch loop's default
 /// arm only, the `gxCodeNames` table in `opcode.rs`, accepted by
-/// `is_declined_label`), the
+/// `is_not_implemented_label`), the
 /// two helpers above, and the regexp crate's own compile-time
 /// `CompileError::Unsupported` labels (`regexp_feature`), which that crate
 /// owns and which today it never constructs. `_` is the wildcard of a `match`
@@ -109,7 +112,7 @@ struct Site {
     line: usize,
     /// The literal labels in the argument, or empty when dynamic.
     literals: Vec<String>,
-    /// The whitespace-collapsed argument text when no literal is present.
+    /// The normalized argument text when no literal is present.
     dynamic: Option<String>,
     /// The code-only text of the eight lines preceding the site.
     preceding: String,
@@ -174,9 +177,7 @@ fn sites(variant: &str) -> Vec<Site> {
             out.push(Site {
                 file: file.clone(),
                 line,
-                dynamic: literals
-                    .is_empty()
-                    .then(|| args.split_whitespace().collect::<Vec<_>>().join(" ")),
+                dynamic: literals.is_empty().then(|| normalized_dynamic_form(args)),
                 literals,
                 preceding,
             });
@@ -228,6 +229,42 @@ fn as_set(list: &[&str]) -> BTreeSet<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
 
+/// Rustfmt wraps nested constructors and may add trailing argument commas.
+/// Recognize the same pinned call shape without admitting a different helper,
+/// extra argument, or tuple expression.
+fn normalized_dynamic_form(args: &str) -> String {
+    let compact: String = args.chars().filter(|c| !c.is_whitespace()).collect();
+    compact
+        .strip_suffix(',')
+        .unwrap_or(&compact)
+        .replace(",)", ")")
+}
+
+#[test]
+fn dynamic_forms_ignore_layout_but_keep_the_call_shape() {
+    for (source, expected) in [
+        (
+            "native_unsupported_name(\n native,\n )",
+            "native_unsupported_name(native)",
+        ),
+        (
+            "Self::array_generic_skip_reason(m),",
+            "Self::array_generic_skip_reason(m)",
+        ),
+        ("other.name(),", "other.name()"),
+    ] {
+        assert_eq!(normalized_dynamic_form(source), expected);
+        assert!(DECLINED_DYNAMIC_FORMS.contains(&expected));
+    }
+    for source in [
+        "unregistered_helper(native)",
+        "native_unsupported_name(native, extra)",
+        "native_unsupported_name((native,))",
+    ] {
+        assert!(!DECLINED_DYNAMIC_FORMS.contains(&normalized_dynamic_form(source).as_str()));
+    }
+}
+
 fn diff(name: &str, found: &BTreeSet<String>, pinned: &BTreeSet<String>) {
     let unregistered: Vec<_> = found.difference(pinned).collect();
     let stale: Vec<_> = pinned.difference(found).collect();
@@ -241,9 +278,13 @@ fn diff(name: &str, found: &BTreeSet<String>, pinned: &BTreeSet<String>) {
 
 #[test]
 fn declined_labels_mirror_the_construction_sites() {
-    let sites = sites("Unsupported");
+    let sites = sites("NotImplemented");
     let literals: BTreeSet<String> = sites.iter().flat_map(|s| s.literals.clone()).collect();
-    diff("Halt::Unsupported", &literals, &as_set(DECLINED_LABELS));
+    diff(
+        "Halt::NotImplemented",
+        &literals,
+        &as_set(NOT_IMPLEMENTED_LABELS),
+    );
     let allowed = as_set(DECLINED_DYNAMIC_FORMS);
     let unknown: Vec<_> = sites
         .iter()
@@ -256,7 +297,7 @@ fn declined_labels_mirror_the_construction_sites() {
         .collect();
     assert!(
         unknown.is_empty(),
-        "Halt::Unsupported constructed from unregistered dynamic forms {unknown:?}; \
+        "Halt::NotImplemented constructed from unregistered dynamic forms {unknown:?}; \
          a label family must be enumerated in DECLINED_DYNAMIC_FORMS and pinned"
     );
     let mnemonic_sites = sites
@@ -270,11 +311,27 @@ fn declined_labels_mirror_the_construction_sites() {
 }
 
 #[test]
+fn refused_labels_mirror_literal_construction_sites() {
+    let sites = sites("Refused");
+    assert!(
+        sites
+            .iter()
+            .all(|site| site.dynamic.as_deref().is_none_or(|form| form == "_")),
+        "refusals must name an explicitly classified literal policy limit"
+    );
+    let literals = sites
+        .iter()
+        .flat_map(|site| site.literals.clone())
+        .collect();
+    diff("Halt::Refused", &literals, &as_set(REFUSED_LABELS));
+}
+
+#[test]
 fn the_regexp_crate_constructs_no_declined_labels() {
     // `build_regexp` passes `ironhorse_regexp::CompileError::Unsupported`'s
     // label straight through as a declined halt (the `regexp_feature` form).
     // That crate constructs none today; the day it does, its labels need a
-    // registry of their own (and `is_declined_label` must learn them), so
+    // registry of their own (and `is_not_implemented_label` must learn them), so
     // pin the count at zero rather than let a new family in silently.
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ironhorse-regexp/src");
     let mut constructions = 0;
@@ -332,14 +389,15 @@ fn declined_helpers_return_only_registered_labels() {
     diff(
         "declined helper labels",
         &found,
-        &as_set(DECLINED_HELPER_LABELS),
+        &as_set(NOT_IMPLEMENTED_HELPER_LABELS),
     );
 }
 
 #[test]
 fn no_declined_site_is_an_underflow_guard() {
-    let offenders: Vec<_> = sites("Unsupported")
-        .iter()
+    let offenders: Vec<_> = sites("NotImplemented")
+        .into_iter()
+        .chain(sites("Refused"))
         .filter(|s| {
             UNDERFLOW_SCRUTINEES
                 .iter()
@@ -349,7 +407,7 @@ fn no_declined_site_is_an_underflow_guard() {
         .collect();
     assert!(
         offenders.is_empty(),
-        "Halt::Unsupported under a stack-depth or frame-depth scrutinee at {offenders:?}: \
+        "Halt::NotImplemented under a stack-depth or frame-depth scrutinee at {offenders:?}: \
          an underflow guard is an engine invariant and belongs on Halt::EngineInvariant"
     );
     // And the check is not vacuous: the invariant guards it would catch exist.
@@ -369,9 +427,10 @@ fn no_declined_site_is_an_underflow_guard() {
 
 #[test]
 fn no_declined_label_carries_an_invariant_signature() {
-    let offenders: Vec<_> = DECLINED_LABELS
+    let offenders: Vec<_> = NOT_IMPLEMENTED_LABELS
         .iter()
-        .chain(DECLINED_HELPER_LABELS)
+        .chain(NOT_IMPLEMENTED_HELPER_LABELS)
+        .chain(REFUSED_LABELS)
         .filter(|l| INVARIANT_SIGNATURES.iter().any(|sig| l.contains(sig)))
         .collect();
     assert!(
@@ -392,19 +451,19 @@ fn the_scanner_is_not_fooled_by_comments_or_literals() {
     // The evasions an adversarial review tried against the previous,
     // line-comment-only scanner, each of which must now be seen.
     let src = r###"
-        let url = "http://example"; return Err(Halt::Unsupported("a:after-url"));
-        return Err(/* see https://tc39.es */ Halt::Unsupported("b:after-block"));
-        let q = '"'; return Err(Halt::Unsupported("c:after-char"));
-        /* Halt::Unsupported("d:inside-block-comment") */
-        // Halt::Unsupported("e:inside-line-comment")
-        let s = "Halt::Unsupported(\"f:inside-string\")";
-        return Err(Halt::Unsupported(if x { "g:branch-one" } else { "h:branch-two" }));
-        let r#type = r"raw // not a comment"; return Err(Halt::Unsupported("i:after-raw-ident"));
-        let raw = r##"Halt::Unsupported("j:inside-raw-string")"##; return Err(Halt::Unsupported("k:after-raw-string"));
-        let bytes = b"(\""; return Err(Halt::Unsupported("l:after-byte-string"));
+        let url = "http://example"; return Err(Halt::NotImplemented("a:after-url"));
+        return Err(/* see https://tc39.es */ Halt::NotImplemented("b:after-block"));
+        let q = '"'; return Err(Halt::NotImplemented("c:after-char"));
+        /* Halt::NotImplemented("d:inside-block-comment") */
+        // Halt::NotImplemented("e:inside-line-comment")
+        let s = "Halt::NotImplemented(\"f:inside-string\")";
+        return Err(Halt::NotImplemented(if x { "g:branch-one" } else { "h:branch-two" }));
+        let r#type = r"raw // not a comment"; return Err(Halt::NotImplemented("i:after-raw-ident"));
+        let raw = r##"Halt::NotImplemented("j:inside-raw-string")"##; return Err(Halt::NotImplemented("k:after-raw-string"));
+        let bytes = b"(\""; return Err(Halt::NotImplemented("l:after-byte-string"));
     "###;
     let code = code_only(src);
-    let marker = "Halt::Unsupported(";
+    let marker = "Halt::NotImplemented(";
     let mut found = Vec::new();
     for at in marker_positions(&code, marker) {
         found.extend(string_literals(balanced_args(&code, at, marker)));
@@ -433,7 +492,7 @@ fn the_scanner_is_not_fooled_by_comments_or_literals() {
     // A raw string with an unescaped quote inside it does not desync the
     // scan of what follows.
     let tricky = code_only(
-        r####"let a = r"\"; let b = r#"a"b"#; return Err(Halt::Unsupported("m:after-tricky-raw"));"####,
+        r####"let a = r"\"; let b = r#"a"b"#; return Err(Halt::NotImplemented("m:after-tricky-raw"));"####,
     );
     let mut found = Vec::new();
     for at in marker_positions(&tricky, marker) {

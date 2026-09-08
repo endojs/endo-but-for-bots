@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/ZonedDateTime/prototype/withPlainTime tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/ZonedDateTime/prototype/withPlainTime/dst-skipped-cross-midnight.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/ZonedDateTime/prototype/withPlainTime/dst-skipped-cross-midnight.js strict skip:oracle-host-missing-global:Temporal

@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainTime/prototype/toJSON tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainTime/prototype/toJSON/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/prototype/toJSON/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/prototype/toJSON/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prototype/toJSON/prop-desc.js strict skip:oracle-host-missing-temporal

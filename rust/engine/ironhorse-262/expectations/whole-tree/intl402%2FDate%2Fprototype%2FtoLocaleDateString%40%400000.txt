@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Date/prototype/toLocaleDateString tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Date/prototype/toLocaleDateString/builtin.js sloppy pass
+intl402/Date/prototype/toLocaleDateString/builtin.js strict pass
+intl402/Date/prototype/toLocaleDateString/length.js sloppy pass
+intl402/Date/prototype/toLocaleDateString/length.js strict pass

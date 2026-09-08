@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=annexB/language/statements/for-await-of tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/statements/for-await-of/iterator-close-return-emulates-undefined-throws-when-called.js sloppy skip:feature:IsHTMLDDA

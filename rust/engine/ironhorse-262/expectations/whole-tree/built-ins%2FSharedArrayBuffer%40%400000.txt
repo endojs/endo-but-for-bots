@@ -1,0 +1,53 @@
+# engine=ironhorse features=default corpus=built-ins/SharedArrayBuffer tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/SharedArrayBuffer/allocation-limit.js sloppy pass
+built-ins/SharedArrayBuffer/allocation-limit.js strict pass
+built-ins/SharedArrayBuffer/data-allocation-after-object-creation.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError but got a RangeError"
+built-ins/SharedArrayBuffer/data-allocation-after-object-creation.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError but got a RangeError"
+built-ins/SharedArrayBuffer/init-zero.js sloppy pass
+built-ins/SharedArrayBuffer/init-zero.js strict pass
+built-ins/SharedArrayBuffer/is-a-constructor.js sloppy pass
+built-ins/SharedArrayBuffer/is-a-constructor.js strict pass
+built-ins/SharedArrayBuffer/length-is-absent.js sloppy pass
+built-ins/SharedArrayBuffer/length-is-absent.js strict pass
+built-ins/SharedArrayBuffer/length-is-too-large-throws.js sloppy pass
+built-ins/SharedArrayBuffer/length-is-too-large-throws.js strict pass
+built-ins/SharedArrayBuffer/length.js sloppy pass
+built-ins/SharedArrayBuffer/length.js strict pass
+built-ins/SharedArrayBuffer/negative-length-throws.js sloppy pass
+built-ins/SharedArrayBuffer/negative-length-throws.js strict pass
+built-ins/SharedArrayBuffer/newtarget-prototype-is-not-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: newTarget.prototype is undefined Expected SameValue(«[object ArrayBuffer]», «[object Object]») to be true"
+built-ins/SharedArrayBuffer/newtarget-prototype-is-not-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: newTarget.prototype is undefined Expected SameValue(«[object ArrayBuffer]», «[object Object]») to be true"
+built-ins/SharedArrayBuffer/options-maxbytelength-allocation-limit.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-allocation-limit.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-compared-before-object-creation.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-compared-before-object-creation.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-data-allocation-after-object-creation.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError to be thrown but no exception was thrown at all"
+built-ins/SharedArrayBuffer/options-maxbytelength-data-allocation-after-object-creation.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError to be thrown but no exception was thrown at all"
+built-ins/SharedArrayBuffer/options-maxbytelength-diminuitive.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-diminuitive.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-excessive.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-excessive.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-negative.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-negative.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-object.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-object.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-poisoned.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-poisoned.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-undefined.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-maxbytelength-undefined.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/options-non-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «booleanfalse») to be true"
+built-ins/SharedArrayBuffer/options-non-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «booleanfalse») to be true"
+built-ins/SharedArrayBuffer/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/SharedArrayBuffer/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/SharedArrayBuffer/prototype-from-newtarget.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget is built-in Object constructor Expected SameValue(«[object ArrayBuffer]», «[object Object]») to be true"
+built-ins/SharedArrayBuffer/prototype-from-newtarget.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget is built-in Object constructor Expected SameValue(«[object ArrayBuffer]», «[object Object]») to be true"
+built-ins/SharedArrayBuffer/return-abrupt-from-length-symbol.js sloppy pass
+built-ins/SharedArrayBuffer/return-abrupt-from-length-symbol.js strict pass
+built-ins/SharedArrayBuffer/return-abrupt-from-length.js sloppy pass
+built-ins/SharedArrayBuffer/return-abrupt-from-length.js strict pass
+built-ins/SharedArrayBuffer/toindex-length.js sloppy pass
+built-ins/SharedArrayBuffer/toindex-length.js strict pass
+built-ins/SharedArrayBuffer/undefined-newtarget-throws.js sloppy pass
+built-ins/SharedArrayBuffer/undefined-newtarget-throws.js strict pass
+built-ins/SharedArrayBuffer/zero-length.js sloppy pass
+built-ins/SharedArrayBuffer/zero-length.js strict pass

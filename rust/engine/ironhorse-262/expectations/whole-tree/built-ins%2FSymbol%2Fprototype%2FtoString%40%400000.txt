@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/prototype/toString tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/prototype/toString/length.js sloppy pass
+built-ins/Symbol/prototype/toString/length.js strict pass
+built-ins/Symbol/prototype/toString/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toString; name value should be toString"
+built-ins/Symbol/prototype/toString/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toString; name value should be toString"
+built-ins/Symbol/prototype/toString/not-a-constructor.js sloppy pass
+built-ins/Symbol/prototype/toString/not-a-constructor.js strict pass
+built-ins/Symbol/prototype/toString/prop-desc.js sloppy pass
+built-ins/Symbol/prototype/toString/prop-desc.js strict pass
+built-ins/Symbol/prototype/toString/toString-default-attributes-non-strict.js sloppy pass
+built-ins/Symbol/prototype/toString/toString-default-attributes-strict.js strict pass
+built-ins/Symbol/prototype/toString/toString.js sloppy pass
+built-ins/Symbol/prototype/toString/toString.js strict pass
+built-ins/Symbol/prototype/toString/undefined.js sloppy pass
+built-ins/Symbol/prototype/toString/undefined.js strict pass

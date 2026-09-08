@@ -1,0 +1,33 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/escape tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/escape/argument_bigint.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/argument_bigint.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/argument_types.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/argument_types.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/empty-string.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/empty-string.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/escape-above-astral.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/escape-above-astral.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/escape-above.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/escape-above.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/escape-below.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/escape-below.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/length.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/length.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/name.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/name.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/not-a-constructor.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/not-a-constructor.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+annexB/built-ins/escape/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+annexB/built-ins/escape/to-primitive-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/escape/to-primitive-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/escape/to-primitive-observe.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/to-primitive-observe.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/to-string-err-symbol.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/escape/to-string-err-symbol.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/escape/to-string-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a ReferenceError"
+annexB/built-ins/escape/to-string-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a ReferenceError"
+annexB/built-ins/escape/to-string-observe.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/to-string-observe.js strict skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/unmodified.js sloppy skip:ironhorse-missing-global:escape
+annexB/built-ins/escape/unmodified.js strict skip:ironhorse-missing-global:escape

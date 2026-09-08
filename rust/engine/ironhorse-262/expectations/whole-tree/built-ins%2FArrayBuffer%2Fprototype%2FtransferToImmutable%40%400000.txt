@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/ArrayBuffer/prototype/transferToImmutable tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ArrayBuffer/prototype/transferToImmutable/new-length-coercion.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/new-length-coercion.js strict skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/not-a-constructor.js sloppy skip:shared-test262-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/not-a-constructor.js strict skip:shared-test262-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/prop-desc.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: transferToImmutable should be a function Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/prop-desc.js strict fail:"abort-value-differs: oracle=\"Test262Error: transferToImmutable should be a function Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-has-no-arraybufferdata-internal.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Method must exist. Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-has-no-arraybufferdata-internal.js strict fail:"abort-value-differs: oracle=\"Test262Error: Method must exist. Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-is-not-detachable.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-is-not-detachable.js strict skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-is-not-object.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Method must exist. Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-is-not-object.js strict fail:"abort-value-differs: oracle=\"Test262Error: Method must exist. Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-is-sharedarraybuffer.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Method must exist. Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/this-is-sharedarraybuffer.js strict fail:"abort-value-differs: oracle=\"Test262Error: Method must exist. Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/transferToImmutable/to-larger.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/to-larger.js strict skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/to-same-or-smaller.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/transferToImmutable/to-same-or-smaller.js strict skip:shared-positive-test-failure

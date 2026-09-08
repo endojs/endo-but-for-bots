@@ -1,0 +1,63 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Duration/from tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Duration/from/argument-duration-max.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-duration-max.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-duration-out-of-range.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: string with days > max is out of range Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: string with days > max is out of range Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/from/argument-duration-out-of-range.js strict fail:"abort-value-differs: oracle=\"Test262Error: string with days > max is out of range Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: string with days > max is out of range Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/from/argument-duration-precision-exact-numerical-values.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-duration-precision-exact-numerical-values.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-duration.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-duration.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-existing-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-existing-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-non-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: no argument Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: no argument Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Duration/from/argument-non-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: no argument Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: no argument Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Duration/from/argument-object-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-object-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-propertybag-optional-properties.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-propertybag-optional-properties.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-propertybag.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-propertybag.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/argument-string-fractional-precision.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-string-fractional-precision.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-string-fractional-units-rounding-mode.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-string-fractional-units-rounding-mode.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-string-fractional-with-zero-subparts.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-string-fractional-with-zero-subparts.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-string-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-string-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-string-is-infinity.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-string-is-infinity.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/argument-string-negative-fractional-units.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-string-negative-fractional-units.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/argument-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/blank-duration.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/blank-duration.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/get-property-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: name = years Expected a Test262Error but got a ReferenceError"
+built-ins/Temporal/Duration/from/get-property-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: name = years Expected a Test262Error but got a ReferenceError"
+built-ins/Temporal/Duration/from/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/Duration/from/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/from/invalid-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: name = years, value = Symbol() Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: name = years, value = 0 Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Duration/from/invalid-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: name = years, value = Symbol() Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: name = years, value = 0 Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Duration/from/length.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/lower-limit.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/lower-limit.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/name.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/negative-inifinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/Duration/from/negative-inifinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/from/non-integer-throws-rangeerror.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/non-integer-throws-rangeerror.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/from/order-of-operations.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/order-of-operations.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/from/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/string-with-skipped-units.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/string-with-skipped-units.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/subclassing-ignored.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/from/subclassing-ignored.js strict skip:oracle-host-missing-temporal

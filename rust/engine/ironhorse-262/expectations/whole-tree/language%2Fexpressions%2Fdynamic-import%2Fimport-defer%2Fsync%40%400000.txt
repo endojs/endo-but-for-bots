@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=language/expressions/dynamic-import/import-defer/sync tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/dynamic-import/import-defer/sync/main.js sloppy skip:module:compiler-rejected

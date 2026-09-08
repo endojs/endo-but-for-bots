@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/SharedArrayBuffer/prototype/maxByteLength tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/SharedArrayBuffer/prototype/maxByteLength/invoked-as-accessor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/invoked-as-accessor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/invoked-as-func.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/invoked-as-func.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/prop-desc.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/prop-desc.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/return-maxbytelength-growable.js sloppy skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/maxByteLength/return-maxbytelength-growable.js strict skip:unsupported-opcode:native-call:SharedArrayBuffer:growable
+built-ins/SharedArrayBuffer/prototype/maxByteLength/return-maxbytelength-non-growable.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/return-maxbytelength-non-growable.js strict fail:"ironhorse threw where the oracle completed: TypeError: this: not an ArrayBuffer instance"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/this-has-no-arraybufferdata-internal.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/this-has-no-arraybufferdata-internal.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/this-is-arraybuffer.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/this-is-arraybuffer.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/this-is-not-object.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/SharedArrayBuffer/prototype/maxByteLength/this-is-not-object.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"

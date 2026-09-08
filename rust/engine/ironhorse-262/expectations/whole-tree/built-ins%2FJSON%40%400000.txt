@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/JSON tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/JSON/15.12-0-1.js sloppy pass
+built-ins/JSON/15.12-0-1.js strict pass
+built-ins/JSON/15.12-0-2.js sloppy pass
+built-ins/JSON/15.12-0-2.js strict pass
+built-ins/JSON/15.12-0-3.js sloppy pass
+built-ins/JSON/15.12-0-3.js strict pass
+built-ins/JSON/15.12-0-4.js sloppy pass
+built-ins/JSON/15.12-0-4.js strict pass
+built-ins/JSON/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"JSON\"») to be true"
+built-ins/JSON/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"JSON\"») to be true"
+built-ins/JSON/prop-desc.js sloppy pass
+built-ins/JSON/prop-desc.js strict pass

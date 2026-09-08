@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=language/literals/bigint tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/literals/bigint/binary-invalid-digit.js sloppy pass
+language/literals/bigint/binary-invalid-digit.js strict pass
+language/literals/bigint/exponent-part.js sloppy pass
+language/literals/bigint/exponent-part.js strict pass
+language/literals/bigint/hexadecimal-invalid-digit.js sloppy pass
+language/literals/bigint/hexadecimal-invalid-digit.js strict pass
+language/literals/bigint/legacy-octal-like-invalid-00n.js sloppy pass
+language/literals/bigint/legacy-octal-like-invalid-00n.js strict pass
+language/literals/bigint/legacy-octal-like-invalid-01n.js sloppy pass
+language/literals/bigint/legacy-octal-like-invalid-01n.js strict pass
+language/literals/bigint/legacy-octal-like-invalid-07n.js sloppy pass
+language/literals/bigint/legacy-octal-like-invalid-07n.js strict pass
+language/literals/bigint/mv-is-not-integer-dil-dot-dds.js sloppy pass
+language/literals/bigint/mv-is-not-integer-dil-dot-dds.js strict pass
+language/literals/bigint/mv-is-not-integer-dot-dds.js sloppy pass
+language/literals/bigint/mv-is-not-integer-dot-dds.js strict pass
+language/literals/bigint/non-octal-like-invalid-0008n.js sloppy pass
+language/literals/bigint/non-octal-like-invalid-0008n.js strict pass
+language/literals/bigint/non-octal-like-invalid-012348n.js sloppy pass
+language/literals/bigint/non-octal-like-invalid-012348n.js strict pass
+language/literals/bigint/non-octal-like-invalid-08n.js sloppy pass
+language/literals/bigint/non-octal-like-invalid-08n.js strict pass
+language/literals/bigint/non-octal-like-invalid-09n.js sloppy pass
+language/literals/bigint/non-octal-like-invalid-09n.js strict pass
+language/literals/bigint/octal-invalid-digit.js sloppy pass
+language/literals/bigint/octal-invalid-digit.js strict pass

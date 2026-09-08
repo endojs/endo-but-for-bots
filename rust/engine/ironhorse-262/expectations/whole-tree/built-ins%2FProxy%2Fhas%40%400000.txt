@@ -1,0 +1,44 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/has tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/has/call-in-prototype-index.js sloppy pass
+built-ins/Proxy/has/call-in-prototype-index.js strict pass
+built-ins/Proxy/has/call-in-prototype.js sloppy pass
+built-ins/Proxy/has/call-in-prototype.js strict pass
+built-ins/Proxy/has/call-in.js sloppy pass
+built-ins/Proxy/has/call-in.js strict pass
+built-ins/Proxy/has/call-object-create.js sloppy pass
+built-ins/Proxy/has/call-object-create.js strict pass
+built-ins/Proxy/has/call-with.js sloppy pass
+built-ins/Proxy/has/null-handler-using-with.js sloppy pass
+built-ins/Proxy/has/null-handler.js sloppy pass
+built-ins/Proxy/has/null-handler.js strict pass
+built-ins/Proxy/has/return-false-target-not-extensible-using-with.js sloppy pass
+built-ins/Proxy/has/return-false-target-not-extensible.js sloppy pass
+built-ins/Proxy/has/return-false-target-not-extensible.js strict pass
+built-ins/Proxy/has/return-false-target-prop-exists-using-with.js sloppy pass
+built-ins/Proxy/has/return-false-target-prop-exists.js sloppy pass
+built-ins/Proxy/has/return-false-target-prop-exists.js strict pass
+built-ins/Proxy/has/return-false-targetdesc-not-configurable-using-with.js sloppy pass
+built-ins/Proxy/has/return-false-targetdesc-not-configurable.js sloppy pass
+built-ins/Proxy/has/return-false-targetdesc-not-configurable.js strict pass
+built-ins/Proxy/has/return-is-abrupt-in.js sloppy pass
+built-ins/Proxy/has/return-is-abrupt-in.js strict pass
+built-ins/Proxy/has/return-is-abrupt-with.js sloppy pass
+built-ins/Proxy/has/return-true-target-prop-exists-using-with.js sloppy pass
+built-ins/Proxy/has/return-true-target-prop-exists.js sloppy pass
+built-ins/Proxy/has/return-true-target-prop-exists.js strict pass
+built-ins/Proxy/has/return-true-without-same-target-prop.js sloppy pass
+built-ins/Proxy/has/return-true-without-same-target-prop.js strict pass
+built-ins/Proxy/has/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/has/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/has/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/has/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/has/trap-is-not-callable-using-with.js sloppy pass
+built-ins/Proxy/has/trap-is-not-callable.js sloppy pass
+built-ins/Proxy/has/trap-is-not-callable.js strict pass
+built-ins/Proxy/has/trap-is-null-target-is-proxy.js sloppy pass
+built-ins/Proxy/has/trap-is-null-target-is-proxy.js strict pass
+built-ins/Proxy/has/trap-is-undefined-target-is-proxy.js sloppy pass
+built-ins/Proxy/has/trap-is-undefined-target-is-proxy.js strict pass
+built-ins/Proxy/has/trap-is-undefined-using-with.js sloppy fail:"spurious ReferenceError: ironhorse could not resolve `length` (bound as a global by oracle=false ironhorse=false)"
+built-ins/Proxy/has/trap-is-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
+built-ins/Proxy/has/trap-is-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"

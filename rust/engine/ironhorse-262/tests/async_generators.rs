@@ -98,3 +98,19 @@ fn async_generator_function_prototype_remains_assignable() {
     assert!(run.result_agrees, "{run:?}");
     assert_eq!(run.ironhorse_result, "true");
 }
+
+#[test]
+fn for_await_missing_async_and_sync_iterator_diagnostic() {
+    for sync_method in ["undefined", "null"] {
+        assert_async_signal(
+            &format!(
+                "var g=''; async function* f(){{yield 1}} var i=f(); \
+                 i[Symbol.asyncIterator]=undefined; i[Symbol.iterator]={sync_method}; \
+                 async function consume(){{try{{for await(var x of i){{g+=x}}}} \
+                 catch(e){{g=(e instanceof TypeError)+':'+e.message}}}} \
+                 consume(); undefined"
+            ),
+            "true:call: not a function",
+        );
+    }
+}

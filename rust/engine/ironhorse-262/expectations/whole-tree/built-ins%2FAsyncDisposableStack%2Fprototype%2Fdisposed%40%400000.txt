@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncDisposableStack/prototype/disposed tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncDisposableStack/prototype/disposed/does-not-have-asyncdisposablestate-internal-slot.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/does-not-have-asyncdisposablestate-internal-slot.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/getter.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/getter.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/AsyncDisposableStack/prototype/disposed/returns-false-when-not-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposed/returns-false-when-not-disposed.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposed/returns-true-when-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposed/returns-true-when-disposed.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposed/this-not-object-throw.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposed/this-not-object-throw.js strict pass

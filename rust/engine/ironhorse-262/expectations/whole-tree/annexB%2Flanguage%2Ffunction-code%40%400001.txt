@@ -1,0 +1,60 @@
+# engine=ironhorse features=default corpus=annexB/language/function-code tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/function-code/if-stmt-else-decl-func-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-existing-block-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-existing-block-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-existing-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-existing-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-existing-var-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-existing-var-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-no-skip-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-dft-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for-in.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for-of.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-for.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-early-err.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-skip-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-stmt-else-decl-func-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/switch-case-decl-nostrict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefined») to be true\" ironhorse=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefinedundefined») to be true\""
+annexB/language/function-code/switch-case-func-block-scoping.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-case-func-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-case-func-existing-block-fn-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-case-func-existing-fn-no-init.js sloppy pass
+annexB/language/function-code/switch-case-func-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/function-code/switch-case-func-existing-var-no-init.js sloppy pass
+annexB/language/function-code/switch-case-func-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/function-code/switch-case-func-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-case-func-no-skip-try.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-case-func-skip-dft-param.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-early-err-block.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-early-err-for-in.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-early-err-for-of.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-early-err-for.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-early-err-switch.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-early-err-try.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-early-err.js sloppy pass
+annexB/language/function-code/switch-case-func-skip-param.js sloppy pass
+annexB/language/function-code/switch-case-func-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-dflt-decl-nostrict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefined») to be true\" ironhorse=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefinedundefined») to be true\""
+annexB/language/function-code/switch-dflt-func-block-scoping.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-dflt-func-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-dflt-func-existing-block-fn-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-dflt-func-existing-fn-no-init.js sloppy pass
+annexB/language/function-code/switch-dflt-func-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/function-code/switch-dflt-func-existing-var-no-init.js sloppy pass
+annexB/language/function-code/switch-dflt-func-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/function-code/switch-dflt-func-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-dflt-func-no-skip-try.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/switch-dflt-func-skip-dft-param.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-early-err-block.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-early-err-for-in.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-early-err-for-of.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-early-err-for.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-early-err-switch.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-early-err-try.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-early-err.js sloppy pass
+annexB/language/function-code/switch-dflt-func-skip-param.js sloppy pass
+annexB/language/function-code/switch-dflt-func-update.js sloppy skip:shared-positive-test-failure

@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/NativeErrors/TypeError tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/NativeErrors/TypeError/constructor.js sloppy pass
+built-ins/NativeErrors/TypeError/constructor.js strict pass
+built-ins/NativeErrors/TypeError/instance-proto.js sloppy pass
+built-ins/NativeErrors/TypeError/instance-proto.js strict pass
+built-ins/NativeErrors/TypeError/is-a-constructor.js sloppy pass
+built-ins/NativeErrors/TypeError/is-a-constructor.js strict pass
+built-ins/NativeErrors/TypeError/is-error-object.js sloppy pass
+built-ins/NativeErrors/TypeError/is-error-object.js strict pass
+built-ins/NativeErrors/TypeError/length.js sloppy pass
+built-ins/NativeErrors/TypeError/length.js strict pass
+built-ins/NativeErrors/TypeError/name.js sloppy pass
+built-ins/NativeErrors/TypeError/name.js strict pass
+built-ins/NativeErrors/TypeError/prop-desc.js sloppy pass
+built-ins/NativeErrors/TypeError/prop-desc.js strict pass
+built-ins/NativeErrors/TypeError/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/NativeErrors/TypeError/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/NativeErrors/TypeError/proto.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/NativeErrors/TypeError/proto.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/NativeErrors/TypeError/prototype.js sloppy pass
+built-ins/NativeErrors/TypeError/prototype.js strict pass

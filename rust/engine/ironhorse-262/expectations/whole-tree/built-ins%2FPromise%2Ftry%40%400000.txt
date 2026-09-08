@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/Promise/try tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Promise/try/args.js sloppy skip:async:reported-failure
+built-ins/Promise/try/args.js strict skip:async:reported-failure
+built-ins/Promise/try/ctx-ctor-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a TypeError"
+built-ins/Promise/try/ctx-ctor-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a TypeError"
+built-ins/Promise/try/ctx-ctor.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Promise/try/ctx-ctor.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Promise/try/ctx-non-ctor.js sloppy pass
+built-ins/Promise/try/ctx-non-ctor.js strict pass
+built-ins/Promise/try/ctx-non-object.js sloppy pass
+built-ins/Promise/try/ctx-non-object.js strict pass
+built-ins/Promise/try/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Promise/try/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Promise/try/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Promise/try/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Promise/try/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Promise/try/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Promise/try/promise.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Promise/try/promise.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Promise/try/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: try should be an own property"
+built-ins/Promise/try/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: try should be an own property"
+built-ins/Promise/try/return-value.js sloppy skip:async:reported-failure
+built-ins/Promise/try/return-value.js strict skip:async:reported-failure
+built-ins/Promise/try/throws.js sloppy skip:async:reported-failure
+built-ins/Promise/try/throws.js strict skip:async:reported-failure

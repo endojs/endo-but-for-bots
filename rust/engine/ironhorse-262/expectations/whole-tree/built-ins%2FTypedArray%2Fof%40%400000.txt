@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/of tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/of/invoked-as-func.js sloppy pass
+built-ins/TypedArray/of/invoked-as-func.js strict pass
+built-ins/TypedArray/of/invoked-as-method.js sloppy pass
+built-ins/TypedArray/of/invoked-as-method.js strict pass
+built-ins/TypedArray/of/length.js sloppy pass
+built-ins/TypedArray/of/length.js strict pass
+built-ins/TypedArray/of/name.js sloppy pass
+built-ins/TypedArray/of/name.js strict pass
+built-ins/TypedArray/of/not-a-constructor.js sloppy pass
+built-ins/TypedArray/of/not-a-constructor.js strict pass
+built-ins/TypedArray/of/prop-desc.js sloppy pass
+built-ins/TypedArray/of/prop-desc.js strict pass
+built-ins/TypedArray/of/resized-with-out-of-bounds-and-in-bounds-indices.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/of/resized-with-out-of-bounds-and-in-bounds-indices.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/of/this-is-not-constructor.js sloppy pass
+built-ins/TypedArray/of/this-is-not-constructor.js strict pass

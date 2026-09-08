@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/balance-negative-time-units.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/balance-negative-time-units.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/basic.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/basic.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/limits.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/limits.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/negative-epochnanoseconds.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/negative-epochnanoseconds.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/prop-desc.js strict skip:oracle-host-missing-temporal

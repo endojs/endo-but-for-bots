@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/DateTimeFormat/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DateTimeFormat/prototype/builtin.js sloppy skip:oracle-host-missing-intl
+intl402/DateTimeFormat/prototype/builtin.js strict skip:oracle-host-missing-intl
+intl402/DateTimeFormat/prototype/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/DateTimeFormat/prototype/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/DateTimeFormat/prototype/this-value-datetimeformat-prototype.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.DateTimeFormat's prototype is not an object that has been initialized as an Intl.DateTimeFormat Expected a TypeError but got a ReferenceError"
+intl402/DateTimeFormat/prototype/this-value-datetimeformat-prototype.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Intl.DateTimeFormat's prototype is not an object that has been initialized as an Intl.DateTimeFormat Expected a TypeError but got a ReferenceError"
+intl402/DateTimeFormat/prototype/this-value-not-datetimeformat.js sloppy skip:oracle-host-missing-intl
+intl402/DateTimeFormat/prototype/this-value-not-datetimeformat.js strict skip:oracle-host-missing-intl

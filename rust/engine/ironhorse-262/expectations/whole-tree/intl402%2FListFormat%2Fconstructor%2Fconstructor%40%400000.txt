@@ -1,0 +1,31 @@
+# engine=ironhorse features=default corpus=intl402/ListFormat/constructor/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/ListFormat/constructor/constructor/locales-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a CustomError but got a RangeError\""
+intl402/ListFormat/constructor/constructor/locales-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a CustomError but got a RangeError\""
+intl402/ListFormat/constructor/constructor/locales-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/constructor/locales-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/constructor/newtarget-undefined.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/newtarget-undefined.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-getoptionsobject.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-getoptionsobject.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-invalid.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-invalid.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-localeMatcher-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-localeMatcher-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-order.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-order.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-style-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-style-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-style-valid.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-style-valid.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-throwing-getters.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Exception from type getter should be propagated Expected a CustomError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-throwing-getters.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Exception from type getter should be propagated Expected a CustomError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-type-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid type option value Expected a RangeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-type-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid type option value Expected a RangeError but got a ReferenceError"
+intl402/ListFormat/constructor/constructor/options-type-valid.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-type-valid.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-undefined.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/options-undefined.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/constructor/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+intl402/ListFormat/constructor/constructor/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+intl402/ListFormat/constructor/constructor/subclassing.js sloppy skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/constructor/subclassing.js strict skip:oracle-host-missing-global:Intl

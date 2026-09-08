@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/Error/isError tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Error/isError/bigints.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/bigints.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/error-subclass.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/error-subclass.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/errors-other-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Error/isError/errors-other-realm.js strict skip:shared-positive-test-failure
+built-ins/Error/isError/errors.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/errors.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/fake-errors.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/fake-errors.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/is-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Error/isError/is-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Error/isError/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Error/isError/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Error/isError/non-error-objects-other-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Error/isError/non-error-objects-other-realm.js strict skip:shared-positive-test-failure
+built-ins/Error/isError/non-error-objects.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/non-error-objects.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/primitives.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/primitives.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isError should be an own property"
+built-ins/Error/isError/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isError should be an own property"
+built-ins/Error/isError/symbols.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Error/isError/symbols.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"

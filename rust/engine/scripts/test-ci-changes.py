@@ -32,7 +32,8 @@ class Paths(unittest.TestCase):
 
     def test_oracle_inputs_only_run_oracle(self):
         for path in [b"c/moddable", b"rust/endo/xsnap/xsnap-platform.c",
-                     b".github/workflows/ironhorse-sanitizers.yml"]:
+                     b".github/workflows/ironhorse-sanitizers.yml",
+                     b"packages/test262-runner/test262/test/language/statements/try/catch.js"]:
             self.assertEqual(changes.classify([path]), {"engine": False, "oracle": True})
 
 

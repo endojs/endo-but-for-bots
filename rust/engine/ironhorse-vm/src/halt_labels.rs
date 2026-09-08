@@ -1,16 +1,17 @@
 //! The halt-label registry: the explicit allowlist that decides which
-//! [`Halt::Unsupported`](crate::Halt::Unsupported) labels a differential
+//! [`Halt::NotImplemented`](crate::Halt::NotImplemented) labels a differential
 //! instrument may treat as an honest skip.
 //!
 //! Both differential instruments (the fuzz targets' `differential_check*`
 //! bodies and the test262 runner's verdict arms) compare a run only after
-//! asking how ironhorse halted. A declined surface — an unported opcode,
-//! built-in, or value shape, or a deliberate value-dependent refusal — is
+//! asking how ironhorse halted. NotImplemented names an unported opcode,
+//! built-in, or value shape; Refused names a deliberate policy limit. Both are
 //! uncovered ground, never a finding. That makes the set of skip-eligible
 //! labels the set of executions the engine is excused from being judged on,
 //! so the set lives here, as data the instruments consult through
-//! [`is_declined_label`], rather than in the engine's `return` statements.
-//! An `Unsupported` halt whose label is not registered here is a failure at
+//! [`is_not_implemented_label`] and [`is_refused_label`], rather than in
+//! the engine's `return` statements.
+//! A NotImplemented or Refused halt whose label is not registered here is a failure at
 //! every discard site: the engine cannot widen its own exemption by reaching
 //! for a new string, wherever in the crate (or however indirectly) it is
 //! constructed.
@@ -21,31 +22,16 @@
 
 use crate::opcode::Opcode;
 
-/// Labels the engine may decline with, written as literals at their
-/// construction sites: an unported opcode, built-in, or value shape, or a
-/// deliberate value-dependent refusal. Skip-eligible in every differential
+/// Unported opcodes, built-ins, and value shapes, written as literals at their
+/// construction sites. Skip-eligible in every differential
 /// instrument. Sorted by byte order.
-pub const DECLINED_LABELS: &[&str] = &[
-    "Array.prototype.sort:oversized-array-like",
-    "Array.prototype.toReversed:oversized-array-like",
-    "Array.prototype.toSorted:oversized-array-like",
-    "Array.prototype.toSpliced:oversized-array-like",
-    "Array.prototype.with:oversized-array-like",
-    "BigInt.asN:result-too-large",
-    "Date.toJSON:toISOString-key",
+pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "Date:method",
     "Intl.NumberFormat:formatRange",
     "Iterator.helper",
-    "Iterator.setter:missing-toStringTag",
-    "Iterator:missing-constructor",
     "JSON.parse:lone-surrogate",
     "JSON.parse:lone-surrogate-key",
-    "JSON.stringify:oversized-array",
-    "JSON.stringify:oversized-replacer",
     "Number.toString:fractional-non-decimal-radix",
-    "Object-static:unexpected-proxy",
-    "RegExp.replace:oversized-result",
-    "String.raw:oversized-template",
     "String.replace:non-string-receiver",
     "Temporal.Now:method",
     "Temporal.Plain:difference-calendar",
@@ -66,22 +52,16 @@ pub const DECLINED_LABELS: &[&str] = &[
     "atomics:non-integer-typedarray",
     "atomics:non-typedarray",
     "atomics:op",
-    "atomics:wait-notify",
-    "bigint-shift:result-too-large",
     "bind:new-bound-target",
     "bind:non-user-function-receiver",
     "call:non-user-function-receiver",
     "callback:non-user-function",
-    "collection-constructor:weak-symbol-oracle-version",
     "compartment:dynamic-import",
     "compartment:heap-endowment",
     "concat:isConcatSpreadable-symbol",
-    "concat:oversized-spreadable",
     "concat:sparse-arg",
-    "copyWithin:oversized-array-like",
     "current:program-level",
     "data-view-get:bigint",
-    "data-view-set:bigint",
     "defineProperty:accessor-descriptor",
     "defineProperty:ambiguous-default-key",
     "defineProperty:bad-symbol-key",
@@ -96,17 +76,11 @@ pub const DECLINED_LABELS: &[&str] = &[
     "equal",
     "eval:compiler-unimplemented",
     "eval:no-compiler",
-    "eval:relink",
     "eval:shadowed-call",
-    "exponentiation:result-too-large",
-    "fill:oversized-array-like",
-    "flat:oversized-array-like",
     "for_in:non-object-receiver",
     "for_of:weak-collection",
     "generator:new-target",
     "get_super:no-home",
-    "join:oversized-array-like",
-    "join:oversized-result",
     "join:reference-element",
     "json:unmodeled",
     "module:dynamic-import",
@@ -123,19 +97,10 @@ pub const DECLINED_LABELS: &[&str] = &[
     "native-call:TypedArray:from-array-like",
     "number:unmodeled",
     "opcode:no-code",
-    "ordinary-ownKeys:unknown-key",
     "private:missing-brand",
-    "property-key:id-space-exhausted",
     "proxy:construct-nonuser-target",
     "reduce:concurrent-mutation",
-    "reduce:empty-no-initial",
-    "reverse:oversized-array-like",
     "set_super:no-home",
-    "shift:oversized-array-like",
-    "slice:oversized-array-like",
-    "splice:oversized-delete",
-    "splice:oversized-delete-tail",
-    "splice:oversized-move",
     "string-method:unmodeled",
     "super_at:key",
     "super_at:no-home",
@@ -147,14 +112,47 @@ pub const DECLINED_LABELS: &[&str] = &[
     "to_string:symbol",
     "typed-array-set:bigint",
     "typed-array-species:symbol",
+];
+
+/// Deliberate size, key-space, agent-model, or oracle-version policy limits.
+/// These operations are recognized but refused under the current execution profile.
+pub const REFUSED_LABELS: &[&str] = &[
+    "Array.prototype.sort:oversized-array-like",
+    "Array.prototype.toReversed:oversized-array-like",
+    "Array.prototype.toSorted:oversized-array-like",
+    "Array.prototype.toSpliced:oversized-array-like",
+    "Array.prototype.with:oversized-array-like",
+    "BigInt.asN:result-too-large",
+    "JSON.stringify:oversized-array",
+    "JSON.stringify:oversized-replacer",
+    "RegExp.replace:oversized-result",
+    "String.prototype.pad:result-too-large",
+    "String.raw:oversized-template",
+    "atomics:wait-notify",
+    "bigint-shift:result-too-large",
+    "collection-constructor:weak-symbol-oracle-version",
+    "concat:oversized-spreadable",
+    "copyWithin:oversized-array-like",
+    "exponentiation:result-too-large",
+    "fill:oversized-array-like",
+    "flat:oversized-array-like",
+    "join:oversized-array-like",
+    "join:oversized-result",
+    "property-key:id-space-exhausted",
+    "reverse:oversized-array-like",
+    "shift:oversized-array-like",
+    "slice:oversized-array-like",
+    "splice:oversized-delete",
+    "splice:oversized-delete-tail",
+    "splice:oversized-move",
     "unshift:oversized-array-like",
 ];
 
 /// The declined labels produced by the two label-returning helpers the
-/// dynamic `Halt::Unsupported(…)` sites route through
+/// dynamic `Halt::NotImplemented(…)` sites route through
 /// (`native_unsupported_name`, `array_generic_skip_reason`). Sorted by byte
 /// order.
-pub const DECLINED_HELPER_LABELS: &[&str] = &[
+pub const NOT_IMPLEMENTED_HELPER_LABELS: &[&str] = &[
     "array:non-dense-array",
     "at:non-dense-array",
     "filter:non-dense-array",
@@ -224,6 +222,10 @@ pub const DECLINED_HELPER_LABELS: &[&str] = &[
 /// Labels of the interpreter's own invariant guards: the engine reporting
 /// that its state is wrong. Never skip-eligible. Sorted by byte order.
 pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
+    "Date.toJSON:toISOString-key",
+    "Iterator.setter:missing-toStringTag",
+    "Iterator:missing-constructor",
+    "Object-static:unexpected-proxy",
     "Reflect:unexpected",
     "add:stack-underflow",
     "apply:unexpected",
@@ -242,16 +244,21 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "at:stack-underflow",
     "await:no-async-instance",
     "await:stack-underflow",
+    "bigint:missing-binary-result",
     "bind:bound-callback",
     "bitwise:stack-underflow",
     "call:stack-underflow",
     "call:unexpected",
     "class:invalid-stack",
+    "collection:missing-method-brand",
+    "collection:unexpected-method",
     "comparison:stack-underflow",
     "delete_property_at:key",
+    "dispatch:control-transfer-escaped",
     "dub_at:stack-underflow",
     "end:frame-underflow",
     "eval:frame-underflow",
+    "eval:relink",
     "exponentiation:stack-underflow",
     "function:missing-segment",
     "generator:no-frame",
@@ -260,18 +267,26 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "get_property_at:key",
     "get_super_at:key",
     "get_super_at:reference",
+    "group-by:invalid-key-kind",
+    "group-by:invalid-string-iterator",
+    "group-by:invalid-string-key",
+    "group-by:invalid-symbol-key",
     "in:proxy-key",
     "increment:non-numeric-result",
     "increment:stack-underflow",
+    "map-get-or-insert:unexpected-method",
     "module:envelope-shape",
     "module:envelope-stack",
     "module:transfer-record",
     "module:transfer-shape",
     "module:transfer-stack",
     "native-try:resume-escaped-fence",
+    "ordinary-ownKeys:unknown-key",
     "promise:resolving-fn-unexpected",
     "promise:settle-non-promise",
     "promise:unknown-finally-function",
+    "return:non-program-frame",
+    "set-method:unexpected-method",
     "set_property_at:key",
     "set_super_at:key",
     "set_super_at:reference",
@@ -313,15 +328,19 @@ fn is_opcode_mnemonic(label: &str) -> bool {
     mnemonics.binary_search(&label).is_ok()
 }
 
-/// Is `label` a registered declined surface — one the differential
-/// instruments may treat as an honest skip? True for the literal labels, the
+/// Is `label` a registered missing implementation? True for the literal labels, the
 /// two helpers' labels, and any opcode mnemonic. Every other label, including
-/// every [`ENGINE_INVARIANT_LABELS`] entry, is not: an `Unsupported` halt that
+/// every [`ENGINE_INVARIANT_LABELS`] entry, is not: a NotImplemented or Refused halt that
 /// carries it is a finding, not a skip.
-pub fn is_declined_label(label: &str) -> bool {
-    DECLINED_LABELS.binary_search(&label).is_ok()
-        || DECLINED_HELPER_LABELS.binary_search(&label).is_ok()
+pub fn is_not_implemented_label(label: &str) -> bool {
+    NOT_IMPLEMENTED_LABELS.binary_search(&label).is_ok()
+        || NOT_IMPLEMENTED_HELPER_LABELS.binary_search(&label).is_ok()
         || is_opcode_mnemonic(label)
+}
+
+/// Is this an explicitly registered execution-policy refusal?
+pub fn is_refused_label(label: &str) -> bool {
+    REFUSED_LABELS.binary_search(&label).is_ok()
 }
 
 /// Is `label` a registered engine-invariant guard?
@@ -332,6 +351,10 @@ pub fn is_engine_invariant_label(label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn is_declined_label(label: &str) -> bool {
+        is_not_implemented_label(label) || is_refused_label(label)
+    }
 
     fn assert_sorted_and_distinct(name: &str, list: &[&str]) {
         for w in list.windows(2) {
@@ -347,9 +370,16 @@ mod tests {
 
     #[test]
     fn lists_are_sorted_for_binary_search() {
-        assert_sorted_and_distinct("DECLINED_LABELS", DECLINED_LABELS);
-        assert_sorted_and_distinct("DECLINED_HELPER_LABELS", DECLINED_HELPER_LABELS);
+        assert_sorted_and_distinct("NOT_IMPLEMENTED_LABELS", NOT_IMPLEMENTED_LABELS);
+        assert_sorted_and_distinct(
+            "NOT_IMPLEMENTED_HELPER_LABELS",
+            NOT_IMPLEMENTED_HELPER_LABELS,
+        );
         assert_sorted_and_distinct("ENGINE_INVARIANT_LABELS", ENGINE_INVARIANT_LABELS);
+        assert_sorted_and_distinct("REFUSED_LABELS", REFUSED_LABELS);
+        for label in REFUSED_LABELS {
+            assert!(!is_not_implemented_label(label));
+        }
     }
 
     #[test]

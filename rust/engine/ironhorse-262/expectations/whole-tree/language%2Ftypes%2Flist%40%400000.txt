@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=language/types/list tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/types/list/S8.8_A2_T1.js sloppy pass
+language/types/list/S8.8_A2_T1.js strict pass
+language/types/list/S8.8_A2_T2.js sloppy pass
+language/types/list/S8.8_A2_T2.js strict pass
+language/types/list/S8.8_A2_T3.js sloppy pass
+language/types/list/S8.8_A2_T3.js strict pass

@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncIteratorPrototype/Symbol.asyncDispose tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/invokes-return.js sloppy skip:async:reported-failure
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/invokes-return.js strict skip:async:reported-failure
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/is-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/is-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.asyncDispose) should be an own property"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.asyncDispose) should be an own property"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/return-val.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/return-val.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-rejected-return.js sloppy skip:async:reported-failure
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-rejected-return.js strict skip:async:reported-failure
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-return-getter.js sloppy skip:async:reported-failure
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-return-getter.js strict skip:async:reported-failure
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-return.js sloppy skip:async:reported-failure
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/throw-return.js strict skip:async:reported-failure

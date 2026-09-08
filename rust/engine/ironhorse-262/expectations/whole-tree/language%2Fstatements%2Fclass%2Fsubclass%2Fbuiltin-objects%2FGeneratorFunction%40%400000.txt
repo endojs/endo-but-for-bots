@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/GeneratorFunction tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/GeneratorFunction/instance-length.js sloppy pass
+language/statements/class/subclass/builtin-objects/GeneratorFunction/instance-length.js strict pass
+language/statements/class/subclass/builtin-objects/GeneratorFunction/instance-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/GeneratorFunction/instance-name.js strict pass
+language/statements/class/subclass/builtin-objects/GeneratorFunction/instance-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleantrue», «booleanfalse») to be true"
+language/statements/class/subclass/builtin-objects/GeneratorFunction/instance-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleantrue», «booleanfalse») to be true"
+language/statements/class/subclass/builtin-objects/GeneratorFunction/regular-subclassing.js sloppy pass
+language/statements/class/subclass/builtin-objects/GeneratorFunction/regular-subclassing.js strict pass
+language/statements/class/subclass/builtin-objects/GeneratorFunction/super-must-be-called.js sloppy pass
+language/statements/class/subclass/builtin-objects/GeneratorFunction/super-must-be-called.js strict pass

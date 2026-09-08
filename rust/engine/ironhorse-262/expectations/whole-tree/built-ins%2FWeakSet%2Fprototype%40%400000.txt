@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/WeakSet/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/WeakSet/prototype/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"WeakSet\"») to be true"
+built-ins/WeakSet/prototype/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"WeakSet\"») to be true"
+built-ins/WeakSet/prototype/prototype-attributes.js sloppy pass
+built-ins/WeakSet/prototype/prototype-attributes.js strict pass

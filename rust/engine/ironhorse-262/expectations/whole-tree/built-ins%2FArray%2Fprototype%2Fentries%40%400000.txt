@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/entries tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/entries/iteration-mutable.js sloppy pass
+built-ins/Array/prototype/entries/iteration-mutable.js strict pass
+built-ins/Array/prototype/entries/iteration.js sloppy pass
+built-ins/Array/prototype/entries/iteration.js strict pass
+built-ins/Array/prototype/entries/length.js sloppy pass
+built-ins/Array/prototype/entries/length.js strict pass
+built-ins/Array/prototype/entries/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be entries; name value should be entries"
+built-ins/Array/prototype/entries/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be entries; name value should be entries"
+built-ins/Array/prototype/entries/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/entries/not-a-constructor.js strict pass
+built-ins/Array/prototype/entries/prop-desc.js sloppy pass
+built-ins/Array/prototype/entries/prop-desc.js strict pass
+built-ins/Array/prototype/entries/resizable-buffer-grow-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/entries/resizable-buffer-grow-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/entries/resizable-buffer-shrink-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/entries/resizable-buffer-shrink-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/entries/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/entries/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/entries/return-abrupt-from-this.js sloppy pass
+built-ins/Array/prototype/entries/return-abrupt-from-this.js strict pass
+built-ins/Array/prototype/entries/returns-iterator-from-object.js sloppy pass
+built-ins/Array/prototype/entries/returns-iterator-from-object.js strict pass
+built-ins/Array/prototype/entries/returns-iterator.js sloppy pass
+built-ins/Array/prototype/entries/returns-iterator.js strict pass

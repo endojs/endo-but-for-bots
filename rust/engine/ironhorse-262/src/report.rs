@@ -97,6 +97,8 @@ pub enum Category {
     /// Ironhorse did not implement the feature/opcode/surface the case reached
     /// — a genuine language-implementation gap (the actionable backlog).
     Unsupported,
+    /// A supported operation rejected by the execution profile or resource limits.
+    Refused,
     /// Declared or structural skip the run never attempted (a `feature:` on the
     /// skip list or a host shape such as multi-agent blocking). Note that the
     /// SES lockdown/compartment modes are *engine gaps* classed as
@@ -115,6 +117,7 @@ impl Category {
             Category::Covered => "covered",
             Category::IronhorseFailure => "ironhorse-failure",
             Category::Unsupported => "unsupported",
+            Category::Refused => "refused",
             Category::Skipped => "skipped",
             Category::Infrastructure => "infrastructure",
         }
@@ -122,11 +125,12 @@ impl Category {
 
     /// The categories in report order (covered first, then the failure the bar
     /// forbids, then the coverage gap, then the honest skips, then infra).
-    pub fn all() -> [Category; 5] {
+    pub fn all() -> [Category; 6] {
         [
             Category::Covered,
             Category::IronhorseFailure,
             Category::Unsupported,
+            Category::Refused,
             Category::Skipped,
             Category::Infrastructure,
         ]
@@ -173,7 +177,9 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
             }
         }
         Verdict::RunSkip => {
-            if reason == "oracle-host-missing-intl"
+            if reason.starts_with("refused:") {
+                return Category::Refused;
+            } else if reason == "oracle-host-missing-intl"
                 || reason == "oracle-host-missing-temporal"
                 || reason.starts_with("oracle-host-missing-global:")
             {
@@ -197,15 +203,19 @@ pub fn classify(outcome: Verdict, reason: &str) -> Category {
                 || reason.starts_with("non-primitive-completion")
                 || reason.starts_with("builtin-coercion-computron-gap")
                 || reason.starts_with("abort-value-differs")
+                || reason.starts_with("error-message-differs:")
                 || reason.starts_with("ironhorse-aborted")
                 || reason.starts_with("ironhorse-missing-global:")
                 || reason.starts_with("negative-")
                 || reason.starts_with("async:")
                 || reason == "shared-test262-failure"
+                || reason == "shared-positive-test-failure"
                 || reason.starts_with("compiler-unimplemented:")
             {
                 // unsupported-opcode:*, parse-or-decode, non-primitive-completion,
                 // builtin-coercion-computron-gap, abort-value-differs,
+                // error-message-differs:<constructor> (legacy skip reports;
+                // current thrown-value mismatches use Verdict::Fail),
                 // ironhorse-aborted*, ironhorse-missing-global:* (a host
                 // intrinsic the port has not landed), negative-*:pending-compiler,
                 // negative-type-unmatched:*, async:*, and
@@ -345,6 +355,7 @@ pub struct CategoryCounts {
     pub covered: usize,
     pub ironhorse_failure: usize,
     pub unsupported: usize,
+    pub refused: usize,
     pub skipped: usize,
     pub infrastructure: usize,
 }
@@ -355,6 +366,7 @@ impl CategoryCounts {
             Category::Covered => self.covered += 1,
             Category::IronhorseFailure => self.ironhorse_failure += 1,
             Category::Unsupported => self.unsupported += 1,
+            Category::Refused => self.refused += 1,
             Category::Skipped => self.skipped += 1,
             Category::Infrastructure => self.infrastructure += 1,
         }
@@ -364,6 +376,7 @@ impl CategoryCounts {
         self.covered
             + self.ironhorse_failure
             + self.unsupported
+            + self.refused
             + self.skipped
             + self.infrastructure
     }
@@ -373,6 +386,7 @@ impl CategoryCounts {
             Category::Covered => self.covered,
             Category::IronhorseFailure => self.ironhorse_failure,
             Category::Unsupported => self.unsupported,
+            Category::Refused => self.refused,
             Category::Skipped => self.skipped,
             Category::Infrastructure => self.infrastructure,
         }
@@ -1139,6 +1153,7 @@ pub fn to_html(report: &RunReport) -> String {
         ("Covered", counts.covered, "covered"),
         ("Ironhorse failures", counts.ironhorse_failure, "fail"),
         ("Unsupported", counts.unsupported, "unsupported"),
+        ("Refused", counts.refused, "refused"),
         ("Skipped", counts.skipped, "skipped"),
         ("Infrastructure", counts.infrastructure, "infra"),
     ];
@@ -1158,7 +1173,7 @@ pub fn to_html(report: &RunReport) -> String {
         "ran end-to-end with the oracle gate disabled"
     };
     s.push_str(&format!(
-        "<p class=\"note\">&ldquo;Covered&rdquo; = {}. &ldquo;Ironhorse failures&rdquo; are bar-forbidden divergences/over-acceptances. &ldquo;Unsupported&rdquo; are genuine language gaps (the actionable backlog). &ldquo;Infrastructure&rdquo; are oracle/harness non-results, <strong>not</strong> Ironhorse gaps. Totals sum to {} cases.</p>\n",
+        "<p class=\"note\">&ldquo;Covered&rdquo; = {}. &ldquo;Ironhorse failures&rdquo; are bar-forbidden divergences/over-acceptances. &ldquo;Unsupported&rdquo; are genuine language gaps (the actionable backlog). &ldquo;Refused&rdquo; are explicit execution-profile limits. &ldquo;Infrastructure&rdquo; are oracle/harness non-results, <strong>not</strong> Ironhorse gaps. Totals sum to {} cases.</p>\n",
         covered_definition, total
     ));
     s.push_str("</section>\n");
@@ -1227,6 +1242,8 @@ pub fn to_html(report: &RunReport) -> String {
     // Unsupported reasons (named, with samples).
     s.push_str("<section aria-labelledby=\"unsupported\">\n<h2 id=\"unsupported\">Unsupported reasons (language gaps)</h2>\n");
     s.push_str(&reason_table(&report.reasons(Category::Unsupported, 3)));
+    s.push_str("</section>\n<section aria-labelledby=\"refused\">\n<h2 id=\"refused\">Refused reasons (execution profile limits)</h2>\n");
+    s.push_str(&reason_table(&report.reasons(Category::Refused, 3)));
     s.push_str("</section>\n");
 
     // Pre-skip reasons (declared/structural).
@@ -1247,19 +1264,20 @@ pub fn to_html(report: &RunReport) -> String {
 fn category_table(map: &BTreeMap<String, CategoryCounts>) -> String {
     let mut s = String::new();
     s.push_str("<table>\n<thead><tr>");
-    s.push_str("<th scope=\"col\">Key</th><th scope=\"col\">Total</th><th scope=\"col\">Covered</th><th scope=\"col\">Failures</th><th scope=\"col\">Unsupported</th><th scope=\"col\">Skipped</th><th scope=\"col\">Infra</th>");
+    s.push_str("<th scope=\"col\">Key</th><th scope=\"col\">Total</th><th scope=\"col\">Covered</th><th scope=\"col\">Failures</th><th scope=\"col\">Unsupported</th><th scope=\"col\">Refused</th><th scope=\"col\">Skipped</th><th scope=\"col\">Infra</th>");
     s.push_str("</tr></thead>\n<tbody>\n");
     // Sort rows by total descending for readability, ties by key.
     let mut rows: Vec<(&String, &CategoryCounts)> = map.iter().collect();
     rows.sort_by(|a, b| b.1.total().cmp(&a.1.total()).then(a.0.cmp(b.0)));
     for (key, counts) in rows {
         s.push_str(&format!(
-            "<tr><th scope=\"row\" class=\"path\">{}</th><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td></tr>\n",
+            "<tr><th scope=\"row\" class=\"path\">{}</th><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td></tr>\n",
             escape_html(key),
             counts.total(),
             counts.covered,
             counts.ironhorse_failure,
             counts.unsupported,
+            counts.refused,
             counts.skipped,
             counts.infrastructure,
         ));
@@ -1334,7 +1352,7 @@ ul.cards { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wr
 .card .pct { font-size: .8rem; color: var(--muted); }
 .card.covered { border-left-color: var(--covered); }
 .card.fail { border-left-color: var(--fail); }
-.card.unsupported { border-left-color: var(--unsupported); }
+.card.unsupported, .card.refused { border-left-color: var(--unsupported); }
 .card.skipped { border-left-color: var(--skipped); }
 .card.infra { border-left-color: var(--infra); }
 table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; font-size: .92rem; }
@@ -1497,6 +1515,102 @@ mod tests {
         assert_eq!(back[0].path, "a/b.js");
         assert_eq!(back[0].features, vec!["Symbol".to_string()]);
         assert_eq!(back[1].outcome, Verdict::Fail);
+    }
+
+    #[test]
+    fn refusals_have_distinct_counts_wire_category_and_html() {
+        let reason = "refused:property-key:id-space-exhausted";
+        assert_eq!(classify(Verdict::RunSkip, reason), Category::Refused);
+        assert_eq!(
+            classify(Verdict::RunSkip, &format!("strict:{reason}")),
+            Category::Refused
+        );
+        let report = RunReport {
+            provenance: Provenance::default(),
+            cases: vec![rec("language/a.js", Verdict::RunSkip, reason, &[])],
+        };
+        let counts = report.totals_by_category();
+        assert_eq!(counts.refused, 1);
+        assert_eq!(counts.unsupported, 0);
+        assert_eq!(counts.total(), 1);
+        let json = report.to_json();
+        assert!(json.contains("\"refused\""));
+        let back = read_cases_from_str(&json);
+        assert_eq!(back[0].reason, reason);
+        assert_eq!(back[0].category(), Category::Refused);
+        let html = to_html(&report);
+        assert!(html.contains("Refused reasons (execution profile limits)"));
+        assert!(html.contains(reason));
+    }
+
+    #[test]
+    fn error_message_failures_are_counted_by_constructor_and_source_path() {
+        let report = RunReport {
+            provenance: Provenance::default(),
+            cases: vec![
+                rec(
+                    "language/call/a.js",
+                    Verdict::Fail,
+                    "error-message-differs:TypeError: oracle=\"TypeError: expected\" ironhorse=\"TypeError: actual\"",
+                    &[],
+                ),
+                rec(
+                    "language/call/b.js",
+                    Verdict::Fail,
+                    "error-message-differs:TypeError: oracle=\"TypeError: expected\" ironhorse=\"TypeError: actual\"",
+                    &[],
+                ),
+                rec(
+                    "built-ins/Array/c.js",
+                    Verdict::Fail,
+                    "error-message-differs:RangeError: oracle=\"RangeError: expected\" ironhorse=\"RangeError: actual\"",
+                    &[],
+                ),
+                rec(
+                    "language/throw/d.js",
+                    Verdict::Fail,
+                    "abort-value-differs: oracle=\"first\" ironhorse=\"second\"",
+                    &[],
+                ),
+            ],
+        };
+        assert_eq!(report.totals_by_category().ironhorse_failure, 4);
+        assert_eq!(report.by_path(2)["language/call"].ironhorse_failure, 2);
+        let reasons = report.reasons(Category::IronhorseFailure, usize::MAX);
+        assert_eq!(
+            reasons,
+            vec![
+                (
+                    "error-message-differs:TypeError: oracle=\"TypeError: expected\" ironhorse=\"TypeError: actual\"".into(),
+                    2,
+                    vec!["language/call/a.js".into(), "language/call/b.js".into()]
+                ),
+                (
+                    "abort-value-differs: oracle=\"first\" ironhorse=\"second\"".into(),
+                    1,
+                    vec!["language/throw/d.js".into()]
+                ),
+                (
+                    "error-message-differs:RangeError: oracle=\"RangeError: expected\" ironhorse=\"RangeError: actual\"".into(),
+                    1,
+                    vec!["built-ins/Array/c.js".into()]
+                ),
+            ]
+        );
+        // The machine-readable report retains every source location, and the
+        // human report shows both the constructor counts and concrete cases.
+        let decoded = read_cases_from_str(&RunReport::batch_json(&report.cases));
+        assert_eq!(decoded.len(), 4);
+        for case in &report.cases {
+            assert!(decoded.contains(case));
+        }
+        let html = to_html(&report);
+        assert!(html.contains("error-message-differs:TypeError"));
+        assert!(html.contains("language/call/a.js"));
+        assert_eq!(
+            classify(Verdict::Fail, "strict:error-message-differs:TypeError: oracle=\"TypeError: expected\" ironhorse=\"TypeError: actual\""),
+            Category::IronhorseFailure
+        );
     }
 
     #[test]

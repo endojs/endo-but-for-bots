@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/SharedArrayBuffer/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/SharedArrayBuffer/prototype/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"SharedArrayBuffer\"») to be true"
+built-ins/SharedArrayBuffer/prototype/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"SharedArrayBuffer\"») to be true"
+built-ins/SharedArrayBuffer/prototype/constructor.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/constructor.js strict pass
+built-ins/SharedArrayBuffer/prototype/prop-desc.js sloppy pass
+built-ins/SharedArrayBuffer/prototype/prop-desc.js strict pass

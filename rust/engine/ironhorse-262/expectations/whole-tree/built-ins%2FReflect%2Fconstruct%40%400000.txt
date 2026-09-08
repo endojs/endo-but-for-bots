@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect/construct tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/construct/arguments-list-is-not-array-like.js sloppy pass
+built-ins/Reflect/construct/arguments-list-is-not-array-like.js strict pass
+built-ins/Reflect/construct/construct.js sloppy pass
+built-ins/Reflect/construct/construct.js strict pass
+built-ins/Reflect/construct/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/construct/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/construct/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be construct; name value should be construct"
+built-ins/Reflect/construct/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be construct; name value should be construct"
+built-ins/Reflect/construct/newtarget-is-not-constructor-throws.js sloppy pass
+built-ins/Reflect/construct/newtarget-is-not-constructor-throws.js strict pass
+built-ins/Reflect/construct/not-a-constructor.js sloppy pass
+built-ins/Reflect/construct/not-a-constructor.js strict pass
+built-ins/Reflect/construct/return-with-newtarget-argument.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«[object Object]», «») to be true"
+built-ins/Reflect/construct/return-with-newtarget-argument.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«[object Object]», «») to be true"
+built-ins/Reflect/construct/return-without-newtarget-argument.js sloppy pass
+built-ins/Reflect/construct/return-without-newtarget-argument.js strict pass
+built-ins/Reflect/construct/target-is-not-constructor-throws.js sloppy pass
+built-ins/Reflect/construct/target-is-not-constructor-throws.js strict pass
+built-ins/Reflect/construct/use-arguments-list.js sloppy pass
+built-ins/Reflect/construct/use-arguments-list.js strict pass

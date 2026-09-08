@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/RegExp tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/RegExp/RegExp-control-escape-russian-letter.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/RegExp/RegExp-control-escape-russian-letter.js strict skip:shared-positive-test-failure
+annexB/built-ins/RegExp/RegExp-decimal-escape-class-range.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [\\\\d][\\\\12-\\\\14 invalid range\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/RegExp-decimal-escape-class-range.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [\\\\d][\\\\12-\\\\14 invalid range\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/RegExp-decimal-escape-not-capturing.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\b(\\\\w+) \\\\2\\\\b invalid reference number \\\\2\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/RegExp-decimal-escape-not-capturing.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\b(\\\\w+) \\\\2\\\\b invalid reference number \\\\2\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/RegExp-invalid-control-escape-character-class-range.js sloppy pass
+annexB/built-ins/RegExp/RegExp-invalid-control-escape-character-class-range.js strict pass
+annexB/built-ins/RegExp/RegExp-invalid-control-escape-character-class.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid regular expression: [\\\\c�� invalid escape\" ironhorse=\"SyntaxError: invalid regular expression: [\\\\c invalid escape\""
+annexB/built-ins/RegExp/RegExp-invalid-control-escape-character-class.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid regular expression: [\\\\c�� invalid escape\" ironhorse=\"SyntaxError: invalid regular expression: [\\\\c invalid escape\""
+annexB/built-ins/RegExp/RegExp-leading-escape-BMP.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError: line 1: invalid regular expression\""
+annexB/built-ins/RegExp/RegExp-leading-escape-BMP.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError: line 1: invalid regular expression\""
+annexB/built-ins/RegExp/RegExp-leading-escape.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/RegExp-leading-escape.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/RegExp-trailing-escape-BMP.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: a\\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError: line 1: invalid regular expression\""
+annexB/built-ins/RegExp/RegExp-trailing-escape-BMP.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: a\\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError: line 1: invalid regular expression\""
+annexB/built-ins/RegExp/RegExp-trailing-escape.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: a\\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/RegExp-trailing-escape.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: a\\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError\""
+annexB/built-ins/RegExp/incomplete_hex_unicode_escape.js sloppy pass
+annexB/built-ins/RegExp/incomplete_hex_unicode_escape.js strict pass

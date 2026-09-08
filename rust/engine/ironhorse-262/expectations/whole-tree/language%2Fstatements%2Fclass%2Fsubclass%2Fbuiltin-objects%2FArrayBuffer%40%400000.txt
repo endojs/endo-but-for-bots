@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/ArrayBuffer tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+language/statements/class/subclass/builtin-objects/ArrayBuffer/super-must-be-called.js sloppy pass
+language/statements/class/subclass/builtin-objects/ArrayBuffer/super-must-be-called.js strict pass

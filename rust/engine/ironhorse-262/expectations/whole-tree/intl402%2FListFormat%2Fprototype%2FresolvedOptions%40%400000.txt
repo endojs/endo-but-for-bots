@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=intl402/ListFormat/prototype/resolvedOptions tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/ListFormat/prototype/resolvedOptions/branding.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/branding.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/caching.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/caching.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/length.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/length.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/name.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/name.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/order.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/order.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/type.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/prototype/resolvedOptions/type.js strict skip:oracle-host-missing-intl

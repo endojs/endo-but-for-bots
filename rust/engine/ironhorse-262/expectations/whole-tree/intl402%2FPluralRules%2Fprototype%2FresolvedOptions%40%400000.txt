@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=intl402/PluralRules/prototype/resolvedOptions tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/PluralRules/prototype/resolvedOptions/builtins.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/builtins.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/length.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/length.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/name.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/name.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/order.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/order.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/plural-categories-order.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/plural-categories-order.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/pluralCategories.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/pluralCategories.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/properties.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/properties.js strict skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/return-keys-order-default.js sloppy skip:oracle-host-missing-intl
+intl402/PluralRules/prototype/resolvedOptions/return-keys-order-default.js strict skip:oracle-host-missing-intl

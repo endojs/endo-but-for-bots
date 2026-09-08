@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/WeakSet/prototype/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/WeakSet/prototype/constructor/weakset-prototype-constructor-intrinsic.js sloppy pass
+built-ins/WeakSet/prototype/constructor/weakset-prototype-constructor-intrinsic.js strict pass
+built-ins/WeakSet/prototype/constructor/weakset-prototype-constructor.js sloppy pass
+built-ins/WeakSet/prototype/constructor/weakset-prototype-constructor.js strict pass

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/FallbackSymbol tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/FallbackSymbol/description.js sloppy skip:oracle-host-missing-global:Intl
+intl402/FallbackSymbol/description.js strict skip:oracle-host-missing-global:Intl
+intl402/FallbackSymbol/per-realm.js sloppy skip:oracle-host-missing-global:Intl
+intl402/FallbackSymbol/per-realm.js strict skip:oracle-host-missing-global:Intl

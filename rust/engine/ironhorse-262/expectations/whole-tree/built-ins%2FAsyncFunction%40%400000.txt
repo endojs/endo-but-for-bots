@@ -1,0 +1,37 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncFunction tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncFunction/AsyncFunction-construct.js sloppy pass
+built-ins/AsyncFunction/AsyncFunction-construct.js strict pass
+built-ins/AsyncFunction/AsyncFunction-is-extensible.js sloppy pass
+built-ins/AsyncFunction/AsyncFunction-is-extensible.js strict pass
+built-ins/AsyncFunction/AsyncFunction-is-subclass.js sloppy pass
+built-ins/AsyncFunction/AsyncFunction-is-subclass.js strict pass
+built-ins/AsyncFunction/AsyncFunction-length.js sloppy pass
+built-ins/AsyncFunction/AsyncFunction-length.js strict pass
+built-ins/AsyncFunction/AsyncFunction-name.js sloppy pass
+built-ins/AsyncFunction/AsyncFunction-name.js strict pass
+built-ins/AsyncFunction/AsyncFunction-prototype.js sloppy pass
+built-ins/AsyncFunction/AsyncFunction-prototype.js strict pass
+built-ins/AsyncFunction/AsyncFunction.js sloppy pass
+built-ins/AsyncFunction/AsyncFunction.js strict pass
+built-ins/AsyncFunction/AsyncFunctionPrototype-is-extensible.js sloppy pass
+built-ins/AsyncFunction/AsyncFunctionPrototype-is-extensible.js strict pass
+built-ins/AsyncFunction/AsyncFunctionPrototype-is-not-callable.js sloppy pass
+built-ins/AsyncFunction/AsyncFunctionPrototype-is-not-callable.js strict pass
+built-ins/AsyncFunction/AsyncFunctionPrototype-prototype.js sloppy pass
+built-ins/AsyncFunction/AsyncFunctionPrototype-prototype.js strict pass
+built-ins/AsyncFunction/AsyncFunctionPrototype-to-string.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"AsyncFunction\"») to be true"
+built-ins/AsyncFunction/AsyncFunctionPrototype-to-string.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «string\"AsyncFunction\"») to be true"
+built-ins/AsyncFunction/instance-construct-throws.js sloppy skip:unsupported-opcode:async:new-target
+built-ins/AsyncFunction/instance-construct-throws.js strict skip:unsupported-opcode:async:new-target
+built-ins/AsyncFunction/instance-has-name.js sloppy pass
+built-ins/AsyncFunction/instance-has-name.js strict pass
+built-ins/AsyncFunction/instance-length.js sloppy pass
+built-ins/AsyncFunction/instance-length.js strict pass
+built-ins/AsyncFunction/instance-prototype-property.js sloppy pass
+built-ins/AsyncFunction/instance-prototype-property.js strict pass
+built-ins/AsyncFunction/is-a-constructor.js sloppy skip:unsupported-opcode:Iterator.helper
+built-ins/AsyncFunction/is-a-constructor.js strict skip:unsupported-opcode:Iterator.helper
+built-ins/AsyncFunction/is-not-a-global.js sloppy pass
+built-ins/AsyncFunction/is-not-a-global.js strict pass
+built-ins/AsyncFunction/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/AsyncFunction/proto-from-ctor-realm.js strict skip:shared-positive-test-failure

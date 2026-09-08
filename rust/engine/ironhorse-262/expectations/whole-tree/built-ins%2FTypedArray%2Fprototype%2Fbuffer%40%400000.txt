@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/buffer tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/buffer/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/buffer/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/buffer/invoked-as-accessor.js sloppy pass
+built-ins/TypedArray/prototype/buffer/invoked-as-accessor.js strict pass
+built-ins/TypedArray/prototype/buffer/invoked-as-func.js sloppy pass
+built-ins/TypedArray/prototype/buffer/invoked-as-func.js strict pass
+built-ins/TypedArray/prototype/buffer/length.js sloppy pass
+built-ins/TypedArray/prototype/buffer/length.js strict pass
+built-ins/TypedArray/prototype/buffer/name.js sloppy pass
+built-ins/TypedArray/prototype/buffer/name.js strict pass
+built-ins/TypedArray/prototype/buffer/prop-desc.js sloppy pass
+built-ins/TypedArray/prototype/buffer/prop-desc.js strict pass
+built-ins/TypedArray/prototype/buffer/return-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/buffer/return-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/buffer/this-has-no-typedarrayname-internal.js sloppy pass
+built-ins/TypedArray/prototype/buffer/this-has-no-typedarrayname-internal.js strict pass
+built-ins/TypedArray/prototype/buffer/this-inherits-typedarray.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/buffer/this-inherits-typedarray.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/buffer/this-is-not-object.js sloppy pass
+built-ins/TypedArray/prototype/buffer/this-is-not-object.js strict pass

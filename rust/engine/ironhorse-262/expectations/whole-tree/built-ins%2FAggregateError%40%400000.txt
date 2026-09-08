@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=built-ins/AggregateError tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AggregateError/cause-property.js sloppy pass
+built-ins/AggregateError/cause-property.js strict pass
+built-ins/AggregateError/errors-iterabletolist-failures.js sloppy pass
+built-ins/AggregateError/errors-iterabletolist-failures.js strict pass
+built-ins/AggregateError/errors-iterabletolist.js sloppy pass
+built-ins/AggregateError/errors-iterabletolist.js strict pass
+built-ins/AggregateError/is-a-constructor.js sloppy pass
+built-ins/AggregateError/is-a-constructor.js strict pass
+built-ins/AggregateError/length.js sloppy pass
+built-ins/AggregateError/length.js strict pass
+built-ins/AggregateError/message-method-prop-cast.js sloppy pass
+built-ins/AggregateError/message-method-prop-cast.js strict pass
+built-ins/AggregateError/message-method-prop.js sloppy pass
+built-ins/AggregateError/message-method-prop.js strict pass
+built-ins/AggregateError/message-tostring-abrupt-symbol.js sloppy pass
+built-ins/AggregateError/message-tostring-abrupt-symbol.js strict pass
+built-ins/AggregateError/message-tostring-abrupt.js sloppy pass
+built-ins/AggregateError/message-tostring-abrupt.js strict pass
+built-ins/AggregateError/message-undefined-no-prop.js sloppy pass
+built-ins/AggregateError/message-undefined-no-prop.js strict pass
+built-ins/AggregateError/name.js sloppy pass
+built-ins/AggregateError/name.js strict pass
+built-ins/AggregateError/newtarget-is-undefined.js sloppy pass
+built-ins/AggregateError/newtarget-is-undefined.js strict pass
+built-ins/AggregateError/newtarget-proto-custom.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«AggregateError», «[object Object]») to be true"
+built-ins/AggregateError/newtarget-proto-custom.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«AggregateError», «[object Object]») to be true"
+built-ins/AggregateError/newtarget-proto-fallback.js sloppy pass
+built-ins/AggregateError/newtarget-proto-fallback.js strict pass
+built-ins/AggregateError/newtarget-proto.js sloppy pass
+built-ins/AggregateError/newtarget-proto.js strict pass
+built-ins/AggregateError/order-of-args-evaluation.js sloppy pass
+built-ins/AggregateError/order-of-args-evaluation.js strict pass
+built-ins/AggregateError/prop-desc.js sloppy pass
+built-ins/AggregateError/prop-desc.js strict pass
+built-ins/AggregateError/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/AggregateError/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/AggregateError/proto.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/AggregateError/proto.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"

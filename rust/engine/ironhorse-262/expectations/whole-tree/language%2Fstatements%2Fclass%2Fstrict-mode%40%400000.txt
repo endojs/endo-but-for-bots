@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/class/strict-mode tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/strict-mode/arguments-callee.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/strict-mode/arguments-callee.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/strict-mode/with.js sloppy pass
+language/statements/class/strict-mode/with.js strict pass

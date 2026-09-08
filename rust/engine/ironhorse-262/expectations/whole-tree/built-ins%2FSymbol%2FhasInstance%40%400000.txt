@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/hasInstance tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/hasInstance/cross-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Symbol/hasInstance/cross-realm.js strict skip:shared-positive-test-failure
+built-ins/Symbol/hasInstance/prop-desc.js sloppy pass
+built-ins/Symbol/hasInstance/prop-desc.js strict pass

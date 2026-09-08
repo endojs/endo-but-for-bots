@@ -39,7 +39,7 @@ use ironhorse_vm::{Halt, RunOutcome};
 ///
 /// Total over the coder's panics (`catch_unwind`): a deferred coder path
 /// becomes an honest [`ironhorse_vm::SourceCompileError::Unsupported`]
-/// (a coverage gap the VM surfaces as `Halt::Unsupported`), never a harness
+/// (a coverage gap the VM surfaces as `Halt::NotImplemented`), never a harness
 /// crash. A structured parse reject splits on its kind exactly as
 /// [`compile_for`] does: an `Unsupported` parse (an unported-but-valid
 /// construct) is a coverage gap; every other reject is a genuine early error,
@@ -223,6 +223,8 @@ pub struct DualRun {
     /// read this to tell an oracle *parse rejection* (early error) apart from an
     /// oracle *runtime abort* on a source XS parsed.
     pub oracle_parsed: bool,
+    /// Original XS abort status; zero for an ordinary guest throw.
+    pub oracle_exit_status: i32,
 }
 
 impl DualRun {
@@ -562,6 +564,7 @@ fn build_dual_run(
         ironhorse_compile,
         bytecode,
         oracle_parsed,
+        oracle_exit_status: oracle.exit_status,
     }
 }
 
@@ -758,24 +761,37 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
         Some(r) => r,
         None => return BootVerdict::NamedGap("oracle-machine-error".into()),
     };
+    boot_run_verdict(&r)
+}
+
+fn boot_run_verdict(r: &DualRun) -> BootVerdict {
     // The halt is judged before the agreement shape, as in every other
     // instrument: the engine reporting its own state as wrong, or declining
     // with a label it never registered, is a divergence whatever the pin did
     // — never a gap the ledger can wait on, and never excused by the pin's
     // own unrelated abort.
     match &r.ironhorse_halt {
+        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+            return BootVerdict::Divergent(format!("engine-fault:{message}"));
+        }
         Halt::EngineInvariant(label) => {
             return BootVerdict::Divergent(format!(
                 "ironhorse violated an engine invariant: {label} (pin completed={})",
                 xst::oracle_completed(r.agreement)
             ))
         }
-        Halt::Unsupported(op) if !xst::is_skip_eligible_label(op) => {
+        Halt::NotImplemented(op) if !xst::is_skip_eligible_label(op) => {
             return BootVerdict::Divergent(format!(
                 "ironhorse declined with an unregistered label: {op} (pin completed={})",
                 xst::oracle_completed(r.agreement)
             ))
         }
+        Halt::Refused(label) if !ironhorse_vm::halt_labels::is_refused_label(label) => {
+            return BootVerdict::Divergent(format!(
+                "unregistered or misclassified refusal: {label}"
+            ));
+        }
+        Halt::Refused(_) => return BootVerdict::NamedGap(boot_gap_key(r)),
         _ => {}
     }
     match r.agreement {
@@ -794,7 +810,7 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
         Agreement::BothAbort => BootVerdict::NamedGap(format!("both-abort:{}", r.oracle_error)),
         // ironhorse honestly aborted where the pin completed: the bundle hit an
         // engine surface ironhorse does not model. Name the gap from the halt.
-        Agreement::OracleOnlyComplete => BootVerdict::NamedGap(boot_gap_key(&r)),
+        Agreement::OracleOnlyComplete => BootVerdict::NamedGap(boot_gap_key(r)),
         // ironhorse completed a program the pin rejected: over-acceptance.
         Agreement::IronhorseOnlyComplete => BootVerdict::Divergent(format!(
             "ironhorse completed a program the pin rejected: ironhorse={:?} pin aborted={:?}",
@@ -809,7 +825,8 @@ pub fn boot_bundle_verdict(source: &str) -> BootVerdict {
 /// intrinsic; anything else carries its halt verbatim.
 fn boot_gap_key(r: &DualRun) -> String {
     match &r.ironhorse_halt {
-        Halt::Unsupported(op) => format!("boot:unsupported:{op}"),
+        Halt::NotImplemented(op) => format!("boot:unsupported:{op}"),
+        Halt::Refused(label) => format!("boot:refused:{label}"),
         Halt::Throw { rendered, .. } if rendered.contains("undefined variable") => {
             // Historical stage-4 gap: before stage-7 child 1 the committed
             // bundle's first statement (`globalThis`) had no live global-object
@@ -1164,7 +1181,49 @@ mod tests {
             ironhorse_compile: IronhorseCompile::NotAttempted,
             bytecode: Vec::new(),
             oracle_parsed: false,
+            oracle_exit_status: 0,
         }
+    }
+
+    #[test]
+    fn boot_engine_fault_is_never_a_named_gap() {
+        for agreement in [
+            Agreement::BothComplete,
+            Agreement::BothAbort,
+            Agreement::OracleOnlyComplete,
+            Agreement::IronhorseOnlyComplete,
+        ] {
+            let run = abort_run(
+                agreement,
+                Halt::Panic(ironhorse_vm::PanicKind::EngineFault {
+                    message: "synthetic defect".into(),
+                    location: None,
+                }),
+            );
+            assert!(
+                matches!(boot_run_verdict(&run), BootVerdict::Divergent(detail) if detail == "engine-fault:synthetic defect")
+            );
+        }
+    }
+
+    #[test]
+    fn boot_refusals_require_the_correct_registered_category() {
+        for halt in [
+            Halt::Refused("sneak:new-exemption"),
+            Halt::Refused("eval:no-compiler"),
+            Halt::NotImplemented("property-key:id-space-exhausted"),
+        ] {
+            let run = abort_run(Agreement::OracleOnlyComplete, halt);
+            assert!(matches!(boot_run_verdict(&run), BootVerdict::Divergent(_)));
+        }
+        let run = abort_run(
+            Agreement::OracleOnlyComplete,
+            Halt::Refused("property-key:id-space-exhausted"),
+        );
+        assert_eq!(
+            boot_run_verdict(&run),
+            BootVerdict::NamedGap("boot:refused:property-key:id-space-exhausted".into())
+        );
     }
 
     #[test]
@@ -1178,7 +1237,7 @@ mod tests {
 
         // An `Unsupported` bail is not agreement even if the oracle also
         // aborted (finding 3): it must never pass silently.
-        let unsupported = abort_run(Agreement::BothAbort, Halt::Unsupported("XS_CODE_CALL"));
+        let unsupported = abort_run(Agreement::BothAbort, Halt::NotImplemented("XS_CODE_CALL"));
         assert!(
             !unsupported.is_bit_exact(),
             "BothAbort with an Unsupported halt is not bit-exact"
@@ -1226,7 +1285,7 @@ mod tests {
         // The summary must count a non-`Throw` `BothAbort` (here under
         // `unsupported`) rather than let it slip through as bit-exact.
         let runs = [
-            abort_run(Agreement::BothAbort, Halt::Unsupported("XS_CODE_CALL")),
+            abort_run(Agreement::BothAbort, Halt::NotImplemented("XS_CODE_CALL")),
             abort_run(Agreement::BothAbort, Halt::Decode("truncated".into())),
         ];
         let mut s = Summary::default();

@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainYearMonth/compare tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainYearMonth/compare/compare-calendar.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/PlainYearMonth/compare/compare-calendar.js strict skip:oracle-host-missing-temporal
+intl402/Temporal/PlainYearMonth/compare/exhaustive.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/PlainYearMonth/compare/exhaustive.js strict skip:oracle-host-missing-temporal
+intl402/Temporal/PlainYearMonth/compare/future-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainYearMonth/compare/future-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainYearMonth/compare/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainYearMonth/compare/infinity-throws-rangeerror.js strict skip:oracle-host-missing-global:Temporal

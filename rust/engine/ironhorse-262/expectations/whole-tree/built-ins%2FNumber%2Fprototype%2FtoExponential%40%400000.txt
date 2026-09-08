@@ -1,0 +1,31 @@
+# engine=ironhorse features=default corpus=built-ins/Number/prototype/toExponential tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Number/prototype/toExponential/infinity.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/infinity.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Number/prototype/toExponential/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Number/prototype/toExponential/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Number/prototype/toExponential/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Number/prototype/toExponential/nan.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/nan.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Number/prototype/toExponential/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Number/prototype/toExponential/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: toExponential should be an own property"
+built-ins/Number/prototype/toExponential/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: toExponential should be an own property"
+built-ins/Number/prototype/toExponential/range.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/range.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/return-abrupt-tointeger-fractiondigits-symbol.js sloppy pass
+built-ins/Number/prototype/toExponential/return-abrupt-tointeger-fractiondigits-symbol.js strict pass
+built-ins/Number/prototype/toExponential/return-abrupt-tointeger-fractiondigits.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: valueOf Expected a Test262Error but got a TypeError"
+built-ins/Number/prototype/toExponential/return-abrupt-tointeger-fractiondigits.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: valueOf Expected a Test262Error but got a TypeError"
+built-ins/Number/prototype/toExponential/return-values.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/return-values.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/this-is-0-fractiondigits-is-0.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/this-is-0-fractiondigits-is-0.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/this-is-0-fractiondigits-is-not-0.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/this-is-0-fractiondigits-is-not-0.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/this-type-not-number-or-number-object.js sloppy pass
+built-ins/Number/prototype/toExponential/this-type-not-number-or-number-object.js strict pass
+built-ins/Number/prototype/toExponential/tointeger-fractiondigits.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/tointeger-fractiondigits.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/undefined-fractiondigits.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Number/prototype/toExponential/undefined-fractiondigits.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"

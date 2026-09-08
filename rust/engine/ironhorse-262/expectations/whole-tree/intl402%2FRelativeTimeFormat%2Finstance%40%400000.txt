@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/RelativeTimeFormat/instance tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/RelativeTimeFormat/instance/extensibility.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/instance/extensibility.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/instance/prototype.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/instance/prototype.js strict skip:oracle-host-missing-global:Intl

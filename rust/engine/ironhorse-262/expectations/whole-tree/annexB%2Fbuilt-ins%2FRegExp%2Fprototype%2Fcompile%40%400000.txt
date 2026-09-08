@@ -1,0 +1,47 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/RegExp/prototype/compile tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/RegExp/prototype/compile/B.RegExp.prototype.compile.js sloppy pass
+annexB/built-ins/RegExp/prototype/compile/B.RegExp.prototype.compile.js strict pass
+annexB/built-ins/RegExp/prototype/compile/duplicate-named-capturing-groups-syntax.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/duplicate-named-capturing-groups-syntax.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/flags-string-invalid.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/flags-string-invalid.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/flags-to-string-err.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/flags-to-string-err.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/flags-to-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalFlags]] internal slot Expected SameValue(«\\\"g\\\"», «\\\"i\\\"») to be true\" ironhorse=\"Test262Error: string\\\"g\\\"», «string\\\"i\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/flags-to-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalFlags]] internal slot Expected SameValue(«\\\"g\\\"», «\\\"i\\\"») to be true\" ironhorse=\"Test262Error: string\\\"g\\\"», «string\\\"i\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/flags-undefined.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalFlags]] (unspecified) Expected SameValue(«\\\"gi\\\"», «\\\"\\\"») to be true\" ironhorse=\"Test262Error: string\\\"gi\\\"», «string\\\"\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/flags-undefined.js strict fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalFlags]] (unspecified) Expected SameValue(«\\\"gi\\\"», «\\\"\\\"») to be true\" ironhorse=\"Test262Error: string\\\"gi\\\"», «string\\\"\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/length.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/length.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be compile; name value should be compile"
+annexB/built-ins/RegExp/prototype/compile/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be compile; name value should be compile"
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-distinct.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«23», «0») to be true\" ironhorse=\"Test262Error: number23», «number0») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-distinct.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«23», «0») to be true\" ironhorse=\"Test262Error: number23», «number0») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-flags-defined.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-flags-defined.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-immutable-lastindex.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-immutable-lastindex.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-props.js sloppy pass
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-props.js strict pass
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-same.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«23», «0») to be true\" ironhorse=\"Test262Error: number23», «number0») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-regexp-same.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«23», «0») to be true\" ironhorse=\"Test262Error: number23», «number0») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-string-invalid-u.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-string-invalid-u.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-string-invalid.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-string-invalid.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-string-u.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalSource]] internal slot Expected SameValue(«\\\"original value\\\"», «\\\"[������]\\\"») to be true\" ironhorse=\"Test262Error: string\\\"original value\\\"», «string\\\"[𝌆]\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-string-u.js strict fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalSource]] internal slot Expected SameValue(«\\\"original value\\\"», «\\\"[������]\\\"») to be true\" ironhorse=\"Test262Error: string\\\"original value\\\"», «string\\\"[𝌆]\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalSource]] internal slot Expected SameValue(«\\\"original value\\\"», «\\\"new value\\\"») to be true\" ironhorse=\"Test262Error: string\\\"original value\\\"», «string\\\"new value\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalSource]] internal slot Expected SameValue(«\\\"original value\\\"», «\\\"new value\\\"») to be true\" ironhorse=\"Test262Error: string\\\"original value\\\"», «string\\\"new value\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-to-string-err.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-to-string-err.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/pattern-undefined.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalSource]] (unspecified) Expected SameValue(«\\\"abc\\\"», «\\\"(?:)\\\"») to be true\" ironhorse=\"Test262Error: string\\\"abc\\\"», «string\\\"(?:)\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/pattern-undefined.js strict fail:"abort-value-differs: oracle=\"Test262Error: [[OriginalSource]] (unspecified) Expected SameValue(«\\\"abc\\\"», «\\\"(?:)\\\"») to be true\" ironhorse=\"Test262Error: string\\\"abc\\\"», «string\\\"(?:)\\\"») to be true\""
+annexB/built-ins/RegExp/prototype/compile/this-cross-realm-instance.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/RegExp/prototype/compile/this-cross-realm-instance.js strict skip:shared-positive-test-failure
+annexB/built-ins/RegExp/prototype/compile/this-not-object.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/this-not-object.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/this-obj-not-regexp.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/this-obj-not-regexp.js strict skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/this-subclass-instance.js sloppy skip:shared-test262-failure
+annexB/built-ins/RegExp/prototype/compile/this-subclass-instance.js strict skip:shared-test262-failure

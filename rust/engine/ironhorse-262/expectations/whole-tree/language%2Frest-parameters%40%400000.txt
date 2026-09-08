@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=language/rest-parameters tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/rest-parameters/array-pattern.js sloppy pass
+language/rest-parameters/array-pattern.js strict pass
+language/rest-parameters/arrow-function.js sloppy pass
+language/rest-parameters/arrow-function.js strict pass
+language/rest-parameters/expected-argument-count.js sloppy pass
+language/rest-parameters/expected-argument-count.js strict pass
+language/rest-parameters/no-alias-arguments.js sloppy pass
+language/rest-parameters/no-alias-arguments.js strict pass
+language/rest-parameters/object-pattern.js sloppy pass
+language/rest-parameters/object-pattern.js strict pass
+language/rest-parameters/position-invalid.js sloppy pass
+language/rest-parameters/position-invalid.js strict pass
+language/rest-parameters/rest-index.js sloppy pass
+language/rest-parameters/rest-index.js strict pass
+language/rest-parameters/rest-parameters-apply.js sloppy pass
+language/rest-parameters/rest-parameters-apply.js strict pass
+language/rest-parameters/rest-parameters-call.js sloppy pass
+language/rest-parameters/rest-parameters-call.js strict pass
+language/rest-parameters/rest-parameters-produce-an-array.js sloppy pass
+language/rest-parameters/rest-parameters-produce-an-array.js strict pass
+language/rest-parameters/with-new-target.js sloppy pass
+language/rest-parameters/with-new-target.js strict pass

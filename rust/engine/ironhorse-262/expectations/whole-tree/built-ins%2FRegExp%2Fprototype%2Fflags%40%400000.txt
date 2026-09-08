@@ -1,0 +1,33 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/prototype/flags tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/prototype/flags/coercion-dotall.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-dotall.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-global.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-global.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-hasIndices.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-hasIndices.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-ignoreCase.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-ignoreCase.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-multiline.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-multiline.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-sticky.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-sticky.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-unicode.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/coercion-unicode.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/get-order.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/get-order.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/prop-desc.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/prop-desc.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/rethrow.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/rethrow.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/return-order.js sloppy pass
+built-ins/RegExp/prototype/flags/return-order.js strict pass
+built-ins/RegExp/prototype/flags/this-val-non-obj.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/this-val-non-obj.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/this-val-regexp-prototype.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/this-val-regexp-prototype.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/RegExp/prototype/flags/this-val-regexp.js sloppy pass
+built-ins/RegExp/prototype/flags/this-val-regexp.js strict pass

@@ -177,7 +177,7 @@ mod tests {
         round_trip(Slot::boolean(false));
         round_trip(Slot::integer(-42));
         round_trip(Slot::integer(i32::MIN));
-        round_trip(Slot::number(3.14159));
+        round_trip(Slot::number(std::f64::consts::PI));
         round_trip(Slot::number(f64::INFINITY));
         round_trip(Slot::of(Kind::String, Payload::String(ChunkOffset(7))));
         round_trip(Slot::of(Kind::Reference, Payload::Reference(SlotIndex(99))));

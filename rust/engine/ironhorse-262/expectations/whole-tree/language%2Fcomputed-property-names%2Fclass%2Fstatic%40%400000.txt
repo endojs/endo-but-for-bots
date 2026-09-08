@@ -1,0 +1,29 @@
+# engine=ironhorse features=default corpus=language/computed-property-names/class/static tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/computed-property-names/class/static/generator-constructor.js sloppy pass
+language/computed-property-names/class/static/generator-constructor.js strict pass
+language/computed-property-names/class/static/generator-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/computed-property-names/class/static/generator-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/computed-property-names/class/static/getter-constructor.js sloppy pass
+language/computed-property-names/class/static/getter-constructor.js strict pass
+language/computed-property-names/class/static/getter-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/computed-property-names/class/static/getter-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/computed-property-names/class/static/method-constructor.js sloppy pass
+language/computed-property-names/class/static/method-constructor.js strict pass
+language/computed-property-names/class/static/method-number-order.js sloppy pass
+language/computed-property-names/class/static/method-number-order.js strict pass
+language/computed-property-names/class/static/method-number.js sloppy pass
+language/computed-property-names/class/static/method-number.js strict pass
+language/computed-property-names/class/static/method-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/computed-property-names/class/static/method-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/computed-property-names/class/static/method-string-order.js sloppy pass
+language/computed-property-names/class/static/method-string-order.js strict pass
+language/computed-property-names/class/static/method-string.js sloppy pass
+language/computed-property-names/class/static/method-string.js strict pass
+language/computed-property-names/class/static/method-symbol-order.js sloppy pass
+language/computed-property-names/class/static/method-symbol-order.js strict pass
+language/computed-property-names/class/static/method-symbol.js sloppy pass
+language/computed-property-names/class/static/method-symbol.js strict pass
+language/computed-property-names/class/static/setter-constructor.js sloppy pass
+language/computed-property-names/class/static/setter-constructor.js strict pass
+language/computed-property-names/class/static/setter-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/computed-property-names/class/static/setter-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"

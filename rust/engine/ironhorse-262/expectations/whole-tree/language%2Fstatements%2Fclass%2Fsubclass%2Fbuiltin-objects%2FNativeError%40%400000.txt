@@ -1,0 +1,37 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/NativeError tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/NativeError/EvalError-message.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-eval-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/EvalError-message.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-eval-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/EvalError-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/EvalError-name.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/EvalError-super.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/EvalError-super.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/RangeError-message.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-range-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/RangeError-message.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-range-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/RangeError-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/RangeError-name.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/RangeError-super.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/RangeError-super.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/ReferenceError-message.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-reference-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/ReferenceError-message.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-reference-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/ReferenceError-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/ReferenceError-name.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/ReferenceError-super.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/ReferenceError-super.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/SyntaxError-message.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-syntax-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/SyntaxError-message.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-syntax-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/SyntaxError-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/SyntaxError-name.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/SyntaxError-super.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/SyntaxError-super.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/TypeError-message.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-type-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/TypeError-message.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-type-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/TypeError-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/TypeError-name.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/TypeError-super.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/TypeError-super.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/URIError-message.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-uri-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/URIError-message.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"custom-uri-error\"») to be true"
+language/statements/class/subclass/builtin-objects/NativeError/URIError-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/URIError-name.js strict pass
+language/statements/class/subclass/builtin-objects/NativeError/URIError-super.js sloppy pass
+language/statements/class/subclass/builtin-objects/NativeError/URIError-super.js strict pass

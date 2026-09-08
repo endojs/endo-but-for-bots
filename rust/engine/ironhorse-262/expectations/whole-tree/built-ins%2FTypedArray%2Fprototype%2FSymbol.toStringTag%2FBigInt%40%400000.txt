@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/invoked-as-accessor.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/invoked-as-accessor.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/invoked-as-func.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/invoked-as-func.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/length.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/length.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/name.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/name.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/prop-desc.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/prop-desc.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/return-typedarrayname.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/return-typedarrayname.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/this-has-no-typedarrayname-internal.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/this-has-no-typedarrayname-internal.js strict pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/this-is-not-object.js sloppy pass
+built-ins/TypedArray/prototype/Symbol.toStringTag/BigInt/this-is-not-object.js strict pass

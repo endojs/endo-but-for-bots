@@ -1,0 +1,43 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/getOwnPropertyDescriptor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/getOwnPropertyDescriptor/call-parameters.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/call-parameters.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/null-handler.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/null-handler.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined-target-is-not-extensible.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined-target-is-not-extensible.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined-targetdesc-is-not-configurable.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined-targetdesc-is-not-configurable.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined-targetdesc-is-undefined.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined-targetdesc-is-undefined.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-type-is-not-object-nor-undefined-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/getOwnPropertyDescriptor/result-type-is-not-object-nor-undefined-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/getOwnPropertyDescriptor/result-type-is-not-object-nor-undefined.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/result-type-is-not-object-nor-undefined.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-invalid-descriptor.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-invalid-descriptor.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-not-writable-targetdesc-is-writable.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-not-writable-targetdesc-is-writable.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-targetdesc-is-configurable.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-targetdesc-is-configurable.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-targetdesc-is-undefined.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-targetdesc-is-undefined.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-return-configurable.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-return-configurable.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-return-not-configurable.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-return-not-configurable.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/return-is-abrupt.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/return-is-abrupt.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 0 descriptor should be enumerable"
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 0 descriptor should be enumerable"
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-not-callable.js sloppy pass
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-not-callable.js strict pass
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-null-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: foo descriptor should be enumerable"
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-null-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: foo descriptor should be enumerable"
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-undefined-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 0 descriptor should be enumerable"
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-undefined-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: 0 descriptor should be enumerable"
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: attr descriptor should be enumerable"
+built-ins/Proxy/getOwnPropertyDescriptor/trap-is-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: attr descriptor should be enumerable"
