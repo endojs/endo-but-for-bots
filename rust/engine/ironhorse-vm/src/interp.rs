@@ -10571,7 +10571,17 @@ impl Interp {
             // counter, and every name-keyed lookup-id cache. The
             // install pass below then covers the appended ids along
             // with any older above-floor backlog.
-            self.bind_program_symbols(&extended);
+            if old_len == 0 {
+                // Initial relinking must establish the implicit keys and
+                // current-layout marker, or restore mistakes this current
+                // machine for a legacy layout and changes allocation order.
+                self.link_intrinsics(&extended);
+                if self.id_space_exhausted {
+                    return Err(RelinkError::TableFull);
+                }
+            } else {
+                self.bind_program_symbols(&extended);
+            }
         }
         self.rewrite_template_site_ids(&mut remapped)?;
         self.install_pending_intrinsics();
@@ -61940,6 +61950,19 @@ mod tests {
 
     fn b(op: Opcode) -> u8 {
         op as u8
+    }
+
+    #[test]
+    fn first_relink_refuses_when_implicit_initialization_exhausts_ids() {
+        let mut machine = Interp::new();
+        // A tiny remaining id space models a nearly full symbol namespace
+        // without building a quadratic-size explicit name table.
+        machine.next_symbol_key_id = 4;
+        assert_eq!(
+            machine.relink_crank(&[b(Opcode::XS_CODE_END)], &["x".into()]),
+            Err(RelinkError::TableFull)
+        );
+        assert!(!machine.is_quiescent());
     }
 
     #[test]
