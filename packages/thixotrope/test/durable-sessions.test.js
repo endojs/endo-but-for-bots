@@ -4,7 +4,7 @@ import test from '@endo/ses-ava/test.js';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
@@ -47,7 +47,11 @@ const makeDaemon = (statePath, port, resources = {}) =>
         logger,
         resumption,
         makeBaseNetlayer: powers =>
-          makeTcpNetLayer({ ...powers, specifiedPort: port }),
+          makeTcpNetLayer({
+            ...powers,
+            specifiedPort: port,
+            specifiedDesignator: basename(statePath),
+          }),
       }),
   });
 
@@ -60,7 +64,8 @@ const makeDurableClient = label =>
       makeDurableNetLayer({
         handlers,
         logger,
-        makeBaseNetlayer: powers => makeTcpNetLayer(powers),
+        makeBaseNetlayer: powers =>
+          makeTcpNetLayer({ ...powers, specifiedDesignator: label }),
         reconnectDelayMs: 25,
       }),
   });
@@ -339,3 +344,111 @@ test.serial('sessions survive repeated daemon restarts', async t => {
   }
   await daemon.shutdown();
 });
+
+test.serial(
+  'both durable nodes restart and deliver a settlement to the persisted listener',
+  async t => {
+    t.timeout(20_000);
+    const exporterPath = await mkdtemp(
+      join(tmpdir(), 'thix-exporter-restart-'),
+    );
+    t.teardown(() => rm(exporterPath, { recursive: true, force: true }));
+    const holderPath = await mkdtemp(join(tmpdir(), 'thix-holder-restart-'));
+    t.teardown(() => rm(holderPath, { recursive: true, force: true }));
+    const exporter1 = await makeDaemon(exporterPath, 0);
+    t.teardown(() => exporter1.shutdown());
+    const holder1 = await makeDaemon(holderPath, 0);
+    t.teardown(() => holder1.shutdown());
+    const exporterPort = Number(exporter1.location.hints.port);
+    const holderPort = Number(holder1.location.hints.port);
+    const counterWorker = await exporter1.createWorker();
+    const counter = await counterWorker.evaluate(`(() => {
+      let count = 0;
+      let waiting = false;
+      let resolveGate;
+      const gate = new Promise(resolve => { resolveGate = resolve; });
+      return Far('Counter', {
+        incr: () => { count += 1; return count; },
+        getCount: () => count,
+        wait: () => { waiting = true; return gate; },
+        isWaiting: () => waiting,
+        settle: value => { resolveGate(value); return true; },
+      });
+    })()`);
+    const counterSecret = exporter1.publish(counter);
+    const holderWorker = await holder1.createWorker();
+    const holder = await holderWorker.evaluate(`(() => {
+    let counter;
+    let observed = 'pending';
+    return Far('Holder', {
+      hold: value => { counter = value; return true; },
+      incr: () => E(counter).incr(),
+      count: () => E(counter).getCount(),
+      watch: () => {
+        E(counter).wait().then(
+          value => { observed = value; },
+          () => { observed = 'rejected'; },
+        );
+        return E(counter).isWaiting();
+      },
+      observed: () => observed,
+    });
+  })()`);
+    const holderSecret = holder1.publish(holder);
+    const gifter = await makeDurableClient('both-restart-gifter');
+    t.teardown(() => gifter.shutdown());
+    const remoteCounter = await gifter.enlivenSturdyRef(
+      gifter.makeSturdyRef(exporter1.location, counterSecret),
+    );
+    const remoteHolder = await gifter.enlivenSturdyRef(
+      gifter.makeSturdyRef(holder1.location, holderSecret),
+    );
+    t.true(await E(remoteHolder).hold(remoteCounter));
+    t.is(await E(remoteCounter).getCount(), 0);
+    t.is(await E(remoteHolder).incr(), 1);
+    t.true(
+      await E(remoteHolder).watch(),
+      'the originating call reached the exporter',
+    );
+    t.is(await E(remoteHolder).observed(), 'pending');
+    const store = makeFsStore(holderPath);
+    const outgoing = store
+      .listSessionTokens()
+      .filter(token => store.provideSessionStore(token).getMeta().isOriginator);
+    t.is(
+      outgoing.length,
+      1,
+      'gift withdrawal created a durable originating session',
+    );
+    const before = store.provideSessionStore(outgoing[0]).getMeta();
+    t.true(before.hubSessionKey.startsWith('handoff:'));
+    await holder1.shutdown();
+    await exporter1.shutdown();
+    const exporter2 = await makeDaemon(exporterPath, exporterPort);
+    t.teardown(() => exporter2.shutdown());
+    t.true(await E(remoteCounter).settle('settled while holder was offline'));
+    const exporterSession = makeFsStore(exporterPath).provideSessionStore(
+      outgoing[0],
+    );
+    t.truthy(
+      exporterSession.getMeta().frames[0],
+      'the exporter retains settlement delivery while the listener node is offline',
+    );
+    const holder2 = await makeDaemon(holderPath, holderPort);
+    t.teardown(() => holder2.shutdown());
+    t.is(await E(remoteHolder).incr(), 2);
+    t.is(await E(remoteHolder).count(), 2);
+    t.is(await E(remoteHolder).observed(), 'settled while holder was offline');
+    const after = store.provideSessionStore(outgoing[0]).getMeta();
+    t.deepEqual(
+      after.identity,
+      before.identity,
+      'originating session identity was restored',
+    );
+    t.is(
+      after.hubSessionKey,
+      before.hubSessionKey,
+      'the hub alias was preserved',
+    );
+  },
+);
