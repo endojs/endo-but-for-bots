@@ -2,7 +2,7 @@
 //! Keep oracle result checks at each call site; these pins replace only the
 //! obsolete version-1/XS cost expectation.
 pub fn assert_raw(source: &str, raw: u64) {
-    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-4");
+    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-5");
     let matches: Vec<_> = include_str!("raw.tsv")
         .lines()
         .filter_map(|line| {

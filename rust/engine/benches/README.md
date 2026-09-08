@@ -309,3 +309,53 @@ controls with identical charges and passing scaling gates.
 An initial ordinary-read dispatch result was 34.4% slower; a full paired repeat
 measured 2.4% for that case and up to 7.1% slower across dispatch cases.
 Both runs remain in the artifact; these medians do not establish statistical significance.
+
+## Compiler work budget (F065, second increment)
+
+[results/f065-compiler-budget.json](results/f065-compiler-budget.json) retains all
+paired legacy runs, including failures, and the new API overhead measurements.
+The reviewed 32,000-branch median is 120.9 ms through the legacy API and 129.3 ms
+with a live charge callback (about 7% overhead); bytecode and symbols are identical.
+All three new fixture modes pass the unchanged 2.5x time/charge growth ceiling.
+The legacy baseline and candidate both had noisy failures in earlier pairs.
+The final baseline fails at 2.535x branch growth; the final candidate passes.
+These medians establish neither a legacy-path speedup nor statistical significance.
+
+The rebased implementation uses the shared `ironhorse-meter-5` release, retaining
+upstream weights while changing charging sites and enforcing checked raw limits.
+Releases 1–4 and their digest pins remain immutable.
+Source admission costs `COMPILE_SOURCE_BYTE_METERING` per UTF-8 byte and occurs in
+the lexer before its character/offset allocations.
+Tokens, scoper operations, coder nodes/records, symbol interning, and reserved scans
+use the shared token/work weights.
+BigInt conversion keeps upstream's incremental charges for each growing limb scan;
+regexp validation prepays squared body length, including string-set products.
+Repeated `using` disposal-slot searches reserve declaration count before traversal.
+Optimizer and serialization passes reserve linear scans before allocation.
+These weights are deterministic policy, not calibrated CPU time or XS parity.
+
+`ParseMeter` clones retain cumulative charges across errors and compiler panics.
+A hard raw allowance caps the bill; multiplication overflow or an attempted excess
+consumes only the remaining allowance and refuses stickily.
+Host callbacks receive the actual charged delta, with no callback after refusal.
+Reentrant charging fails closed, and non-meter panics retain progress and propagate.
+Only the private meter refusal is translated at the compilation boundary.
+Exact-budget completion remains distinct from an attempted excess.
+
+`compile_atoms_budgeted_with_limit` preserves upstream's `CompiledAtoms` receipt and
+Module-aware goal dispatch, with both a raw allowance and a live host callback.
+The retained-meter goal API also supports Module, Script, and Eval without changing
+atom identity.
+Legacy unlimited APIs still count all phases under the shared table.
+The following increments integrate the stronger bounds with runtime and daemon meters.
+
+The artifact above records the original pre-rebase pair and its earlier cost policy;
+its timings and charges are historical evidence, not measurements of release 5.
+A fresh pair against the updated base is required after integration.
+The fixture's legacy `raw=0` denotes no host compilation bill, not zero parse work.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-compile --test compile_budget_bench \
+  -- --ignored --nocapture --test-threads=1
+```

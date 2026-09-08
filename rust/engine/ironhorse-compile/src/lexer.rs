@@ -147,9 +147,7 @@ impl<'a> Lexer<'a> {
     pub(crate) fn with_meter(source: &str, meter: ParseMeter<'a>) -> Lexer<'a> {
         // Admission precedes both eager source-sized allocations and scanning,
         // including a single huge comment/string with no intervening token.
-        meter.charge(
-            (source.len() as u64).saturating_mul(ironhorse_meter::COMPILE_SOURCE_BYTE_METERING),
-        );
+        meter.source(source.len());
         let chars: Vec<char> = source.chars().collect();
         let mut offsets = Vec::with_capacity(chars.len() + 1);
         let mut b = 0usize;
@@ -296,7 +294,12 @@ impl<'a> Lexer<'a> {
     /// Produce the next token, transliterating `fxGetNextTokenAux`, and
     /// charge the parse meter once for it (including EOF).
     pub fn next(&mut self) -> Result<Lexeme, LexError> {
-        self.meter.charge_token();
+        if !self.meter.charge_token() {
+            return Err(LexError {
+                line: self.line,
+                kind: LexErrorKind::MeterLimit,
+            });
+        }
         let lexeme = self.scan()?;
         self.prev_token = lexeme.token;
         Ok(lexeme)
@@ -1157,7 +1160,12 @@ impl<'a> Lexer<'a> {
         }
         self.advance();
         st.end = self.ch_offset;
-        self.meter.charge_token();
+        if !self.meter.charge_token() {
+            return Err(LexError {
+                line: self.line,
+                kind: LexErrorKind::MeterLimit,
+            });
+        }
         self.prev_token = st.token;
         Ok(st)
     }
@@ -1246,12 +1254,14 @@ impl<'a> Lexer<'a> {
         // with the oracle.
         let mut charged = 0;
         let mut check = |raw: u64| {
-            self.meter.charge(raw - charged);
+            let admitted = self.meter.charge_raw(raw - charged);
             charged = raw;
-            true
+            admitted
         };
         let outcome = ironhorse_regexp::compile_checked(&body, &flags, u64::MAX, Some(&mut check));
-        self.meter.charge(outcome.work_meter_raw - charged);
+        if !self.meter.charge_raw(outcome.work_meter_raw - charged) {
+            return Err(self.err(LexErrorKind::RegExpBudgetExceeded));
+        }
         match outcome.result {
             Ok(_) | Err(ironhorse_regexp::CompileError::Unsupported(_)) => {}
             Err(ironhorse_regexp::CompileError::Syntax(_)) => {
@@ -1267,7 +1277,12 @@ impl<'a> Lexer<'a> {
         st.modifier = Some(flags);
         st.token = Token::Regexp;
         st.end = self.ch_offset;
-        self.meter.charge_token();
+        if !self.meter.charge_token() {
+            return Err(LexError {
+                line: self.line,
+                kind: LexErrorKind::MeterLimit,
+            });
+        }
         self.prev_token = st.token;
         Ok(st)
     }

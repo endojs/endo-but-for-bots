@@ -1,4 +1,6 @@
 //! F065 before/after compiler instrumentation. Run serially in release mode.
+#[path = "common/compiler_growth.rs"]
+mod compiler_growth;
 use ironhorse_compile::{compile_atoms_goal, parse_computrons, Goal};
 use std::hint::black_box;
 use std::time::Instant;
@@ -12,6 +14,12 @@ fn compiler_growth() {
         (
             "branches",
             &[4000usize, 8000, 16000, 32000][..],
+            Goal::Script,
+            false,
+        ),
+        (
+            "populated_blocks",
+            &[2000usize, 4000, 8000][..],
             Goal::Script,
             false,
         ),
@@ -41,11 +49,16 @@ fn compiler_growth() {
         ),
     ] {
         let mut previous: Option<(f64, u64)> = None;
+        let mut elapsed_samples = Vec::new();
         for &n in sizes {
             let mut source = if shape == "branches" {
                 // Fixed-length names keep this at ~1 MB at 32k branches without
                 // making the symbol-count limit part of the measured workload.
                 "if(a00000){b00000;}else{c00000;}".repeat(n)
+            } else if shape == "populated_blocks" {
+                // Exercise one declaration index per scope, not just a large
+                // declaration table in one scope, alongside the empty blocks.
+                "{ let local = 1; local; }".repeat(n)
             } else {
                 (0..n).map(|i| format!("var v{i} = {i};\n")).collect()
             };
@@ -75,6 +88,7 @@ fn compiler_growth() {
             }
             times.sort_by(f64::total_cmp);
             let elapsed = times[1];
+            elapsed_samples.push((n, elapsed));
             println!(
                 "\nCOMPILER_METRIC {shape} n={n} bytes={} seconds={elapsed:.9} computrons={meter}",
                 source.len()
@@ -85,13 +99,20 @@ fn compiler_growth() {
                 println!(
                     "COMPILER_RATIO {shape} n={n} time={time_ratio:.3} meter={meter_ratio:.3}"
                 );
-                if time_ratio >= 2.5 || meter_ratio >= 2.5 {
+                if meter_ratio >= 2.5 {
                     failures.push(format!(
                         "{shape} n={n}: time={time_ratio:.3}x meter={meter_ratio:.3}x"
                     ));
                 }
             }
             previous = Some((elapsed, meter));
+        }
+        match compiler_growth::check(sizes, &elapsed_samples) {
+            Ok(growth) => println!(
+                "COMPILER_FULL_RANGE {shape} time={:.6} limit={:.6}",
+                growth.full_ratio, growth.limit
+            ),
+            Err(error) => failures.push(format!("{shape}: {error}")),
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

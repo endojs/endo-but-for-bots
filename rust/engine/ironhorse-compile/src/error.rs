@@ -20,6 +20,8 @@ pub struct LexError {
 /// `fxReportParserError` / `fxReportMemoryError` site in `xsLexical.c`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LexErrorKind {
+    /// Compilation exhausted its deterministic work allowance.
+    MeterLimit,
     /// A byte sequence that is not a legal UTF-8 lead/continuation as XS
     /// decodes it (`fxGetNextCode`, "invalid character").
     InvalidCharacter(u32),
@@ -64,6 +66,7 @@ impl fmt::Display for LexError {
         use LexErrorKind::*;
         write!(f, "line {}: ", self.line)?;
         match &self.kind {
+            MeterLimit => write!(f, "compilation meter limit"),
             InvalidCharacter(c) => write!(f, "invalid character {}", c),
             InvalidEscape => write!(f, "invalid escape"),
             InvalidNumber => write!(f, "invalid number"),

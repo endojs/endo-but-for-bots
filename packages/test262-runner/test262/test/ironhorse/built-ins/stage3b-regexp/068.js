@@ -1,7 +1,7 @@
 /*---
 description: stage3b-regexp corpus line 68 converted to a test262 case
 flags: [noStrict]
-features: [ironhorse-dual-run, ironhorse-meter-4-raw-17484416, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-5-raw-17484416, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-regexp.js line 68.
   Source: "hello".replace(/l/, "L")

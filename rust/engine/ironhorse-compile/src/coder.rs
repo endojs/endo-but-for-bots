@@ -1117,7 +1117,7 @@ fn compile_goal_metered(
             n.flags |= crate::ast::flags::EVAL;
         }
     }
-    let tree = crate::scoper::run_goal_metered(&root, goal, meter.clone())?;
+    let tree = crate::scoper::run_goal_for_compile(&root, goal, meter.clone())?;
     let mut coder = Coder::new(&tree, meter);
     coder.intern_tree(&root);
     if module {
@@ -1158,17 +1158,29 @@ pub fn compile_atoms_budgeted(
     strict: bool,
     charge: &mut dyn FnMut(u64) -> bool,
 ) -> Result<CompiledAtoms, CompileError> {
-    crate::meter::budgeted(charge, |meter| {
-        let (bytecode, symbols) = compile_goal_metered(source, goal, strict, meter.clone())
-            .map_err(CompileError::Parse)?;
-        Ok(CompiledAtoms {
-            bytecode,
-            symbols,
-            parse_meter_raw: meter.raw(),
-            parse_computrons: meter.computrons(),
-        })
+    compile_atoms_budgeted_with_limit(source, goal, strict, u64::MAX, charge)
+}
+
+/// Bound the accumulated raw bill in addition to consulting the live host.
+pub fn compile_atoms_budgeted_with_limit(
+    source: &str,
+    goal: Goal,
+    strict: bool,
+    raw_budget: u64,
+    charge: &mut dyn FnMut(u64) -> bool,
+) -> Result<CompiledAtoms, CompileError> {
+    let meter = crate::ParseMeter::with_charge_callback(raw_budget, charge);
+    let result = compile_atoms_goal_with_meter(source, goal, strict, meter.clone());
+    if meter.exhausted() {
+        return Err(CompileError::MeterAbort);
+    }
+    let (bytecode, symbols) = result.map_err(CompileError::Parse)?;
+    Ok(CompiledAtoms {
+        bytecode,
+        symbols,
+        parse_meter_raw: meter.raw(),
+        parse_computrons: meter.computrons(),
     })
-    .map_err(|()| CompileError::MeterAbort)?
 }
 
 fn node_of(item: &Item) -> &Node {
@@ -2828,6 +2840,7 @@ impl Coder<'_, '_> {
                         },
                     );
                     let declares = &self.tree.scopes[scope].declares;
+                    self.meter.work(declares.len());
                     let position = declares.iter().position(|d| d.id == id).unwrap();
                     let disposal_id = declares[position + 1].id;
                     let disposal_index = self.declare_index(scope, disposal_id);
@@ -6663,6 +6676,7 @@ mod budget_tests {
     #[test]
     fn optimizer_reservation_refuses_before_mutation() {
         let tree = crate::scoper::scope_program("0", false).unwrap();
+        let mut refuse = |_| false;
         let mut coder = Coder::new(&tree, crate::ParseMeter::new());
         coder.codes = vec![
             Code {
@@ -6672,7 +6686,6 @@ mod budget_tests {
             };
             10_000
         ];
-        let mut refuse = |_| false;
         let result = crate::meter::budgeted(&mut refuse, |meter| {
             coder.meter = meter;
             coder.optimize();
@@ -6680,4 +6693,42 @@ mod budget_tests {
         assert!(result.is_err());
         assert_eq!(coder.codes.len(), 10_000);
     }
+}
+
+/// A complete compilation result and its retained raw work bill.
+pub struct CompileReport {
+    pub result: Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError>,
+    pub parse_meter_raw: u64,
+}
+/// Eval-goal compilation with an explicit raw allowance.
+pub fn compile_atoms_with_budget(source: &str, strict: bool, raw_budget: u64) -> CompileReport {
+    let meter = crate::ParseMeter::with_budget(raw_budget);
+    let result = compile_atoms_with_meter(source, strict, meter.clone());
+    CompileReport {
+        result,
+        parse_meter_raw: meter.raw(),
+    }
+}
+/// Retain a clone to observe costs across errors or non-meter compiler panics.
+/// Only private meter refusal is translated here; other panics propagate.
+pub fn compile_atoms_with_meter(
+    source: &str,
+    strict: bool,
+    meter: crate::ParseMeter<'_>,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    compile_atoms_goal_with_meter(source, Goal::Eval, strict, meter)
+}
+/// The same retained-meter boundary for all compilation goals, including Module.
+pub fn compile_atoms_goal_with_meter(
+    source: &str,
+    goal: Goal,
+    strict: bool,
+    meter: crate::ParseMeter<'_>,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    let result =
+        crate::meter::catch_refusal(|| compile_goal_metered(source, goal, strict, meter.clone()));
+    if meter.exhausted() {
+        return Err(crate::meter::limit_error());
+    }
+    result.map_err(|()| crate::meter::limit_error())?
 }

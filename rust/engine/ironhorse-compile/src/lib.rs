@@ -36,9 +36,11 @@ pub use ironhorse_regexp::unicode;
 
 pub use ast::{Item, Node, TREE_DEPTH_LIMIT};
 pub use coder::{
-    compile, compile_atoms, compile_atoms_budgeted, compile_atoms_goal, compile_atoms_with,
-    compile_module, compile_module_atoms, compile_with, declares_top_level_var_or_function,
-    script_goal_deviates, CompileError, CompiledAtoms,
+    compile, compile_atoms, compile_atoms_budgeted, compile_atoms_budgeted_with_limit,
+    compile_atoms_goal, compile_atoms_goal_with_meter, compile_atoms_with,
+    compile_atoms_with_budget, compile_atoms_with_meter, compile_module, compile_module_atoms,
+    compile_with, declares_top_level_var_or_function, script_goal_deviates, CompileError,
+    CompileReport, CompiledAtoms,
 };
 pub use error::{LexError, LexErrorKind};
 pub use lexer::{BigIntLiteral, Lexeme, Lexer};

@@ -52,6 +52,8 @@ pub struct ParseError {
 /// The classified parse failure.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseErrorKind {
+    /// Host compilation work allowance exhausted; not a SyntaxError.
+    MeterLimit,
     /// A lexing error surfaced while pulling a token.
     Lex(LexError),
     /// A `SyntaxError` XS raises in the parser (an early error) — the
@@ -76,7 +78,11 @@ impl From<LexError> for ParseError {
     fn from(e: LexError) -> ParseError {
         ParseError {
             line: e.line,
-            kind: ParseErrorKind::Lex(e.clone()),
+            kind: if e.kind == crate::error::LexErrorKind::MeterLimit {
+                ParseErrorKind::MeterLimit
+            } else {
+                ParseErrorKind::Lex(e.clone())
+            },
             message: e.to_string(),
         }
     }

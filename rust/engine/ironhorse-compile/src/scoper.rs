@@ -450,6 +450,24 @@ pub(crate) fn run_goal_metered(
     goal: Goal,
     meter: crate::meter::ParseMeter<'_>,
 ) -> Result<ScopeTree, ParseError> {
+    run_goal_with_access_log(root, goal, meter, false)
+}
+
+/// The private compiler consumes resolutions, not the diagnostic access log.
+pub(crate) fn run_goal_for_compile(
+    root: &Item,
+    goal: Goal,
+    meter: crate::meter::ParseMeter<'_>,
+) -> Result<ScopeTree, ParseError> {
+    run_goal_with_access_log(root, goal, meter, true)
+}
+
+fn run_goal_with_access_log(
+    root: &Item,
+    goal: Goal,
+    meter: crate::meter::ParseMeter<'_>,
+    omit_access_log: bool,
+) -> Result<ScopeTree, ParseError> {
     let root_node = match root {
         Item::Node(n) => n.as_ref(),
         _ => return Err(err(1, "invalid root")),
@@ -457,6 +475,7 @@ pub(crate) fn run_goal_metered(
     let mut s = Scoper {
         meter,
         goal,
+        omit_access_log,
         ..Scoper::default()
     };
     // fxParserHoist
@@ -513,7 +532,9 @@ struct Scoper<'a> {
     /// The [`Goal`] this run is scoping for (see [`run_goal`]).
     goal: Goal,
     scopes: Vec<Scope>,
-    declare_indexes: Vec<DeclareIndex>,
+    // Most block scopes have no declarations. Keep only a pointer-sized
+    // vacancy for them; allocate the lookup tables on the first declaration.
+    declare_indexes: Vec<Option<Box<DeclareIndex>>>,
     /// `hoister->scope` / `binder->scope` — the current scope.
     scope: Option<usize>,
     /// `hoister->functionScope`.
@@ -536,6 +557,8 @@ struct Scoper<'a> {
     scope_maximum: i32,
     scope_counts: HashMap<usize, i32>,
     accesses: Vec<AccessRecord>,
+    // Default scoping still records diagnostics; only the compiler opts out.
+    omit_access_log: bool,
     /// Per-node access resolution, keyed by the node's address: an
     /// `Access` / declaration / `Define` node → the `(scope, declare id)`
     /// its symbol binds to (XS's `access->declaration`), or `None` for a
@@ -726,7 +749,7 @@ impl Scoper<'_> {
         let sc = Scope::new(parent, token, node_ptr(node), self.node_flags(node));
         let id = self.scopes.len();
         self.scopes.push(sc);
-        self.declare_indexes.push(DeclareIndex::default());
+        self.declare_indexes.push(None);
         self.scope = Some(id);
         id
     }
@@ -747,7 +770,7 @@ impl Scoper<'_> {
         sc.flags |= SCOPE_STRICT;
         let fi = self.scopes.len();
         self.scopes.push(sc);
-        self.declare_indexes.push(DeclareIndex::default());
+        self.declare_indexes.push(None);
         self.scope = Some(fi);
         let fs = self.function_scope;
         let bs = self.body_scope;
@@ -808,7 +831,7 @@ impl Scoper<'_> {
         let id = decl.id;
         let sc = &mut self.scopes[si];
         sc.declare_count += 1;
-        let index = &mut self.declare_indexes[si];
+        let index = self.declare_indexes[si].get_or_insert_with(Default::default);
         index.positions.resize(sc.next_id as usize, None);
         index.positions[id as usize] = Some(sc.declares.len());
         if let Some(symbol) = &decl.symbol {
@@ -838,24 +861,39 @@ impl Scoper<'_> {
     /// `fxScopeGetDeclareNode`, preserving first-in-list resolution without a scan.
     fn scope_get_declare(&self, si: usize, symbol: &Sym) -> Option<u32> {
         self.meter.work(1);
-        self.declare_indexes[si].names.get(symbol).copied()
+        self.declare_indexes[si]
+            .as_ref()?
+            .names
+            .get(symbol)
+            .copied()
     }
 
     fn declare_mut(&mut self, si: usize, id: u32) -> &mut Declare {
         self.meter.work(1);
-        let pos = self.declare_indexes[si].positions[id as usize].expect("declare id present");
+        let pos = self.declare_indexes[si]
+            .as_ref()
+            .expect("declared scope has an index")
+            .positions[id as usize]
+            .expect("declare id present");
         &mut self.scopes[si].declares[pos]
     }
     fn declare_ref(&self, si: usize, id: u32) -> &Declare {
         self.meter.work(1);
-        let pos = self.declare_indexes[si].positions[id as usize].expect("declare id present");
+        let pos = self.declare_indexes[si]
+            .as_ref()
+            .expect("declared scope has an index")
+            .positions[id as usize]
+            .expect("declare id present");
         &self.scopes[si].declares[pos]
     }
 
     /// Block close removes NoToken placeholders; rebuild the lookup indexes once.
     fn reindex_declarations(&mut self, si: usize) {
         self.meter.work(self.scopes[si].declares.len());
-        let index = &mut self.declare_indexes[si];
+        let Some(index) = &mut self.declare_indexes[si] else {
+            debug_assert!(self.scopes[si].declares.is_empty());
+            return;
+        };
         index.names.clear();
         index.positions.fill(None);
         for (pos, decl) in self.scopes[si].declares.iter().enumerate() {
@@ -2009,6 +2047,9 @@ impl Scoper<'_> {
     }
 
     fn record_access(&mut self, symbol: &SymbolName, line: u32, resolved: Option<(usize, u32)>) {
+        if self.omit_access_log {
+            return;
+        }
         self.accesses.push(AccessRecord {
             symbol: symbol.clone(),
             line,
@@ -2974,3 +3015,88 @@ fn decl_flags(flags: u32) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lazy_declare_index_tests {
+    use super::*;
+
+    #[test]
+    fn empty_lookup_and_reindex_stay_lazy_then_track_stable_declaration_ids() {
+        let mut scoper = Scoper::default();
+        let node = Node::leaf(Token::Block, 1);
+        let scope = scoper.scope_new(&node, Token::Block);
+        let name = Sym::Named("x".into());
+        assert!(scoper.declare_indexes[scope].is_none());
+        let before = scoper.meter.raw();
+        assert_eq!(scoper.scope_get_declare(scope, &name), None);
+        let lookup_charge = scoper.meter.raw() - before;
+        assert!(lookup_charge > 0, "an empty scope lookup still charges");
+        scoper.reindex_declarations(scope);
+        assert!(scoper.declare_indexes[scope].is_none());
+        let first = scoper.new_declare(scope, Token::NoToken, Some(name.clone()), 1);
+        let first = scoper.scope_add_declare(scope, first);
+        let second = scoper.new_declare(scope, Token::Let, Some(name.clone()), 1);
+        let second = scoper.scope_add_declare(scope, second);
+        assert!(scoper.declare_indexes[scope].is_some());
+        let before = scoper.meter.raw();
+        assert_eq!(scoper.scope_get_declare(scope, &name), Some(first));
+        assert_eq!(scoper.meter.raw() - before, lookup_charge);
+        // Hoisting removes placeholders. IDs survive relocation, while the
+        // first remaining duplicate becomes the block's lookup result.
+        scoper.scopes[scope]
+            .declares
+            .retain(|decl| decl.id != first);
+        scoper.reindex_declarations(scope);
+        assert_eq!(scoper.scope_get_declare(scope, &name), Some(second));
+        scoper.declare_mut(scope, second).bound = true;
+        assert!(scoper.declare_ref(scope, second).bound);
+    }
+}
+
+#[cfg(test)]
+mod compiler_access_log_tests {
+    use super::*;
+
+    #[test]
+    fn compiler_omits_only_diagnostics_and_preserves_scope_receipts() {
+        for source in [
+            "if(a){b;}else{c;}",
+            "var x=1; function f(a){ let y=a; return function(){return x+y;}; } f(x)",
+            "class C { #x=1; static #y=2; get(){return this.#x;} static get(){return this.#y;} } new C().get()",
+            "class B { x=1; } class D extends B { y=2; constructor(){super();} } new D().y",
+        ] {
+            let mut parser = crate::parser::Parser::new(source, false, false).unwrap();
+            let root = parser.parse_program(false).unwrap();
+            let public_meter = crate::ParseMeter::new();
+            let private_meter = crate::ParseMeter::new();
+            let public = run_goal_metered(&root, Goal::Eval, public_meter.clone()).unwrap();
+            let private = run_goal_for_compile(&root, Goal::Eval, private_meter.clone()).unwrap();
+            assert!(!public.accesses.is_empty(), "{source}");
+            assert!(private.accesses.is_empty(), "{source}");
+            assert_eq!(public_meter.raw(), private_meter.raw(), "{source}");
+            assert!(public_meter.raw() > 0);
+            assert_eq!(public.goal, private.goal);
+            assert_eq!(public.root, private.root);
+            assert_eq!(format!("{:?}", public.scopes), format!("{:?}", private.scopes));
+            assert_eq!(public.scope_counts, private.scope_counts);
+            assert_eq!(public.node_scopes, private.node_scopes);
+            assert_eq!(public.resolutions, private.resolutions);
+            assert_eq!(public.class_instance_init, private.class_instance_init);
+            assert_eq!(public.super_instance_init, private.super_instance_init);
+            assert_eq!(public.class_field_init_inst, private.class_field_init_inst);
+            assert_eq!(public.class_field_init_static, private.class_field_init_static);
+            for (logged, unlogged) in [
+                (&public.class_member_access, &private.class_member_access),
+                (&public.class_member_fi, &private.class_member_fi),
+            ] {
+                assert_eq!(logged.len(), unlogged.len());
+                for (key, value) in logged {
+                    assert_eq!(format!("{value:?}"), format!("{:?}", unlogged[key]));
+                }
+            }
+            // The public convenience entry points retain their diagnostic contract.
+            assert!(!run(&root).unwrap().accesses.is_empty());
+            assert!(!run_goal(&root, Goal::Script).unwrap().accesses.is_empty());
+        }
+    }
+}

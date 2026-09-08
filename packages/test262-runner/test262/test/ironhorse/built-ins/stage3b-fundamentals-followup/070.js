@@ -1,7 +1,7 @@
 /*---
 description: stage3b-fundamentals-followup corpus line 70 converted to a test262 case
 flags: [raw]
-features: [ironhorse-dual-run, ironhorse-meter-4-raw-8120008, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-5-raw-8120008, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-fundamentals-followup.js line 70.
   Source: function fcadd(a,b){return a+b} var bca=fcadd.bind(null,10); [1,2].map(bca)

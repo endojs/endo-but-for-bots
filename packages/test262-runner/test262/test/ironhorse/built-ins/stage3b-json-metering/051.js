@@ -1,7 +1,7 @@
 /*---
 description: stage3b-json-metering corpus line 51 converted to a test262 case
 flags: [raw]
-features: [ironhorse-dual-run, ironhorse-meter-4-raw-1329832, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-5-raw-1329832, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-json-metering.js line 51.
   Source: JSON.parse(" [ 1 , 2 , 3 ] ")

@@ -174,10 +174,16 @@ jobs:
           set -euo pipefail
           cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test property_lookup_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee property-lookup.log
       - name: Check compiler scaling
+        id: compiler_scaling
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-compile --test performance_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee compiler-scaling.log
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release --no-fail-fast -p ironhorse-compile --test compiler_growth_policy --test performance_bench --test compile_budget_bench -- --include-ignored --nocapture --test-threads=1 2>&1 | tee compiler-scaling.log
+      - name: Diagnose failed compiler scaling
+        if: ${{ !cancelled() && steps.compiler_scaling.outcome == 'failure' }}
+        run: |
+          set -euo pipefail
+          python3 rust/engine/benches/profile_compile.py 2>&1 | tee compiler-phases.log
       - name: Check shared-bytecode lifecycle scaling
         if: ${{ !cancelled() }}
         run: |
@@ -198,6 +204,7 @@ jobs:
             benchmark.log
             scaling.log
             compiler-scaling.log
+            compiler-phases.log
             lifecycle.log
             classification.log
             property-lookup.log
