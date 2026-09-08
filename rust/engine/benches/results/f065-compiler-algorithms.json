@@ -1,0 +1,254 @@
+{
+  "finding": "F065",
+  "increment": "compiler algorithms; bounded compilation metering remains open",
+  "before_revision": "9aca80b6839047a263e02e98055525f0025f54e7",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M3 Max",
+  "fixture_sha256": "076319e5699f6509dd23700d766ad659b62ffb59091cf7a60d503d46837e41bf",
+  "samples": "one warmup, median of three measured full compiles; compilation only, parsing/scoping/coding/serialization included",
+  "command": "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-compile --test performance_bench -- --ignored --nocapture --test-threads=1",
+  "measurements": [
+    {
+      "shape": "branches",
+      "n": 4000,
+      "before": {
+        "source_bytes": 128000,
+        "seconds": 0.082517333,
+        "parse_computrons": 52001
+      },
+      "after": {
+        "source_bytes": 128000,
+        "seconds": 0.012225583,
+        "parse_computrons": 52001
+      },
+      "speedup": 6.749562209016944
+    },
+    {
+      "shape": "branches",
+      "n": 8000,
+      "before": {
+        "source_bytes": 256000,
+        "seconds": 0.310481292,
+        "parse_computrons": 104001
+      },
+      "after": {
+        "source_bytes": 256000,
+        "seconds": 0.025322541,
+        "parse_computrons": 104001
+      },
+      "speedup": 12.261063848213338
+    },
+    {
+      "shape": "branches",
+      "n": 16000,
+      "before": {
+        "source_bytes": 512000,
+        "seconds": 1.175623458,
+        "parse_computrons": 208001
+      },
+      "after": {
+        "source_bytes": 512000,
+        "seconds": 0.054164625,
+        "parse_computrons": 208001
+      },
+      "speedup": 21.704635783964164
+    },
+    {
+      "shape": "branches",
+      "n": 32000,
+      "before": {
+        "source_bytes": 1024000,
+        "seconds": 4.711935542,
+        "parse_computrons": 416001
+      },
+      "after": {
+        "source_bytes": 1024000,
+        "seconds": 0.111896417,
+        "parse_computrons": 416001
+      },
+      "speedup": 42.109798225263994
+    },
+    {
+      "shape": "eval_declarations",
+      "n": 2000,
+      "before": {
+        "source_bytes": 33780,
+        "seconds": 0.017145125,
+        "parse_computrons": 10001
+      },
+      "after": {
+        "source_bytes": 33780,
+        "seconds": 0.002691917,
+        "parse_computrons": 10001
+      },
+      "speedup": 6.369113535075562
+    },
+    {
+      "shape": "eval_declarations",
+      "n": 4000,
+      "before": {
+        "source_bytes": 69780,
+        "seconds": 0.07214225,
+        "parse_computrons": 20001
+      },
+      "after": {
+        "source_bytes": 69780,
+        "seconds": 0.005531791,
+        "parse_computrons": 20001
+      },
+      "speedup": 13.041391115463329
+    },
+    {
+      "shape": "eval_declarations",
+      "n": 8000,
+      "before": {
+        "source_bytes": 141780,
+        "seconds": 0.304566166,
+        "parse_computrons": 40001
+      },
+      "after": {
+        "source_bytes": 141780,
+        "seconds": 0.010736958,
+        "parse_computrons": 40001
+      },
+      "speedup": 28.36615044968976
+    },
+    {
+      "shape": "script_declarations",
+      "n": 2000,
+      "before": {
+        "source_bytes": 33780,
+        "seconds": 0.017552583,
+        "parse_computrons": 10001
+      },
+      "after": {
+        "source_bytes": 33780,
+        "seconds": 0.002684459,
+        "parse_computrons": 10001
+      },
+      "speedup": 6.538592319718796
+    },
+    {
+      "shape": "script_declarations",
+      "n": 4000,
+      "before": {
+        "source_bytes": 69780,
+        "seconds": 0.073035375,
+        "parse_computrons": 20001
+      },
+      "after": {
+        "source_bytes": 69780,
+        "seconds": 0.005489167,
+        "parse_computrons": 20001
+      },
+      "speedup": 13.305365823266081
+    },
+    {
+      "shape": "script_declarations",
+      "n": 8000,
+      "before": {
+        "source_bytes": 141780,
+        "seconds": 0.301413333,
+        "parse_computrons": 40001
+      },
+      "after": {
+        "source_bytes": 141780,
+        "seconds": 0.011023666,
+        "parse_computrons": 40001
+      },
+      "speedup": 27.34238618985735
+    },
+    {
+      "shape": "strict_eval_declarations",
+      "n": 2000,
+      "before": {
+        "source_bytes": 33780,
+        "seconds": 0.019295459,
+        "parse_computrons": 10001
+      },
+      "after": {
+        "source_bytes": 33780,
+        "seconds": 0.002655042,
+        "parse_computrons": 10001
+      },
+      "speedup": 7.267477877939408
+    },
+    {
+      "shape": "strict_eval_declarations",
+      "n": 4000,
+      "before": {
+        "source_bytes": 69780,
+        "seconds": 0.08474725,
+        "parse_computrons": 20001
+      },
+      "after": {
+        "source_bytes": 69780,
+        "seconds": 0.005411208,
+        "parse_computrons": 20001
+      },
+      "speedup": 15.661429019176495
+    },
+    {
+      "shape": "strict_eval_declarations",
+      "n": 8000,
+      "before": {
+        "source_bytes": 141780,
+        "seconds": 0.341836334,
+        "parse_computrons": 40001
+      },
+      "after": {
+        "source_bytes": 141780,
+        "seconds": 0.011024375,
+        "parse_computrons": 40001
+      },
+      "speedup": 31.007320959238054
+    },
+    {
+      "shape": "function_declarations",
+      "n": 2000,
+      "before": {
+        "source_bytes": 33797,
+        "seconds": 0.010226959,
+        "parse_computrons": 10008
+      },
+      "after": {
+        "source_bytes": 33797,
+        "seconds": 0.002737375,
+        "parse_computrons": 10008
+      },
+      "speedup": 3.7360460294990645
+    },
+    {
+      "shape": "function_declarations",
+      "n": 4000,
+      "before": {
+        "source_bytes": 69797,
+        "seconds": 0.043752416,
+        "parse_computrons": 20008
+      },
+      "after": {
+        "source_bytes": 69797,
+        "seconds": 0.005772417,
+        "parse_computrons": 20008
+      },
+      "speedup": 7.579566063920884
+    },
+    {
+      "shape": "function_declarations",
+      "n": 8000,
+      "before": {
+        "source_bytes": 141797,
+        "seconds": 0.185429625,
+        "parse_computrons": 40008
+      },
+      "after": {
+        "source_bytes": 141797,
+        "seconds": 0.01105025,
+        "parse_computrons": 40008
+      },
+      "speedup": 16.780581887287617
+    }
+  ]
+}

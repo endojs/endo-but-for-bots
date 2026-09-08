@@ -66,3 +66,22 @@ Consequently it does not claim the four-variant daemon envelope is measured or m
 ```sh
 python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'
 ```
+
+## Compiler algorithms (F065, first increment)
+
+The compiler growth gate covers a 1.024 MB branch-heavy Script and declaration-heavy
+Script, sloppy eval, strict eval, and function bodies.
+It uses the same `<2.5x` doubling criterion for elapsed time and parse computrons,
+checks deterministic bytecode and symbols, and runs in the nightly job.
+The before/after measurements and exact fixture digest are recorded in
+[results/f065-compiler-algorithms.json](results/f065-compiler-algorithms.json).
+The baseline revision is recorded there; copy the same `performance_bench.rs` into
+that revision's compiler tests to reproduce the before measurement.
+Both revisions were measured serially with the same release toolchain and machine.
+This increment changes algorithms, not charges; bounded compilation and charging
+through the F051 runtime/daemon bridge remain necessary to close F065 fully.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-compile --test performance_bench -- --ignored --nocapture --test-threads=1
+```

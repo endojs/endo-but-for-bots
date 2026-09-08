@@ -424,6 +424,8 @@ pub struct Coder<'a, 'm> {
     /// The atom table (`parser->symbolTable`), seeded with the built-ins.
     symbols: SymbolTable<'m>,
     tree: &'a ScopeTree,
+    /// Immutable resolved-declaration flags, indexed once for local accesses.
+    declaration_flags: HashMap<(usize, u32), u32>,
     /// The frame slot each declaration was assigned during scope coding
     /// (XS writes `node->index` in `fxScopeCodingBlock`/`Eval`; a resolved
     /// access reads it back). Keyed by `(scope index, declare id)`.
@@ -511,6 +513,14 @@ impl<'a, 'm> Coder<'a, 'm> {
             chain_target: None,
             symbols: SymbolTable::seeded(meter),
             tree,
+            declaration_flags: tree
+                .scopes
+                .iter()
+                .enumerate()
+                .flat_map(|(scope, data)| {
+                    data.declares.iter().map(move |d| ((scope, d.id), d.flags))
+                })
+                .collect(),
             decl_index: HashMap::new(),
             defined: std::collections::HashSet::new(),
             pending_name: None,
@@ -558,11 +568,9 @@ impl<'a, 'm> Coder<'a, 'm> {
 
     /// A resolved declaration's `flags` word (for the closure test).
     fn declare_flags(&self, scope: usize, id: u32) -> u32 {
-        self.tree.scopes[scope]
-            .declares
-            .iter()
-            .find(|d| d.id == id)
-            .map(|d| d.flags)
+        self.declaration_flags
+            .get(&(scope, id))
+            .copied()
             .unwrap_or(0)
     }
 
@@ -5835,103 +5843,97 @@ impl Coder<'_, '_> {
     /// sizing, in order. Ported faithfully over the record `Vec`
     /// (`Payload::Target` records are XS's `XS_NO_CODE` placeholders).
     fn optimize(&mut self) {
+        self.meter.work(
+            self.codes
+                .len()
+                .saturating_mul(12)
+                .saturating_add(self.targets.len()),
+        );
         let is_end = |id: i32| (XS_CODE_END..=XS_CODE_END_DERIVED).contains(&id);
         let skippable = |id: i32| id == XS_NO_CODE || id == XS_CODE_UNWIND_1;
 
-        // Pass 1: branch to (target | unwind)* end => end. A `BRANCH_1`
-        // whose target, after skipping placeholders/unwinds, reaches an
-        // `END*` becomes that `END*` inline (replaced in place).
-        let mut i = 0;
-        while i < self.codes.len() {
-            self.meter.work(1);
+        // Targets are dense arena indices. Build their record positions once;
+        // no pass below relocates records until it has finished marking them.
+        let mut positions = vec![None; self.targets.len()];
+        for (i, code) in self.codes.iter().enumerate() {
+            if let Payload::Target { tid } = code.payload {
+                positions[tid].get_or_insert(i);
+            }
+        }
+        // Cache positions, not opcodes: pass 1 must observe an earlier branch
+        // rewritten to END while preserving its original left-to-right order.
+        // Rewrites never change whether a record is skippable.
+        let mut significant = vec![None; self.codes.len() + 1];
+        for i in (0..self.codes.len()).rev() {
+            significant[i] = if skippable(self.codes[i].id) {
+                significant[i + 1]
+            } else {
+                Some(i)
+            };
+        }
+        // Pass 1: branch to (target | unwind)* end => end.
+        for i in 0..self.codes.len() {
             if self.codes[i].id == XS_CODE_BRANCH_1 {
                 if let Payload::Branch { tid } = self.codes[i].payload {
-                    if let Some(p) = self.target_pos(tid) {
-                        let mut j = p + 1;
-                        while j < self.codes.len() && skippable(self.codes[j].id) {
-                            self.meter.work(1);
-                            j += 1;
-                        }
-                        if j < self.codes.len() && is_end(self.codes[j].id) {
-                            let end_id = self.codes[j].id;
-                            self.codes[i].id = end_id;
+                    if let Some(j) = positions[tid].and_then(|p| significant[p + 1]) {
+                        if is_end(self.codes[j].id) {
+                            self.codes[i].id = self.codes[j].id;
                             self.codes[i].payload = Payload::Byte;
                         }
                     }
                 }
             }
-            i += 1;
         }
 
         // Pass 2: unwind (target | unwind)* end => (target | unwind)* end.
-        // An `UNWIND_1` that reaches an `END*` (over placeholders/unwinds)
-        // is dropped — the frame teardown at `END*` subsumes it.
-        let mut i = 0;
-        while i < self.codes.len() {
-            self.meter.work(1);
-            if self.codes[i].id == XS_CODE_UNWIND_1 {
-                let mut j = i + 1;
-                while j < self.codes.len() && skippable(self.codes[j].id) {
-                    self.meter.work(1);
-                    j += 1;
-                }
-                if j < self.codes.len() && is_end(self.codes[j].id) {
-                    self.meter.work(self.codes.len() - i);
-                    self.codes.remove(i);
-                    continue;
-                }
+        // A reverse scan shares the next significant opcode across arbitrarily
+        // long placeholder/unwind runs, instead of rescanning each suffix.
+        let mut drop = vec![false; self.codes.len()];
+        let mut next = None;
+        for i in (0..self.codes.len()).rev() {
+            let id = self.codes[i].id;
+            drop[i] = id == XS_CODE_UNWIND_1 && next.is_some_and(is_end);
+            if !skippable(id) {
+                next = Some(id);
             }
-            i += 1;
         }
+        self.drop_marked(&drop);
 
-        // Pass 3: end target* end => target* end. A dead `END*` followed
-        // (over placeholders) by the same `END*` is dropped.
-        let mut i = 0;
-        while i < self.codes.len() {
-            self.meter.work(1);
-            if is_end(self.codes[i].id) {
-                let mut j = i + 1;
-                while j < self.codes.len() && self.codes[j].id == XS_NO_CODE {
-                    self.meter.work(1);
-                    j += 1;
-                }
-                if j < self.codes.len() && self.codes[j].id == self.codes[i].id {
-                    self.meter.work(self.codes.len() - i);
-                    self.codes.remove(i);
-                    continue;
-                }
+        // Pass 3: end target* end => target* end (only identical END forms).
+        drop.resize(self.codes.len(), false);
+        next = None;
+        for i in (0..self.codes.len()).rev() {
+            let id = self.codes[i].id;
+            drop[i] = is_end(id) && next == Some(id);
+            if id != XS_NO_CODE {
+                next = Some(id);
             }
-            i += 1;
         }
+        self.drop_marked(&drop);
 
-        // Pass 4: branch to next =>. A `BRANCH_1` whose target is the
-        // immediately following record is dropped.
-        let mut i = 0;
-        while i < self.codes.len() {
-            self.meter.work(1);
-            if self.codes[i].id == XS_CODE_BRANCH_1 {
-                if let Payload::Branch { tid } = self.codes[i].payload {
-                    if let Some(Payload::Target { tid: ntid }) =
-                        self.codes.get(i + 1).map(|c| c.payload.clone())
-                    {
-                        if ntid == tid {
-                            self.meter.work(self.codes.len() - i);
-                            self.codes.remove(i);
-                            continue;
-                        }
-                    }
+        // Pass 4: branch to the immediately following target => nothing.
+        drop.clear();
+        drop.resize(self.codes.len(), false);
+        for (i, pair) in self.codes.windows(2).enumerate() {
+            if pair[0].id == XS_CODE_BRANCH_1 {
+                if let (Payload::Branch { tid }, Payload::Target { tid: next }) =
+                    (&pair[0].payload, &pair[1].payload)
+                {
+                    drop[i] = tid == next;
                 }
             }
-            i += 1;
         }
+        self.drop_marked(&drop);
     }
 
-    /// The record index of a placed target (`Payload::Target { tid }`).
-    fn target_pos(&self, tid: usize) -> Option<usize> {
-        self.meter.work(self.codes.len());
-        self.codes
-            .iter()
-            .position(|c| matches!(c.payload, Payload::Target { tid: t } if t == tid))
+    /// Compact once per peephole pass, preserving record and target order.
+    fn drop_marked(&mut self, drop: &[bool]) {
+        let mut i = 0;
+        self.codes.retain(|_| {
+            let keep = !drop[i];
+            i += 1;
+            keep
+        });
     }
 
     /// `fxParserCode`'s three passes, producing **both** the `codeBuffer`
@@ -6591,6 +6593,52 @@ fn binary_code(token: Token) -> i32 {
 }
 
 #[cfg(test)]
+mod optimizer_tests {
+    use super::*;
+
+    #[test]
+    fn later_branch_observes_an_earlier_end_rewrite() {
+        let tree = crate::scoper::scope_program("0", false).unwrap();
+        let mut coder = Coder::new(&tree, crate::ParseMeter::new());
+        let earlier = coder.create_target();
+        let finish = coder.create_target();
+        coder.place_target(0, earlier);
+        coder.add_branch(0, XS_CODE_BRANCH_1, finish);
+        coder.add_integer(0, XS_CODE_INTEGER_1, 1);
+        coder.add_branch(0, XS_CODE_BRANCH_1, earlier);
+        coder.place_target(0, finish);
+        coder.add_byte(0, XS_CODE_END);
+        coder.optimize();
+        assert!(!coder.codes.iter().any(|c| c.id == XS_CODE_BRANCH_1));
+        assert_eq!(
+            coder.codes.iter().filter(|c| c.id == XS_CODE_END).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn long_shared_target_unwind_suffix_is_compacted() {
+        let tree = crate::scoper::scope_program("0", false).unwrap();
+        let mut coder = Coder::new(&tree, crate::ParseMeter::new());
+        let targets: Vec<_> = (0..4096).map(|_| coder.create_target()).collect();
+        for &target in &targets {
+            coder.add_branch(0, XS_CODE_BRANCH_1, target);
+        }
+        for &target in &targets {
+            coder.place_target(0, target);
+            coder.add_index(0, XS_CODE_UNWIND_1, 1);
+        }
+        coder.add_byte(0, XS_CODE_END);
+        coder.optimize();
+        assert_eq!(coder.codes.len(), targets.len() + 1);
+        assert_eq!(coder.codes.last().unwrap().id, XS_CODE_END);
+        assert!(coder.codes[..targets.len()]
+            .iter()
+            .all(|c| c.id == XS_NO_CODE));
+    }
+}
+
+#[cfg(test)]
 mod budget_tests {
     use super::*;
 
@@ -6613,38 +6661,23 @@ mod budget_tests {
     }
 
     #[test]
-    fn optimizer_inner_scan_stops_at_its_budget() {
-        let mut parser = crate::Parser::new("", false, false).unwrap();
-        let root = parser.parse_program(false).unwrap();
-        let tree = crate::scoper::run(&root).unwrap();
-        let mut admitted = 0;
-        // Pass 1 visits every record. The next 100 visits enter the nested
-        // pass-2 scan, before its first removal or the quadratic remainder.
-        let result = crate::meter::budgeted(
-            &mut |_| {
-                admitted += 1;
-                admitted < 10_101
-            },
-            |meter| {
-                let mut coder = Coder::new(&tree, crate::ParseMeter::new());
-                coder.codes = vec![
-                    Code {
-                        id: XS_CODE_UNWIND_1,
-                        stack_level: 0,
-                        payload: Payload::Byte
-                    };
-                    10_000
-                ];
-                coder.codes.push(Code {
-                    id: XS_CODE_END,
-                    stack_level: 0,
-                    payload: Payload::Byte,
-                });
-                coder.meter = meter;
-                coder.optimize();
-            },
-        );
+    fn optimizer_reservation_refuses_before_mutation() {
+        let tree = crate::scoper::scope_program("0", false).unwrap();
+        let mut coder = Coder::new(&tree, crate::ParseMeter::new());
+        coder.codes = vec![
+            Code {
+                id: XS_CODE_UNWIND_1,
+                stack_level: 0,
+                payload: Payload::Byte
+            };
+            10_000
+        ];
+        let mut refuse = |_| false;
+        let result = crate::meter::budgeted(&mut refuse, |meter| {
+            coder.meter = meter;
+            coder.optimize();
+        });
         assert!(result.is_err());
-        assert_eq!(admitted, 10_101);
+        assert_eq!(coder.codes.len(), 10_000);
     }
 }
