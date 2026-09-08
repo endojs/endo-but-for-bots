@@ -4125,6 +4125,8 @@ pub enum Halt {
     Return,
     /// The meter host refused more computation.
     MeterAbort,
+    /// The configured slot or chunk heap ceiling was exhausted.
+    HeapExhausted,
     /// The interpreter ran past a caller-supplied **step ceiling** without
     /// completing — a bounded-execution guard for callers that install no
     /// metering host (notably the bytecode-decoder fuzz harness, which
@@ -4256,6 +4258,7 @@ impl Halt {
             self,
             Halt::StackOverflow(_)
                 | Halt::MeterAbort
+                | Halt::HeapExhausted
                 | Halt::Panic(_)
                 | Halt::EngineInvariant(_)
                 // Provisional (Open Question), may change without a
@@ -14420,6 +14423,33 @@ impl Interp {
     }
 
     pub fn run(&mut self, code: &[u8]) -> RunOutcome {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_inner(code))) {
+            Ok(outcome) => outcome,
+            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
+                // All native activations have unwound. The interrupted heap
+                // remains non-quiescent and must be rewound by the supervisor.
+                self.native_depth = 0;
+                self.last_crank_completed = false;
+                RunOutcome {
+                    completed: false,
+                    result: String::new(),
+                    coercion_error: None,
+                    computrons: self.meter.computrons(),
+                    dispatched: self.n_dispatched,
+                    meter_raw: self.meter.raw(),
+                    halt: Halt::HeapExhausted,
+                }
+            }
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    fn run_inner(&mut self, code: &[u8]) -> RunOutcome {
+        if self.slots.capacity() > self.slots.ceiling()
+            || self.chunks.byte_size() > self.chunks.ceiling()
+        {
+            crate::value::heap_exhausted();
+        }
         // A halted crank retains its activation for inspection until the
         // caller explicitly starts another run. Abandon that activation now:
         // otherwise its frames make BEGIN treat this program as a callee,
@@ -63027,6 +63057,7 @@ mod tests {
                 Halt::Return
                 | Halt::Throw { .. }
                 | Halt::MeterAbort
+                | Halt::HeapExhausted
                 | Halt::StepLimit(_)
                 | Halt::NotImplemented(_)
                 | Halt::Refused(_)
