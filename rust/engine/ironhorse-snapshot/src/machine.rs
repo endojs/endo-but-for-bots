@@ -1171,6 +1171,28 @@ pub fn checkpoint_to_store(
             found: stored.seal,
         });
     }
+    if let Some(pin) = &session.pin {
+        // Read through the caller's existing store borrow: the lazy source
+        // owns the same RefCell and cannot be borrowed during checkpoint.
+        session
+            .interp
+            .slots
+            .validate_backing_before_checkpoint(|page| {
+                let bytes = store.read_slot_page(page)?;
+                if pin.leaves.borrow().pages.get(page as usize).copied()
+                    != Some(leaf_hash(LEAF_PAGE, page, &bytes))
+                {
+                    return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+                        "checkpoint deferred slot page leaf mismatch",
+                    )));
+                }
+                crate::slot_codec::decode_slots(&bytes).map_err(|_| {
+                    StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+                        "checkpoint deferred slot page decode",
+                    ))
+                })
+            })?;
+    }
     let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
@@ -1797,6 +1819,56 @@ mod tests {
             resume_from_store(&store, &sig()).is_err(),
             "the store path must refuse what the container path refuses"
         );
+    }
+
+    #[test]
+    fn live_to_free_to_poison_is_refused_by_container_and_store_paths() {
+        use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+        let mut m = Interp::new();
+        m.link_intrinsics(&["x".into()]);
+        let mut image = m.snapshot_image(&sig()).expect("gated image");
+        let page = ironhorse_vm::value::SLOTS_PER_PAGE;
+        let edge = (image.slots.len() as u32).div_ceil(page) * page;
+        let free = edge + page;
+        image.slots.resize(free as usize, Slot::undefined());
+        image.slots[edge as usize] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(free)));
+        image.slots.push(Slot::of(
+            Kind::Reference,
+            Payload::Reference(SlotIndex(free + 900_000)),
+        ));
+        image.slot_free.push(free);
+        image.slot_live = image.slots.len() as u32 - image.slot_free.len() as u32;
+        assert!(crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err());
+        for checkpoint in [false, true] {
+            let mut store = crate::store::MemoryStore::new();
+            let batch = image_to_batch(&image, 1, "");
+            crate::store::HeapStore::commit(&mut store, &batch)
+                .expect("consistently sealed hostile store");
+            assert!(resume_from_store(&store, &sig()).is_err());
+            let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
+            let mut resumed = resume_from_store_lazy(shared.clone(), &sig()).expect("lazy attach");
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if checkpoint {
+                    assert_eq!(
+                        resumed.machine_mut().slots.alloc(Slot::undefined()),
+                        SlotIndex(free)
+                    );
+                    checkpoint_to_store(&mut resumed, &sig(), &mut *shared.borrow_mut()).unwrap();
+                } else {
+                    resumed.machine().slots.ensure_all_resident();
+                }
+            }))
+            .expect_err("the live-to-free edge must fail before fault or commit can follow poison");
+            let message = panic.downcast_ref::<String>().expect("named fault");
+            assert!(message.contains("references a free slot"), "{message}");
+            assert_eq!(
+                crate::store::HeapStore::manifest(&*shared.borrow())
+                    .unwrap()
+                    .epoch,
+                1,
+                "refusal must precede the durable commit"
+            );
+        }
     }
 
     /// The lazy twin: the poisoned page dies AT THE FAULT with a named

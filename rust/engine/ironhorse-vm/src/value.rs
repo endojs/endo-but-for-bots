@@ -70,6 +70,9 @@ struct SlotBacking {
     /// against (a short row must die loudly, not install placeholder
     /// records beside real ones).
     snapshot_count: u32,
+    /// Free records in the backing generation, independent of allocations
+    /// and collections since attach. Persisted edges must not alias reuse.
+    snapshot_free: Vec<bool>,
     /// The attach-time chunk-arena byte length, so a fault can bound a
     /// slot's String/BigInt chunk offset without seeing the chunk
     /// arena itself (the wave-6 W6-14 lazy remainder, closed): a
@@ -99,6 +102,72 @@ struct SlotBacking {
 }
 
 impl SlotBacking {
+    fn validate_records(&self, page: u32, records: &[Slot]) {
+        let start = page as usize * SLOTS_PER_PAGE as usize;
+        // Exact length, both directions: a short row would silently
+        // leave placeholder records marked resident (the review's
+        // silent-corruption finding); a long row would overrun.
+        let expected = (self.snapshot_count as usize)
+            .min(start + SLOTS_PER_PAGE as usize)
+            .saturating_sub(start);
+        assert!(
+            records.len() == expected,
+            "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
+            records.len(),
+        );
+        // Wave-6 W6-14 (lazy half): leaf hashes prove the row's bytes
+        // are authentic-to-commit, not that its indices are in-arena —
+        // a consistently-resealed hostile store faulted rows whose
+        // references sent the collector out of range (an anonymous
+        // release panic). Refuse AT THE FAULT, named, like the leaf
+        // check above. The chunk-offset bound rides the backing
+        // (`chunk_bound`, the attach-time chunk length), mirroring the
+        // eager gate's rule: a payload offset sits above its 4-byte
+        // header and inside the arena.
+        let capacity = self.snapshot_count;
+        for (k, s) in records.iter().enumerate() {
+            // A record on the free list is OPAQUE dead bytes: the sweep
+            // does not scrub it and chunk compaction remaps MARKED
+            // slots only, so an honest post-GC store legitimately
+            // holds freed records whose stale references and chunk
+            // offsets sit outside the current arenas. Nothing reads
+            // them before `alloc` overwrites (and re-faults) the page,
+            // so validating them here refuses honest stores (review
+            // finding 2 — the lazy half; the eager gate skips the same
+            // records).
+            if self.snapshot_free[start + k] {
+                continue;
+            }
+            s.each_ref_slot(|r| {
+                assert!(
+                    r.is_null() || r.0 < capacity,
+                    "lazy heap fault: slot page {page} holds an out-of-arena                      reference ({} past {capacity}) — corrupt store",
+                    r.0,
+                );
+                assert!(
+                    r.is_null() || !self.snapshot_free[r.0 as usize],
+                    "lazy heap fault: slot page {page} references a free slot ({}) — corrupt store",
+                    r.0,
+                );
+            });
+            assert!(
+                s.next.is_null() || s.next.0 < capacity,
+                "lazy heap fault: slot page {page} holds an out-of-arena                  next link ({} past {capacity}) — corrupt store",
+                s.next.0,
+            );
+            if let Some(off) = s.chunk_ref() {
+                let o = off.0 as u64;
+                assert!(
+                    off.is_null()
+                        || (o >= CHUNK_HEADER as u64 && o <= self.chunk_bound),
+                    "lazy heap fault: slot page {page} holds an out-of-arena chunk offset ({o} outside {}..={}) — corrupt store",
+                    CHUNK_HEADER,
+                    self.chunk_bound,
+                );
+            }
+        }
+    }
+
     #[inline]
     fn get(&self, i: usize) -> Slot {
         assert!(
@@ -579,7 +648,7 @@ impl SlotArena {
         SlotArena {
             slots: Vec::new(),
             free,
-            free_marks,
+            free_marks: free_marks.clone(),
             marks: vec![false; slot_count as usize],
             live,
             dirty: vec![false; pages],
@@ -590,6 +659,7 @@ impl SlotArena {
                 source,
                 resident: (0..pages).map(|_| Cell::new(false)).collect(),
                 snapshot_count: slot_count,
+                snapshot_free: free_marks,
                 chunk_bound,
                 pages: RefCell::new((0..pages).map(|_| None).collect()),
                 count: Cell::new(slot_count),
@@ -621,64 +691,8 @@ impl SlotArena {
             return;
         }
         let records = backing.source.slot_page(page);
+        backing.validate_records(page, &records);
         let start = page as usize * SLOTS_PER_PAGE as usize;
-        // Exact length, both directions: a short row would silently
-        // leave placeholder records marked resident (the review's
-        // silent-corruption finding); a long row would overrun.
-        let expected = (backing.snapshot_count as usize)
-            .min(start + SLOTS_PER_PAGE as usize)
-            .saturating_sub(start);
-        assert!(
-            records.len() == expected,
-            "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
-            records.len(),
-        );
-        // Wave-6 W6-14 (lazy half): leaf hashes prove the row's bytes
-        // are authentic-to-commit, not that its indices are in-arena —
-        // a consistently-resealed hostile store faulted rows whose
-        // references sent the collector out of range (an anonymous
-        // release panic). Refuse AT THE FAULT, named, like the leaf
-        // check above. The chunk-offset bound rides the backing
-        // (`chunk_bound`, the attach-time chunk length), mirroring the
-        // eager gate's rule: a payload offset sits above its 4-byte
-        // header and inside the arena.
-        let capacity = self.capacity() as u32;
-        for (k, s) in records.iter().enumerate() {
-            // A record on the free list is OPAQUE dead bytes: the sweep
-            // does not scrub it and chunk compaction remaps MARKED
-            // slots only, so an honest post-GC store legitimately
-            // holds freed records whose stale references and chunk
-            // offsets sit outside the current arenas. Nothing reads
-            // them before `alloc` overwrites (and re-faults) the page,
-            // so validating them here refuses honest stores (review
-            // finding 2 — the lazy half; the eager gate skips the same
-            // records).
-            if self.is_free((start + k) as u32) {
-                continue;
-            }
-            s.each_ref_slot(|r| {
-                assert!(
-                    r.is_null() || r.0 < capacity,
-                    "lazy heap fault: slot page {page} holds an out-of-arena                      reference ({} past {capacity}) — corrupt store",
-                    r.0,
-                );
-            });
-            assert!(
-                s.next.is_null() || s.next.0 < capacity,
-                "lazy heap fault: slot page {page} holds an out-of-arena                  next link ({} past {capacity}) — corrupt store",
-                s.next.0,
-            );
-            if let Some(off) = s.chunk_ref() {
-                let o = off.0 as u64;
-                assert!(
-                    off.is_null()
-                        || (o >= CHUNK_HEADER as u64 && o <= backing.chunk_bound),
-                    "lazy heap fault: slot page {page} holds an out-of-arena chunk offset ({o} outside {}..={}) — corrupt store",
-                    CHUNK_HEADER,
-                    backing.chunk_bound,
-                );
-            }
-        }
         for (k, s) in records.into_iter().enumerate() {
             backing.set(start + k, s);
         }
@@ -754,6 +768,34 @@ impl SlotArena {
         self.ensure_page_resident(page);
     }
 
+    /// Validate deferred rows before committing a geometry or free-set
+    /// change that could make a corrupt persisted edge appear valid.
+    /// The caller supplies authenticated rows through its existing store borrow.
+    /// Ordinary checkpoints keep their lazy working set. Reuse or growth
+    /// must validate remaining rows against the OLD backing generation,
+    /// before the durable commit can launder an invalid destination.
+    pub fn validate_backing_before_checkpoint<E>(
+        &self,
+        mut read_page: impl FnMut(u32) -> Result<Vec<Slot>, E>,
+    ) -> Result<(), E> {
+        if let Some(backing) = &self.lazy {
+            if self.capacity() > backing.snapshot_count
+                || backing
+                    .snapshot_free
+                    .iter()
+                    .zip(&self.free_marks)
+                    .any(|(&was_free, &is_free)| was_free && !is_free)
+            {
+                for (page, resident) in backing.resident.iter().enumerate() {
+                    if !resident.get() {
+                        backing.validate_records(page as u32, &read_page(page as u32)?);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Advance the lazy backing to the CURRENT geometry — called by
     /// the store session after ITS OWN successful checkpoint (phase 8
     /// review fix). Records appended since attach are committed rows
@@ -774,6 +816,7 @@ impl SlotArena {
         let pages = count.div_ceil(SLOTS_PER_PAGE) as usize;
         if let Some(backing) = &mut self.lazy {
             backing.snapshot_count = count;
+            backing.snapshot_free.clone_from(&self.free_marks);
             backing.chunk_bound = chunk_bound;
             while backing.resident.len() < pages {
                 backing.resident.push(Cell::new(true));
@@ -1883,6 +1926,72 @@ mod dirty_tests {
     //! possibly smaller, extent range.
 
     use super::*;
+
+    #[test]
+    fn lazy_fault_cannot_hide_a_free_target_by_reusing_it_first() {
+        struct CrossPage;
+        impl PageSource for CrossPage {
+            fn slot_page(&self, page: u32) -> Vec<Slot> {
+                if page == 0 {
+                    let mut slots = vec![Slot::undefined(); SLOTS_PER_PAGE as usize];
+                    slots[1] = Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(SlotIndex(SLOTS_PER_PAGE)),
+                    );
+                    slots
+                } else {
+                    vec![Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(SlotIndex(900_000)),
+                    )]
+                }
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                unreachable!()
+            }
+        }
+        let mut arena = SlotArena::lazy_from_parts(
+            SLOTS_PER_PAGE + 1,
+            vec![SLOTS_PER_PAGE],
+            SLOTS_PER_PAGE,
+            Rc::new(CrossPage),
+            64,
+        );
+        assert_eq!(arena.alloc(Slot::undefined()), SlotIndex(SLOTS_PER_PAGE));
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| arena.get(SlotIndex(1))))
+                .expect_err("reuse must not launder a persisted live-to-free edge");
+        let message = panic.downcast_ref::<String>().expect("named fault");
+        assert!(message.contains("references a free slot"), "{message}");
+    }
+
+    #[test]
+    fn lazy_fault_rejects_live_edges_into_free_records() {
+        struct PoisonedPage(Slot);
+        impl PageSource for PoisonedPage {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                vec![
+                    Slot::undefined(),
+                    self.0,
+                    Slot::of(Kind::Reference, Payload::Reference(SlotIndex(900_000))),
+                ]
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                unreachable!()
+            }
+        }
+        let reference = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(2)));
+        let mut next = Slot::undefined();
+        next.next = SlotIndex(2);
+        for edge in [reference, next] {
+            let arena = SlotArena::lazy_from_parts(3, vec![2], 2, Rc::new(PoisonedPage(edge)), 64);
+            let panic =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| arena.get(SlotIndex(1))))
+                    .expect_err("the first fault must reject a live-to-free edge");
+            let message = panic.downcast_ref::<String>().expect("named fault");
+            assert!(message.contains("references a free slot"), "{message}");
+        }
+    }
 
     #[test]
     fn chunk_addressability_boundaries_do_not_need_gigabyte_allocations() {
