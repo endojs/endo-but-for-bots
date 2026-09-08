@@ -41,6 +41,22 @@ and 101 still stand; 80 are pinned by a regression test that did not exist at
 review time, and no finding regressed.
 Appendix A now carries four locations and three statuses per finding.
 
+**Revised a fourth time 2026-09-08 against
+[`1b130df7`](https://github.com/endojs/endo-but-for-bots/commit/1b130df7).**
+94 further commits landed, 58 of them touching the reviewed paths.
+Three workstreams landed at once: W2's allocation half, all seven steps of W3,
+and W4 entire, alongside the six performance findings of §3.10 and the
+F106/F122 instrumentation.
+The engine gained two crates, `ironhorse-meter` and `ironhorse-text`, and
+`Halt` gained `HeapExhausted`.
+All 191 findings were re-verified again: 83 are fixed, 47 are partially fixed,
+and 61 still stand; 129 are pinned by a regression test that did not exist at
+review time, and no finding regressed.
+This revision also records, for the first time, what each fix costs to carry:
+86 findings name a derived index, a retained allocation, a small-input
+regression or a second source of truth that the fix introduced.
+Appendix A now carries five locations and four statuses per finding.
+
 The earlier revision's per-finding statuses were **not** overwritten: a finding
 resolved since carries an additional Status line, and Appendix A carries a
 location and a status column per revision.
@@ -62,6 +78,18 @@ survivors appear in the summary.
 These companion files are the readers' and reviewers' own reports, kept
 verbatim as evidence.
 Line numbers refer to the reviewed commit.
+
+## Implementation records
+
+Added after publication, describing work done in response to the review.
+The first four are the implementers' own records; the fifth is the review's
+assessment of what that work cost to carry.
+
+- [W2-ALLOCATION](W2-ALLOCATION.md)
+- [W3-COMPLETION](W3-COMPLETION.md)
+- [W4-IMPLEMENTATION](W4-IMPLEMENTATION.md)
+- [PERFORMANCE-FIXES](PERFORMANCE-FIXES.md)
+- [PERFORMANCE-TRADEOFFS](PERFORMANCE-TRADEOFFS.md)
 
 ## Lens reports
 
