@@ -396,7 +396,10 @@ fn parse_meter_advances_per_token() {
     }
     // a, +, b, EOF = 4 tokens.
     assert_eq!(count, 4);
-    assert_eq!(lexer.meter().computrons(), 4);
+    assert_eq!(
+        lexer.meter().raw(),
+        4 * crate::meter::PARSE_TOKEN_METERING + 5 * ironhorse_meter::COMPILE_SOURCE_BYTE_METERING
+    );
     assert_eq!(
         crate::meter::PARSE_METER_RELEASE,
         ironhorse_meter::COST_TABLE_VERSION

@@ -474,9 +474,11 @@ impl Compartment {
         self.evaluate_with_symbols_on(interp, bytecode, symbols)
     }
 
-    /// The shared body of the symbol-linked evaluators: link, seed this
-    /// compartment's globals, run.
-    fn evaluate_with_symbols_on(
+    /// Link and evaluate on a caller-owned interpreter. An embedder may use
+    /// this to retain the meter and admission window used to compile the unit.
+    /// The interpreter must belong to this evaluation; its existing state is
+    /// retained before this compartment's globals are seeded.
+    pub fn evaluate_with_symbols_on(
         &self,
         mut interp: Interp,
         bytecode: &[u8],

@@ -442,11 +442,20 @@ pub fn run(root: &Item) -> Result<ScopeTree, ParseError> {
 /// decides where a program's top-level `var`/function declarations live; see
 /// [`Goal`] for the three answers.
 pub fn run_goal(root: &Item, goal: Goal) -> Result<ScopeTree, ParseError> {
+    run_goal_metered(root, goal, crate::meter::ParseMeter::new())
+}
+
+pub(crate) fn run_goal_metered(
+    root: &Item,
+    goal: Goal,
+    meter: crate::meter::ParseMeter<'_>,
+) -> Result<ScopeTree, ParseError> {
     let root_node = match root {
         Item::Node(n) => n.as_ref(),
         _ => return Err(err(1, "invalid root")),
     };
     let mut s = Scoper {
+        meter,
         goal,
         ..Scoper::default()
     };
@@ -482,7 +491,8 @@ use crate::ast::TREE_DEPTH_LIMIT;
 /// Ambient hoister/binder state threaded through the passes, plus the
 /// arena and the by-address side tables the immutable AST needs.
 #[derive(Default)]
-struct Scoper {
+struct Scoper<'a> {
+    meter: crate::meter::ParseMeter<'a>,
     /// Tree levels currently on the native stack (see [`TREE_DEPTH_LIMIT`]
     /// and [`Self::descend`]).
     depth: u32,
@@ -681,7 +691,7 @@ fn child_list<'a>(n: &'a Node, i: usize) -> Option<&'a [Item]> {
     }
 }
 
-impl Scoper {
+impl Scoper<'_> {
     fn node_flags(&self, n: &Node) -> u32 {
         n.flags | self.node_extra.get(&node_ptr(n)).copied().unwrap_or(0)
     }
@@ -804,6 +814,7 @@ impl Scoper {
     /// `fxScopeGetDeclareNode` — linear symbol lookup, returning the id.
     fn scope_get_declare(&self, si: usize, symbol: &Sym) -> Option<u32> {
         let sc = &self.scopes[si];
+        self.meter.work(sc.declares.len());
         sc.declares
             .iter()
             .find(|d| d.symbol.as_ref() == Some(symbol))
@@ -811,6 +822,7 @@ impl Scoper {
     }
 
     fn declare_mut(&mut self, si: usize, id: u32) -> &mut Declare {
+        self.meter.work(self.scopes[si].declares.len());
         self.scopes[si]
             .declares
             .iter_mut()
@@ -818,6 +830,7 @@ impl Scoper {
             .expect("declare id present")
     }
     fn declare_ref(&self, si: usize, id: u32) -> &Declare {
+        self.meter.work(self.scopes[si].declares.len());
         self.scopes[si]
             .declares
             .iter()
@@ -858,6 +871,7 @@ impl Scoper {
     /// `fxScopeEval` — poison a scope and every ancestor with `mxEvalFlag`.
     fn scope_eval(&mut self, mut si: Option<usize>) {
         while let Some(i) = si {
+            self.meter.work(1);
             self.scopes[i].flags |= SCOPE_EVAL;
             si = self.scopes[i].parent;
         }
@@ -868,6 +882,7 @@ impl Scoper {
     fn scope_arrow(&mut self, si: Option<usize>) {
         let mut cur = si;
         while let Some(i) = cur {
+            self.meter.work(1);
             let tok = self.scopes[i].token;
             if tok == Token::Eval || tok == Token::Program {
                 return;
@@ -934,7 +949,7 @@ impl Scoper {
 
 // ============================ fxScopeLookup ============================
 
-impl Scoper {
+impl Scoper<'_> {
     /// `fxScopeLookup` — resolve `symbol` up the scope chain from scope
     /// `si`, creating function-scope closure aliases as XS does. Returns
     /// the resolved `(scope, declare id)` or `None` for a global / `with`
@@ -1042,7 +1057,7 @@ impl Scoper {
 
 // ============================== hoist pass ==============================
 
-impl Scoper {
+impl Scoper<'_> {
     /// Walk one tree level with `f`, refusing past [`TREE_DEPTH_LIMIT`] with
     /// the parser's `"stack overflow"` `SyntaxError`. The parser never builds
     /// a tree that deep (it refuses at construction), so this is the backstop
@@ -1053,6 +1068,7 @@ impl Scoper {
         line: u32,
         f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<T, ParseError> {
+        self.meter.work(1);
         if self.depth >= TREE_DEPTH_LIMIT {
             return Err(err(line, "stack overflow"));
         }
@@ -1915,7 +1931,7 @@ impl Scoper {
 
 // ============================== bind pass ==============================
 
-impl Scoper {
+impl Scoper<'_> {
     // ---- binder frame counters (fxBinderPush/PopVariables) ----
     fn push_variables(&mut self, count: i32) {
         self.scope_level += count;

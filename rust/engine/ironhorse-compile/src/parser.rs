@@ -165,8 +165,8 @@ fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
 
 /// The parser: the token window (`states[0]`/`states[1]`), the mode-flag
 /// word (`parser->flags`), and the node-build stack (`parser->root`).
-pub struct Parser {
-    lexer: Lexer,
+pub struct Parser<'a> {
+    lexer: Lexer<'a>,
     /// `parser->states[0]` — the current token.
     cur: Lexeme,
     /// `parser->states[1..=2]` — the token lookahead window. Most grammar
@@ -187,11 +187,20 @@ pub struct Parser {
     depth: u32,
 }
 
-impl Parser {
+impl<'a> Parser<'a> {
     /// A parser over `source`. `strict` seeds `mxStrictFlag`; `module`
     /// seeds the module context (`await` reserved at top level via the
     /// async flag, as XS does for a module program).
-    pub fn new(source: &str, strict: bool, module: bool) -> PResult<Parser> {
+    pub fn new(source: &str, strict: bool, module: bool) -> PResult<Parser<'a>> {
+        Self::with_meter(source, strict, module, ParseMeter::new())
+    }
+
+    pub(crate) fn with_meter(
+        source: &str,
+        strict: bool,
+        module: bool,
+        meter: ParseMeter<'a>,
+    ) -> PResult<Parser<'a>> {
         let mut flags = 0u32;
         if strict {
             flags |= flags::STRICT;
@@ -199,7 +208,7 @@ impl Parser {
         if module {
             flags |= flags::STRICT | flags::ASYNC;
         }
-        let mut lexer = Lexer::new(source);
+        let mut lexer = Lexer::with_meter(source, meter);
         lexer.set_strict(flags & flags::STRICT != 0);
         lexer.set_async(flags & flags::ASYNC != 0);
         lexer.set_generator(flags & flags::GENERATOR != 0);
@@ -238,7 +247,7 @@ impl Parser {
 
     /// The parse meter (ironhorse's own frozen cost table), for telemetry
     /// after a parse.
-    pub fn meter(&self) -> &ParseMeter {
+    pub fn meter(&self) -> &ParseMeter<'a> {
         self.lexer.meter()
     }
 

@@ -347,3 +347,58 @@ fn an_oversized_check_interval_still_enforces_the_limit() {
         );
     }
 }
+
+#[test]
+fn compilation_is_inside_the_crank_budget_before_source_allocation() {
+    let source = format!("/*{}*/ 1", "x".repeat(100_000));
+    let bounds = MeterBounds::per_crank(1_000);
+    assert!(matches!(
+        Machine::with_bounds(bounds.clone()).eval(&source),
+        Err(MachineError::MeterAbort { .. })
+    ));
+    let dir = tempfile::tempdir().unwrap();
+    let opts = options(dir.path(), bounds);
+    let mut machine = PersistentMachine::open(&opts).unwrap();
+    machine.eval("var x = 7; x").unwrap();
+    let epoch = machine.epoch().unwrap();
+    for _ in 0..2 {
+        assert!(matches!(
+            machine.eval(&source),
+            Err(MachineError::MeterAbort { .. })
+        ));
+        assert_eq!(machine.epoch().unwrap(), epoch);
+    }
+    assert_eq!(machine.eval("x").unwrap().result, "7");
+    machine.close().unwrap();
+    let mut resumed = PersistentMachine::open(&opts).unwrap();
+    assert!(matches!(
+        resumed.eval(&source),
+        Err(MachineError::MeterAbort { .. })
+    ));
+    assert_eq!(resumed.eval("x").unwrap().result, "7");
+    resumed.close().unwrap();
+}
+
+#[test]
+fn successful_crank_reports_compilation_plus_execution_cost() {
+    use endo::ironhorse_engine::engine::compile_atoms_with;
+    let source = "1 + 2";
+    let (code, symbols) = compile_atoms_with(source, false).unwrap();
+    let mut runtime = ironhorse_vm::Interp::new();
+    runtime.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
+    runtime.run(&code);
+    let compiled = ironhorse_compile::compile_atoms_budgeted(
+        source,
+        ironhorse_compile::Goal::Eval,
+        false,
+        &mut |_| true,
+    )
+    .unwrap();
+    let outcome = Machine::with_bounds(MeterBounds::Unbounded)
+        .evaluate(source, false)
+        .unwrap();
+    assert_eq!(
+        outcome.computrons,
+        (runtime.meter_index() + compiled.parse_meter_raw) >> 16
+    );
+}

@@ -107,7 +107,7 @@ impl Lexeme {
 /// The lexer. Holds the character cursor (XS's `character`/`lookahead`
 /// two-char window), the running line, the mode flags XS keeps in
 /// `parser->flags`, and the parse meter threaded from the first token.
-pub struct Lexer {
+pub struct Lexer<'a> {
     chars: Vec<char>,
     /// Byte offset of each char in `chars`, plus a final total-length
     /// entry so `offsets[i]` is always valid up to `chars.len()`.
@@ -134,13 +134,22 @@ pub struct Lexer {
     /// member-name exception in `fxGetNextKeyword`.
     prev_token: Token,
     /// The parse meter (ironhorse's own frozen cost table).
-    meter: ParseMeter,
+    meter: ParseMeter<'a>,
 }
 
-impl Lexer {
+impl<'a> Lexer<'a> {
     /// A fresh lexer over `source`, in sloppy mode with the host `@`
     /// token disabled (ordinary-JS defaults).
-    pub fn new(source: &str) -> Lexer {
+    pub fn new(source: &str) -> Lexer<'a> {
+        Self::with_meter(source, ParseMeter::new())
+    }
+
+    pub(crate) fn with_meter(source: &str, meter: ParseMeter<'a>) -> Lexer<'a> {
+        // Admission precedes both eager source-sized allocations and scanning,
+        // including a single huge comment/string with no intervening token.
+        meter.charge(
+            (source.len() as u64).saturating_mul(ironhorse_meter::COMPILE_SOURCE_BYTE_METERING),
+        );
         let chars: Vec<char> = source.chars().collect();
         let mut offsets = Vec::with_capacity(chars.len() + 1);
         let mut b = 0usize;
@@ -162,7 +171,7 @@ impl Lexer {
             generator_ctx: false,
             host: false,
             prev_token: Token::NoToken,
-            meter: ParseMeter::new(),
+            meter,
         };
         // Prime the two-char window (XS calls fxGetNextCharacter twice).
         lexer.la = lexer.read_code();
@@ -192,7 +201,7 @@ impl Lexer {
     }
 
     /// The parse meter, for telemetry after a scan.
-    pub fn meter(&self) -> &ParseMeter {
+    pub fn meter(&self) -> &ParseMeter<'a> {
         &self.meter
     }
 
@@ -287,8 +296,8 @@ impl Lexer {
     /// Produce the next token, transliterating `fxGetNextTokenAux`, and
     /// charge the parse meter once for it (including EOF).
     pub fn next(&mut self) -> Result<Lexeme, LexError> {
-        let lexeme = self.scan()?;
         self.meter.charge_token();
+        let lexeme = self.scan()?;
         self.prev_token = lexeme.token;
         Ok(lexeme)
     }
