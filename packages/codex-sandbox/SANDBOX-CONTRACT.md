@@ -86,9 +86,15 @@ other sessions.
   Production uses the attested credential-free loopback sidecar, not a host
   socket mount.
 - Before slice start, `BrokerLeaseV1` must attest an exact lease ID, session ID,
-  image digest, provider HTTPS origin, operator account reference, loopback
-  endpoint, expiry, model allowlist, positive request/byte/cost quotas, and the
-  same network-namespace ID reported by the slice.
+  image digest, provider HTTPS origin, operator account reference, upstream
+  authentication mode, loopback endpoint, expiry, model allowlist, positive
+  request/byte/cost quotas, and the same network-namespace ID reported by the
+  slice.
+  The authentication mode is `api-key` or `oauth`; `subscription` is not a
+  supported value, for the reasons in
+  [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md).
+  An operator may pin the mode it will accept, and a lease issued in the other
+  is refused rather than silently admitted.
   Unknown or mismatched lease fields fail provisioning before app-server starts.
 - The broker pins provider scheme, host, methods, and paths; strips caller
   authentication and forwarding headers; rejects cross-origin redirects,
