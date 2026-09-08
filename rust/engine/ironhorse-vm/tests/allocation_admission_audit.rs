@@ -77,3 +77,76 @@ fn named_allocation_paths_keep_the_shared_admission_seam() {
         assert!(method(name).contains(seam), "{name} lost {seam}");
     }
 }
+
+use ironhorse_vm::source_scan::{
+    code_only, matching_delimiter, token_body, token_positions, tokens, Token,
+};
+
+fn raw_variable_charges(code: &[Token<'_>]) -> usize {
+    token_positions(code, "tick_builtin_some(")
+        .into_iter()
+        .filter(|&at| {
+            let open = at + 1;
+            let close = matching_delimiter(code, open);
+            close != open + 2 || code[open + 1].text.parse::<u64>().is_err()
+        })
+        .count()
+}
+
+#[test]
+fn guest_quantity_charges_cannot_bypass_admission() {
+    let source = code_only(SOURCE);
+    let code = tokens(&source);
+    assert_eq!(raw_variable_charges(&code), 0);
+    for sample in [
+        "self.meter.tick_builtin_some(n);",
+        "self . meter /* c */ . tick_builtin_some (n as u64);",
+        "self.meter.tick_builtin_some(length * 10);",
+    ] {
+        assert_eq!(raw_variable_charges(&tokens(&code_only(sample))), 1);
+    }
+}
+
+#[test]
+fn conversion_helpers_keep_output_admission() {
+    let source = code_only(SOURCE);
+    let code = tokens(&source);
+    for (name, seam) in [
+        ("unicode_case_convert_utf16", "reserve_units("),
+        ("unicode_normalize_utf16", "extend_reserved_units("),
+        ("unicode_locale_case_convert_utf16", "reserve_scratch("),
+    ] {
+        let body = &code[token_body(&code, &format!("fn {name}("))];
+        assert!(
+            !token_positions(body, seam).is_empty(),
+            "{name} lost admission"
+        );
+        assert!(
+            token_positions(body, "with_capacity(").is_empty(),
+            "{name} added raw scratch"
+        );
+    }
+    let native = &code[token_body(&code, "fn call_string(")];
+    let concat = &native[token_body(native, "StringConcat =>")];
+    assert!(!token_positions(concat, "extend_reserved_units(").is_empty());
+    assert!(token_positions(concat, "content.clone(").is_empty());
+    assert!(token_positions(concat, "out.extend_from_slice(").is_empty());
+}
+
+#[test]
+fn parser_and_collection_paths_keep_incremental_admission() {
+    for (name, seam) in [
+        ("arraylike_to_vec", "reserve_work_scratch"),
+        ("iterable_to_list_inner", "push_prepaid_scratch"),
+        ("json_parse_array", "admit_scratch::<Slot>"),
+        ("json_parse_object", "admit_scratch::<(ReadKey, Slot)>"),
+        ("json_parse_string_units", "push_prepaid_scratch"),
+        ("mop_own_keys_inner", "push_prepaid_scratch"),
+    ] {
+        assert!(method(name).contains(seam), "{name} lost {seam}");
+    }
+    assert!(
+        !method("json_parse_string_units").contains("&input[i..]"),
+        "decoding each scalar must not revalidate the entire remaining string"
+    );
+}

@@ -175,7 +175,7 @@ fn caught_late_json_failure_retains_admitted_work() {
         ),
         (
             "try { JSON.stringify({a:1,get b(){throw 'late'}}); } catch (_) { 'caught'; }",
-            4_577_976,
+            4_610_744,
         ),
     ] {
         let (code, names) = compile(source);
@@ -214,4 +214,66 @@ fn guest_regexp_source_rendering_has_an_admission_checkpoint() {
     metered.link_intrinsics(&names);
     metered.arm_meter(1, Box::new(move |n| n <= limit));
     assert_eq!(metered.run(&code).halt, Halt::MeterAbort);
+}
+
+#[test]
+fn unicode_and_dense_array_work_check_before_running() {
+    for source in [
+        "var s='x'.repeat(10000);s.toUpperCase()",
+        "var s='x'.repeat(10000);s.normalize()",
+        "var s='x'.repeat(10000);s.startsWith(s)",
+        "delete Array[Symbol.species]; var a=[];for(var i=0;i<1000;i++)a.push(1);a.slice()",
+        "Array(20000).toReversed()",
+        "Array(20000).copyWithin(0,1)",
+        "Array(20000).splice(0,20000)",
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        vm.arm_meter(1, Box::new(|n| n <= 3_000));
+        assert_eq!(vm.run(&code).halt, Halt::MeterAbort, "{source}");
+    }
+}
+
+#[test]
+fn version_two_unicode_parse_and_argument_costs_are_frozen() {
+    let cases = [
+        ("'abc   '.trim()", "abc"),
+        ("[1,2,3].reduce((a,b)=>a+b,0)", "6"),
+        ("JSON.parse('[1,2,3]').length", "3"),
+        ("12345678901234567890n.toString(16)", "ab54a98ceb1f0ad2"),
+        ("Math.max.apply(null,[1,2,3])", "3"),
+        ("Object.keys({a:1,b:2}).join(',')", "a,b"),
+    ];
+    let raw: Vec<_> = cases
+        .into_iter()
+        .map(|(source, expected)| {
+            let (code, names) = compile(source);
+            let mut vm = Interp::new();
+            vm.link_intrinsics(&names);
+            let out = vm.run(&code);
+            assert!(out.completed, "{source}: {:?}", out.halt);
+            assert_eq!(out.result, expected, "{source}");
+            out.meter_raw
+        })
+        .collect();
+    assert_eq!(
+        raw,
+        vec![935_752, 6_411_096, 1_264_288, 1_328_472, 3_065_864, 2_265_824]
+    );
+}
+
+#[test]
+fn parse_and_argument_expansion_cannot_hide_host_refusal_in_a_catch() {
+    for source in [
+        "try { Math.max.apply(null,{length:100000}); } catch (_) { 'caught' }",
+        "try { JSON.parse('['+'0,'.repeat(10000)+'0]'); } catch (_) { 'caught' }",
+        "try { new AggregateError({[Symbol.iterator](){return {next(){return {value:0,done:false}}}}}); } catch (_) { 'caught' }",
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        vm.arm_meter(1, Box::new(|n| n <= 10_000));
+        assert_eq!(vm.run(&code).halt, Halt::MeterAbort, "{source}");
+    }
 }

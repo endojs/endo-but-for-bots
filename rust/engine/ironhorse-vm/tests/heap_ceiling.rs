@@ -180,3 +180,45 @@ fn empty_search_replace_all_streams_positions_under_low_headroom() {
     assert!(out.completed, "{:?}", out.halt);
     assert_eq!(out.result.len(), 10_000);
 }
+
+#[test]
+fn concat_unicode_expansion_and_dense_copies_share_admission() {
+    for source in [
+        "var s='x'.repeat(20000); s.concat(s,s,s,s,s)",
+        "'\u{00df}'.repeat(20000).toUpperCase()",
+        "'\u{fdfa}'.repeat(10000).normalize('NFKD')",
+        "delete Array[Symbol.species]; var a=[]; for(var i=0;i<1000;i++)a.push(1); a.slice()",
+        "delete Array[Symbol.species]; var a=[]; for(var i=0;i<1000;i++)a.push(1); a.toReversed()",
+        "delete Array[Symbol.species]; var a=[]; for(var i=0;i<1000;i++)a.push(1); a.copyWithin(0,1)",
+        "delete Array[Symbol.species]; var a=[]; for(var i=0;i<1000;i++)a.push(1); a.splice(0,1)",
+        "delete Array[Symbol.species]; var a=[]; for(var i=0;i<1000;i++)a.push(1); a.toSpliced(0,1)",
+        "Array(1000000).toString()",
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        let headroom = if source.starts_with("delete Array") {
+            8_000
+        } else {
+            100_000
+        };
+        vm.chunks.set_ceiling(vm.chunks.byte_size() + headroom);
+        let out = vm.run(&code);
+        assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
+    }
+}
+
+#[test]
+fn compact_json_and_argument_lists_obey_element_storage_limits() {
+    for source in [
+        "JSON.parse('['+'0,'.repeat(4000)+'0]')",
+        "JSON.parse('['+'0,'.repeat(4000)+'0]', function(k,v){return v})",
+        "Math.max.apply(null,{length:100000})",
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        vm.chunks.set_ceiling(vm.chunks.byte_size() + 60_000);
+        assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
+    }
+}

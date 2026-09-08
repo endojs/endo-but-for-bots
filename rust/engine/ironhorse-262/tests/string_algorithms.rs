@@ -646,7 +646,7 @@ fn deleting_regexp_split_selects_the_plain_string_fallback() {
 fn regexp_split_protocol_has_frozen_version_two_totals() {
     let expected = [
         5_772_960, 4_360_096, 5_813_920, 3_327_880, 6_437_776, 4_656_928, 6_478_736, 4_838_280,
-        5_082_408,
+        5_098_792,
     ];
     for (source, raw) in [
         "'a,b,c'.split(/,/)",
