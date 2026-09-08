@@ -22,4 +22,4 @@ ironhorse-compile = { path = "../ironhorse-compile" }
 # decoder fuzz arms drive the XS_M writer/reader (design § Snapshots,
 # Fuzzability). The substance stays here in the forbid(unsafe_code) lib so it
 # builds and unit-tests without a libFuzzer toolchain.
-ironhorse-snapshot = { path = "../ironhorse-snapshot" }
+ironhorse-snapshot = { path = "../ironhorse-snapshot", features = ["unchecked-tooling"] }

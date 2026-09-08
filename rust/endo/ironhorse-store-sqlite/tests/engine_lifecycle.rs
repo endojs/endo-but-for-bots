@@ -97,7 +97,7 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         store_to_image(&store).unwrap(),
         session
             .machine()
-            .snapshot_image(&sig())
+            .snapshot_image_for_testing(&sig())
             .expect("gated image"),
         "[{name}] store equals live machine after the full write"
     );
@@ -140,7 +140,7 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
             store_to_image(&store).unwrap(),
             session
                 .machine()
-                .snapshot_image(&sig())
+                .snapshot_image_for_testing(&sig())
                 .expect("gated image"),
             "[{name}] store equals live machine after checkpoint {}",
             i + 1

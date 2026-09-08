@@ -25,7 +25,7 @@ fn sig() -> Signature {
 
 fn write_matching_boot_v5(path: &std::path::Path) {
     use ironhorse_snapshot::machine::MachineSnapshot;
-    use ironhorse_snapshot::store::{combine_root, image_to_batch, leaf_hash, LEAF_SMALL};
+    use ironhorse_snapshot::store::{combine_root, image_to_batch_unchecked, leaf_hash, LEAF_SMALL};
     let mut m = ironhorse_vm::Interp::new();
     let source = "var keep = {v: 1, w: 2}; var g = 0; var i = 0; var t = 3; t";
     let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
@@ -35,7 +35,7 @@ fn write_matching_boot_v5(path: &std::path::Path) {
     assert!(m.run(&code).completed);
     let mut store = SqliteHeapStore::open(path).unwrap();
     store
-        .commit(&image_to_batch(&m.snapshot_image(&sig()).unwrap(), 1, ""))
+        .commit(&image_to_batch_unchecked(&m.snapshot_image_for_testing(&sig()).unwrap(), 1, ""))
         .unwrap();
     let mut manifest = store.manifest().unwrap();
     let mut small = store.read_small_state().unwrap();

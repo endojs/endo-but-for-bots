@@ -6,7 +6,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     resume_from_store_lazy, MachineSnapshot,
@@ -170,7 +170,7 @@ fn duplicate_date_owners_are_refused() {
     let mut image = read_machine(&bytes, &sig()).expect("read");
     let row = image.dates[0].clone();
     image.dates.push(row);
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
         Err(SnapshotError::Corrupt("date side table: owners not strictly ascending")) => {}
         Err(other) => panic!("wrong duplicate-owner refusal: {other:?}"),
         Ok(_) => panic!("duplicate Date owners must not restore"),

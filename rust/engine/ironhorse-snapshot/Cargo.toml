@@ -26,7 +26,10 @@ ironhorse-compile = { path = "../ironhorse-compile", optional = true }
 # The backend-parameterized store acceptance suite (`store_suite`
 # module): test support for backend crates (e.g. the daemon-side
 # SQLite store), kept out of production builds.
-store-suite = ["dep:ironhorse-compile"]
+store-suite = ["dep:ironhorse-compile", "unchecked-tooling"]
+# Deliberate construction/encoding of invalid images for fuzzers and tests.
+# Kept out of ordinary persistence builds.
+unchecked-tooling = []
 
 [dev-dependencies]
 # The integration test crate (`tests/supervisor_suspend_resume.rs`) drives

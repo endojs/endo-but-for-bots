@@ -813,10 +813,11 @@ impl HeapStore for FileStore {
 mod tests {
     use super::*;
     use crate::format::Signature;
-    use crate::image::write_machine;
+    use crate::image::write_machine_unchecked;
     use crate::machine::MachineSnapshot;
     use crate::store::{
-        export_to_container, image_to_batch, import_from_container, store_to_image, validate_store,
+        export_to_container, image_to_batch_unchecked, import_from_container, store_to_image,
+        validate_store,
     };
     use ironhorse_vm::Interp;
 
@@ -833,7 +834,7 @@ mod tests {
     fn ran_image() -> crate::image::MachineImage {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        m.snapshot_image(&sig()).expect("gated image")
+        m.snapshot_image_for_testing(&sig()).expect("gated image")
     }
 
     fn tmp_dir(name: &str) -> crate::test_dir::TempDir {
@@ -854,7 +855,9 @@ mod tests {
         std::fs::create_dir_all(target.join("occupier")).unwrap();
         let image = ran_image();
         assert!(
-            store.commit(&image_to_batch(&image, 1, "")).is_err(),
+            store
+                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .is_err(),
             "renaming a file onto a non-empty directory fails"
         );
         let leftovers: Vec<String> = std::fs::read_dir(&*dir)
@@ -883,7 +886,7 @@ mod tests {
         let dir = tmp_dir("roundtrip");
         let path = dir.join("heap.ihstore");
         let image = ran_image();
-        let bytes = write_machine(&image);
+        let bytes = write_machine_unchecked(&image);
 
         let mut store = FileStore::open(&path).unwrap();
         import_from_container(&bytes, &sig(), &mut store).expect("imports");
@@ -905,13 +908,15 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
 
         // Mutate one record on page 0 and commit only that page.
         let mut changed = image.clone();
         changed.slots[0] = ironhorse_vm::Slot::integer(424242);
         let prev = store.manifest().unwrap().seal;
-        let full = image_to_batch(&changed, 2, &prev);
+        let full = image_to_batch_unchecked(&changed, 2, &prev);
         let mut one_page = CheckpointBatch {
             prev_seal: prev.clone(),
             manifest: full.manifest.clone(),
@@ -952,20 +957,26 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         drop(store);
 
         let mut store = FileStore::open(&path).unwrap();
         // Replaying epoch 1 into a store already at epoch 1 is refused.
         assert_eq!(
-            store.commit(&image_to_batch(&image, 1, "")).unwrap_err(),
+            store
+                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .unwrap_err(),
             StoreError::EpochMismatch {
                 expected: 2,
                 found: 1
             }
         );
         let prev = store.manifest().unwrap().seal;
-        store.commit(&image_to_batch(&image, 2, &prev)).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 2, &prev))
+            .unwrap();
     }
 
     #[test]
@@ -985,7 +996,9 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         drop(store);
 
         // Cut the file mid-directory: open must refuse, not misread.
@@ -1002,14 +1015,18 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         drop(store);
 
         std::fs::write(dir.join("heap.ihstore.tmp"), b"half a checkpoint").unwrap();
         let mut store = FileStore::open(&path).unwrap();
         assert_eq!(store_to_image(&store).unwrap(), image);
         let prev = store.manifest().unwrap().seal;
-        store.commit(&image_to_batch(&image, 2, &prev)).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 2, &prev))
+            .unwrap();
         assert_eq!(store.manifest().unwrap().epoch, 2);
     }
 
@@ -1021,7 +1038,9 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
 
         let mut grown = image.clone();
         grown.chunks.extend(std::iter::repeat_n(
@@ -1029,7 +1048,7 @@ mod tests {
             crate::store::CHUNK_EXTENT_BYTES as usize,
         ));
         let prev = store.manifest().unwrap().seal;
-        let mut batch = image_to_batch(&grown, 2, &prev);
+        let mut batch = image_to_batch_unchecked(&grown, 2, &prev);
         batch.chunk_extents.pop(); // drop the newest extent's row
         crate::store::reseal_batch(&mut batch);
         match store.commit(&batch) {

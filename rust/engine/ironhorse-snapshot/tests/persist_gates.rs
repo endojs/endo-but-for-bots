@@ -813,15 +813,15 @@ fn assert_every_persist_verb_refuses_non_quiescent(m: Interp, shape: &str) {
 /// Architecture review F047: the gate is on the DATA PATH, not on three
 /// convenience verbs. `snapshot_image` — the only route from a live
 /// machine to its image that the crate offers — refuses by the same name
-/// the verbs do, so `image_to_batch(&image) + commit` and
-/// `write_machine(&image)` never see a machine the gate refused. (What
+/// the verbs do, so `image_to_batch_unchecked(&image) + commit` and
+/// `write_machine_unchecked(&image)` never see a machine the gate refused. (What
 /// remains reachable is hand-assembly through `MachineImage::from_arenas`
 /// over the vm's public arenas: an unchecked encoder input on the same
 /// footing as a crafted image, not a machine verb.)
 #[test]
 fn the_image_of_a_halted_machine_is_unobtainable() {
     let m = halted_machine();
-    match m.snapshot_image(&sig()) {
+    match m.snapshot_image_for_testing(&sig()) {
         Err(MachineSnapshotError::NotQuiescent) => {}
         Ok(_) => panic!("an ungated image of a halted machine must not exist"),
         Err(other) => panic!("refused by the wrong gate: {other:?}"),
@@ -832,7 +832,7 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
-    match m.snapshot_image(&sig()) {
+    match m.snapshot_image_for_testing(&sig()) {
         Err(MachineSnapshotError::PendingStateUnsupported { row }) => {
             assert_eq!(row, "an async generator whose state does not yet persist")
         }
@@ -843,9 +843,9 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
-    let image = m.snapshot_image(&sig()).expect("gated image");
+    let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
     assert_eq!(
-        ironhorse_snapshot::image::write_machine(&image),
+        ironhorse_snapshot::image::write_machine_unchecked(&image),
         m.write_snapshot(&sig()).expect("blob verb"),
         "the gated image is the blob verb's input"
     );
@@ -869,7 +869,7 @@ fn a_stored_unregistered_key_id_refuses_the_gated_image_and_every_verb() {
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
-    m.snapshot_image(&sig())
+    m.snapshot_image_for_testing(&sig())
         .expect("the control: the clean machine is admitted");
 
     // The global `x`'s property slot carries `x`'s program id.
@@ -891,7 +891,7 @@ fn a_stored_unregistered_key_id_refuses_the_gated_image_and_every_verb() {
     m.slots.get_mut(holder).id = unregistered;
 
     const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
-    match m.snapshot_image(&sig()) {
+    match m.snapshot_image_for_testing(&sig()) {
         Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(msg))) => {
             assert_eq!(msg, REFUSAL, "the gated image refuses by the audit's name")
         }

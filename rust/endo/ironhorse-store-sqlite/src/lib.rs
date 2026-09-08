@@ -1188,7 +1188,7 @@ mod tests {
         begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
     };
     use ironhorse_snapshot::store::{
-        export_to_container, image_to_batch, import_from_container, reseal_batch, store_to_image,
+        export_to_container, image_to_batch_unchecked, import_from_container, reseal_batch, store_to_image,
         validate_store, STORE_SCHEMA_VERSION,
     };
     use ironhorse_snapshot::{Signature, SnapshotError};
@@ -1265,9 +1265,9 @@ mod tests {
         // the mechanism a refusal depends on.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig()).expect("gated image");
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
-        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        store.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
         let prev = store.manifest().unwrap();
 
         // The engine suite's crafted omit-the-tail batch: shrink
@@ -1276,7 +1276,7 @@ mod tests {
         assert!(image2.chunks.len() >= 8, "fixture carries chunk bytes");
         image2.chunks.truncate(image2.chunks.len() - 4);
         let tail_ext = chunk_extent_count(image2.chunks.len() as u64) - 1;
-        let mut crafted = image_to_batch(&image2, 2, &prev.seal);
+        let mut crafted = image_to_batch_unchecked(&image2, 2, &prev.seal);
         crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
         reseal_batch(&mut crafted);
         assert_eq!(
@@ -1292,7 +1292,7 @@ mod tests {
         assert_eq!(after.seal, prev.seal, "prior seal intact after the refusal");
         validate_store(&store, &sig()).expect("the refused commit left a valid store");
         store
-            .commit(&image_to_batch(&image2, 2, &prev.seal))
+            .commit(&image_to_batch_unchecked(&image2, 2, &prev.seal))
             .expect("the well-formed twin still commits");
         assert_eq!(store.manifest().unwrap().epoch, 2);
     }
@@ -1304,9 +1304,9 @@ mod tests {
     fn sql_abort_after_row_mutation_rolls_back_and_forces_a_cold_retry() {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig()).expect("gated image");
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
-        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        store.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
         let prior = store.manifest().unwrap();
         let prior_image = store_to_image(&store).unwrap();
         let prior_counts: Vec<i64> = [
@@ -1329,8 +1329,8 @@ mod tests {
         .collect();
 
         assert!(m.run(&PROG_B).completed);
-        let image2 = m.snapshot_image(&sig()).expect("gated image");
-        let batch2 = image_to_batch(&image2, 2, &prior.seal);
+        let image2 = m.snapshot_image_for_testing(&sig()).expect("gated image");
+        let batch2 = image_to_batch_unchecked(&image2, 2, &prior.seal);
 
         store
             .conn
@@ -1441,7 +1441,7 @@ mod tests {
             store_to_image(&store).unwrap(),
             session
                 .machine()
-                .snapshot_image(&sig())
+                .snapshot_image_for_testing(&sig())
                 .expect("gated image")
         );
 
@@ -1451,7 +1451,7 @@ mod tests {
             store_to_image(&store).unwrap(),
             session
                 .machine()
-                .snapshot_image(&sig())
+                .snapshot_image_for_testing(&sig())
                 .expect("gated image")
         );
         assert_eq!(
@@ -1523,7 +1523,7 @@ mod tests {
         checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
         let expected = session
             .machine()
-            .snapshot_image(&sig())
+            .snapshot_image_for_testing(&sig())
             .expect("gated image");
         store.close().unwrap();
 
@@ -1532,7 +1532,7 @@ mod tests {
         assert_eq!(store_to_image(&store).unwrap(), expected);
 
         // A replayed batch is refused after reopen.
-        let stale = image_to_batch(&expected, 2, "");
+        let stale = image_to_batch_unchecked(&expected, 2, "");
         assert_eq!(
             store.commit(&stale).unwrap_err(),
             StoreError::EpochMismatch {
@@ -1549,8 +1549,8 @@ mod tests {
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image = m.snapshot_image(&sig()).expect("gated image");
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
+        store.commit(&image_to_batch_unchecked(&image, 1, "")).unwrap();
         assert!(
             !image.chunks.is_empty(),
             "fixture must carry chunk bytes for the shrink to mean anything"
@@ -1571,7 +1571,7 @@ mod tests {
         }
         shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
         let prev = store.manifest().unwrap().seal;
-        let mut batch = image_to_batch(&shrunk, 2, &prev);
+        let mut batch = image_to_batch_unchecked(&shrunk, 2, &prev);
         batch.chunk_extents.clear();
         store.commit(&batch).unwrap();
 
@@ -1591,7 +1591,7 @@ mod tests {
     /// other suite while leaving ghost edges that inflate the CTE's
     /// reachability forever (review-wave-2 coverage finding). The
     /// empty-transition batch is legitimate by construction:
-    /// `image_to_batch` re-derives summaries and leaves from the
+    /// `image_to_batch_unchecked` re-derives summaries and leaves from the
     /// mutated rows, so the batch stays self-consistent through
     /// `apply_batch`'s symmetric-difference check.
     #[test]
@@ -1601,8 +1601,8 @@ mod tests {
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig()).expect("gated image");
-        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
+        store.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
 
         // Pick a page with outgoing edges (the boot region guarantees
         // cross-page references exist).
@@ -1633,7 +1633,7 @@ mod tests {
             *s = ironhorse_vm::Slot::undefined();
         }
         let prev = store.manifest().unwrap().seal;
-        store.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
+        store.commit(&image_to_batch_unchecked(&image2, 2, &prev)).unwrap();
 
         let after: i64 = store
             .conn
@@ -1760,15 +1760,15 @@ mod tests {
 
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig()).expect("gated image");
-        sqlite.commit(&image_to_batch(&image1, 1, "")).unwrap();
-        memory.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
+        sqlite.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
+        memory.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
 
         assert!(m.run(&PROG_B).completed);
-        let image2 = m.snapshot_image(&sig()).expect("gated image");
+        let image2 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let prev = memory.manifest().unwrap().seal;
-        sqlite.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
-        memory.commit(&image_to_batch(&image2, 2, &prev)).unwrap();
+        sqlite.commit(&image_to_batch_unchecked(&image2, 2, &prev)).unwrap();
+        memory.commit(&image_to_batch_unchecked(&image2, 2, &prev)).unwrap();
 
         assert_eq!(
             export_to_container(&sqlite).unwrap(),

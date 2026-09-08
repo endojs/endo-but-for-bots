@@ -462,6 +462,49 @@ pub struct MachineImage {
     pub name_floor: Option<u32>,
 }
 
+/// Immutable proof that an image crossed a live persistence gate or the
+/// complete snapshot decoder. Mutation requires discarding this proof.
+///
+/// ```compile_fail
+/// use ironhorse_snapshot::{image::MachineImage, write_machine};
+/// fn persist_unchecked(image: &MachineImage) { write_machine(image); }
+/// ```
+///
+/// ```compile_fail
+/// use ironhorse_snapshot::GatedImage;
+/// fn mutate_admitted(mut image: GatedImage) { image.slots.clear(); }
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct GatedImage(MachineImage);
+
+impl GatedImage {
+    pub(crate) fn new(image: MachineImage) -> Result<Self, SnapshotError> {
+        if image.stored_unregistered_key_id().is_some() {
+            return Err(SnapshotError::Corrupt(
+                "stored property id outside the name and symbol-key tables",
+            ));
+        }
+        Ok(Self(image))
+    }
+
+    /// Inspect admitted state without permitting mutation.
+    pub fn image(&self) -> &MachineImage {
+        &self.0
+    }
+
+    /// Discard the proof to edit data for inspection or adversarial tooling.
+    pub fn into_image(self) -> MachineImage {
+        self.0
+    }
+}
+
+impl std::ops::Deref for GatedImage {
+    type Target = MachineImage;
+    fn deref(&self) -> &MachineImage {
+        self.image()
+    }
+}
+
 /// A decoded machine image that has crossed the complete container
 /// validation boundary.
 ///
@@ -477,6 +520,11 @@ pub struct ValidatedSnapshot {
 impl ValidatedSnapshot {
     pub(crate) fn from_validated_image(image: MachineImage) -> ValidatedSnapshot {
         ValidatedSnapshot { image }
+    }
+
+    /// Preserve validation when publishing a decoded snapshot again.
+    pub fn into_gated(self) -> GatedImage {
+        GatedImage(self.image)
     }
 
     /// Borrow the validated plain-data image for inspection.
@@ -4737,7 +4785,19 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
 /// SYMB METR` (the order `xsSnapshot.c` emits, with the ironhorse-specific
 /// `METR` meter atom last), so two writes of the same image are
 /// byte-identical.
-pub fn write_machine(image: &MachineImage) -> Vec<u8> {
+pub fn write_machine(image: &GatedImage) -> Vec<u8> {
+    encode_machine(image.image())
+}
+
+/// Encode arbitrary data for low-level inspection and adversarial tooling.
+/// This bypasses lifecycle and semantic gates; normal persistence uses
+/// [`write_machine`] with a [`GatedImage`].
+#[cfg(any(test, feature = "unchecked-tooling"))]
+pub fn write_machine_unchecked(image: &MachineImage) -> Vec<u8> {
+    encode_machine(image)
+}
+
+fn encode_machine(image: &MachineImage) -> Vec<u8> {
     let mut w = AtomWriter::new();
     let mut version = image.version.clone();
     // Preserve the wire format when rewriting a legacy scalar-only image.
@@ -5370,7 +5430,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     // Version 16 makes canonical bytes part of admission, including
     // required core atoms and canonical slot encodings. Older formats
     // retain their documented import normalization path.
-    if image.version.format_version >= 16 && write_machine(&image) != buf {
+    if image.version.format_version >= 16 && encode_machine(&image) != buf {
         return Err(SnapshotError::Corrupt("non-canonical machine encoding"));
     }
     Ok(image)
@@ -6791,11 +6851,11 @@ mod tests {
             iterators: Vec::new(),
             name_floor: None,
         };
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
         assert_eq!(back, img);
         // Second write byte-equals the first.
-        assert_eq!(write_machine(&back), bytes);
+        assert_eq!(write_machine_unchecked(&back), bytes);
     }
 
     #[test]
@@ -6838,7 +6898,7 @@ mod tests {
             iterators: Vec::new(),
             name_floor: None,
         };
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         match read_machine(&bytes, &Signature::new("host-is-now-v2")) {
             Err(SnapshotError::SignatureMismatch { .. }) => {}
             other => panic!("expected signature mismatch, got {:?}", other),
@@ -6894,11 +6954,11 @@ mod tests {
             },
         );
 
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
         assert_eq!(back, img);
         // Byte-equality of the second write.
-        assert_eq!(write_machine(&back), bytes);
+        assert_eq!(write_machine_unchecked(&back), bytes);
 
         // Structural: the rebuilt arenas reproduce the graph.
         let (slots2, chunks2) = back.to_arenas();
@@ -6930,8 +6990,11 @@ mod tests {
             vec!["key".into()],
             SymbolKeyImage::default(),
         );
-        let bytes = write_machine(&image);
-        assert_eq!(write_machine(&read_machine(&bytes, &sig()).unwrap()), bytes);
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(
+            write_machine_unchecked(&read_machine(&bytes, &sig()).unwrap()),
+            bytes
+        );
         for tag in [VERS, CREA, BLOC, HEAP, STAC, KEYS, NAME] {
             let parsed = AtomReader::parse(&bytes).unwrap();
             let mut writer = AtomWriter::new();
@@ -6952,7 +7015,7 @@ mod tests {
         for version in [15, 16] {
             let mut variant = image.clone();
             variant.version.format_version = version;
-            let bytes = write_machine(&variant);
+            let bytes = write_machine_unchecked(&variant);
             for tag in [CREA, BLOC, STAC] {
                 let parsed = AtomReader::parse(&bytes).unwrap();
                 let mut writer = AtomWriter::new();
@@ -7023,7 +7086,7 @@ mod tests {
             iterators: Vec::new(),
             name_floor: None,
         };
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
         assert_eq!(back, img);
     }
@@ -7059,9 +7122,9 @@ mod tests {
             vec![],
             SymbolKeyImage::default(),
         );
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig()).unwrap();
-        assert_eq!(write_machine(&back), bytes);
+        assert_eq!(write_machine_unchecked(&back), bytes);
         let (slots2, chunks2) = back.to_arenas();
         if let Payload::BigInt(o) = slots2.get(bi).value {
             assert_eq!(&*chunks2.payload(o), &[0x00, 0x01, 0x00, 0x00, 0x00]);

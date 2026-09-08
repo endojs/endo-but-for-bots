@@ -6,7 +6,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
     MachineSnapshot,
@@ -189,7 +189,7 @@ fn malformed_function_rows_are_refused() {
         .function_state
         .functions
         .push(duplicate.function_state.functions[0].clone());
-    match from_snapshot_bytes(&write_machine(&duplicate), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&duplicate), &sig()) {
         Err(SnapshotError::Corrupt("function state: owners not strictly ascending")) => {}
         Err(other) => panic!("wrong duplicate-owner refusal: {other:?}"),
         Ok(_) => panic!("duplicate function owners must not restore"),
@@ -197,7 +197,7 @@ fn malformed_function_rows_are_refused() {
 
     let mut out_of_range = image;
     out_of_range.function_state.functions[0].body_start = Some(u64::MAX);
-    match from_snapshot_bytes(&write_machine(&out_of_range), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&out_of_range), &sig()) {
         Err(SnapshotError::Corrupt("function state: body range overflow")) => {}
         Err(other) => panic!("wrong body-range refusal: {other:?}"),
         Ok(_) => panic!("an overflowing function body must not restore"),

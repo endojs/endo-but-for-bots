@@ -32,7 +32,7 @@ use std::rc::Rc;
 use ironhorse_snapshot::format::Signature;
 use ironhorse_snapshot::image::{MachineImage, MeterImage};
 use ironhorse_snapshot::store::{
-    chunk_extent_count, image_to_batch, seal_commit, slot_page_count, store_to_image,
+    chunk_extent_count, image_to_batch_unchecked, seal_commit, slot_page_count, store_to_image,
     validate_store, CheckpointBatch, HeapStore, MemoryStore, SmallState, StoreManifest,
     STORE_SCHEMA_VERSION,
 };
@@ -353,7 +353,7 @@ fn randomized_schedules_keep_store_equal_to_live_arenas() {
         for _ in 0..600 {
             m.step(&mut rng);
         }
-        let full = image_to_batch(&m.image(&[]), 1, "");
+        let full = image_to_batch_unchecked(&m.image(&[]), 1, "");
         // The full batch encodes the whole arenas, so the live dirty
         // bits are consumed by it.
         m.heap.slots.clear_dirty();
@@ -421,7 +421,7 @@ fn randomized_fault_schedules_reify_identically() {
     let store = Rc::new(RefCell::new(MemoryStore::new()));
     store
         .borrow_mut()
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
         .unwrap();
     let manifest = store.borrow().manifest().unwrap();
 
@@ -483,7 +483,9 @@ fn corrupted_store_files_never_panic() {
     let dir = common::TempDir::new("ironhorse-hardening-corrupt");
     let path = dir.join("heap.ihstore");
     let mut store = FileStore::open(&path).unwrap();
-    store.commit(&image_to_batch(&m.image(&[]), 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&m.image(&[]), 1, ""))
+        .unwrap();
     drop(store);
     let pristine = std::fs::read(&path).unwrap();
 
@@ -544,7 +546,9 @@ fn dirty_fraction_sweep_commits_exactly_the_touched_pages() {
         ironhorse_snapshot::image::SymbolKeyImage::default(),
     );
     let mut store = MemoryStore::new();
-    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
     slots.clear_dirty();
 
     let pages = slot_page_count(slots.capacity()) as usize;
@@ -601,7 +605,9 @@ fn corrupted_store_headers_never_panic() {
     let dir = common::TempDir::new("ironhorse-hardening-corrupt-header");
     let path = dir.join("heap.ihstore");
     let mut store = FileStore::open(&path).unwrap();
-    store.commit(&image_to_batch(&m.image(&[]), 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&m.image(&[]), 1, ""))
+        .unwrap();
     drop(store);
     let pristine = std::fs::read(&path).unwrap();
 
@@ -706,7 +712,9 @@ fn edge_summary_flip_at_rest_fails_closed() {
     let dir = common::TempDir::new("ironhorse-hardening-edge-flip");
     let path = dir.join("heap.ihstore");
     let mut store = FileStore::open(&path).unwrap();
-    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
     drop(store);
     let pristine = std::fs::read(&path).unwrap();
 
@@ -850,7 +858,7 @@ fn evict_refuses_a_page_holding_records_past_the_backed_rows() {
 /// call site fails a test rather than waiting for a hostile store.
 #[test]
 fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
-    use ironhorse_snapshot::image::{read_machine, write_machine};
+    use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 
     // An honest small machine, then one poisoned index per arm.
     let mut m = Machine::new();
@@ -890,7 +898,7 @@ fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
             i
         }),
     ] {
-        let bytes = write_machine(&poison);
+        let bytes = write_machine_unchecked(&poison);
         assert!(
             read_machine(&bytes, &sig()).is_err(),
             "the container decoder must refuse a crafted {what}",
@@ -907,7 +915,7 @@ fn crafted_slot_indices_are_refused_at_both_untrusted_boundaries() {
         key: b"k".to_vec(),
         descriptor: n + 1_000_000,
     }];
-    let mut batch = image_to_batch(&poisoned, 1, "");
+    let mut batch = image_to_batch_unchecked(&poisoned, 1, "");
     ironhorse_snapshot::store::reseal_batch(&mut batch);
     store
         .commit(&batch)
