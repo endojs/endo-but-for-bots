@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { bundleApplication } from '../src/bundle-application.js';
 import { connectLocalControl } from '../src/local-control.js';
 import { showInventory } from '../src/inventory-view.js';
+import { showMailbox } from '../src/mailbox-view.js';
 import { serveThixotrope } from '../src/supervisor.js';
 
 const [command, directory = './.thix', ...args] = process.argv.slice(2);
@@ -32,6 +33,18 @@ try {
       process.removeListener('SIGTERM', stop);
     }
   } else if (
+    [
+      'revoke-invite',
+      'invite',
+      'connect',
+      'contacts',
+      'send',
+      'inbox',
+      'outbox',
+      'take',
+      'discard',
+      'mail',
+    ].includes(command) ||
     command === 'reachability' ||
     command === 'collect' ||
     command === 'install' ||
@@ -43,7 +56,34 @@ try {
   ) {
     const client = await connectLocalControl(join(statePath, 'control.sock'));
     try {
-      if (command === 'install') {
+      if (command === 'mail') {
+        await showMailbox(client);
+      } else if (
+        [
+          'revoke-invite',
+          'invite',
+          'connect',
+          'send',
+          'take',
+          'discard',
+          'contacts',
+          'inbox',
+          'outbox',
+        ].includes(command)
+      ) {
+        const method =
+          command === 'revoke-invite'
+            ? 'revokeInvitation'
+            : command === 'take'
+              ? 'takeOffer'
+              : command === 'discard'
+                ? 'discardOffer'
+                : command;
+        const result = await client.call(method, ...args);
+        console.log(
+          command === 'invite' ? result : JSON.stringify(result, null, 2),
+        );
+      } else if (command === 'install') {
         const [name, modulePath, ...grantArgs] = args;
         if (!name || !modulePath)
           throw Error(
@@ -116,7 +156,7 @@ try {
     }
   } else {
     console.log(
-      'Usage: thix serve|attach|install|applications|inventory|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
