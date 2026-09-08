@@ -10,6 +10,8 @@ export default {
     'test/ironhorse/reachability.js',
     'test/ironhorse/supervisor.js',
     'test/ironhorse/mailbox.js',
+    'test/ironhorse/http.js',
+    'test/ironhorse/http-crash.js',
   ],
   timeout: '3m',
   concurrency: 1,
