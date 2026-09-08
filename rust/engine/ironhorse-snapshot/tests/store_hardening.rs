@@ -26,6 +26,7 @@
 //! All randomness is a seeded LCG: every run is reproducible from the
 //! printed seed.
 
+use ironhorse_snapshot::store::HeapStoreCommit;
 use std::cell::RefCell;
 use std::rc::Rc;
 

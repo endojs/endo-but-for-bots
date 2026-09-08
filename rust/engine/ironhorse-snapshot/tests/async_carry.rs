@@ -3,6 +3,7 @@ use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
+use ironhorse_snapshot::store::HeapStoreCommit;
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::{parse_symbols, Interp};
@@ -83,7 +84,7 @@ fn async_locals_catch_finally_and_multiple_awaits_survive_checkpoints() {
 #[test]
 fn crafted_async_anchors_capabilities_and_resume_cursors_are_refused() {
     use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
-    use ironhorse_snapshot::store::{image_to_batch_unchecked, validate_store, HeapStore};
+    use ironhorse_snapshot::store::{image_to_batch_unchecked, validate_store};
     let signature = Signature::new("async-carry");
     let mut m = Interp::new();
     crank(&mut m, "var release; var gate = new Promise(r => { release = r; }); async function f() { return await gate; } var result = f();");

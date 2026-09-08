@@ -19,6 +19,7 @@
 //! counters), so their failure taxonomy is backend-specific by
 //! nature; they stay next to the backend they describe.
 
+use crate::store::HeapStoreCommit;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -824,4 +825,54 @@ fn real_progs() -> Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> {
     .iter()
     .map(|s| compile(s))
     .collect()
+}
+
+/// Shared backend commit contract, including actual close/reopen durability.
+/// Supply identity for an in-memory backend; durable backends must close the
+/// owned handle and return a newly opened handle on the same medium.
+/// Every refusal must preserve both the manifest and complete logical content.
+pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> S) -> S {
+    use crate::store::{image_to_batch, reseal_batch};
+    let mut machine = Interp::new();
+    let proof = machine.snapshot_image(&sig()).unwrap();
+    let genesis = image_to_batch(&proof, 1, "");
+    store.commit(&genesis).expect("genesis commits");
+    store = reopen(store);
+    assert_eq!(store.manifest().unwrap(), genesis.manifest);
+    let before = export_to_container(&store).unwrap();
+    assert_eq!(before, crate::image::write_machine(&proof));
+
+    // Grow through a page boundary so the missing-row case is mandatory,
+    // even when the backend would otherwise retain every old row.
+    for _ in 0..SLOTS_PER_PAGE {
+        machine.slots.alloc(ironhorse_vm::Slot::undefined());
+    }
+    let grown = machine.snapshot_image(&sig()).unwrap();
+    let successor = image_to_batch(&grown, 2, &genesis.manifest.seal);
+    let mut wrong_parent = successor.clone();
+    wrong_parent.prev_seal.push('0');
+    wrong_parent.manifest.parent_seal = wrong_parent.prev_seal.clone();
+    reseal_batch(&mut wrong_parent);
+    let mut missing = successor.clone();
+    missing.slot_pages.pop();
+    missing.page_edges.pop();
+    reseal_batch(&mut missing);
+    let mut corrupt = successor.clone();
+    *corrupt.chunk_extents[0].1.last_mut().unwrap() ^= 1;
+    for bad in [genesis.clone(), wrong_parent, missing, corrupt] {
+        assert!(store.commit(&bad).is_err(), "invalid commit must refuse");
+        store = reopen(store);
+        assert_eq!(store.manifest().unwrap(), genesis.manifest);
+        assert_eq!(export_to_container(&store).unwrap(), before);
+    }
+    store
+        .commit(&successor)
+        .expect("valid successor after refusals");
+    store = reopen(store);
+    assert_eq!(store.manifest().unwrap(), successor.manifest);
+    assert_eq!(
+        export_to_container(&store).unwrap(),
+        crate::image::write_machine(&grown)
+    );
+    store
 }

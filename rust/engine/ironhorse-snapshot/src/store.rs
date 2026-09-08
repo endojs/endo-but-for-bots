@@ -932,6 +932,11 @@ impl RootLedger {
         }
     }
 
+    /// Consume derived metadata to write dense leaf vectors in simple backends.
+    pub(crate) fn into_leaf_vectors(self) -> (Vec<[u8; 32]>, Vec<[u8; 32]>, Vec<[u8; 32]>) {
+        (self.pages, self.exts, self.frees)
+    }
+
     /// The prior free-segment leaves — the checkpoint producer's
     /// dirty-diff baseline, read before [`Self::apply`] advances them.
     pub fn free_leaves(&self) -> &[[u8; 32]] {
@@ -1844,6 +1849,68 @@ pub struct CheckpointBatch {
     pub page_edges: Vec<(u32, Vec<u32>)>,
 }
 
+/// An immutable batch plus its verified next root ledger. Only the shared
+/// commit gate can construct this token; backend hooks receive no batch until
+/// succession, geometry, summaries, and the complete root have passed.
+pub struct VerifiedCommit<'a> {
+    batch: &'a CheckpointBatch,
+    ledger: RootLedger,
+}
+
+impl<'a> VerifiedCommit<'a> {
+    /// Consume admission, yielding the immutable batch and next ledger.
+    pub fn into_parts(self) -> (&'a CheckpointBatch, RootLedger) {
+        (self.batch, self.ledger)
+    }
+}
+
+/// A backend invokes this gate with its current manifest and root metadata
+/// while holding its transaction or exclusive commit access. The returned
+/// token is the only way the hook obtains the batch it will persist.
+pub type CommitVerifier<'a> =
+    dyn FnMut(Option<&StoreManifest>, RootLedger) -> Result<VerifiedCommit<'a>, StoreError> + 'a;
+
+/// Non-overridable checkpoint admission for every [`HeapStore`]. The blanket
+/// implementation prevents backend implementations from replacing the gate.
+pub trait HeapStoreCommit: HeapStore {
+    /// Apply a checkpoint through the shared admission gauntlet. The backend
+    /// supplies its baseline under commit isolation and only sees the batch
+    /// after verification succeeds.
+    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+        self.commit_verified(&mut |stored, mut ledger| {
+            check_succession(stored, batch)?;
+            if let Some(previous) = stored {
+                verify_current_seal(previous)?;
+                let root = ledger.root(previous);
+                if root != previous.root {
+                    return Err(StoreError::BaselineMismatch {
+                        expected: root,
+                        found: previous.root.clone(),
+                    });
+                }
+            }
+            check_batch(stored.map(|m| (m, ledger.widths())), batch)?;
+            let root = ledger.apply(
+                &batch.manifest,
+                &batch.small,
+                &batch.slot_pages,
+                &batch.chunk_extents,
+                &batch.free_segs,
+                &batch.page_edges,
+            )?;
+            if root != batch.manifest.root {
+                return Err(StoreError::BaselineMismatch {
+                    expected: root,
+                    found: batch.manifest.root.clone(),
+                });
+            }
+            Ok(VerifiedCommit { batch, ledger })
+        })
+    }
+}
+
+impl<S: HeapStore + ?Sized> HeapStoreCommit for S {}
+
 /// The keyed snapshot store: point reads by page/extent index and one
 /// atomic batch commit. Implementations: [`MemoryStore`] (tests and
 /// reference), [`crate::store_file::FileStore`] (single-file reference,
@@ -1884,10 +1951,12 @@ pub trait HeapStore {
     /// sorted target list per slot page. Metadata-scale; maintained by
     /// `commit` from the batch's `page_edges`.
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError>;
-    /// Apply one checkpoint atomically. Must enforce the epoch
-    /// discipline via [`check_epoch`] and drop rows beyond the new
-    /// geometry.
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError>;
+    /// Acquire commit isolation (or enforce a documented single-writer contract),
+    /// invoke `verify` with the current baseline,
+    /// then atomically persist its admitted batch. Drop advanced metadata on
+    /// any failure. This hook has no raw batch argument, so it cannot
+    /// accidentally skip the common verification step.
+    fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError>;
     /// How many page-edge summaries the store holds — the geometry
     /// gate the partial collector checks before deciding anything
     /// from the summaries (a truncated store must fail closed, not
@@ -3047,7 +3116,7 @@ fn migrate_v26_to_v27(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &small)
 }
 
-/// The epoch discipline every [`HeapStore::commit`] enforces: the first
+/// The epoch discipline every [`HeapStoreCommit::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
 /// forked batch and fails closed.
@@ -3317,7 +3386,7 @@ fn encode_image_batch(
 
 /// Read a whole store back into the plain-data [`MachineImage`] — the
 /// eager-reify path, and the bridge to the atom container. The inverse
-/// of [`image_to_batch`] + [`HeapStore::commit`].
+/// of [`image_to_batch`] + [`HeapStoreCommit::commit`].
 pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError> {
     let manifest = store.manifest()?;
     // Schema gate FIRST. The root below is recomputed with the CURRENT
@@ -3922,7 +3991,7 @@ pub fn root_hash(store: &dyn HeapStore) -> Result<String, StoreError> {
 
 // --- the in-memory reference store ---
 
-/// What one [`MemoryStore::commit`] wrote, for the incremental-
+/// What one [`HeapStoreCommit::commit`] wrote, for the incremental-
 /// checkpoint acceptance tests (the phase-2 bar: commit cost is
 /// proportional to dirty rows, measured, not asserted from hope).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -4069,26 +4138,23 @@ impl HeapStore for MemoryStore {
         Ok(self.leaf_frees.clone())
     }
 
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-        check_succession(self.manifest.as_ref(), batch)?;
-        // The shared per-commit verification (grown-region presence,
-        // row lengths, summary coupling, leaf/summary maintenance,
-        // root recombination) runs on CLONES first — a refused batch
-        // must leave the store untouched.
+    fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError> {
+        let ledger = RootLedger::build(
+            &self.small,
+            self.leaf_pages.clone(),
+            self.leaf_exts.clone(),
+            self.leaf_frees.clone(),
+            &self.edges,
+        );
+        let (batch, ledger) = verify(self.manifest.as_ref(), ledger)?.into_parts();
         let pages = slot_page_count(batch.manifest.slot_count);
         let exts = chunk_extent_count(batch.manifest.chunk_len);
-        let mut leaf_pages = self.leaf_pages.clone();
-        let mut leaf_exts = self.leaf_exts.clone();
-        let mut leaf_frees = self.leaf_frees.clone();
+        let (leaf_pages, leaf_exts, leaf_frees) = ledger.into_leaf_vectors();
         let mut edges = self.edges.clone();
-        apply_batch(
-            &mut leaf_pages,
-            &mut leaf_exts,
-            &mut leaf_frees,
-            &mut edges,
-            self.manifest.as_ref(),
-            batch,
-        )?;
+        edges.resize(pages as usize, Vec::new());
+        for (page, targets) in &batch.page_edges {
+            edges[*page as usize] = targets.clone();
+        }
         for (page, bytes) in &batch.slot_pages {
             self.slot_pages.insert(*page, bytes.clone());
         }

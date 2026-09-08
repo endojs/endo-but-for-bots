@@ -101,3 +101,16 @@ fn sqlite_on_disk_resume_equals_uninterrupted() {
         store.close().expect("full last-connection close");
     });
 }
+
+#[test]
+fn sqlite_obeys_shared_commit_contract_across_full_close() {
+    use ironhorse_snapshot::store_suite::commit_contract;
+    commit_contract(in_memory(), |store| store);
+    let dir = common::TempDir::new("sqlite-shared-commit-contract");
+    let path = dir.join("heap.sqlite");
+    let store = commit_contract(SqliteHeapStore::open(&path).unwrap(), |store| {
+        store.close().unwrap();
+        SqliteHeapStore::open(&path).unwrap()
+    });
+    store.close().unwrap();
+}
