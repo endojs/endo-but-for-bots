@@ -40,6 +40,16 @@ reinventing it; this document does not re-derive endo-claude's client flags.
 
 ## Division of labor with the neighboring designs
 
+The diagram below names five terms the next section defines in full; a one-line
+gloss up front so the boxes read on first pass (define-before-diagram): a
+**guest** is a confined counterparty the Endo daemon grants an attenuated set of
+capabilities to; the **harness** is the arc-item-4 `@endo/claude` caplet that
+spawns and supervises that guest's confined `claude -p`; a **formula id** is
+Endo's stable 64-hex identifier for the persistent recipe that instantiated a
+guest; a **facet** is the attenuated capability handle the daemon hands out for
+one guest's daemon-side object surface; and **CapTP** is Endo's capability
+transport protocol, carried here over a Unix domain socket (UDS).
+
 ```mermaid
 flowchart LR
   subgraph claude["@endo/claude (arc item 4): the client + harness"]
@@ -157,10 +167,18 @@ namespace **out** and closes the vector with two concrete, layered mechanisms:
        lifetime and topology*). So a persistent per-guest socket cannot simply
        "live inside" a namespace that is torn down and recreated on every spawn.
      - **The resolution.** The harness **re-mounts the same stable per-guest
-       broker-socket directory into each freshly created per-spawn slice** (exactly
-       the move Design Decision 7 makes for its per-spawn credential mount), while
-       excluding every *sibling* guest's broker-socket directory and the raw daemon
-       socket path from that slice's view.
+       broker-socket directory into each freshly created per-spawn slice**
+       (structurally the same per-spawn scoped-mount move Design Decision 7 makes
+       for its per-spawn credential *files*), while excluding every *sibling*
+       guest's broker-socket directory and the raw daemon socket path from that
+       slice's view. Note the scope difference: Design Decision 7 mounts a
+       per-spawn credential directory, not a per-guest broker-socket directory, so
+       re-mounting a *per-guest* socket path into each *per-spawn* slice is a
+       **new cross-document obligation** this design places on
+       [endo-claude](endo-claude.md)'s slice construction and on
+       [endo-posix-sandbox](endo-posix-sandbox.md)'s mount plumbing, not plumbing
+       either already specifies. It is carried as such in the Open Questions
+       section below, symmetric with the broker-teardown obligation.
      - **The resulting isolation.** A filesystem-path UDS is reachable only by a
        process that can traverse to its path. A sibling guest, whose per-spawn
        slices receive only *its own* broker-socket directory, cannot name, `stat`,
@@ -194,11 +212,19 @@ namespace **out** and closes the vector with two concrete, layered mechanisms:
        has no such window.
      A connection whose peer uid is not this guest's assigned uid is refused before
      a single MCP frame is read, so even if a sibling reached the path, the
-     peer-identity check rejects it. This makes the sandbox's per-guest uid
-     assignment a stated precondition of this check; where a deployment cannot
-     assign one (a single-uid sandbox), the filesystem-path mount isolation of
-     mechanism 1 remains the load-bearing boundary and this credential check
-     degrades to a coarse same-uid gate rather than a false per-guest guarantee.
+     peer-identity check rejects it. This per-guest-uid assignment is a stated
+     precondition of this check that [endo-posix-sandbox](endo-posix-sandbox.md)
+     does **not** yet commit to (it specifies an unrelated `uid_map` sizing probe,
+     not a contract that distinct guests receive distinct host-visible uids); as
+     with the re-mount above, requiring it is a **new cross-document obligation**
+     this design places on the sandbox, carried in the Open Questions section
+     below rather than assumed as settled. Where a deployment cannot assign one (a
+     single-uid sandbox), the filesystem-path mount isolation of mechanism 1
+     remains the load-bearing boundary and this credential check degrades to a
+     coarse same-uid gate rather than a false per-guest guarantee; the Test plan's
+     negative-confinement criterion exercises **both** the assigned-uid path and
+     this degraded fallback so the admitted-real degraded case is not left
+     untested.
 
 Naming the primitive is the point: the boundary is network/mount-namespace
 isolation plus peer-credential verification, not an unguessable address on a
@@ -250,7 +276,15 @@ contract.
   standing between the guest and another facet: it re-checks, server-side, that a
   `tools/call`'s arguments fall within the facet's attenuated surface and
   **rejects** (never silently narrows) one that does not, returning the same
-  visible `-32001` JSON-RPC error a name-level rejection returns. Its distinct
+  visible `-32001` JSON-RPC error a name-level rejection returns. To avoid a
+  second, independently-maintained copy of the facet's scope policy (which would
+  drift from the facet's own petstore resolution), the check derives its answer
+  from the **same lookup the facet already owns**: the broker resolves each
+  argument's petname through the facet's own fail-closed petstore resolution as a
+  **pre-flight call**, and treats a resolution failure as the rejection, rather
+  than maintaining a separate authorization table. This keeps a single source of
+  truth for "which capabilities are in scope"; its distinct value over letting the
+  facet fail at dispatch time is only the wire shape below. Its distinct
   value over relying on the facet alone is a **uniform, reject-only wire shape**:
   an out-of-scope argument surfaces as the same visible failure the caller can see,
   never as a narrower success it mistakes for what it asked, regardless of how the
@@ -388,15 +422,19 @@ server that exposes zero tools. Concretely, the broker **refuses to construct**
 construction throw is not undifferentiated: it carries the same `reason`-style
 discriminant the request-time table below models, so an operator or harness reading
 a construction failure gets the same "why, and what to do about it" clarity a
-request-time failure gives, and can branch config bug vs. attacker-shaped guest vs.
-implementation bug. The discriminant values are `invalid-formula-id` (not 64-hex or
-unresolvable), `empty-facet` (the projection yields zero tools), `empty-after-prune`
-(every projected name was unsafe/code-eval), and `malformed-catalog` (a projected
-name that is `__`-containing, dunder/reserved, code-eval, internally duplicate, or
-case-confusable: the well-formedness guard of § *Naming*). This unifies both
-construction-throw sites (this section's derivation refusals and § *Naming*'s
-well-formedness refusals) under one discriminated failure the harness reads exactly
-as it reads the request-time `data.reason`.
+request-time failure gives, and can branch on config bug versus attacker-shaped
+guest versus implementation bug. The discriminant values are `invalid-formula-id`
+(not 64-hex or unresolvable), `empty-facet` (the projection yields zero tools),
+`empty-after-prune` (every projected name was unsafe/code-eval), and
+`malformed-catalog` (a projected name that is `__`-containing, dunder/reserved,
+code-eval, internally duplicate, or case-confusable: the well-formedness guard of
+§ *Naming*). The parity with the request-time surface is of **grammar**, not only
+of "there is a discriminant field": both surfaces use compound hyphenated-kebab
+discriminant values (`name-scope`/`argument-scope` at request time; the four values
+above at construction), so a single harness parser reads the same string shape on
+both. This unifies both construction-throw sites (this section's derivation
+refusals and § *Naming*'s well-formedness refusals) under one discriminated failure
+the harness reads exactly as it reads the request-time `data.reason`.
 
 A zero-tool server that "passes confinement by exposing nothing" is the exact
 anti-pattern this rule rejects: confinement must be demonstrated positively (the
@@ -406,18 +444,19 @@ positive-confinement test. At **request** time the same posture holds: an unknow
 `tools/call` name is a JSON-RPC error, a malformed frame is an error, and the
 server never falls back to an unscoped surface on any error path.
 
-**Distinct wire-visible error shapes per failure class.** So the model can tell
-"you're not allowed to call this" from "the backend just died" (a distinction
-that decides whether to retry, rephrase, or give up), each request-time failure
-class carries its own JSON-RPC error, not one undifferentiated error, and the
-adapter is a pass-through that relays the broker's classification without
+**Distinct wire-visible error shapes per failure class.** The model must be able
+to tell "you're not allowed to call this" from "the backend just died," a
+distinction that decides whether to retry, rephrase, or give up. So each
+request-time failure class carries its own JSON-RPC error, not one
+undifferentiated error, and the adapter is a pass-through that relays the broker's
+classification without
 collapsing it:
 
 | Failure class | JSON-RPC error | Retry? |
 |---|---|---|
 | Malformed frame / not valid JSON-RPC | `-32700` parse error / `-32600` invalid request | client bug: fix and resend |
 | Unknown method (not `tools/list`/`tools/call`) | `-32601` method not found | no |
-| Policy rejection (name or arguments outside the pinned catalog / facet scope: the dispatch check, including the argument-scope check) | application code `-32001` `tool-not-permitted`, `data.reason` = `name` \| `argument-scope` | no (the surface will not widen) |
+| Policy rejection (name or arguments outside the pinned catalog / facet scope: the dispatch check, including the argument-scope check) | application code `-32001` `tool-not-permitted`, `data.reason` = `name-scope` \| `argument-scope` | no (the surface will not widen) |
 | Broker or daemon connection down (the harness-side `bridge-down`) | application code `-32010` `bridge-down`, `data.detail` mirroring the harness's `{type: 'bridge-down', detail}` | transient (the harness may respawn on the next call) |
 | **Facet method threw** (an in-catalog, in-scope `tools/call` that *reached* the facet and the target application code raised, for example `readText` on a missing path) | **not** a JSON-RPC error: a successful `tools/call` **result** with `isError: true` and the failure in the result `content`, the standard MCP "the tool ran and failed" shape; the harness settles it to `{type: 'facet-threw', method, error}` ([endo-claude](endo-claude.md) Design Decision 8), carrying `error: toPassableError(caught)` | application-level: up to the model, given the surfaced error |
 
@@ -492,11 +531,14 @@ the two surfaces disjoint. Keying a **security-critical construction throw** on 
 name landed by minion.town make an otherwise-correct Endo confinement server
 refuse to construct for a guest: an availability failure whose root cause sits
 entirely outside this design's change surface. So collision against minion.town's
-prospective reservations is demoted to a **construction-time warning** (logged to
-stderr, read by the harness), not a throw. The convention is adopted; the foreign
-reservation list is advisory, not a gate. What the server owns and enforces
-fail-closed is that its own projected names are well-formed and internally
-non-colliding.
+prospective reservations is demoted to a **construction-time warning**, not a
+throw. The warning carries the **same discriminated shape** as the construction
+throws above (rather than unstructured stderr text), so the harness can branch on
+it the same way: a `{ warning: 'reserved-name-collision', names: [...] }` record
+naming the colliding tool names, written to stderr where the harness reads it. The
+convention is adopted; the foreign reservation list is advisory, not a gate. What
+the server owns and enforces fail-closed is that its own projected names are
+well-formed and internally non-colliding.
 
 ## Package shape and code home
 
@@ -559,11 +601,17 @@ positive-confinement test. An implementation is accepted only when these pass.
   and from `/proc/net/unix`, so it cannot be discovered; and (b) a connection
   forged directly to B's broker socket from a process whose peer uid is not B's
   assigned per-guest uid is refused at `accept` by the `SO_PEERCRED` check before
-  any frame is read. A `tools/call` issued on A's adapter only ever reaches A's one facet.
+  any frame is read. Both peer-check regimes are exercised: the assigned-per-guest-uid
+  path (distinct uids per guest, forged sibling refused at `accept`) **and** the
+  degraded single-uid fallback (where the sandbox assigns no per-guest uid, the
+  filesystem-path mount isolation of mechanism 1 alone keeps A from reaching B's
+  socket, and the credential check is a coarse same-uid gate that does not claim a
+  false per-guest guarantee). A `tools/call` issued on A's adapter only ever reaches
+  A's one facet.
 - **Name-scope rejection.** A `tools/call` for a name not in the pinned catalog
   (a pruned code-eval name, a `__`-containing name, or an unknown name) returns
-  the `-32001` `tool-not-permitted` error with `data.reason = name`, and never
-  reaches the facet.
+  the `-32001` `tool-not-permitted` error with `data.reason = name-scope`, and
+  never reaches the facet.
 - **Argument-scope rejection.** A `tools/call` for an in-catalog petname-designating
   tool whose *arguments* designate a petname/path outside the facet's own
   attenuated surface returns `-32001` with `data.reason = argument-scope`: a
@@ -594,6 +642,7 @@ positive-confinement test. An implementation is accepted only when these pass.
 | [endo-agent-tools](endo-agent-tools.md) | **Projection.** The MCP adapter (`packages/agent-tools/src/adapters/mcp.js`, a declared stub) that maps a `ToolRecord`'s name/description/parameters/invoke to an MCP tool and dispatches `tools/call` to the facet. This server hosts it over stdio; it does not reinvent it. |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, the `initialize` response *shape*, and the `mcp__<server>__<tool>` naming *grammar* (each transport pins its own `serverInfo.name` label, `endo` here vs `endo-gateway` there, so the shape is shared but the label string is not); differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
 | [daemon-agent-tools](daemon-agent-tools.md) | **Future catalog source.** The capability-scoped tool surface that composes into the projection via `extra`; once live it tightens per-guest scoping (each guest's catalog reflects only its granted capabilities). |
+| [endo-posix-sandbox](endo-posix-sandbox.md) | **Slice/mount plumbing (new obligations placed here).** Owns the per-spawn slice's mount namespace and uid mapping. This design places two not-yet-specified obligations on it: re-mounting a per-guest broker-socket directory into each per-spawn slice (§ *Scoping* mechanism 1), and assigning a distinct per-guest uid so the `SO_PEERCRED` check (mechanism 2) can be per-guest rather than a coarse same-uid gate. Both are carried in Open Questions until adopted there. |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | **Framing precedent, not the same surface.** Its LF-delimited JSONL framing lesson (split on `\n` only) carries over; but it is a *drive-the-agent* RPC (prompt/steer/abort), not an MCP *tool-call* server, so it is prior art for framing only. |
 | `kriscendobot/minion.town` PR [#79](https://github.com/kriscendobot/minion.town/pull/79) | **Naming convention, adopted (not a construction gate).** A cross-repo reference, open and unmerged at the time of writing. This server adopts its flat interface-native camelCase convention; it does **not** key any fail-closed construction throw on that PR's reserved-name list (server-scoping already prevents wire collisions, and a security-critical construction path must not depend on an unmerged external artifact). A bare-name collision against its reservations is at most an advisory warning here. |
 
@@ -640,6 +689,26 @@ positive-confinement test. An implementation is accepted only when these pass.
 
 ## Open Questions
 
+- **The per-guest broker-socket re-mount is a new obligation on the slice
+  plumbing.** § *Scoping by formula identifier* mechanism 1 requires the harness
+  to re-mount a **per-guest** broker-socket directory into each **per-spawn**
+  slice, excluding every sibling guest's. [endo-claude](endo-claude.md) Design
+  Decision 7 mounts a per-spawn credential directory, not a per-guest socket path,
+  and [endo-posix-sandbox](endo-posix-sandbox.md) does not specify this mount, so
+  the re-mount is a new cross-document obligation those two designs must adopt
+  (structurally the same scoped-mount primitive, applied to a longer-lived path).
+  Confirm the slice construction can mount a per-guest path that outlives the slice
+  before the cross-guest negative-confinement test can be built.
+- **The `SO_PEERCRED` per-guest-uid assignment is a new obligation on the
+  sandbox.** Mechanism 2's peer check keys on a per-guest uid the sandbox assigns
+  to every process it spawns for a guest. [endo-posix-sandbox](endo-posix-sandbox.md)
+  has no such contract today (only an unrelated `uid_map` sizing probe), so
+  distinct-uid-per-guest is a precondition that document must commit to for the
+  strong form of the check to hold. Where it cannot (a single-uid sandbox), the
+  check degrades to a coarse same-uid gate and the filesystem-path mount isolation
+  of mechanism 1 is the load-bearing boundary; the Test plan exercises both
+  regimes. Resolve which regime a given deployment is in before relying on the
+  per-guest peer guarantee.
 - **Where does a shared naming manifest live, if the endo side ever wants
   cross-repo enforcement?** The naming convention is today reconciled in
   `kriscendobot/minion.town` (PR #79). This server enforces only its *own*
