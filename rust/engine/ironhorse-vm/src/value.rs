@@ -15,6 +15,23 @@
 //! arena handles and are filled in as later stages land the object
 //! model and GC.
 
+/// Default execution profile: at most one million slot records and 256 MiB
+/// of chunk address space. These are deterministic policy limits, not claims
+/// about the host allocator's available memory. Embedders may configure each
+/// arena before running, including after snapshot restore.
+pub const DEFAULT_SLOT_CEILING: u32 = 1_000_000;
+pub const DEFAULT_CHUNK_CEILING: usize = 256 * 1024 * 1024;
+
+/// Private non-guest control transfer from infallible arena APIs to the run
+/// boundary. `resume_unwind` avoids invoking the process panic hook for an
+/// expected resource refusal. Other Rust panics are never converted to this.
+#[derive(Debug)]
+pub(crate) struct HeapExhausted;
+
+pub(crate) fn heap_exhausted() -> ! {
+    std::panic::resume_unwind(Box::new(HeapExhausted))
+}
+
 /// XS's `XS_NO_ID` (`xs.h`): the sentinel key id meaning "no name". A
 /// `constructor_function`/`function` opcode carries it as the name operand
 /// for an anonymous function; a real (inferred or declared) name is any
@@ -553,8 +570,8 @@ impl Slot {
 /// ([`crate::gc`]) sweeps it to the free list (design § Value and heap
 /// model). Because it is index-based it is safe code: a stale index is
 /// a kind-checked logic bug, not undefined behavior.
-#[derive(Default)]
 pub struct SlotArena {
+    ceiling: u32,
     /// The DENSE record storage of an eagerly built machine. `Cell`
     /// (identical layout to `Slot`, zero runtime bookkeeping) is what
     /// lets shared-reference paths write records in
@@ -612,9 +629,16 @@ pub struct SlotArena {
     lazy: Option<SlotBacking>,
 }
 
+impl Default for SlotArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SlotArena {
     pub fn new() -> SlotArena {
         SlotArena {
+            ceiling: DEFAULT_SLOT_CEILING,
             slots: Vec::new(),
             free: Vec::new(),
             free_marks: Vec::new(),
@@ -646,6 +670,7 @@ impl SlotArena {
             free_marks[i as usize] = true;
         }
         SlotArena {
+            ceiling: DEFAULT_SLOT_CEILING,
             slots: Vec::new(),
             free,
             free_marks: free_marks.clone(),
@@ -874,8 +899,31 @@ impl SlotArena {
         self.dirty[page] = true;
     }
 
+    /// Configure the slot-address-space ceiling. Existing records count even
+    /// when free; reusing one needs no growth. Policy is host configuration,
+    /// reapplied after restore, and is not part of the serialized heap image.
+    pub fn set_ceiling(&mut self, ceiling: u32) {
+        self.ceiling = ceiling;
+    }
+
+    pub fn ceiling(&self) -> u32 {
+        self.ceiling
+    }
+
     /// Allocate a slot, reusing the free list first (XS semantics).
     pub fn alloc(&mut self, slot: Slot) -> SlotIndex {
+        if self.capacity() > self.ceiling
+            || (self.free.is_empty() && self.capacity() >= self.ceiling)
+        {
+            heap_exhausted();
+        }
+        if self.free.is_empty()
+            && ((self.lazy.is_none() && self.slots.try_reserve(1).is_err())
+                || self.free_marks.try_reserve(1).is_err()
+                || self.marks.try_reserve(1).is_err())
+        {
+            heap_exhausted();
+        }
         self.live += 1;
         if let Some(i) = self.free.pop() {
             // Fault the page first: overwriting one record of a
@@ -1117,6 +1165,7 @@ impl SlotArena {
             free_marks[i as usize] = true;
         }
         SlotArena {
+            ceiling: DEFAULT_SLOT_CEILING,
             slots: slots.into_iter().map(Cell::new).collect(),
             free,
             free_marks,
@@ -1288,8 +1337,8 @@ fn chunk_allocation_fits(header: usize, payload: usize, ceiling: usize) -> bool 
         .is_some_and(|end| end < ceiling)
 }
 
-#[derive(Default)]
 pub struct ChunkArena {
+    ceiling: usize,
     bytes: ChunkBytes,
     /// One dirty bit per [`CHUNK_EXTENT_BYTES`]-byte extent of the byte
     /// space, set by the byte-mutating paths ([`ChunkArena::alloc`],
@@ -1302,9 +1351,16 @@ pub struct ChunkArena {
     unbacked: Vec<bool>,
 }
 
+impl Default for ChunkArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChunkArena {
     pub fn new() -> ChunkArena {
         ChunkArena {
+            ceiling: DEFAULT_CHUNK_CEILING,
             bytes: ChunkBytes::Plain(Vec::new()),
             dirty: Vec::new(),
             unbacked: Vec::new(),
@@ -1317,6 +1373,7 @@ impl ChunkArena {
     pub fn lazy_from_parts(snapshot_len: usize, source: Rc<dyn PageSource>) -> ChunkArena {
         let exts = snapshot_len.div_ceil(CHUNK_EXTENT_BYTES as usize);
         ChunkArena {
+            ceiling: DEFAULT_CHUNK_CEILING,
             bytes: ChunkBytes::Lazy {
                 cell: RefCell::new(vec![0u8; snapshot_len]),
                 resident: (0..exts).map(|_| Cell::new(false)).collect(),
@@ -1545,6 +1602,25 @@ impl ChunkArena {
         }
     }
 
+    /// Configure the chunk-address-space ceiling, capped by its u32 format.
+    /// Reapply this host policy after snapshot restore.
+    pub fn set_ceiling(&mut self, ceiling: usize) {
+        self.ceiling = ceiling.min(ChunkOffset::NULL.0 as usize);
+    }
+
+    pub fn ceiling(&self) -> usize {
+        self.ceiling
+    }
+
+    /// Whether a new payload fits, including its length header.
+    pub fn can_allocate(&self, payload_bytes: usize) -> bool {
+        self.len()
+            .checked_add(CHUNK_HEADER)
+            .and_then(|end| end.checked_add(payload_bytes))
+            .is_some_and(|end| end <= self.ceiling)
+            && chunk_allocation_fits(self.len(), payload_bytes, ChunkOffset::NULL.0 as usize)
+    }
+
     /// Append bytes behind a length header, returning the offset of the
     /// payload (not the header). Strings are stored as UTF-16 big-endian code
     /// units (revised 2026-07-06 from CESU-8; resolved question 4), so a byte-
@@ -1569,6 +1645,9 @@ impl ChunkArena {
             chunk_allocation_fits(header, data.len(), ceiling),
             "chunk:address-space-exhausted"
         );
+        if !self.can_allocate(data.len()) {
+            heap_exhausted();
+        }
         // Fault the stored tail extent before appending beside its bytes:
         // an append can land mid-extent, so its stored prefix must be real.
         // The addressability guard above must precede even this read.
@@ -1576,6 +1655,9 @@ impl ChunkArena {
             self.ensure_range_resident(header - 1, header);
         }
         let v = self.bytes_mut();
+        if v.try_reserve(CHUNK_HEADER + data.len()).is_err() {
+            heap_exhausted();
+        }
         v.extend_from_slice(&(data.len() as u32).to_le_bytes());
         let off = v.len() as u32;
         v.extend_from_slice(data);
@@ -1800,6 +1882,7 @@ impl ChunkArena {
     pub fn from_image(bytes: Vec<u8>) -> ChunkArena {
         let exts = bytes.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
         ChunkArena {
+            ceiling: DEFAULT_CHUNK_CEILING,
             bytes: ChunkBytes::Plain(bytes),
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
