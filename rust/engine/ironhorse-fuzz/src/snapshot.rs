@@ -208,6 +208,9 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // The low indices that stayed live — the pool the ledger rows below
     // draw owners and descriptors from.
     let live_cap = (idxs.len() - n_free) as u32;
+    // Side-table values, as well as their owners, must only reference
+    // live records. F046 rejects edges into the freed suffix.
+    idxs.truncate(live_cap as usize);
 
     // The value stack is EMPTY: the reader enforces quiescence (a
     // populated `STAC` cannot come from an honest writer — review
@@ -1060,7 +1063,17 @@ pub fn decoder_is_error_free(data: &[u8]) {
     // the reader passes the gates and reaches the count-bearing decoders.
     let valid = write_machine(&gen_machine_image(data));
     let mutated = mutate_bytes(&valid, data);
-    let _ = read_machine(&mutated, &sig);
+    if let Ok(image) = read_machine(&mutated, &sig) {
+        // Legacy imports intentionally normalize NaNs and absent core atoms.
+        // Version 16 makes byte identity an admission invariant.
+        if image.version.format_version >= 16 {
+            assert_eq!(
+                write_machine(&image),
+                mutated,
+                "accepted snapshot must have one encoding"
+            );
+        }
+    }
     let _ = from_snapshot_bytes(&mutated, &sig);
 }
 

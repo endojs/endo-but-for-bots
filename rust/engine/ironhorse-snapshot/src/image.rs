@@ -140,8 +140,9 @@ impl MeterImage {
 }
 
 /// Machine creation parameters (`CREA`). The heap-sizing hints XS records
-/// so a restore can pre-size the arenas; ironhorse's arenas grow on demand, so
-/// these are advisory (recorded for fidelity and future pre-sizing).
+/// so a restore can pre-size the arenas. Ironhorse writers record the current
+/// arena sizes. Since format 16, `initial_chunk_bytes` also bounds the exact
+/// `BLOC` payload; older formats treated it as an advisory sizing hint.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CreationParams {
     pub initial_slot_count: u32,
@@ -158,6 +159,9 @@ impl CreationParams {
     pub(crate) fn decode(p: &[u8]) -> Result<CreationParams, SnapshotError> {
         if p.len() < 8 {
             return Err(SnapshotError::Corrupt("CREA payload too short"));
+        }
+        if p.len() != 8 {
+            return Err(SnapshotError::Corrupt("CREA trailing bytes"));
         }
         Ok(CreationParams {
             initial_slot_count: u32::from_be_bytes([p[0], p[1], p[2], p[3]]),
@@ -785,6 +789,9 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
         out.push(s.to_string());
         i = end;
     }
+    if i != p.len() {
+        return Err(SnapshotError::Corrupt("string list trailing bytes"));
+    }
     Ok(out)
 }
 
@@ -867,6 +874,9 @@ pub(crate) fn decode_u32s(p: &[u8]) -> Result<Vec<u32>, SnapshotError> {
         out.push(u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]));
         i += 4;
     }
+    if i != p.len() {
+        return Err(SnapshotError::Corrupt("u32 list trailing bytes"));
+    }
     Ok(out)
 }
 
@@ -914,6 +924,9 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
         .ok_or(SnapshotError::Corrupt("HEAP record count"))?;
     if p.len() - i < want {
         return Err(SnapshotError::Corrupt("HEAP records truncated"));
+    }
+    if p.len() - i != want {
+        return Err(SnapshotError::Corrupt("HEAP trailing bytes"));
     }
     // Semantic gates on the free list, matching the store path's
     // (`validate_store`): every index in range, no duplicates. An
@@ -4685,6 +4698,9 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
     if p.len() - 4 < want {
         return Err(SnapshotError::Corrupt("STAC records truncated"));
     }
+    if p.len() - 4 != want {
+        return Err(SnapshotError::Corrupt("STAC trailing bytes"));
+    }
     decode_slots(&p[4..4 + want]).map_err(|_| SnapshotError::Corrupt("STAC slot record"))
 }
 
@@ -4905,7 +4921,11 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => CreationParams::decode(a.payload)?,
         None => CreationParams::default(),
     };
-    let chunks = r.find(BLOC).map(|a| a.payload.to_vec()).unwrap_or_default();
+    let chunk_bytes = r.find(BLOC).map(|a| a.payload).unwrap_or_default();
+    if version.format_version >= 16 && chunk_bytes.len() != creation.initial_chunk_bytes as usize {
+        return Err(SnapshotError::Corrupt("BLOC length differs from CREA"));
+    }
+    let chunks = chunk_bytes.to_vec();
 
     let heap = r.find(HEAP).ok_or(SnapshotError::MissingAtom(HEAP))?;
     let (slots, slot_free, slot_live) = decode_heap(heap.payload)?;
@@ -5258,16 +5278,16 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         &slot_free,
     )?;
 
-    // A container stamped with the CURRENT version must carry every
+    // Since version 15, a container must carry every
     // atom the current writer unconditionally emits — omitting one
     // (the reader would supply a default and the next write would put
-    // it back) is one more second-encoding shape. Older versions in
+    // it back) is one more second-encoding shape. Versions before 15 in
     // the read range keep their recorded leniencies (e.g. the
     // pre-row-6 absent `METR`); their writers no longer run, so the
     // canonical-bytes property is claimed of current containers.
     // Checked LAST so a malformed atom refuses by its own decoder's
     // name first — this gate is about honest-looking omissions.
-    if version.format_version == crate::format::IRONHORSE_FORMAT_VERSION {
+    if version.format_version >= 15 {
         for tag in [VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR] {
             if r.find(tag).is_none() {
                 return Err(SnapshotError::Corrupt(
@@ -5277,7 +5297,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         }
     }
 
-    Ok(MachineImage {
+    let image = MachineImage {
         index_props,
         version,
         signature,
@@ -5314,7 +5334,14 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         intl,
         iterators,
         name_floor,
-    })
+    };
+    // Version 16 makes canonical bytes part of admission, including
+    // required core atoms and canonical slot encodings. Older formats
+    // retain their documented import normalization path.
+    if image.version.format_version >= 16 && write_machine(&image) != buf {
+        return Err(SnapshotError::Corrupt("non-canonical machine encoding"));
+    }
+    Ok(image)
 }
 
 /// Decode and validate container bytes into the proof-carrying image accepted
@@ -6861,6 +6888,63 @@ mod tests {
     }
 
     #[test]
+    fn core_payloads_reject_slack_and_current_containers_are_canonical() {
+        let image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            vec!["key".into()],
+            SymbolKeyImage::default(),
+        );
+        let bytes = write_machine(&image);
+        assert_eq!(write_machine(&read_machine(&bytes, &sig()).unwrap()), bytes);
+        for tag in [VERS, CREA, BLOC, HEAP, STAC, KEYS, NAME] {
+            let parsed = AtomReader::parse(&bytes).unwrap();
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                let mut payload = atom.payload.to_vec();
+                if atom.tag == tag {
+                    payload.push(0);
+                }
+                writer.atom(atom.tag, &payload);
+            }
+            assert!(
+                read_machine(&writer.finish(), &sig()).is_err(),
+                "slack in {tag:?}"
+            );
+        }
+        // A core atom absent from an otherwise valid current container is
+        // also a second encoding of the default value and must be refused.
+        for version in [15, 16] {
+            let mut variant = image.clone();
+            variant.version.format_version = version;
+            let bytes = write_machine(&variant);
+            for tag in [CREA, BLOC, STAC] {
+                let parsed = AtomReader::parse(&bytes).unwrap();
+                let mut writer = AtomWriter::new();
+                for atom in parsed.atoms() {
+                    if atom.tag != tag {
+                        writer.atom(atom.tag, atom.payload);
+                    }
+                }
+                assert!(
+                    read_machine(&writer.finish(), &sig()).is_err(),
+                    "missing {tag:?}"
+                );
+            }
+        }
+        // NAME before version 15 used the same UTF-8 decoder as KEYS.
+        let mut legacy_name = encode_strings(&["legacy".into()]);
+        legacy_name.push(0);
+        assert!(decode_strings(&legacy_name).is_err());
+        let mut frees = encode_u32s(&[1]);
+        frees.push(0);
+        assert!(decode_u32s(&frees).is_err());
+    }
+
+    #[test]
     fn string_and_symbol_tables_round_trip() {
         let img = MachineImage {
             index_props: Vec::new(),
@@ -6868,7 +6952,7 @@ mod tests {
             signature: sig(),
             creation: CreationParams {
                 initial_slot_count: 3,
-                initial_chunk_bytes: 16,
+                initial_chunk_bytes: 4,
             },
             chunks: vec![1, 2, 3, 4],
             slots: vec![Slot::integer(9)],
