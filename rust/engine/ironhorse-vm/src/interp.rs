@@ -42074,6 +42074,40 @@ impl Interp {
         let mut seen: std::collections::HashSet<(u16, u32)> = std::collections::HashSet::new();
         let mut cur = obj;
         while !cur.is_null() {
+            // A String wrapper's units and a TypedArray's elements are
+            // enumerable own keys, and XS queues them ahead of the named chain
+            // (`fxStringOwnKeys`, `fxTypedArrayOwnKeys`). Neither had an arm
+            // here, so `for (k in new String('ab'))` and `for (k in new
+            // Uint8Array(2))` yielded nothing at all — while `Object.keys` on
+            // the same receiver answered correctly, which is the same one
+            // property, two answers split that the index-read work has been
+            // closing everywhere else.
+            if let Some(Slot {
+                kind: Kind::String,
+                value: Payload::String(offset),
+                ..
+            }) = self.wrapper_data.get(&cur).copied()
+            {
+                for index in 0..self.str_len(offset) as u32 {
+                    let k = (crate::value::XS_NO_ID, index);
+                    if seen.insert(k) {
+                        out.push(k);
+                    }
+                }
+            }
+            if let Some(&ta) = self.typed_arrays.get(&cur) {
+                let length = if self.detached_buffers.contains(&ta.buffer) {
+                    0
+                } else {
+                    ta.length
+                };
+                for index in 0..length {
+                    let k = (crate::value::XS_NO_ID, index);
+                    if seen.insert(k) {
+                        out.push(k);
+                    }
+                }
+            }
             // Array index keys first (ascending), then string keys.
             if let Some(a) = self.arrays.get(&cur) {
                 // A non-enumerable ITEM is skipped, exactly as the
@@ -49271,9 +49305,9 @@ impl Interp {
                     .index_read_key_id(index)
                     .is_some_and(|id| self.find_property(inst, id).is_some());
                 if !shadowed && u64::from(index) < self.str_len(off) as u64 {
-                    let current = self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-                        vm.uninterned_index_own_descriptor(code, inst, index)
-                    })?;
+                    // No `with_native_frame` here: `uninterned_index_own_descriptor`
+                    // charges its own, and every sibling arm charges exactly one.
+                    let current = self.uninterned_index_own_descriptor(code, inst, index)?;
                     if let Some(current) = current {
                         return Ok(self.is_compatible_descriptor(false, &desc, Some(&current)));
                     }
