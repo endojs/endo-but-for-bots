@@ -114,3 +114,41 @@ fn unsupported_async_generator_state_remains_an_explicit_refusal() {
         Err(MachineSnapshotError::PendingStateUnsupported { row }) if row == "an async generator whose state does not yet persist")
     );
 }
+
+/// Explicit format/schema migration tool. Runtime costs and continuation
+/// results must remain unchanged; only persisted byte/seal identities move.
+#[test]
+#[ignore = "regenerates persisted identities after a reviewed format/schema change"]
+fn regenerate_persistence_identities() {
+    let corpus = include_str!("fixtures/state_golden.tsv");
+    let mut lines = corpus.lines();
+    let mut output = format!("{}\n", lines.next().unwrap());
+    let sig = Signature::new("w4-determinism-corpus");
+    for line in lines {
+        let mut f: Vec<String> = line.split('\t').map(str::to_owned).collect();
+        assert_eq!(f.len(), 10);
+        let machine = fresh(&f[1]);
+        assert_eq!(machine.meter_index(), f[7].parse::<u64>().unwrap());
+        f[5] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
+        let mut store = MemoryStore::new();
+        let session = begin_store_session(machine, &sig, &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        f[6] = store.manifest().unwrap().seal;
+        let mut machine = session.into_machine();
+        crank(&mut machine, &f[2]);
+        assert_eq!(crank(&mut machine, &f[3]), f[4]);
+        assert_eq!(machine.meter_index(), f[8].parse::<u64>().unwrap());
+        f[9] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
+        output.push_str(&f.join("\t"));
+        output.push('\n');
+    }
+    std::fs::write(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/state_golden.tsv"
+        ),
+        output,
+    )
+    .unwrap();
+}

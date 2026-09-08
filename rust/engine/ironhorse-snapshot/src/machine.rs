@@ -2121,10 +2121,10 @@ mod tests {
     fn matching_version_with_different_weights_fails_closed() {
         let mut m = Interp::new();
         m.run(&PROG_A);
-        let mut image = m.snapshot_image(&sig()).unwrap();
+        let mut image = m.snapshot_image_for_testing(&sig()).unwrap();
         image.meter.cost_table_digest[0] ^= 1;
         assert!(matches!(
-            from_snapshot_bytes(&write_machine(&image), &sig()),
+            from_snapshot_bytes(&crate::image::write_machine_unchecked(&image), &sig()),
             Err(SnapshotError::CostTableMismatch { .. })
         ));
     }

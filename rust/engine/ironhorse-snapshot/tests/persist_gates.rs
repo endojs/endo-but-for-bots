@@ -1163,3 +1163,27 @@ fn uncoercible_completion_twins() {
         );
     }
 }
+
+#[test]
+fn a_container_without_meter_identity_is_refused() {
+    use ironhorse_snapshot::atom::{AtomReader, AtomWriter};
+    use ironhorse_snapshot::{SnapshotError, METR};
+
+    let machine = Interp::new();
+    let bytes = machine.write_snapshot(&sig()).unwrap();
+    let reader = AtomReader::parse(&bytes).unwrap();
+    let mut writer = AtomWriter::new();
+    let mut removed = 0;
+    for atom in reader.atoms() {
+        if atom.tag == METR {
+            removed += 1;
+        } else {
+            writer.atom(atom.tag, atom.payload);
+        }
+    }
+    assert_eq!(removed, 1);
+    assert!(matches!(
+        from_snapshot_bytes(&writer.finish(), &sig()),
+        Err(SnapshotError::Corrupt("missing METR identity"))
+    ));
+}
