@@ -21,6 +21,7 @@
 //! instruction sizes, and mnemonics match the oracle exactly.
 
 mod bulk;
+mod classification;
 pub mod compartment;
 pub mod cost;
 pub mod default_keys;

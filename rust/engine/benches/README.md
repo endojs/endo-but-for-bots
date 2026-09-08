@@ -167,3 +167,30 @@ cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
 cargo test --manifest-path rust/endo/Cargo.toml --locked --release \
   --test ironhorse_lifecycle_bench -- --ignored --nocapture --test-threads=1
 ```
+
+## Property and call classification (F119)
+
+The classification fixture measures 500,000 ordinary property reads, plain function
+calls, array length reads, and native calls in both small and populated realms.
+The populated realm retains collections, wrappers, buffers, typed views, RegExp,
+Intl objects, and a proxy, so membership probes encounter populated side tables.
+Compilation, linking, and VM boot are outside the timer; guest setup is included.
+Each case uses one warmup and five measured runs and checks repeatable raw charges
+and dispatch counts.
+
+[results/f119-classification.json](results/f119-classification.json) records paired
+measurements against the preceding commit, using the identical fixture on the same
+host and release toolchain.
+The fixture runs nightly and retains its timings as an artifact.
+These fixed-workload measurements report changes without imposing a scaling threshold.
+Populated-realm property reads and native calls improve about 6% in this run;
+small-realm results are roughly unchanged.
+The derived index adds about 0.65 microseconds per fresh scalar compartment (6%)
+and about 0.51 microseconds per fresh intrinsic compartment (2.4%).
+The artifact retains these costs alongside the improvements, with unchanged charges.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-snapshot --test classification_bench \
+  -- --ignored --nocapture --test-threads=1
+```

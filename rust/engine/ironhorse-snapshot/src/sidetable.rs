@@ -795,6 +795,9 @@ mod tests {
             "from_async",
             "arguments_objects",
             "side_refs",
+            // Derived membership/refinement bits rebuilt by ClassMap inserts
+            // when the authoritative side-table rows are restored.
+            "classes",
         ];
         const TRANSIENTS: &[&str] = &[
             // Intrinsic linking is synchronous and restores this guard before

@@ -49,6 +49,7 @@ use ironhorse_meter::{
 use ironhorse_meter::{string_chunk_cost, PROXY_INTERNAL_METHOD_METERING};
 
 use crate::bulk::{ArrayData, CollKey, CollKind, CollectionData, SideRefCounts};
+use crate::classification::{ClassIndex, ClassMap, ExoticKind};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
 use crate::symbols::{SymbolIds, SymbolName};
@@ -4536,6 +4537,8 @@ pub type IndexPropsSnapshot = (u32, u32, Vec<(u32, Slot)>);
 pub type CollectionSnapshot = (u32, u8, u32, Vec<(Slot, Slot)>);
 
 pub struct Interp {
+    /// Derived membership; never persisted or traced as a guest root.
+    classes: ClassIndex,
     stack: Vec<Slot>,
     /// The program frame's scope slots. `NEW_LOCAL`/`NEW_TEMPORARY`
     /// append (XS's `--mxScope`); a `*_LOCAL` opcode's 1-based index `k`
@@ -4698,18 +4701,18 @@ pub struct Interp {
     /// Side table of user-function metadata (body range + captured
     /// closures), keyed by the function instance's slot index. See
     /// [`FuncInfo`].
-    functions: std::collections::HashMap<crate::value::SlotIndex, FuncInfo>,
+    functions: ClassMap<FuncInfo>,
     /// Side table of bound-function metadata (`Function.prototype.bind`),
     /// keyed by the bound function's slot index: the target to invoke, the
     /// bound `this`, and the bound leading arguments. A callee found here in
     /// the `run` dispatch trampolines into the target (XS's
     /// `fx_Function_prototype_bound`).
-    bound_functions: std::collections::HashMap<crate::value::SlotIndex, BoundData>,
+    bound_functions: ClassMap<BoundData>,
     /// The `Proxy` exotics' `[[ProxyTarget]]`/`[[ProxyHandler]]` internal slots,
     /// keyed by the proxy instance slot (see [`ProxyData`]). Membership here is
     /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
     /// it and every internal-method dispatch site routes it to the trap logic.
-    proxies: std::collections::HashMap<crate::value::SlotIndex, ProxyData>,
+    proxies: ClassMap<ProxyData>,
     /// Synchronous recursive-Get context; always `None` at a crank boundary.
     array_iterator_proxy_get_context: Option<ArrayIteratorProxyGetContext>,
     /// Maps a `revoke` function slot (returned by `Proxy.revocable`) to the
@@ -4810,8 +4813,8 @@ pub struct Interp {
     segment_iterator_identity: crate::value::SlotIndex,
     date_time_format_proto: crate::value::SlotIndex,
     number_format_proto: crate::value::SlotIndex,
-    locales: std::collections::HashMap<crate::value::SlotIndex, LocaleData>,
-    collators: std::collections::HashMap<crate::value::SlotIndex, CollatorData>,
+    locales: ClassMap<LocaleData>,
+    collators: ClassMap<CollatorData>,
     list_formats: std::collections::HashMap<crate::value::SlotIndex, ListFormatData>,
     plural_rules: std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>,
     number_formats: std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>,
@@ -4826,10 +4829,10 @@ pub struct Interp {
     temporal_zoned_proto: crate::value::SlotIndex,
     /// The `Temporal.Now` namespace object (a boot object, not a constructor).
     temporal_now_object: crate::value::SlotIndex,
-    temporal_instants: std::collections::HashMap<crate::value::SlotIndex, TemporalInstantRecord>,
-    temporal_durations: std::collections::HashMap<crate::value::SlotIndex, TemporalDurationRecord>,
-    temporal_plains: std::collections::HashMap<crate::value::SlotIndex, TemporalPlainRecord>,
-    temporal_zoneds: std::collections::HashMap<crate::value::SlotIndex, TemporalZonedRecord>,
+    temporal_instants: ClassMap<TemporalInstantRecord>,
+    temporal_durations: ClassMap<TemporalDurationRecord>,
+    temporal_plains: ClassMap<TemporalPlainRecord>,
+    temporal_zoneds: ClassMap<TemporalZonedRecord>,
     collator_compare_functions:
         std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
     /// The cached `[[BoundFormat]]` functions of `Intl.NumberFormat`, keyed by
@@ -5010,7 +5013,7 @@ pub struct Interp {
     /// (XS's `[[BooleanData]]`/`[[NumberData]]`/`[[StringData]]`). A wrapper's
     /// completion/`String()` stringifies as its wrapped primitive, so
     /// [`Self::render`] reads it here.
-    wrapper_data: std::collections::HashMap<crate::value::SlotIndex, Slot>,
+    wrapper_data: ClassMap<Slot>,
     /// The realm's `%Array.prototype%` (a boot object). Every array literal
     /// and `new Array` instance chains to it, so `arr.push`/`arr.join`/… (the
     /// native methods bound on it) resolve up the prototype chain.
@@ -5023,7 +5026,7 @@ pub struct Interp {
     /// [`Self::error_data`]/[`Self::wrapper_data`]; no mid-run GC runs, so the
     /// item value slots (which may be references) are never swept underneath
     /// it (the stage-2 GC roots contract).
-    arrays: std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
+    arrays: ClassMap<ArrayData>,
     /// An **ordinary** object's integer-indexed properties, stored by index
     /// rather than by name.
     ///
@@ -5060,11 +5063,11 @@ pub struct Interp {
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
-    disposable_stacks: std::collections::HashMap<crate::value::SlotIndex, DisposableStackData>,
+    disposable_stacks: ClassMap<DisposableStackData>,
     /// Per-instance Map/Set/WeakMap/WeakSet data (XS's exotic collection
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
-    collections: std::collections::HashMap<crate::value::SlotIndex, CollectionData>,
+    collections: ClassMap<CollectionData>,
     /// Per-page refcounts for the BULK side tables' references
     /// (arrays' items, collections' entries) — the standing map the
     /// partial collector's page projection reads instead of walking
@@ -5081,7 +5084,7 @@ pub struct Interp {
     /// Per-instance `ArrayBuffer` backing store (XS's `XS_ARRAY_BUFFER_KIND`
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
-    array_buffers: std::collections::HashMap<crate::value::SlotIndex, ArrayBufferData>,
+    array_buffers: ClassMap<ArrayBufferData>,
     /// ArrayBuffers detached through the test262 host hook. The backing bytes
     /// remain allocated so existing views keep stable identities, while every
     /// operation that performs `ValidateTypedArray` rejects the detached
@@ -5105,7 +5108,7 @@ pub struct Interp {
     /// `XS_DATA_VIEW_KIND` internal slots + buffer reference). Keyed by the
     /// view instance's slot, like [`Self::array_buffers`]. See
     /// [`TypedArrayData`].
-    typed_arrays: std::collections::HashMap<crate::value::SlotIndex, TypedArrayData>,
+    typed_arrays: ClassMap<TypedArrayData>,
     /// The program-local symbol ids of `byteOffset` and `buffer`, resolved
     /// at [`Self::link_intrinsics`], so a `ta.byteOffset` / `ta.buffer` get
     /// routes to the TypedArray (and DataView) view accessors. `None` when
@@ -5115,7 +5118,7 @@ pub struct Interp {
     /// Per-instance `DataView` view state (XS's `XS_DATA_VIEW_KIND` internal
     /// slot + buffer reference). Keyed by the view instance's slot. See
     /// [`DataViewData`].
-    data_views: std::collections::HashMap<crate::value::SlotIndex, DataViewData>,
+    data_views: ClassMap<DataViewData>,
     /// The realm's `%DataView.prototype%` (a boot object), so a
     /// `new DataView()` instance chains to it and its `get*`/`set*` methods
     /// resolve.
@@ -5288,7 +5291,7 @@ pub struct Interp {
     /// function instance's slot and consulted in `RUN` when guest code calls a
     /// resolver, capability executor, or `finally` closure it was handed. See
     /// [`PromiseFnData`].
-    promise_functions: std::collections::HashMap<crate::value::SlotIndex, PromiseFnData>,
+    promise_functions: ClassMap<PromiseFnData>,
     /// The per-pair `[[AlreadyResolved]]` guards (XS's boolean slot in each
     /// `fxPushPromiseFunctions` home object). A resolving-function pair shares
     /// one index; the first of resolve/reject to fire trips it, the second is a
@@ -5345,7 +5348,7 @@ pub struct Interp {
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
     /// own data property of the instance; [`RegExpData::last_index`] exists
     /// only as the legacy schema-11 snapshot fallback.
-    regexps: std::collections::HashMap<crate::value::SlotIndex, RegExpData>,
+    regexps: ClassMap<RegExpData>,
     /// The realm's `%RegExp.prototype%` (a boot object), so a `new RegExp`
     /// instance (and a `/.../` literal) chains to it and `exec`/`test`/the
     /// accessor getters resolve.
@@ -6217,7 +6220,9 @@ impl Interp {
             symbol: chunks.alloc(&str_to_be16("symbol")),
             bigint: chunks.alloc(&str_to_be16("bigint")),
         };
+        let classes = ClassIndex::default();
         let mut interp = Interp {
+            classes: classes.clone(),
             stack: Vec::with_capacity(64),
             locals: Vec::new(),
             id_map: std::collections::HashMap::new(),
@@ -6243,9 +6248,26 @@ impl Interp {
             active_segment: None,
             top_level_code: None,
             func_segments: std::collections::HashMap::new(),
-            functions: std::collections::HashMap::new(),
-            bound_functions: std::collections::HashMap::new(),
-            proxies: std::collections::HashMap::new(),
+            functions: ClassMap::new_refined(
+                ExoticKind::FUNCTIONS,
+                ExoticKind::NATIVE.union(ExoticKind::METHOD),
+                |info: &FuncInfo| {
+                    let native = if info.native.is_some() {
+                        ExoticKind::NATIVE
+                    } else {
+                        ExoticKind::default()
+                    };
+                    let method = if info.method.is_some() {
+                        ExoticKind::METHOD
+                    } else {
+                        ExoticKind::default()
+                    };
+                    native.union(method)
+                },
+                classes.clone(),
+            ),
+            bound_functions: ClassMap::new(ExoticKind::BOUND_FUNCTIONS, classes.clone()),
+            proxies: ClassMap::new(ExoticKind::PROXIES, classes.clone()),
             array_iterator_proxy_get_context: None,
             proxy_revokers: std::collections::HashMap::new(),
             call_stack: Vec::new(),
@@ -6272,8 +6294,8 @@ impl Interp {
             segment_iterator_identity: crate::value::SlotIndex::NULL,
             date_time_format_proto: crate::value::SlotIndex::NULL,
             number_format_proto: crate::value::SlotIndex::NULL,
-            locales: std::collections::HashMap::new(),
-            collators: std::collections::HashMap::new(),
+            locales: ClassMap::new(ExoticKind::LOCALES, classes.clone()),
+            collators: ClassMap::new(ExoticKind::COLLATORS, classes.clone()),
             list_formats: std::collections::HashMap::new(),
             plural_rules: std::collections::HashMap::new(),
             number_formats: std::collections::HashMap::new(),
@@ -6287,10 +6309,10 @@ impl Interp {
             temporal_plain_protos: [crate::value::SlotIndex::NULL; 6],
             temporal_zoned_proto: crate::value::SlotIndex::NULL,
             temporal_now_object: crate::value::SlotIndex::NULL,
-            temporal_instants: std::collections::HashMap::new(),
-            temporal_durations: std::collections::HashMap::new(),
-            temporal_plains: std::collections::HashMap::new(),
-            temporal_zoneds: std::collections::HashMap::new(),
+            temporal_instants: ClassMap::new(ExoticKind::TEMPORAL_INSTANTS, classes.clone()),
+            temporal_durations: ClassMap::new(ExoticKind::TEMPORAL_DURATIONS, classes.clone()),
+            temporal_plains: ClassMap::new(ExoticKind::TEMPORAL_PLAINS, classes.clone()),
+            temporal_zoneds: ClassMap::new(ExoticKind::TEMPORAL_ZONEDS, classes.clone()),
             collator_compare_functions: std::collections::HashMap::new(),
             number_format_bound_functions: std::collections::HashMap::new(),
             deleted_fn_meta: std::collections::HashSet::new(),
@@ -6314,27 +6336,27 @@ impl Interp {
             last_crank_completed: true,
             symbol_names: Vec::new(),
             error_data: std::collections::HashMap::new(),
-            wrapper_data: std::collections::HashMap::new(),
+            wrapper_data: ClassMap::new(ExoticKind::WRAPPER_DATA, classes.clone()),
             array_proto: crate::value::SlotIndex::NULL,
-            arrays: std::collections::HashMap::new(),
+            arrays: ClassMap::new(ExoticKind::ARRAYS, classes.clone()),
             index_props: std::collections::HashMap::new(),
             arguments_objects: std::collections::HashSet::new(),
-            disposable_stacks: std::collections::HashMap::new(),
-            collections: std::collections::HashMap::new(),
+            disposable_stacks: ClassMap::new(ExoticKind::DISPOSABLE_STACKS, classes.clone()),
+            collections: ClassMap::new(ExoticKind::COLLECTIONS, classes.clone()),
             side_refs: SideRefCounts::new(),
             map_proto: crate::value::SlotIndex::NULL,
             set_proto: crate::value::SlotIndex::NULL,
             weakmap_proto: crate::value::SlotIndex::NULL,
             weakset_proto: crate::value::SlotIndex::NULL,
-            array_buffers: std::collections::HashMap::new(),
+            array_buffers: ClassMap::new(ExoticKind::ARRAY_BUFFERS, classes.clone()),
             detached_buffers: std::collections::HashSet::new(),
             shared_buffers: std::collections::HashSet::new(),
             arraybuffer_proto: crate::value::SlotIndex::NULL,
             byte_length_id: None,
-            typed_arrays: std::collections::HashMap::new(),
+            typed_arrays: ClassMap::new(ExoticKind::TYPED_ARRAYS, classes.clone()),
             byte_offset_id: None,
             buffer_id: None,
-            data_views: std::collections::HashMap::new(),
+            data_views: ClassMap::new(ExoticKind::DATA_VIEWS, classes.clone()),
             dataview_proto: crate::value::SlotIndex::NULL,
             size_id: None,
             length_id: None,
@@ -6380,7 +6402,7 @@ impl Interp {
             iterator_identity: crate::value::SlotIndex::NULL,
             async_gen_run_stack: Vec::new(),
             resume_status: ResumeStatus::NoStatus,
-            promise_functions: std::collections::HashMap::new(),
+            promise_functions: ClassMap::new(ExoticKind::PROMISE_FUNCTIONS, classes.clone()),
             promise_guards: Vec::new(),
             promise_jobs: std::collections::VecDeque::new(),
             combinators: Vec::new(),
@@ -6389,7 +6411,7 @@ impl Interp {
             constructor_id: None,
             error_stack_accessor: None,
             prototype_key_id: None,
-            regexps: std::collections::HashMap::new(),
+            regexps: ClassMap::new(ExoticKind::REGEXPS, classes.clone()),
             regexp_proto: crate::value::SlotIndex::NULL,
             regexp_replace_method: crate::value::SlotIndex::NULL,
             regexp_match_method: crate::value::SlotIndex::NULL,
@@ -8540,11 +8562,11 @@ impl Interp {
         self.intrinsics.insert("Proxy", f);
         let revocable = self.alloc_method(NativeMethod::ProxyRevocable);
         let revocable_name = self.alloc_str_text(b"revocable");
-        if let Some(info) = self.functions.get_mut(&revocable) {
+        self.functions.update(&revocable, |info| {
             info.name = "revocable".to_string();
             info.name_chunk = revocable_name;
             info.arity = 2;
-        }
+        });
         self.proto_methods.push((f, "revocable", revocable));
     }
 
@@ -13183,8 +13205,12 @@ impl Interp {
                 m.insert(crate::value::SlotIndex(owner), r);
             }
         }
-        install(&mut self.locales, t.locales);
-        install(&mut self.collators, t.collators);
+        for (owner, row) in t.locales {
+            self.locales.insert(crate::value::SlotIndex(owner), row);
+        }
+        for (owner, row) in t.collators {
+            self.collators.insert(crate::value::SlotIndex(owner), row);
+        }
         install(&mut self.list_formats, t.list_formats);
         install(&mut self.plural_rules, t.plural_rules);
         install(&mut self.number_formats, t.number_formats);
@@ -16140,9 +16166,9 @@ impl Interp {
                             };
                             if property_flag & XS_METHOD_FLAG != 0 {
                                 if let Payload::Reference(f) = value.value {
-                                    if let Some(info) = self.functions.get_mut(&f) {
+                                    self.functions.update(&f, |info| {
                                         info.home = inst;
-                                    }
+                                    });
                                 }
                             }
                             if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
@@ -16471,9 +16497,9 @@ impl Interp {
                         if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                             if property_flag & XS_METHOD_FLAG != 0 {
                                 if let Payload::Reference(f) = value.value {
-                                    if let Some(info) = self.functions.get_mut(&f) {
+                                    self.functions.update(&f, |info| {
                                         info.home = inst;
-                                    }
+                                    });
                                 }
                             }
                             let existing =
@@ -16533,9 +16559,9 @@ impl Interp {
                         }
                         if property_flag & XS_METHOD_FLAG != 0 {
                             if let Payload::Reference(f) = value.value {
-                                if let Some(info) = self.functions.get_mut(&f) {
+                                self.functions.update(&f, |info| {
                                     info.home = inst;
-                                }
+                                });
                             }
                         }
                         self.meter.tick_builtin();
@@ -16560,10 +16586,10 @@ impl Interp {
                                     .unwrap_or_default();
                                 let name_chunk =
                                     self.chunks.alloc(&units_to_be16(&fname.to_units()));
-                                if let Some(fi) = self.functions.get_mut(&f) {
+                                self.functions.update(&f, |fi| {
                                     fi.name = fname.to_string();
                                     fi.name_chunk = name_chunk;
-                                }
+                                });
                             }
                         }
                     }
@@ -16604,9 +16630,9 @@ impl Interp {
                             .map(|info| info.home)
                             .unwrap_or(crate::value::SlotIndex::NULL);
                         if let Payload::Reference(f) = value.value {
-                            if let Some(info) = self.functions.get_mut(&f) {
+                            self.functions.update(&f, |info| {
                                 info.home = home;
-                            }
+                            });
                         }
                     }
                     if flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
@@ -16886,9 +16912,13 @@ impl Interp {
                 XS_CODE_GET_PROPERTY => {
                     let id = id!(1);
                     let obj = self.pop();
+                    let kind = match (obj.kind, obj.value) {
+                        (Kind::Reference, Payload::Reference(inst)) => self.classes.get(inst),
+                        _ => ExoticKind::default(),
+                    };
                     let v = match obj.value {
                         Payload::Reference(inst)
-                            if self.arrays.contains_key(&inst)
+                            if kind.has(ExoticKind::ARRAYS)
                                 && !self.arguments_objects.contains(&inst)
                                 && Some(id) == self.length_id =>
                         {
@@ -16898,7 +16928,8 @@ impl Interp {
                             Self::array_index_number(u64::from(self.arrays[&inst].length))
                         }
                         Payload::Reference(inst)
-                            if Some(id) == self.length_id
+                            if kind.has(ExoticKind::WRAPPER_DATA)
+                                && Some(id) == self.length_id
                                 && matches!(
                                     self.wrapper_data.get(&inst),
                                     Some(Slot {
@@ -16914,7 +16945,7 @@ impl Interp {
                             };
                             Slot::integer(self.str_len(off) as i32)
                         }
-                        Payload::Reference(inst) if self.temporal_instants.contains_key(&inst) => {
+                        Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_INSTANTS) => {
                             let ns = self.temporal_instants[&inst].epoch_nanoseconds;
                             match self.scalar_key_text(id).as_deref() {
                                 Some("epochNanoseconds") => self.temporal_i128_bigint(ns),
@@ -16922,7 +16953,7 @@ impl Interp {
                                 _ => self.instance_get(inst, id),
                             }
                         }
-                        Payload::Reference(inst) if self.temporal_durations.contains_key(&inst) => {
+                        Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_DURATIONS) => {
                             let d = self.temporal_durations[&inst];
                             match self.scalar_key_text(id).as_deref() {
                                 Some("years") => Slot::number(d.years as f64),
@@ -16940,7 +16971,7 @@ impl Interp {
                                 _ => self.instance_get(inst, id),
                             }
                         }
-                        Payload::Reference(inst) if self.temporal_plains.contains_key(&inst) => {
+                        Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_PLAINS) => {
                             let r = self.temporal_plains[&inst];
                             let key = self.scalar_key_text(id);
                             match key.as_deref() {
@@ -16999,7 +17030,7 @@ impl Interp {
                                 _ => self.instance_get(inst, id),
                             }
                         }
-                        Payload::Reference(inst) if self.temporal_zoneds.contains_key(&inst) => {
+                        Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_ZONEDS) => {
                             let rec = self.temporal_zoneds[&inst].clone();
                             let p = zoned_local_datetime(rec.epoch_nanoseconds, rec.offset_ns);
                             match self.scalar_key_text(id).as_deref() {
@@ -17073,12 +17104,13 @@ impl Interp {
                         }
                         Payload::Reference(inst)
                             if self.symbol_ids.get("disposed") == Some(&id)
-                                && self.disposable_stacks.contains_key(&inst) =>
+                                && kind.has(ExoticKind::DISPOSABLE_STACKS) =>
                         {
                             Slot::boolean(self.disposable_stacks[&inst].disposed)
                         }
                         Payload::Reference(inst)
                             if Some(id) == self.size_id
+                                && kind.has(ExoticKind::COLLECTIONS)
                                 && self
                                     .collections
                                     .get(&inst)
@@ -17092,10 +17124,10 @@ impl Interp {
                             Slot::integer(self.collections[&inst].live_len() as i32)
                         }
                         Payload::Reference(inst)
-                            if (self.array_buffers.contains_key(&inst)
+                            if (kind.has(ExoticKind::ARRAY_BUFFERS)
                                 && !self.shared_buffers.contains(&inst))
-                                || self.typed_arrays.contains_key(&inst)
-                                || self.data_views.contains_key(&inst) =>
+                                || kind.has(ExoticKind::TYPED_ARRAYS)
+                                || kind.has(ExoticKind::DATA_VIEWS) =>
                         {
                             // These are real accessors on the intrinsic
                             // prototypes. Ordinary lookup preserves guest
@@ -17109,12 +17141,13 @@ impl Interp {
                         }
                         Payload::Reference(inst)
                             if Some(id) == self.byte_length_id
+                                && kind.has(ExoticKind::ARRAY_BUFFERS)
                                 && self.shared_buffers.contains(&inst) =>
                         {
                             self.meter.tick_raw(ARRAY_BUFFER_BYTE_LENGTH_GET_METERING);
                             Slot::integer(self.array_buffers[&inst].length as i32)
                         }
-                        Payload::Reference(inst) if self.regexps.contains_key(&inst) => {
+                        Payload::Reference(inst) if kind.has(ExoticKind::REGEXPS) => {
                             // The RegExp accessor getters (`fx_RegExp_prototype_
                             // get_*`). `source`/`flags` return strings (a fresh
                             // chunk); the per-flag getters read `code[0]` and
@@ -17153,7 +17186,7 @@ impl Interp {
                                 self.instance_get(inst, id)
                             }
                         }
-                        Payload::Reference(inst) if self.locales.contains_key(&inst) => {
+                        Payload::Reference(inst) if kind.has(ExoticKind::LOCALES) => {
                             let name = self
                                 .symbol_names
                                 .get(id.saturating_sub(1) as usize)
@@ -17189,7 +17222,7 @@ impl Interp {
                             }
                         }
                         Payload::Reference(inst)
-                            if self.collators.contains_key(&inst)
+                            if kind.has(ExoticKind::COLLATORS)
                                 && self.symbol_ids.get("compare") == Some(&id) =>
                         {
                             let existing = self.collator_compare_functions.iter().find_map(
@@ -17204,7 +17237,7 @@ impl Interp {
                         }
                         Payload::Reference(inst)
                             if (Some(id) == self.length_id || Some(id) == self.name_id)
-                                && self.functions.contains_key(&inst)
+                                && kind.has(ExoticKind::FUNCTIONS)
                                 && !self.deleted_fn_meta.contains(&(inst, id))
                                 && self.find_property(inst, id).is_none() =>
                         {
@@ -17252,7 +17285,7 @@ impl Interp {
                         Payload::Reference(_) if obj.kind == Kind::Symbol => Slot::undefined(),
                         // A proxy `p.k` routes through the `get` trap
                         // (ECMA-262 10.5.8), never the ordinary store.
-                        Payload::Reference(inst) if self.proxies.contains_key(&inst) => {
+                        Payload::Reference(inst) if kind.has(ExoticKind::PROXIES) => {
                             dispatch_result!(
                                 self.proxy_get(code, inst, id, obj),
                                 pc,
@@ -17656,10 +17689,11 @@ impl Interp {
                         // [`FUNCTION_DEFINE_METERING`]; this only updates its
                         // integer value.)
                         let arity = code.get(body_start + 1).copied().unwrap_or(0) as u32;
-                        let info = self.functions.entry(f).or_default();
-                        info.body_start = Some(body_start);
-                        info.body_len = n;
-                        info.arity = arity;
+                        self.functions.update_or_default(f, |info| {
+                            info.body_start = Some(body_start);
+                            info.body_len = n;
+                            info.arity = arity;
+                        });
                         // Every guest function names an owned segment,
                         // including a top-level crank function. Dynamic/eval
                         // dispatch already has an active segment; the first
@@ -17695,7 +17729,8 @@ impl Interp {
                         ..
                     }) = self.stack.last()
                     {
-                        self.functions.entry(f).or_default().closures = env;
+                        self.functions
+                            .update_or_default(f, |info| info.closures = env);
                     }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(env)));
                     pc += size as usize;
@@ -17754,10 +17789,10 @@ impl Interp {
                         .and_then(|start| code.get(start))
                         .and_then(|byte| Opcode::from_u8(*byte))
                         == Some(XS_CODE_BEGIN_STRICT_DERIVED);
-                    if let Some(info) = self.functions.get_mut(&ctor) {
+                    self.functions.update(&ctor, |info| {
                         info.home = proto;
                         info.class_derived = Some(derived);
-                    }
+                    });
                     self.ctor_prototype.insert(ctor, proto);
                     // A derived class constructor inherits static properties
                     // from its heritage constructor. A base class continues
@@ -17792,9 +17827,9 @@ impl Interp {
                     if let (Payload::Reference(f), Payload::Reference(h)) =
                         (function.value, home.value)
                     {
-                        if let Some(info) = self.functions.get_mut(&f) {
+                        self.functions.update(&f, |info| {
                             info.home = h;
-                        }
+                        });
                     }
                     pc += size as usize;
                 }
@@ -17812,10 +17847,10 @@ impl Interp {
                             .and_then(|i| self.symbol_names.get(i).cloned())
                             .unwrap_or_default();
                         let name_chunk = self.chunks.alloc(&units_to_be16(&name.to_units()));
-                        if let Some(info) = self.functions.get_mut(&f) {
+                        self.functions.update(&f, |info| {
                             info.name = name.to_string();
                             info.name_chunk = name_chunk;
-                        }
+                        });
                         self.meter.tick_builtin_some(2);
                     }
                     pc += ilen;
@@ -17946,40 +17981,24 @@ impl Interp {
                             Some(Payload::Reference(f)) => Some((f, base)),
                             _ => None,
                         });
+                    // One membership lookup preserves overlapping restored
+                    // roles; body metadata does not establish exclusivity.
+                    let kind = func_ref
+                        .map(|(f, _)| self.classes.get(f))
+                        .unwrap_or_default();
+                    let metadata = func_ref
+                        .filter(|_| kind.has(ExoticKind::NATIVE) || kind.has(ExoticKind::METHOD))
+                        .and_then(|(f, base)| {
+                            self.functions
+                                .get(&f)
+                                .map(|info| (info.native, info.method, base))
+                        });
                     let callee =
-                        func_ref.and_then(|(f, base)| self.native_of(f).map(|n| (n, base)));
+                        metadata.and_then(|(native, _, base)| native.map(|native| (native, base)));
                     let method =
-                        func_ref.and_then(|(f, base)| self.method_of(f).map(|m| (m, base)));
-                    let bound = func_ref.and_then(|(f, base)| {
-                        if self.bound_functions.contains_key(&f) {
-                            Some((f, base))
-                        } else {
-                            None
-                        }
-                    });
-                    // A callable/constructable proxy: its `apply`/`construct`
-                    // trap (or, trap-absent, the target) runs the call.
-                    let proxy_callee = func_ref.and_then(|(f, base)| {
-                        if self.proxies.contains_key(&f) {
-                            Some((f, base))
-                        } else {
-                            None
-                        }
-                    });
-                    // A promise resolve/reject function (XS's `fxResolvePromise`/
-                    // `fxRejectPromise`, handed to an executor / capability):
-                    // recognized by its `promise_functions` entry. Checked
-                    // before the generic `method` branch — the function carries
-                    // a `PromiseResolveFunction`/`RejectFunction` method marker
-                    // for `typeof`/render, but it settles here, not in
-                    // `call_native_method`.
-                    let promise_fn = func_ref.and_then(|(f, base)| {
-                        if self.promise_functions.contains_key(&f) {
-                            Some((f, base))
-                        } else {
-                            None
-                        }
-                    });
+                        metadata.and_then(|(_, method, base)| method.map(|method| (method, base)));
+                    // Promise functions precede their generic method marker.
+                    let promise_fn = func_ref.filter(|_| kind.has(ExoticKind::PROMISE_FUNCTIONS));
                     if let Some((f, base)) = promise_fn {
                         if has_target {
                             dispatch_halt!(
@@ -18115,7 +18134,9 @@ impl Interp {
                             return Step::Host(Halt::MeterAbort);
                         }
                         pc = ret_pc;
-                    } else if let Some((bf, base)) = bound {
+                    } else if let Some((bf, base)) =
+                        func_ref.filter(|_| kind.has(ExoticKind::BOUND_FUNCTIONS))
+                    {
                         // A bound function (`fx_Function_prototype_bound`):
                         // re-enter the target with the bound `this` and the
                         // bound args prepended to the call args.
@@ -18168,7 +18189,9 @@ impl Interp {
                             return Step::Host(Halt::MeterAbort);
                         }
                         pc = ret_pc;
-                    } else if let Some((px, base)) = proxy_callee {
+                    } else if let Some((px, base)) =
+                        func_ref.filter(|_| kind.has(ExoticKind::PROXIES))
+                    {
                         // `p(...)` / `new p(...)`: collect the frame's args and
                         // receiver, clear the frame, and run the proxy's
                         // `[[Call]]`/`[[Construct]]` (its `apply`/`construct`
@@ -18475,7 +18498,8 @@ impl Interp {
                         .get(&self.cur_func)
                         .map(|info| info.home)
                         .unwrap_or(crate::value::SlotIndex::NULL);
-                    self.functions.entry(arrow).or_default().home = home;
+                    self.functions
+                        .update_or_default(arrow, |info| info.home = home);
                     if self.cur_target {
                         let id = self.intern_key_unmetered("new.target");
                         let target =
@@ -20582,9 +20606,9 @@ impl Interp {
         }
         // Mark the function as a generator so a bare call is understood (the
         // body's `START_GENERATOR` is what actually produces the instance).
-        if let Some(info) = self.functions.get_mut(&f) {
+        self.functions.update(&f, |info| {
             info.is_generator = true;
-        }
+        });
         f
     }
 
@@ -20699,9 +20723,9 @@ impl Interp {
             self.slots.get_mut(proto).value = Payload::Reference(self.async_generator_proto);
         }
         // Like an async function, an async generator is not constructable.
-        if let Some(info) = self.functions.get_mut(&f) {
+        self.functions.update(&f, |info| {
             info.is_generator = true;
-        }
+        });
         f
     }
 
@@ -63070,6 +63094,172 @@ mod tests {
         assert!(m.slots.free_list().contains(&orphan.0));
     }
 
+    fn assert_classification_matches_tables(interp: &Interp) {
+        for slot in 0..interp.slots.capacity() {
+            let owner = crate::SlotIndex(slot);
+            let mut expected = ExoticKind::default();
+            if interp.arrays.contains_key(&owner) {
+                expected = expected.union(ExoticKind::ARRAYS);
+            }
+            if interp.wrapper_data.contains_key(&owner) {
+                expected = expected.union(ExoticKind::WRAPPER_DATA);
+            }
+            if interp.temporal_instants.contains_key(&owner) {
+                expected = expected.union(ExoticKind::TEMPORAL_INSTANTS);
+            }
+            if interp.temporal_durations.contains_key(&owner) {
+                expected = expected.union(ExoticKind::TEMPORAL_DURATIONS);
+            }
+            if interp.temporal_plains.contains_key(&owner) {
+                expected = expected.union(ExoticKind::TEMPORAL_PLAINS);
+            }
+            if interp.temporal_zoneds.contains_key(&owner) {
+                expected = expected.union(ExoticKind::TEMPORAL_ZONEDS);
+            }
+            if interp.disposable_stacks.contains_key(&owner) {
+                expected = expected.union(ExoticKind::DISPOSABLE_STACKS);
+            }
+            if interp.collections.contains_key(&owner) {
+                expected = expected.union(ExoticKind::COLLECTIONS);
+            }
+            if interp.array_buffers.contains_key(&owner) {
+                expected = expected.union(ExoticKind::ARRAY_BUFFERS);
+            }
+            if interp.typed_arrays.contains_key(&owner) {
+                expected = expected.union(ExoticKind::TYPED_ARRAYS);
+            }
+            if interp.data_views.contains_key(&owner) {
+                expected = expected.union(ExoticKind::DATA_VIEWS);
+            }
+            if interp.regexps.contains_key(&owner) {
+                expected = expected.union(ExoticKind::REGEXPS);
+            }
+            if interp.locales.contains_key(&owner) {
+                expected = expected.union(ExoticKind::LOCALES);
+            }
+            if interp.collators.contains_key(&owner) {
+                expected = expected.union(ExoticKind::COLLATORS);
+            }
+            if interp.functions.contains_key(&owner) {
+                expected = expected.union(ExoticKind::FUNCTIONS);
+            }
+            if interp.proxies.contains_key(&owner) {
+                expected = expected.union(ExoticKind::PROXIES);
+            }
+            if interp.bound_functions.contains_key(&owner) {
+                expected = expected.union(ExoticKind::BOUND_FUNCTIONS);
+            }
+            if interp.promise_functions.contains_key(&owner) {
+                expected = expected.union(ExoticKind::PROMISE_FUNCTIONS);
+            }
+            if let Some(info) = interp.functions.get(&owner) {
+                if info.native.is_some() {
+                    expected = expected.union(ExoticKind::NATIVE);
+                }
+                if info.method.is_some() {
+                    expected = expected.union(ExoticKind::METHOD);
+                }
+            }
+            assert_eq!(interp.classes.get(owner), expected, "slot {slot}");
+        }
+    }
+
+    #[test]
+    fn classification_tracks_boot_guest_mutation_gc_and_reuse() {
+        let mut interp = Interp::new();
+        assert_classification_matches_tables(&interp);
+        for source in [
+            "var keep=[[],new Map(),new Uint8Array(4),new String('x'),/x/,new Intl.Locale('en'),new Proxy(function(){}, {})]; function f(){}; f.bind(null); 0",
+            "keep=null; f=null; 0",
+            "var keep=[new Set(),[],function g(){}]; 0",
+        ] {
+            let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+            let code = interp.relink_crank(&code, &crate::parse_symbols(&symbols)).unwrap();
+            let result = interp.run(&code);
+            assert!(result.completed, "{:?}", result.halt);
+            assert_classification_matches_tables(&interp);
+            interp.collect_garbage();
+            assert_classification_matches_tables(&interp);
+        }
+    }
+
+    #[test]
+    fn restored_bound_metadata_takes_precedence_over_a_runnable_body() {
+        let (mut interp, mut state, candidate, target) = callable_overlap_fixture();
+        state.bound_functions.push(BoundFunctionRow {
+            owner: candidate,
+            target,
+            this_arg: Slot::undefined(),
+            args: Vec::new(),
+        });
+        assert!(interp.restore_function_state(state));
+        assert_classification_matches_tables(&interp);
+        assert_restored_overlap_calls_target(&mut interp);
+    }
+
+    #[test]
+    fn restored_proxy_metadata_takes_precedence_over_a_runnable_body() {
+        let (mut interp, state, candidate, target) = callable_overlap_fixture();
+        assert!(interp.restore_function_state(state));
+        let handler = *interp.symbol_ids.get("handler").unwrap();
+        let Payload::Reference(handler) = interp.instance_get(interp.global_obj, handler).value
+        else {
+            panic!("fixture handler is an object");
+        };
+        assert!(interp.restore_proxy_state(ProxyStateSnapshot {
+            proxies: vec![ProxyRow {
+                owner: candidate,
+                target,
+                handler: handler.0,
+                revoked: false,
+            }],
+            revokers: Vec::new(),
+        }));
+        assert_classification_matches_tables(&interp);
+        assert_restored_overlap_calls_target(&mut interp);
+    }
+
+    fn callable_overlap_fixture() -> (Interp, FunctionStateSnapshot, u32, u32) {
+        let (code, symbols) = ironhorse_compile::compile_atoms(
+            "function candidate(){return 11;} function target(){return 22;} var handler={}; 0",
+        )
+        .unwrap();
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&crate::parse_symbols(&symbols));
+        assert!(interp.run(&code).completed);
+        let state = interp.function_state_snapshot();
+        let candidate = state
+            .functions
+            .iter()
+            .find(|row| row.name == "candidate")
+            .unwrap();
+        assert!(candidate.body_start.is_some());
+        let candidate = candidate.owner;
+        let target = state
+            .functions
+            .iter()
+            .find(|row| row.name == "target")
+            .unwrap()
+            .owner;
+        // Restore onto the same heap after removing only the metadata being
+        // restored. The admitted image deliberately overlaps a real body with
+        // a trampoline; RUN must preserve the historical trampoline priority.
+        for row in &state.functions {
+            interp.functions.remove(&crate::SlotIndex(row.owner));
+        }
+        (interp, state, candidate, target)
+    }
+
+    fn assert_restored_overlap_calls_target(interp: &mut Interp) {
+        let (code, symbols) = ironhorse_compile::compile_atoms("candidate()").unwrap();
+        let code = interp
+            .relink_crank(&code, &crate::parse_symbols(&symbols))
+            .unwrap();
+        let result = interp.run(&code);
+        assert!(result.completed, "{:?}", result.halt);
+        assert_eq!(result.result, "22", "must not execute candidate's body");
+    }
+
     #[test]
     fn shared_program_and_escaping_function_retain_the_callers_allocation() {
         let (bytes, symbols) =
@@ -63080,6 +63270,8 @@ mod tests {
         let result = interp.run_shared(code.clone());
         assert!(result.completed);
         assert_eq!(result.result, "42");
+        // Completion retires the activation; escaping functions retain the
+        // caller's allocation through their defining segment instead.
         assert!(interp.top_level_code.is_none());
         assert!(interp.is_quiescent());
         assert!(interp
@@ -65607,21 +65799,21 @@ impl Interp {
 
         let roots = self.gc_roots();
         struct Hooks<'a> {
-            functions: &'a mut std::collections::HashMap<SlotIndex, FuncInfo>,
-            bound_functions: &'a mut std::collections::HashMap<SlotIndex, BoundData>,
+            functions: &'a mut ClassMap<FuncInfo>,
+            bound_functions: &'a mut ClassMap<BoundData>,
             ctor_prototype: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
-            wrapper_data: &'a mut std::collections::HashMap<SlotIndex, Slot>,
-            arrays: &'a mut std::collections::HashMap<SlotIndex, ArrayData>,
+            wrapper_data: &'a mut ClassMap<Slot>,
+            arrays: &'a mut ClassMap<ArrayData>,
             index_props: &'a mut std::collections::HashMap<SlotIndex, ArrayData>,
-            collections: &'a mut std::collections::HashMap<SlotIndex, CollectionData>,
-            array_buffers: &'a mut std::collections::HashMap<SlotIndex, ArrayBufferData>,
-            typed_arrays: &'a mut std::collections::HashMap<SlotIndex, TypedArrayData>,
-            data_views: &'a mut std::collections::HashMap<SlotIndex, DataViewData>,
+            collections: &'a mut ClassMap<CollectionData>,
+            array_buffers: &'a mut ClassMap<ArrayBufferData>,
+            typed_arrays: &'a mut ClassMap<TypedArrayData>,
+            data_views: &'a mut ClassMap<DataViewData>,
             iterators: &'a mut std::collections::HashMap<SlotIndex, IterState>,
             promises: &'a mut std::collections::HashMap<SlotIndex, PromiseData>,
             generators: &'a mut std::collections::HashMap<SlotIndex, GeneratorData>,
             async_instances: &'a mut std::collections::HashMap<SlotIndex, AsyncData>,
-            promise_functions: &'a mut std::collections::HashMap<SlotIndex, PromiseFnData>,
+            promise_functions: &'a mut ClassMap<PromiseFnData>,
             stack: &'a mut Vec<Slot>,
             locals: &'a mut Vec<Slot>,
             args: &'a mut Vec<Slot>,
@@ -65634,13 +65826,13 @@ impl Interp {
             promise_jobs: &'a mut std::collections::VecDeque<PromiseJob>,
             side_refs: &'a mut SideRefCounts,
             symbol_key_ids: &'a mut std::collections::HashMap<SlotIndex, u16>,
-            proxies: &'a mut std::collections::HashMap<SlotIndex, ProxyData>,
+            proxies: &'a mut ClassMap<ProxyData>,
             proxy_revokers: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
             accessors: &'a mut std::collections::HashMap<(SlotIndex, u16), AccessorData>,
             private_values: &'a mut std::collections::HashMap<(SlotIndex, SlotIndex), Slot>,
             private_accessors:
                 &'a mut std::collections::HashMap<(SlotIndex, SlotIndex), AccessorData>,
-            disposable_stacks: &'a mut std::collections::HashMap<SlotIndex, DisposableStackData>,
+            disposable_stacks: &'a mut ClassMap<DisposableStackData>,
             async_generators: &'a mut std::collections::HashMap<SlotIndex, AsyncGeneratorData>,
             segment_iterators: &'a mut std::collections::HashMap<SlotIndex, SegmentIteratorData>,
             collator_compare_functions: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
@@ -66048,9 +66240,7 @@ impl Interp {
             }
 
             fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
-                for f in self.functions.values_mut() {
-                    visit(&mut f.name_chunk);
-                }
+                self.functions.update_values(|f| visit(&mut f.name_chunk));
                 for b in self.array_buffers.values_mut() {
                     visit(&mut b.data);
                 }

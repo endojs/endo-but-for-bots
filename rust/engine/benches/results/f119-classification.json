@@ -1,0 +1,213 @@
+{
+  "finding": "F119",
+  "before_revision": "9db9d39586f91339ccc2ec053b5e3b8d03bc0196",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M3 Max",
+  "fixtures_sha256": {
+    "rust/engine/ironhorse-snapshot/tests/classification_bench.rs": "eb541b49ad4ec557a4d2c357668ca1f3c4cc77228a092eb7ef40e6c62656f788",
+    "rust/engine/ironhorse-snapshot/tests/lifecycle_bench.rs": "5c9485b043b466e20aaa9ce52471f27946ffe3d240369ad7099bb3abcace6a71"
+  },
+  "samples": "Serial measurements on the same otherwise idle host. One warmup and five measured runs; median seconds. Classification: 500000 loop iterations, compile/link/VM boot excluded, guest setup included. Lifecycle: 1000 operations per batch; shared_run reports batch raw, fresh realm reports per-evaluation raw.",
+  "commands": [
+    "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test classification_bench -- --ignored --nocapture --test-threads=1",
+    "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test lifecycle_bench -- --ignored --nocapture --test-threads=1"
+  ],
+  "baseline_setup": "Archived before_revision and copied identical classification fixture. Separate target directories, same Cargo.lock and toolchain.",
+  "result": "Populated ordinary_get and native_call improve about 6%; small-realm timings remain within 1.3%. Fresh scalar realms cost about 6% more (0.65 microseconds/evaluation); fresh intrinsic realms cost about 2.4% more. These medians are measurements, not statistical significance claims. Raw charges and classification dispatch counts are unchanged; the shared-bytecode size gate still passes.",
+  "measurements": [
+    {
+      "shape": "small_ordinary_get",
+      "before": {
+        "seconds": 0.241205875,
+        "raw_computrons": 704515247736,
+        "dispatched": 10500045
+      },
+      "after": {
+        "seconds": 0.244257959,
+        "raw_computrons": 704515247736,
+        "dispatched": 10500045
+      },
+      "speedup": 0.9875046691927856
+    },
+    {
+      "shape": "small_plain_call",
+      "before": {
+        "seconds": 0.332508209,
+        "raw_computrons": 1097731332000,
+        "dispatched": 16500045
+      },
+      "after": {
+        "seconds": 0.33222575,
+        "raw_computrons": 1097731332000,
+        "dispatched": 16500045
+      },
+      "speedup": 1.0008502020087244
+    },
+    {
+      "shape": "small_array_length",
+      "before": {
+        "seconds": 0.250781333,
+        "raw_computrons": 704516329040,
+        "dispatched": 10500061
+      },
+      "after": {
+        "seconds": 0.2536345,
+        "raw_computrons": 704516329040,
+        "dispatched": 10500061
+      },
+      "speedup": 0.9887508718254023
+    },
+    {
+      "shape": "small_native_call",
+      "before": {
+        "seconds": 0.281049625,
+        "raw_computrons": 868354279752,
+        "dispatched": 13000031
+      },
+      "after": {
+        "seconds": 0.282942625,
+        "raw_computrons": 868354279752,
+        "dispatched": 13000031
+      },
+      "speedup": 0.9933095976613634
+    },
+    {
+      "shape": "populated_ordinary_get",
+      "before": {
+        "seconds": 0.315051959,
+        "raw_computrons": 704524250024,
+        "dispatched": 10500161
+      },
+      "after": {
+        "seconds": 0.2956765,
+        "raw_computrons": 704524250024,
+        "dispatched": 10500161
+      },
+      "speedup": 1.0655292490272308
+    },
+    {
+      "shape": "populated_plain_call",
+      "before": {
+        "seconds": 0.404327666,
+        "raw_computrons": 1097740334288,
+        "dispatched": 16500161
+      },
+      "after": {
+        "seconds": 0.395708125,
+        "raw_computrons": 1097740334288,
+        "dispatched": 16500161
+      },
+      "speedup": 1.0217825726979954
+    },
+    {
+      "shape": "populated_array_length",
+      "before": {
+        "seconds": 0.284612084,
+        "raw_computrons": 704525331328,
+        "dispatched": 10500177
+      },
+      "after": {
+        "seconds": 0.287522125,
+        "raw_computrons": 704525331328,
+        "dispatched": 10500177
+      },
+      "speedup": 0.9898788971457413
+    },
+    {
+      "shape": "populated_native_call",
+      "before": {
+        "seconds": 0.361506542,
+        "raw_computrons": 868363282040,
+        "dispatched": 13000147
+      },
+      "after": {
+        "seconds": 0.340479459,
+        "raw_computrons": 868363282040,
+        "dispatched": 13000147
+      },
+      "speedup": 1.06175727329266
+    }
+  ],
+  "lifecycle_controls": [
+    {
+      "shape": "shared_run",
+      "n": 7,
+      "before": {
+        "seconds": 0.000153875,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.0001525,
+        "raw_computrons": 541976000
+      },
+      "speedup": 1.009016393442623
+    },
+    {
+      "shape": "shared_run",
+      "n": 4096,
+      "before": {
+        "seconds": 0.000153125,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.0001525,
+        "raw_computrons": 541976000
+      },
+      "speedup": 1.0040983606557377
+    },
+    {
+      "shape": "shared_run",
+      "n": 1048576,
+      "before": {
+        "seconds": 0.000150834,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.0001475,
+        "raw_computrons": 541976000
+      },
+      "speedup": 1.0226033898305085
+    },
+    {
+      "shape": "shared_run",
+      "n": 8388608,
+      "before": {
+        "seconds": 0.000150666,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.000147291,
+        "raw_computrons": 541976000
+      },
+      "speedup": 1.0229138236552133
+    },
+    {
+      "shape": "fresh_scalar",
+      "n": 1000,
+      "before": {
+        "seconds": 0.010999833,
+        "raw_computrons": 541976
+      },
+      "after": {
+        "seconds": 0.011652917,
+        "raw_computrons": 541976
+      },
+      "speedup": 0.9439553203717147
+    },
+    {
+      "shape": "fresh_intrinsics",
+      "n": 1000,
+      "before": {
+        "seconds": 0.021539833,
+        "raw_computrons": 2149216
+      },
+      "after": {
+        "seconds": 0.022053875,
+        "raw_computrons": 2149216
+      },
+      "speedup": 0.9766915338007494
+    }
+  ]
+}
