@@ -12,13 +12,15 @@
 //! no realm object below [`crate::interp::Interp`]: one `Interp` owns its
 //! global object, its intrinsic graph, its symbol table and its slot
 //! arena together. Consequently every [`Compartment::evaluate`] and
-//! [`Compartment::evaluate_with_symbols`] builds a **fresh `Interp`**,
-//! links the intrinsics into it, seeds this compartment's own globals,
-//! and runs. Two compartments — and two evaluations of one compartment —
+//! [`Compartment::evaluate_with_symbols`] obtains a **fresh `Interp`**,
+//! seeds this compartment's own globals, and runs. Symbol-linked evaluation
+//! copies a pristine linked boot template into independent mutable arenas;
+//! one exact-symbol-table template is cached per machine. Two compartments — and two evaluations of one compartment —
 //! therefore share **no primordial object**: `Object.prototype` in one
 //! run is a different heap object from `Object.prototype` in the next.
-//! [`Intrinsics`] is a per-machine *marker* that compartments hold by
-//! `Rc`; it carries no intrinsic graph or lockdown state.
+//! [`Intrinsics`] is the per-machine identity compartments hold by `Rc`.
+//! Its private boot template is never guest-executed and carries no lockdown
+//! state; the mutable graph in each evaluation is independently owned.
 //! The identity the tests certify with `Rc::ptr_eq`
 //! is the marker's, not a shared frozen primordial graph's.
 //!
@@ -90,7 +92,7 @@
 //! `ironhorse-262`'s `compartment` dual-run) plus the ironhorse-side
 //! isolation/globalThis/endowments/module-map unit corpus below.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -101,15 +103,36 @@ use crate::value::{Kind, Payload, Slot};
 /// The per-machine intrinsics **marker** compartments hold by `Rc`.
 ///
 /// This is the seam where a shared frozen primordial graph belongs; it
-/// does not hold one yet. Every evaluation builds its own `Interp` and
-/// therefore its own intrinsic objects (see the module documentation's
+/// does not expose one yet. A bounded private cache holds one pristine linked
+/// template; every symbol-linked evaluation copies it into its own `Interp`
+/// and therefore its own intrinsic objects (see the module documentation's
 /// realm decision), so two compartments that `Rc::ptr_eq` on this struct
 /// share a marker, not an `Object.prototype`. Lockdown state belongs
 /// with the shared graph once the realm split lands.
 #[derive(Default)]
-pub struct Intrinsics {}
+pub struct Intrinsics {
+    // One exact-symbol-table template bounds cache growth even when a caller
+    // supplies a different set of names on every evaluation.
+    boot: RefCell<Option<(Vec<crate::symbols::SymbolName>, crate::interp::BootTemplate)>>,
+}
 
 impl Intrinsics {
+    fn fresh_linked(
+        &self,
+        names: &[crate::symbols::SymbolName],
+        meter: Option<(u64, Box<dyn FnMut(u64) -> bool>)>,
+    ) -> Interp {
+        let mut cache = self.boot.borrow_mut();
+        if cache.as_ref().is_none_or(|(cached, _)| cached != names) {
+            *cache = Some((names.to_vec(), crate::interp::BootTemplate::new(names)));
+        }
+        let template = &cache.as_ref().unwrap().1;
+        match meter {
+            Some((interval, host)) => template.instantiate_metered(interval, host),
+            None => template.instantiate(),
+        }
+    }
+
     pub fn new() -> Rc<Intrinsics> {
         Rc::new(Intrinsics::default())
     }
@@ -426,6 +449,11 @@ impl Compartment {
     /// engine's raw completion, like [`Interp::run`]: a differential caller
     /// applies [`RunOutcome::host_coerced`] itself.
     pub fn evaluate(&self, bytecode: &[u8]) -> RunOutcome {
+        self.evaluate_shared(Rc::from(bytecode))
+    }
+
+    /// [`Self::evaluate`] using a caller-owned immutable program buffer.
+    pub fn evaluate_shared(&self, bytecode: Rc<[u8]>) -> RunOutcome {
         let seeded = match self.seeded_globals() {
             Ok(seeded) => seeded,
             Err(skip) => return Self::refused(skip),
@@ -434,7 +462,7 @@ impl Compartment {
         for (id, value) in seeded {
             interp.define_global_id(id, value);
         }
-        interp.run(bytecode)
+        interp.run_shared(bytecode)
     }
 
     /// Evaluate a program bytecode buffer with its XS `symbols` atom, so
@@ -448,12 +476,21 @@ impl Compartment {
     /// the top-level differential wrappers, no oracle-harness coercion is
     /// applied.
     ///
-    /// The intrinsics are linked into a **fresh `Interp`** per call, so the
-    /// two compartments do not share intrinsic object identity (see the
+    /// A pristine linked template is copied into a **fresh `Interp`** per call,
+    /// so the two compartments do not share intrinsic object identity (see the
     /// module documentation's realm decision), and a heap-backed endowment
     /// is refused as `compartment:heap-endowment`.
     pub fn evaluate_with_symbols(&self, bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
-        self.evaluate_with_symbols_on(Interp::new(), bytecode, symbols)
+        self.evaluate_with_symbols_shared(Rc::from(bytecode), symbols)
+    }
+
+    /// [`Self::evaluate_with_symbols`] without copying a shared program.
+    pub fn evaluate_with_symbols_shared(&self, bytecode: Rc<[u8]>, symbols: &[u8]) -> RunOutcome {
+        let names = match crate::symbols::parse_symbols_checked(symbols) {
+            Ok(names) => names,
+            Err(halt) => return crate::symbols::decode_refusal(halt),
+        };
+        self.evaluate_linked_shared(self.intrinsics.fresh_linked(&names, None), bytecode)
     }
 
     /// [`Compartment::evaluate_with_symbols`] under an ARMED meter
@@ -470,34 +507,53 @@ impl Compartment {
         interval: u64,
         host: Box<dyn FnMut(u64) -> bool>,
     ) -> RunOutcome {
-        let mut interp = Interp::new();
-        interp.arm_meter(interval, host);
-        self.evaluate_with_symbols_on(interp, bytecode, symbols)
+        self.evaluate_with_symbols_metered_shared(Rc::from(bytecode), symbols, interval, host)
     }
 
-    /// Link and evaluate on a caller-owned interpreter. An embedder may use
-    /// this to retain the meter and admission window used to compile the unit.
-    /// The interpreter must belong to this evaluation; its existing state is
-    /// retained before this compartment's globals are seeded.
+    /// [`Self::evaluate_with_symbols_metered`] using shared bytecode.
+    pub fn evaluate_with_symbols_metered_shared(
+        &self,
+        bytecode: Rc<[u8]>,
+        symbols: &[u8],
+        interval: u64,
+        host: Box<dyn FnMut(u64) -> bool>,
+    ) -> RunOutcome {
+        let names = match crate::symbols::parse_symbols_checked(symbols) {
+            Ok(names) => names,
+            Err(halt) => return crate::symbols::decode_refusal(halt),
+        };
+        let interp = self.intrinsics.fresh_linked(&names, Some((interval, host)));
+        self.evaluate_linked_shared(interp, bytecode)
+    }
+
+    /// Link and evaluate on the interpreter whose meter admitted compilation.
+    /// Compilation owns this fresh interpreter until cached meter handoff is
+    /// integrated; preserve both its charges and host consultation window.
     pub fn evaluate_with_symbols_on(
         &self,
         mut interp: Interp,
         bytecode: &[u8],
         symbols: &[u8],
     ) -> RunOutcome {
-        let seeded = match self.seeded_globals() {
-            Ok(seeded) => seeded,
-            Err(skip) => return Self::refused(skip),
-        };
         let names = match crate::symbols::parse_symbols_checked(symbols) {
             Ok(names) => names,
             Err(halt) => return crate::symbols::decode_refusal(halt),
         };
         interp.link_intrinsics(&names);
+        self.evaluate_linked_shared(interp, Rc::from(bytecode))
+    }
+
+    /// The shared body of the symbol-linked evaluators: seed this
+    /// compartment's globals into the independent linked copy, then run.
+    fn evaluate_linked_shared(&self, mut interp: Interp, bytecode: Rc<[u8]>) -> RunOutcome {
+        let seeded = match self.seeded_globals() {
+            Ok(seeded) => seeded,
+            Err(skip) => return Self::refused(skip),
+        };
         for (id, value) in seeded {
             interp.define_global_id(id, value);
         }
-        interp.run(bytecode)
+        interp.run_shared(bytecode)
     }
 }
 
@@ -572,6 +628,114 @@ mod tests {
             Opcode::XS_CODE_SET_RESULT as u8,
             Opcode::XS_CODE_END as u8,
         ]
+    }
+
+    #[test]
+    fn template_metering_matches_arm_before_link_and_remains_isolated() {
+        for source in [
+            "var i=0; while(i<20){i++;} i",
+            "var m=new Map(); for(var i=0;i<8;i++){m.set(i,String(i));} Object.keys({a:1}).length + m.size",
+            "var x = RegExp('a').test('a'); for(var i=0;i<8;i++){} x",
+            "var before=Object.prototype.polluted; Object.prototype.polluted=1; before",
+            "var before=typeof sentinel; sentinel=123; before",
+            "Object.prototype.polluted=1; throw 42",
+        ] {
+            let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+            let names = crate::parse_symbols(&symbols);
+            let machine = Machine::new();
+            let compartment = machine.new_compartment();
+            for interval in [1, 32] {
+                for allow in [true, false] {
+                    let baseline_calls = Rc::new(RefCell::new(Vec::new()));
+                    let calls = baseline_calls.clone();
+                    let mut baseline = Interp::new();
+                    baseline.arm_meter(interval, Box::new(move |n| { calls.borrow_mut().push(n); allow }));
+                    baseline.link_intrinsics(&names);
+                    let expected = baseline.run(&code);
+                    for _ in 0..3 {
+                        let actual_calls = Rc::new(RefCell::new(Vec::new()));
+                        let calls = actual_calls.clone();
+                        let actual = compartment.evaluate_with_symbols_metered(&code, &symbols, interval, Box::new(move |n| { calls.borrow_mut().push(n); allow }));
+                        assert_eq!((actual.completed, actual.result, actual.meter_raw, actual.dispatched, format!("{:?}",actual.halt)), (expected.completed, expected.result.clone(), expected.meter_raw, expected.dispatched, format!("{:?}",expected.halt)), "{source}");
+                        assert_eq!(*actual_calls.borrow(), *baseline_calls.borrow(), "{source}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn template_cache_preserves_surrogate_property_names() {
+        let machine = Machine::new();
+        let compartment = machine.new_compartment();
+        for source in [
+            r#"({"\uD800":7,"\uFFFD":9})["\uD800"]"#,
+            r#"({"\uDC00":7,"\uFFFD":9})["\uDC00"]"#,
+            r#"({"\uD800\uDC00":7,"\uFFFD":9})["\uD800\uDC00"]"#,
+        ]
+        .into_iter()
+        .cycle()
+        .take(9)
+        {
+            let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+            for _ in 0..2 {
+                let outcome = compartment.evaluate_with_symbols(&code, &symbols);
+                assert!(outcome.completed, "{:?}", outcome.halt);
+                assert_eq!(outcome.result, "7");
+            }
+        }
+    }
+
+    #[test]
+    fn template_cache_switches_symbol_tables_without_changing_bindings() {
+        let machine = Machine::new();
+        let compartment = machine.new_compartment();
+        for source in [
+            "Object.keys({a:1}).length",
+            "Math.abs(-3)",
+            "Array.isArray([])",
+            "Object.keys({a:1}).length",
+        ]
+        .into_iter()
+        .cycle()
+        .take(12)
+        {
+            let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+            let mut fresh = Interp::new();
+            fresh.link_intrinsics(&crate::parse_symbols(&symbols));
+            let expected = fresh.run(&code);
+            let actual = compartment.evaluate_with_symbols(&code, &symbols);
+            assert_eq!(
+                (actual.completed, actual.result, actual.meter_raw),
+                (expected.completed, expected.result, expected.meter_raw)
+            );
+        }
+    }
+
+    #[test]
+    fn metered_template_refuses_heap_endowments_without_host_calls() {
+        let machine = Machine::new();
+        let mut compartment = machine.new_compartment();
+        compartment.define_global_id(
+            1,
+            Slot::of(Kind::Reference, Payload::Reference(crate::SlotIndex(10))),
+        );
+        let (code, symbols) = ironhorse_compile::compile_atoms("while(true){}").unwrap();
+        for _ in 0..2 {
+            let result = compartment.evaluate_with_symbols_metered(
+                &code,
+                &symbols,
+                1,
+                Box::new(|_| panic!("refused endowment must not call host")),
+            );
+            assert!(!result.completed);
+            assert_eq!(result.meter_raw, 0);
+            assert_eq!(result.dispatched, 0);
+            assert!(matches!(
+                result.halt,
+                Halt::NotImplemented("compartment:heap-endowment")
+            ));
+        }
     }
 
     #[test]

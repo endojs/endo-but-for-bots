@@ -135,3 +135,35 @@ cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-snapshot --test scaling_bench for_in_traversal \
   -- --ignored --nocapture --test-threads=1
 ```
+
+## Bytecode ownership and fresh realms (F176)
+
+The lifecycle gate executes a caller-owned `Rc<[u8]>` 1000 times at each buffer size,
+from a seven-byte program to 8 MiB with an unreachable tail.
+It requires median execution time to remain within 2.5x of the smallest buffer.
+The same fixture also measures 1000 fresh symbol-linked compartment evaluations.
+Both use one warmup and five measured samples.
+A production fixture additionally measures `Machine::evaluate`, including compilation
+and default metering, in `rust/endo/tests/ironhorse_lifecycle_bench.rs`.
+The production fixture is a manual measurement; the VM lifecycle gate runs nightly.
+
+[results/f176-lifecycle.json](results/f176-lifecycle.json) records the paired runs,
+revisions, fixture digests, and build prerequisites.
+The shared-buffer gate fails before the fix and passes afterward.
+Raw charges remain unchanged in all measured cases.
+The slice-based compatibility APIs still acquire owned bytecode; callers already
+holding an `Rc<[u8]>` use the shared APIs to avoid that conversion.
+Creating an `Rc<[u8]>` from freshly compiled `Vec<u8>` remains one ownership conversion.
+
+Fresh realms copy an immutable, pristine linked template into independent mutable
+arenas and tables; guest execution never mutates the cached template.
+The cache holds one exact symbol-table variant per machine.
+Tests compare outcomes, raw charges, and metering callbacks against explicit fresh
+boot, including repeated mutation, throws, meter refusals, and symbol-table changes.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-snapshot --test lifecycle_bench -- --ignored --nocapture --test-threads=1
+cargo test --manifest-path rust/endo/Cargo.toml --locked --release \
+  --test ironhorse_lifecycle_bench -- --ignored --nocapture --test-threads=1
+```

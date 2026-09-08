@@ -436,8 +436,9 @@ pub mod engine {
     impl Machine {
         /// Create a fresh machine, metered under [`MeterBounds::default`].
         ///
-        /// Each `evaluate` builds its own realm; the machine's
-        /// `Intrinsics` is a marker, not a shared frozen primordial graph
+        /// Each `evaluate` gets an independent realm copied from a pristine
+        /// linked template; the machine's `Intrinsics` cache is not a shared
+        /// guest-visible primordial graph
         /// (see `ironhorse_vm::compartment`'s realm decision).
         pub fn new() -> Machine {
             Machine::with_bounds(MeterBounds::default())
@@ -1042,7 +1043,7 @@ pub mod engine {
                     bytecode
                 };
                 // Preserve the compilation baseline and its admission window.
-                let outcome = session.machine_mut().run(&bytecode);
+                let outcome = session.machine_mut().run_shared(bytecode.into());
                 if outcome.completed && checkpoint_due {
                     let r = checkpoint_to_store(
                         session,
