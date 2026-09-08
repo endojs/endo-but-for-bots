@@ -2960,3 +2960,58 @@ fn distinct_nested_labels_accept() {
         "loop: while (1) { break loop; }",
     ]);
 }
+
+// F016: these valid keys must never enter the compiler's Rust String symbol
+// table with their unpaired code units silently replaced by U+FFFD.
+#[test]
+fn lone_surrogate_property_keys_refuse() {
+    for src in [
+        r#"var o={"\uD800":1,"\uD801":2}; Object.keys(o).length"#,
+        r#"var o={"\uD800":1}; o["\uD801"]"#,
+        r#"var o={"\uD800":1}; Object.keys(o)[0].charCodeAt(0)"#,
+        r#"({"\uDC00":1})"#,
+        r#"({"\u{D800}":1})"#,
+        r#"({"\uDC00\uD800":1})"#,
+        r#"({"\uD835\uDC9C\uD800":1})"#,
+        r#"({"a\uD800b":1})"#,
+        r#"({get "\uD800"(){return 1}})"#,
+        r#"({set "\uD800"(v){}})"#,
+        r#"({async "\uD800"(){}})"#,
+        r#"({async *"\uD800"(){}})"#,
+        r#"({*"\uD800"(){}})"#,
+        r#"class C { "\uD800"(){} }"#,
+        r#"class C { static get "\uD800"(){return 1} }"#,
+        r#"class C { "\uD800" = 1; }"#,
+        r#"var {"\uD800": x} = {};"#,
+        r#"function f({"\uD800": x}) {}"#,
+        r#"var x; ({"\uD800": x} = {});"#,
+    ] {
+        let oracle = xs_oracle::run(src).expect("oracle machine");
+        assert!(
+            oracle.completed,
+            "oracle must accept {src}: {}",
+            oracle.error
+        );
+        for result in [compile(src), compile_with(src, false), compile_module(src)] {
+            let error = result.expect_err(src);
+            assert_eq!(
+                error.kind,
+                ironhorse_compile::parser::ParseErrorKind::Unsupported,
+                "{src}: {error}"
+            );
+            assert_eq!(error.message, "unsupported: key:lone-surrogate", "{src}");
+        }
+    }
+}
+
+#[test]
+fn well_formed_property_keys_remain_byte_identical() {
+    assert_identical(&[
+        r#"({"\uFFFD":1})"#,
+        r#"({"𝒜":1})"#,
+        r#"({"\uD835\uDC9C":1})"#,
+        r#"({get "\uD835\uDC9C"(){return 1}})"#,
+        r#"class C { "\uD835\uDC9C"(){} }"#,
+        r#"var {"\uD835\uDC9C": x} = {};"#,
+    ]);
+}

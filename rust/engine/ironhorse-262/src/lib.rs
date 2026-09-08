@@ -1036,6 +1036,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compiler_seam_lone_surrogate_keys_are_named_noncoverage() {
+        for (source, expected) in [
+            (
+                r#"var o={"\uD800":1,"\uD801":2}; Object.keys(o).length"#,
+                "2",
+            ),
+            (r#"var o={"\uD800":1}; o["\uD801"]"#, "undefined"),
+            (
+                r#"var o={"\uD800":1}; Object.keys(o)[0].charCodeAt(0)"#,
+                "55296",
+            ),
+        ] {
+            let run = dual_run_with(source, Compiler::Ironhorse).expect("oracle runs");
+            assert_eq!(run.oracle_result, expected, "{source}");
+            assert!(
+                matches!(run.ironhorse_compile, IronhorseCompile::Unsupported(ref message)
+                if message == "line 1: unsupported: key:lone-surrogate")
+            );
+            assert!(run.bytecode.is_empty(), "refused source must never execute");
+            assert_ne!(run.agreement, Agreement::BothComplete);
+        }
+        use ironhorse_vm::{SourceCompileError, SourceCompiler};
+        assert!(matches!(
+            IronhorseSourceCompiler.compile_source(r#"({"\uD800": 1})"#, false),
+            Err(SourceCompileError::Unsupported(message))
+                if message == "line 1: unsupported: key:lone-surrogate"
+        ));
+    }
+
     /// js-04 helper: a source whose sloppy dual-run must agree with the XS
     /// oracle (BothComplete + observable agreement — a "covered" verdict).
     fn assert_covers_oracle(src: &str) {

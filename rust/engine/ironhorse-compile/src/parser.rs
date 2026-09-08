@@ -266,6 +266,13 @@ impl Parser {
         }
     }
 
+    /// The symbol table cannot represent unpaired UTF-16 surrogates yet.
+    /// Refuse before interning a key rather than aliasing it to U+FFFD.
+    fn string_property_name(&self) -> PResult<String> {
+        String::from_utf16(self.cur.string.as_deref().unwrap_or_default())
+            .map_err(|_| self.unsupported_error("key:lone-surrogate"))
+    }
+
     /// Run `f` as one recursion point of `cost` budget units, refusing with
     /// `fxCheckParserStack`'s `"stack overflow"` when the charge would exceed
     /// [`PARSER_STACK_BUDGET`]. The charge is released on every return path,
@@ -1665,7 +1672,7 @@ impl Parser {
                 }
             }
         } else if self.cur.token == Token::String {
-            let s = crate::ast::units_to_string(&self.cur.string.clone().unwrap_or_default());
+            let s = self.string_property_name()?;
             // `fxStringToIndex`: a string key that is a canonical array
             // index ("0", "1", … up to 2^32-2) codes through the
             // integer-index (`PropertyAt`) path, exactly as XS does; a
@@ -1722,7 +1729,7 @@ impl Parser {
                 }
                 self.get_next_token()?;
             } else if self.cur.token == Token::String {
-                let s = crate::ast::units_to_string(&self.cur.string.clone().unwrap_or_default());
+                let s = self.string_property_name()?;
                 if let Some(index) = string_key_to_index(&s) {
                     self.push_property_index(index, line);
                     token1 = Token::PropertyAt;

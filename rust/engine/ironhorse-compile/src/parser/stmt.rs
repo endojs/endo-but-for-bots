@@ -969,7 +969,7 @@ impl Parser {
                     Some(_) => a_symbol = true,
                 }
             } else if self.cur.token == Token::String {
-                let s = crate::ast::units_to_string(&self.cur.string.clone().unwrap_or_default());
+                let s = self.string_property_name()?;
                 self.push_symbol(s);
                 a_symbol = true;
             } else if self.cur.token == Token::LeftBracket {
