@@ -5,7 +5,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
     MachineSnapshot,
@@ -122,7 +122,7 @@ fn duplicate_private_element_rows_are_refused() {
         .private_elements
         .values
         .push(image.private_elements.values[0].clone());
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
         Err(SnapshotError::Corrupt("private values: rows not strictly ascending")) => {}
         Err(other) => panic!("wrong private-row refusal: {other:?}"),
         Ok(_) => panic!("duplicate private element rows must not restore"),

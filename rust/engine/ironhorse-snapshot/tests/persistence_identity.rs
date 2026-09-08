@@ -1,12 +1,12 @@
 //! Persistence identities must describe the bytes and allocation they name.
 mod common;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     from_snapshot_bytes, resume_from_cas, resume_from_store, resume_from_store_lazy,
     MachineSnapshot, MachineSnapshotError,
 };
-use ironhorse_snapshot::store::{image_to_batch, store_to_image, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::{image_to_batch_unchecked, store_to_image, HeapStore, MemoryStore};
 use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_vm::Interp;
 use std::cell::RefCell;
@@ -27,11 +27,11 @@ fn ran(source: &str) -> Interp {
 #[test]
 fn sealed_buffer_length_cannot_cross_or_shorten_its_allocation() {
     let machine = ran("var b = new ArrayBuffer(8); var adjacent = 'neighbor'; b.byteLength");
-    let image = machine.snapshot_image(&signature()).unwrap();
+    let image = machine.snapshot_image_for_testing(&signature()).unwrap();
     for length in [7, 9] {
         let mut forged = image.clone();
         forged.buffers[0].length = length;
-        let bytes = write_machine(&forged);
+        let bytes = write_machine_unchecked(&forged);
         assert!(matches!(
             read_machine(&bytes, &signature()),
             Err(SnapshotError::Corrupt(
@@ -40,7 +40,9 @@ fn sealed_buffer_length_cannot_cross_or_shorten_its_allocation() {
         ));
         assert!(from_snapshot_bytes(&bytes, &signature()).is_err());
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&forged, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&forged, 1, ""))
+            .unwrap();
         assert!(store_to_image(&store).is_err());
         assert!(resume_from_store(&store, &signature()).is_err());
         assert!(resume_from_store_lazy(Rc::new(RefCell::new(store)), &signature()).is_err());
@@ -50,7 +52,7 @@ fn sealed_buffer_length_cannot_cross_or_shorten_its_allocation() {
 #[test]
 fn vm_restore_checks_buffer_header_and_mutable_slices_stop_at_block_end() {
     let machine = ran("var b = new ArrayBuffer(8); b.byteLength");
-    let image = machine.snapshot_image(&signature()).unwrap();
+    let image = machine.snapshot_image_for_testing(&signature()).unwrap();
     let buffer = &image.buffers[0];
     for length in [7, 9] {
         let (slots, chunks) = image.to_arenas();
@@ -138,7 +140,7 @@ fn refused_cas_publication_removes_its_temporary() {
 #[test]
 fn detached_buffer_keeps_backing_allocation_but_exposes_zero_length() {
     let machine = ran("var b = new ArrayBuffer(8); var c = b.transfer(); b.byteLength");
-    let image = machine.snapshot_image(&signature()).unwrap();
+    let image = machine.snapshot_image_for_testing(&signature()).unwrap();
     let detached = image.buffers.iter().find(|b| b.flags & 1 != 0).unwrap();
     assert_eq!(detached.length, 0);
     let start = detached.data as usize;
@@ -146,17 +148,25 @@ fn detached_buffer_keeps_backing_allocation_but_exposes_zero_length() {
         u32::from_le_bytes(image.chunks[start - 4..start].try_into().unwrap()),
         8
     );
-    let bytes = write_machine(&image);
+    let bytes = write_machine_unchecked(&image);
     let resumed = from_snapshot_bytes(&bytes, &signature()).unwrap();
     assert_eq!(
-        resumed.snapshot_image(&signature()).unwrap().buffers,
+        resumed
+            .snapshot_image_for_testing(&signature())
+            .unwrap()
+            .buffers,
         image.buffers
     );
     let mut store = MemoryStore::new();
-    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
     let lazy = resume_from_store_lazy(Rc::new(RefCell::new(store)), &signature()).unwrap();
     assert_eq!(
-        lazy.machine().snapshot_image(&signature()).unwrap().buffers,
+        lazy.machine()
+            .snapshot_image_for_testing(&signature())
+            .unwrap()
+            .buffers,
         image.buffers
     );
 }
@@ -196,4 +206,42 @@ fn first_relink_preserves_tagged_template_cache_ids_across_cranks() {
         machine = from_snapshot_bytes(&bytes, &signature()).unwrap();
         assert_eq!(machine.write_snapshot(&signature()).unwrap(), bytes);
     }
+}
+
+#[test]
+fn normal_writers_accept_live_and_decoded_proofs() {
+    let machine = ran("var x = 1; x");
+    let proof = machine.snapshot_image(&signature()).unwrap();
+    let bytes = ironhorse_snapshot::write_machine(&proof);
+    let decoded = ironhorse_snapshot::read_validated_machine(&bytes, &signature())
+        .unwrap()
+        .into_gated();
+    assert_eq!(ironhorse_snapshot::write_machine(&decoded), bytes);
+    let mut store = MemoryStore::new();
+    store
+        .commit(&ironhorse_snapshot::image_to_batch(&proof, 1, ""))
+        .unwrap();
+    assert_eq!(
+        ironhorse_snapshot::store::export_to_container(&store).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn store_export_cannot_mint_proof_for_unregistered_property_keys() {
+    let machine = ran("var x = 1; x");
+    let mut image = machine.snapshot_image_for_testing(&signature()).unwrap();
+    let slot = image.slots.iter_mut().find(|slot| slot.id != 0).unwrap();
+    slot.id = 60000;
+    assert_eq!(image.stored_unregistered_key_id(), Some(60000));
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
+    assert!(matches!(
+        ironhorse_snapshot::store::export_to_container(&store),
+        Err(ironhorse_snapshot::StoreError::Snapshot(
+            SnapshotError::Corrupt("stored property id outside the name and symbol-key tables")
+        ))
+    ));
 }

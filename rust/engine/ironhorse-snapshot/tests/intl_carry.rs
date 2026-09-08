@@ -21,7 +21,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
@@ -283,7 +283,7 @@ fn malformed_intl_bound_function_rows_are_refused() {
     let mut image = read_machine(&bytes, &sig()).expect("read IBFN");
     assert_eq!(image.intl_bound_functions.len(), 1);
     image.intl_bound_functions[0].kind = 9;
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
         Err(SnapshotError::Corrupt("Intl bound-function state: unknown kind")) => {}
         Err(other) => panic!("wrong Intl-bound refusal: {other:?}"),
         Ok(_) => panic!("unknown Intl bound-function kind must not restore"),

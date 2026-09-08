@@ -5,7 +5,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
     MachineSnapshot,
@@ -134,7 +134,7 @@ fn malformed_proxy_rows_are_refused() {
         .proxy_state
         .proxies
         .push(duplicate.proxy_state.proxies[0].clone());
-    match from_snapshot_bytes(&write_machine(&duplicate), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&duplicate), &sig()) {
         Err(SnapshotError::Corrupt("proxy state: owners not strictly ascending")) => {}
         Err(other) => panic!("wrong duplicate-owner refusal: {other:?}"),
         Ok(_) => panic!("duplicate proxy owners must not restore"),
@@ -142,7 +142,7 @@ fn malformed_proxy_rows_are_refused() {
 
     let mut revoked = image;
     revoked.proxy_state.proxies[0].revoked = true;
-    match from_snapshot_bytes(&write_machine(&revoked), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&revoked), &sig()) {
         Err(SnapshotError::Corrupt("proxy state: revoked proxy retains target or handler")) => {}
         Err(other) => panic!("wrong revoked-row refusal: {other:?}"),
         Ok(_) => panic!("a revoked proxy cannot retain live internals"),

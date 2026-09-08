@@ -37,14 +37,18 @@ fn current_boot_fixture_image() -> ironhorse_snapshot::image::MachineImage {
             .unwrap();
         assert!(m.run(&code).completed);
     }
-    m.snapshot_image(&sig()).unwrap()
+    m.snapshot_image_for_testing(&sig()).unwrap()
 }
 
 fn write_matching_boot_v5_fixture(path: &std::path::Path) {
-    use ironhorse_snapshot::store::{combine_root, image_to_batch, leaf_hash, LEAF_SMALL};
+    use ironhorse_snapshot::store::{
+        combine_root, image_to_batch_unchecked, leaf_hash, LEAF_SMALL,
+    };
     let image = current_boot_fixture_image();
     let mut store = FileStore::open(path).unwrap();
-    store.commit(&image_to_batch(&image, 1, "")).unwrap();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
     let mut manifest = store.manifest().unwrap();
     let mut small = store.read_small_state().unwrap();
     // Schema 5 contains the original six sections. All later fixture state
@@ -614,7 +618,7 @@ fn v5_container_imports_and_round_trips_unchanged() {
     // container format.
     let mut image = current_boot_fixture_image();
     image.version.format_version = 15;
-    let container = ironhorse_snapshot::image::write_machine(&image);
+    let container = ironhorse_snapshot::image::write_machine_unchecked(&image);
     let mut store = MemoryStore::new();
     import_from_container(&container, &sig(), &mut store)
         .expect("import synthetic v5-era container");

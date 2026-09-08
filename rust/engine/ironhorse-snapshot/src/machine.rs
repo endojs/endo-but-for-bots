@@ -61,11 +61,11 @@ use std::path::Path;
 
 use crate::format::{Signature, SnapshotError};
 use crate::image::{
-    read_validated_machine, write_machine, MachineImage, MeterImage, ValidatedSnapshot,
+    read_validated_machine, write_machine, GatedImage, MachineImage, MeterImage, ValidatedSnapshot,
 };
 use crate::sha256::{hex, Sha256};
 #[cfg(test)]
-use crate::store::image_to_batch;
+use crate::store::image_to_batch_unchecked as image_to_batch;
 use crate::store::{
     chunk_extent_count, compute_root, derive_page_edges, leaf_hash, seal_commit, slot_page_count,
     store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState, StoreError,
@@ -169,31 +169,20 @@ pub trait MachineSnapshot {
     /// value stack, the program symbol names, the metering state, and
     /// the side-table rows — after [`Self::persist_gate`] admits it.
     ///
-    /// This is the only route from a live machine to its image that this
-    /// crate offers, and it is gated by construction: the encoder
-    /// ([`write_machine`]), the store batch builder
-    /// (`store::image_to_batch`) and every store's `commit` are pure
-    /// functions of an image, never of a machine, so the IMAGE data path
-    /// cannot see a machine the gate refused (F047: the gate used to be
-    /// attached to three convenience verbs while this method handed out
-    /// ungated images, and in-tree helpers already used
-    /// `image_to_batch(&m.snapshot_image(..)) + commit` to persist
-    /// machines no gate had seen). The gate is the whole persist
-    /// predicate set — [`Self::persist_gate`] plus the stored-key-id
-    /// audit — so an admitted image is exactly what
-    /// [`begin_store_session`] commits. The one persist path that does
-    /// not go through an image is the incremental `checkpoint_to_store`,
-    /// which builds its batch from the dirty pages; it runs the same
-    /// predicates inline, in the same order, without the audit (a live
-    /// machine's stored ids come only from minting).
-    ///
-    /// What stays reachable is hand-assembly: `MachineImage::from_arenas`
-    /// over the vm's public arenas plus the `with_*` builders, which the
-    /// fuzz targets need to synthesize images from arbitrary data. That
-    /// is an unchecked encoder input on the same footing as a crafted or
-    /// mutated image (how the refusal tests exercise the reader), not a
-    /// machine verb; nothing in this crate persists a machine through it.
-    fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError>;
+    /// The immutable proof prevents mutation between admission and encoding.
+    /// Writers and full-batch builders consume this proof; unchecked tooling
+    /// encoders are separate, explicitly named operations. Incremental
+    /// checkpoints run the same live gate directly over their bound machine.
+    fn snapshot_image(&self, signature: &Signature) -> Result<GatedImage, MachineSnapshotError>;
+
+    /// Test tooling that deliberately discards the persistence proof.
+    #[cfg(feature = "unchecked-tooling")]
+    fn snapshot_image_for_testing(
+        &self,
+        signature: &Signature,
+    ) -> Result<MachineImage, MachineSnapshotError> {
+        self.snapshot_image(signature).map(GatedImage::into_image)
+    }
 
     /// Serialize this machine to the in-memory `XS_M` container bytes.
     /// Refuses whatever [`Self::snapshot_image`] refuses — a machine
@@ -262,7 +251,7 @@ impl MachineSnapshot for Interp {
         Ok(())
     }
 
-    fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError> {
+    fn snapshot_image(&self, signature: &Signature) -> Result<GatedImage, MachineSnapshotError> {
         self.persist_gate()?;
         signature.check_boot()?;
         let image = ungated_image(self, signature);
@@ -279,7 +268,7 @@ impl MachineSnapshot for Interp {
                 "stored property id outside the name and symbol-key tables",
             )));
         }
-        Ok(image)
+        Ok(GatedImage::new(image)?)
     }
 }
 
@@ -1870,7 +1859,7 @@ mod tests {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".into()]);
-        let mut image = m.snapshot_image(&sig()).expect("gated image");
+        let mut image = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
             .find(|i| !free.contains(&(*i as u32)))
@@ -1879,7 +1868,8 @@ mod tests {
         image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
         // Sanity: the CONTAINER path refuses this exact content.
         assert!(
-            crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err(),
+            crate::image::read_machine(&crate::image::write_machine_unchecked(&image), &sig())
+                .is_err(),
             "the container gate refuses the poisoned image"
         );
         // Forge the store: image_to_batch computes CONSISTENT leaf
@@ -1900,7 +1890,7 @@ mod tests {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".into()]);
-        let mut image = m.snapshot_image(&sig()).expect("gated image");
+        let mut image = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let page = ironhorse_vm::value::SLOTS_PER_PAGE;
         let edge = (image.slots.len() as u32).div_ceil(page) * page;
         let free = edge + page;
@@ -1912,7 +1902,10 @@ mod tests {
         ));
         image.slot_free.push(free);
         image.slot_live = image.slots.len() as u32 - image.slot_free.len() as u32;
-        assert!(crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err());
+        assert!(
+            crate::image::read_machine(&crate::image::write_machine_unchecked(&image), &sig())
+                .is_err()
+        );
         for checkpoint in [false, true] {
             let mut store = crate::store::MemoryStore::new();
             let batch = image_to_batch(&image, 1, "");
@@ -1954,7 +1947,7 @@ mod tests {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".into()]);
-        let mut image = m.snapshot_image(&sig()).expect("gated image");
+        let mut image = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
             .find(|i| !free.contains(&(*i as u32)))
@@ -1983,7 +1976,7 @@ mod tests {
         use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot};
         let mut m = Interp::new();
         m.link_intrinsics(&["x".into()]);
-        let mut image = m.snapshot_image(&sig()).expect("gated image");
+        let mut image = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
             .find(|i| !free.contains(&(*i as u32)))
@@ -1992,7 +1985,8 @@ mod tests {
         image.slots[k] = Slot::of(Kind::String, Payload::String(ChunkOffset(poison)));
         // Sanity: the CONTAINER path refuses this exact content.
         assert!(
-            crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err(),
+            crate::image::read_machine(&crate::image::write_machine_unchecked(&image), &sig())
+                .is_err(),
             "the container gate refuses the poisoned chunk offset"
         );
         let mut store = crate::store::MemoryStore::new();
@@ -2109,9 +2103,9 @@ mod tests {
     fn cost_table_mismatch_fails_closed() {
         let mut m = Interp::new();
         m.run(&PROG_A);
-        let mut image = m.snapshot_image(&sig()).expect("gated image");
+        let mut image = m.snapshot_image_for_testing(&sig()).expect("gated image");
         image.meter.cost_table_version = "ironhorse-meter-999".to_string();
-        let bytes = write_machine(&image);
+        let bytes = crate::image::write_machine_unchecked(&image);
         match from_snapshot_bytes(&bytes, &sig()) {
             Err(SnapshotError::CostTableMismatch { expected, found }) => {
                 assert_eq!(expected, COST_TABLE_VERSION);

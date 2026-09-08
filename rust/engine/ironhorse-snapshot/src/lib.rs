@@ -77,7 +77,8 @@ pub use format::{
 };
 pub use image::{
     read_machine, read_validated_machine, write_machine, ArrayImage, CollectionImage,
-    CreationParams, DateImage, MachineImage, MeterImage, RegistryImage, ValidatedSnapshot,
+    CreationParams, DateImage, GatedImage, MachineImage, MeterImage, RegistryImage,
+    ValidatedSnapshot,
 };
 pub use machine::{
     from_snapshot_bytes, from_snapshot_file, image_to_interp, resume_from_cas, MachineSnapshot,
@@ -92,3 +93,8 @@ pub use store::{
     ValidatedStoreState, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE, STORE_SCHEMA_VERSION,
 };
 pub use store_file::{FileStore, FILE_MAGIC};
+
+#[cfg(any(test, feature = "unchecked-tooling"))]
+pub use image::write_machine_unchecked;
+#[cfg(any(test, feature = "unchecked-tooling"))]
+pub use store::image_to_batch_unchecked;

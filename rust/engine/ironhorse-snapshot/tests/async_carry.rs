@@ -82,8 +82,8 @@ fn async_locals_catch_finally_and_multiple_awaits_survive_checkpoints() {
 
 #[test]
 fn crafted_async_anchors_capabilities_and_resume_cursors_are_refused() {
-    use ironhorse_snapshot::image::{read_machine, write_machine};
-    use ironhorse_snapshot::store::{image_to_batch, validate_store, HeapStore};
+    use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
+    use ironhorse_snapshot::store::{image_to_batch_unchecked, validate_store, HeapStore};
     let signature = Signature::new("async-carry");
     let mut m = Interp::new();
     crank(&mut m, "var release; var gate = new Promise(r => { release = r; }); async function f() { return await gate; } var result = f();");
@@ -114,11 +114,13 @@ fn crafted_async_anchors_capabilities_and_resume_cursors_are_refused() {
             }
         }
         assert!(
-            from_snapshot_bytes(&write_machine(&image), &signature).is_err(),
+            from_snapshot_bytes(&write_machine_unchecked(&image), &signature).is_err(),
             "image mutation {kind}"
         );
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         assert!(
             validate_store(&store, &signature).is_err(),
             "store mutation {kind}"

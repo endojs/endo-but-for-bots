@@ -12,7 +12,7 @@ use common::TempDir;
 
 use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, MachineSnapshot};
 use ironhorse_snapshot::store::{
-    image_to_batch, reseal_batch, validate_store, CheckpointBatch, HeapStore, StoreError,
+    image_to_batch_unchecked, reseal_batch, validate_store, CheckpointBatch, HeapStore, StoreError,
 };
 use ironhorse_snapshot::Signature;
 use ironhorse_store_sqlite::SqliteHeapStore;
@@ -48,7 +48,7 @@ fn two_epochs(
     );
     let image = session
         .machine()
-        .snapshot_image(&sig())
+        .snapshot_image_for_testing(&sig())
         .expect("gated image");
     (store, image)
 }
@@ -92,7 +92,7 @@ fn warm_refusal_drops_the_cache_and_recovers() {
 
     // A mis-rooted epoch-3 batch, resealed so succession passes: the
     // WARM fast path must refuse it on root disagreement alone.
-    let mut crafted = image_to_batch(&image, 3, &seal2);
+    let mut crafted = image_to_batch_unchecked(&image, 3, &seal2);
     crafted.manifest.root = format!("{:0>64}", "bad");
     reseal_batch(&mut crafted);
     match store.commit(&crafted) {
@@ -108,11 +108,11 @@ fn warm_refusal_drops_the_cache_and_recovers() {
     // The refusal dropped the cache; the honest successor lands via
     // the slow path (full recombination over the real rows), and one
     // more lands via the re-armed fast path.
-    let honest3 = image_to_batch(&image, 3, &seal2);
+    let honest3 = image_to_batch_unchecked(&image, 3, &seal2);
     store
         .commit(&honest3)
         .expect("honest successor after a refusal");
-    let honest4 = image_to_batch(&image, 4, &store.manifest().unwrap().seal);
+    let honest4 = image_to_batch_unchecked(&image, 4, &store.manifest().unwrap().seal);
     store.commit(&honest4).expect("fast path re-armed");
     validate_store(&store, &sig()).expect("chain stays valid");
 }
@@ -131,7 +131,7 @@ fn cold_commit_refuses_an_at_rest_leaf_edit() {
     // on the edited baseline — detection AT COMMIT, the reference
     // (Memory/File) backends' standing behavior.
     let mut store = SqliteHeapStore::open(&path).unwrap();
-    let batch3 = omit_page(image_to_batch(&image, 3, &seal2), 0);
+    let batch3 = omit_page(image_to_batch_unchecked(&image, 3, &seal2), 0);
     match store.commit(&batch3) {
         Err(StoreError::BaselineMismatch { .. }) => {}
         other => panic!("expected the cold slow path to catch the edit, got {other:?}"),
@@ -160,7 +160,7 @@ fn warm_store_excludes_writers_and_open_time_validation_catches_the_rest() {
     }
 
     // The warm fast path commits without re-reading any stored leaf.
-    let batch3 = omit_page(image_to_batch(&image, 3, &seal2), 0);
+    let batch3 = omit_page(image_to_batch_unchecked(&image, 3, &seal2), 0);
     store.commit(&batch3).expect("warm fast-path commit");
     store.close().unwrap();
 

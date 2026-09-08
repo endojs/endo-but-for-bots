@@ -23,7 +23,7 @@ use ironhorse_snapshot::machine::{
 };
 use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore, StoreError};
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::{read_machine, write_machine, Signature};
+use ironhorse_snapshot::{read_machine, write_machine_unchecked, Signature};
 use ironhorse_vm::{parse_symbols, Interp};
 
 fn sig() -> Signature {
@@ -214,18 +214,20 @@ fn side_tables_round_trip_the_container_and_stay_canonical() {
     let mut m = Interp::new();
     m.link_intrinsics(&symbols);
     assert!(m.run(&bytecode).completed);
-    let image = m.snapshot_image(&sig()).expect("gated image");
+    let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
     assert!(!image.arrays.is_empty(), "fixture carries arrays");
     assert!(!image.collections.is_empty(), "fixture carries a Map");
     assert!(!image.registry.is_empty(), "fixture carries a registration");
-    let bytes = write_machine(&image);
+    let bytes = write_machine_unchecked(&image);
     let reread = read_machine(&bytes, &sig()).expect("read back");
     assert_eq!(reread, image, "side tables round-trip the container");
-    assert_eq!(write_machine(&reread), bytes, "canonical bytes");
+    assert_eq!(write_machine_unchecked(&reread), bytes, "canonical bytes");
 
-    let empty = Interp::new().snapshot_image(&sig()).expect("gated image");
+    let empty = Interp::new()
+        .snapshot_image_for_testing(&sig())
+        .expect("gated image");
     assert!(empty.arrays.is_empty() && empty.collections.is_empty() && empty.registry.is_empty());
-    let empty_bytes = write_machine(&empty);
+    let empty_bytes = write_machine_unchecked(&empty);
     for tag in [b"ARRY".as_slice(), b"COLL".as_slice(), b"REGY".as_slice()] {
         assert!(
             !empty_bytes.windows(4).any(|w| w == tag),
@@ -488,13 +490,13 @@ fn a_read_miss_mints_an_id_but_stores_none_so_it_still_persists() {
 #[test]
 fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     use ironhorse_snapshot::image::MachineImage;
-    use ironhorse_snapshot::store::{image_to_batch, MemoryStore};
+    use ironhorse_snapshot::store::{image_to_batch_unchecked, MemoryStore};
 
     let (b0, n0) = compile("var o = 0; var t = 0; o = { a: 1 }; t = o.a; t");
     let mut m = Interp::new();
     m.link_intrinsics(&n0);
     assert!(m.run(&b0).completed);
-    let clean: MachineImage = m.snapshot_image(&sig()).expect("gated image");
+    let clean: MachineImage = m.snapshot_image_for_testing(&sig()).expect("gated image");
     assert_eq!(
         clean.stored_unregistered_key_id(),
         None,
@@ -528,7 +530,7 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
         "a free slot names nothing"
     );
 
-    let poisoned_bytes = write_machine(&poisoned);
+    let poisoned_bytes = write_machine_unchecked(&poisoned);
     assert_eq!(
         from_snapshot_bytes(&poisoned_bytes, &sig()).err(),
         Some(ironhorse_snapshot::format::SnapshotError::Corrupt(
@@ -554,7 +556,7 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     // resume rather than laundered into this session's checkpoints.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&poisoned, 1, ""))
+        .commit(&image_to_batch_unchecked(&poisoned, 1, ""))
         .expect("the raw commit models an older writer");
     assert_eq!(
         resume_from_store(&store, &sig()).err(),

@@ -6,7 +6,7 @@
 //!
 //! - **Round-trip invariance** ([`roundtrip_generated_is_invariant`],
 //!   [`roundtrip_program_is_invariant`]): a machine state serialized with
-//!   [`ironhorse_snapshot::write_machine`], read back with
+//!   [`ironhorse_snapshot::write_machine_unchecked`], read back with
 //!   [`ironhorse_snapshot::read_machine`], and re-serialized must be
 //!   **byte-identical**, and the decoded image must equal the original. The
 //!   generated-image arm folds fuzzer bytes into an adversarially-shaped
@@ -33,7 +33,8 @@
 //! them), so the finding survives independent of the fuzzing infrastructure.
 
 use ironhorse_snapshot::{
-    from_snapshot_bytes, read_machine, write_machine, MachineImage, MachineSnapshot, Signature,
+    from_snapshot_bytes, read_machine, write_machine_unchecked, MachineImage, MachineSnapshot,
+    Signature,
 };
 use ironhorse_vm::{
     parse_symbols, ChunkArena, ChunkOffset, Interp, Kind, MeterState, Payload, Slot, SlotArena,
@@ -838,7 +839,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
 /// codec's `nan_bits_preserved` lock covers that payload directly.
 pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripDivergence> {
     let sig = fuzz_snapshot_sig();
-    let bytes = write_machine(img);
+    let bytes = write_machine_unchecked(img);
     let back = match read_machine(&bytes, &sig) {
         Ok(b) => b,
         Err(e) => {
@@ -847,7 +848,7 @@ pub fn roundtrip_image_is_invariant(img: &MachineImage) -> Result<(), RoundtripD
             })
         }
     };
-    let bytes2 = write_machine(&back);
+    let bytes2 = write_machine_unchecked(&back);
     if bytes != bytes2 {
         return Err(RoundtripDivergence {
             detail: format!(
@@ -1061,14 +1062,14 @@ pub fn decoder_is_error_free(data: &[u8]) {
 
     // The productive corpus: a valid snapshot with the bytes mutated in, so
     // the reader passes the gates and reaches the count-bearing decoders.
-    let valid = write_machine(&gen_machine_image(data));
+    let valid = write_machine_unchecked(&gen_machine_image(data));
     let mutated = mutate_bytes(&valid, data);
     if let Ok(image) = read_machine(&mutated, &sig) {
         // Legacy imports intentionally normalize NaNs and absent core atoms.
         // Version 16 makes byte identity an admission invariant.
         if image.version.format_version >= 16 {
             assert_eq!(
-                write_machine(&image),
+                write_machine_unchecked(&image),
                 mutated,
                 "accepted snapshot must have one encoding"
             );
@@ -1131,7 +1132,7 @@ mod tests {
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 7);
             let img = gen_machine_image(&buf);
-            distinct.insert(write_machine(&img));
+            distinct.insert(write_machine_unchecked(&img));
             saw_free |= !img.slot_free.is_empty();
             saw_chunks |= !img.chunks.is_empty();
             saw_symbols |= !img.symbols.pairs.is_empty();
@@ -1301,10 +1302,10 @@ mod tests {
         );
         // Direct byte-equality, as the invariant states.
         let sig = fuzz_snapshot_sig();
-        let bytes = write_machine(&img);
+        let bytes = write_machine_unchecked(&img);
         let back = read_machine(&bytes, &sig).expect("valid snapshot reads back");
         assert_eq!(
-            write_machine(&back),
+            write_machine_unchecked(&back),
             bytes,
             "write→read→write byte-identical"
         );
@@ -1323,7 +1324,7 @@ mod tests {
         let mut gate_rejected = 0;
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 23);
-            let valid = write_machine(&gen_machine_image(&buf));
+            let valid = write_machine_unchecked(&gen_machine_image(&buf));
             let mutated = mutate_bytes(&valid, &buf);
             match read_machine(&mutated, &sig) {
                 Ok(_) => restored_ok += 1,

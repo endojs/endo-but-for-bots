@@ -727,7 +727,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
         store_to_image(store).unwrap(),
         session
             .machine()
-            .snapshot_image(&sig())
+            .snapshot_image_for_testing(&sig())
             .expect("gated image")
     );
     assert_eq!(
@@ -746,7 +746,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
         store_to_image(store).unwrap(),
         session
             .machine()
-            .snapshot_image(&sig())
+            .snapshot_image_for_testing(&sig())
             .expect("gated image")
     );
     assert_eq!(

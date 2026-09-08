@@ -9,7 +9,7 @@ use std::path::Path;
 
 use ironhorse_snapshot::sha256::hex_sha256;
 use ironhorse_snapshot::{
-    encode_slot, from_snapshot_bytes, read_validated_machine, write_machine, MachineImage,
+    encode_slot, from_snapshot_bytes, read_validated_machine, write_machine_unchecked, MachineImage,
     Signature,
 };
 use ironhorse_vm::{Kind, Payload};
@@ -36,7 +36,7 @@ fn validated_source(bytes: &[u8], signature: &Signature) -> Result<MachineImage>
     from_snapshot_bytes(bytes, signature).map_err(|e| refuse(format!("eager restore: {e:?}")))?;
     // Restrict the experiment to the current canonical encoding, so an
     // empty patch cannot accidentally perform a format migration.
-    if write_machine(&image) != bytes {
+    if write_machine_unchecked(&image) != bytes {
         return Err(refuse("source is not a current canonical snapshot"));
     }
     Ok(image)
@@ -259,7 +259,7 @@ fn apply(bytes: &[u8], signature: &Signature, db: &Connection) -> Result<Vec<u8>
         }
         image.slots[index as usize].value = donor.value;
     }
-    let candidate = write_machine(&image);
+    let candidate = write_machine_unchecked(&image);
     validated_source(&candidate, signature)?;
     Ok(candidate)
 }

@@ -5,10 +5,10 @@
 //! a machine that cannot safely run or checkpoint.
 
 use ironhorse_snapshot::format::SnapshotError;
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
 use ironhorse_snapshot::store::{
-    image_to_batch, validate_store, HeapStore, MemoryStore, StoreError,
+    image_to_batch_unchecked, validate_store, HeapStore, MemoryStore, StoreError,
 };
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
@@ -46,7 +46,7 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
         "the fixture persisted its regexp row"
     );
     image.regexps[0].source = "(".to_string();
-    let crafted = write_machine(&image);
+    let crafted = write_machine_unchecked(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("regexp side table: persisted source does not compile")) => {}
         Err(other) => panic!("refused, but not by the adoption validator: {other:?}"),
@@ -54,7 +54,7 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
     }
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -80,7 +80,7 @@ fn a_populated_stack_atom_is_refused_at_container_read() {
         "an honest snapshot has an empty stack"
     );
     image.stack = vec![ironhorse_vm::Slot::undefined()];
-    let crafted = write_machine(&image);
+    let crafted = write_machine_unchecked(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("STAC not empty at a quiescent boundary")) => {}
         Err(other) => panic!("refused, but not by the quiescence gate: {other:?}"),
@@ -100,7 +100,7 @@ fn a_populated_stack_section_is_refused_at_store_validation() {
     image.stack = vec![ironhorse_vm::Slot::undefined()];
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -138,14 +138,14 @@ fn a_crafted_collection_table_geometry_is_refused() {
     let mut zeroed = image.clone();
     zeroed.collections[0].table_length = 0;
     expect(
-        &write_machine(&zeroed),
+        &write_machine_unchecked(&zeroed),
         "collections side table: unreachable rehash geometry",
     );
     // Not a power of two.
     let mut lopsided = image.clone();
     lopsided.collections[0].table_length = 3;
     expect(
-        &write_machine(&lopsided),
+        &write_machine_unchecked(&lopsided),
         "collections side table: unreachable rehash geometry",
     );
     // A power of two whose grow threshold the live size already
@@ -153,11 +153,11 @@ fn a_crafted_collection_table_geometry_is_refused() {
     let mut starved = image.clone();
     starved.collections[0].table_length = 1;
     expect(
-        &write_machine(&starved),
+        &write_machine_unchecked(&starved),
         "collections side table: live size past the grow threshold",
     );
     // And the honest row still restores.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }
 
 /// Additional review finding: an explicit `NFLR` equal to the
@@ -176,7 +176,7 @@ fn an_explicit_full_name_floor_is_refused_as_non_canonical() {
         "an honest writer canonicalizes the full floor as an absent atom"
     );
     image.name_floor = Some(image.names.len() as u32);
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
         Err(SnapshotError::Corrupt("installed-names floor: non-canonical explicit full floor")) => {
         }
         Err(other) => panic!("refused, but not by the canonicality gate: {other:?}"),
@@ -186,7 +186,7 @@ fn an_explicit_full_name_floor_is_refused_as_non_canonical() {
     // small state is refused at validation.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -232,7 +232,7 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
 
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -283,7 +283,7 @@ fn a_container_from_a_foreign_host_layout_is_refused() {
     let mut store = MemoryStore::new();
     let image = read_machine(&bytes, &other_build).expect("reads under its own signature");
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
         .expect("the raw commit models the other build's writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
@@ -295,7 +295,7 @@ fn a_container_from_a_foreign_host_layout_is_refused() {
 #[test]
 fn boot_mismatch_is_distinct_and_cannot_be_bypassed_by_the_expected_signature() {
     let m = quiescent_machine("1");
-    let honest = m.snapshot_image(&sig()).unwrap();
+    let honest = m.snapshot_image_for_testing(&sig()).unwrap();
     let mut changed = sig().encode();
     changed[4] ^= 1; // same host, different engine-derived layout
     let foreign = Signature::decode(&changed).unwrap();
@@ -307,14 +307,16 @@ fn boot_mismatch_is_distinct_and_cannot_be_bypassed_by_the_expected_signature() 
         );
         let mut image = honest.clone();
         image.signature = signature.clone();
-        let bytes = write_machine(&image);
+        let bytes = write_machine_unchecked(&image);
         for expected in [sig(), signature.clone()] {
             assert!(matches!(
                 from_snapshot_bytes(&bytes, &expected),
                 Err(SnapshotError::BootLayoutMismatch { .. })
             ));
             let mut store = MemoryStore::new();
-            store.commit(&image_to_batch(&image, 1, "")).unwrap();
+            store
+                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .unwrap();
             assert!(matches!(
                 validate_store(&store, &expected),
                 Err(StoreError::Snapshot(
@@ -518,7 +520,7 @@ fn finally_wrapper_fixture() -> Interp {
 }
 
 fn expect_container_refusal(image: &ironhorse_snapshot::image::MachineImage, msg: &str) {
-    let crafted = write_machine(image);
+    let crafted = write_machine_unchecked(image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt(m)) if m == msg => {}
         Err(other) => panic!("expected Corrupt({msg:?}), got {other:?}"),
@@ -541,7 +543,7 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
     expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
         .expect("the raw commit models a crafted writer");
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -699,7 +701,7 @@ fn a_crafted_capability_executor_home_is_refused() {
         expect_container_refusal(&mixed, "promise cluster: mixed capability executor state");
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch(&mixed, 1, ""))
+            .commit(&image_to_batch_unchecked(&mixed, 1, ""))
             .expect("crafted store");
         assert!(
             ironhorse_snapshot::machine::resume_from_store(&store, &sig()).is_err(),
@@ -842,7 +844,7 @@ fn a_resolver_crafted_onto_a_guest_function_slot_is_refused() {
         .promise_cluster
         .functions
         .dedup_by_key(|row| row.function);
-    let crafted = write_machine(&image);
+    let crafted = write_machine_unchecked(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("side-table restore: malformed retained function state")) => {}
         Err(other) => panic!("the FUNC collision check must refuse the crafted slot: {other:?}"),

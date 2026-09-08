@@ -5,7 +5,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
     MachineSnapshot,
@@ -113,7 +113,7 @@ fn disposed_stack_cannot_retain_records_in_snapshot() {
     let bytes = machine.write_snapshot(&sig()).expect("snapshot");
     let mut image = read_machine(&bytes, &sig()).expect("read DISP");
     image.disposable_stacks[0].disposed = true;
-    match from_snapshot_bytes(&write_machine(&image), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&image), &sig()) {
         Err(SnapshotError::Corrupt("disposable stacks: disposed stack retains records")) => {}
         Err(other) => panic!("wrong disposed-stack refusal: {other:?}"),
         Ok(_) => panic!("disposed stack with records must not restore"),

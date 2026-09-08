@@ -3169,11 +3169,40 @@ pub fn encode_chunk_extent(chunks: &[u8], ext: u32) -> Vec<u8> {
 /// every extent. This is the first-checkpoint and
 /// [`import_from_container`] shape; incremental batches are built by
 /// the machine surface from dirty bits.
-pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> CheckpointBatch {
+///
+/// ```compile_fail
+/// use ironhorse_snapshot::{MachineImage, image_to_batch};
+/// fn unchecked_batch(image: &MachineImage) { image_to_batch(image, 1, ""); }
+/// ```
+pub fn image_to_batch(
+    image: &crate::image::GatedImage,
+    epoch: u64,
+    prev_seal: &str,
+) -> CheckpointBatch {
     image_to_batch_with_cadence(image, epoch, prev_seal, 0)
 }
 
+/// Build an arbitrary full batch for adversarial tooling, without a live gate.
+/// Normal persistence uses [`image_to_batch`] and its immutable proof token.
+#[cfg(any(test, feature = "unchecked-tooling"))]
+pub fn image_to_batch_unchecked(
+    image: &MachineImage,
+    epoch: u64,
+    prev_seal: &str,
+) -> CheckpointBatch {
+    encode_image_batch(image, epoch, prev_seal, 0)
+}
+
 pub(crate) fn image_to_batch_with_cadence(
+    image: &crate::image::GatedImage,
+    epoch: u64,
+    prev_seal: &str,
+    collect_every: u32,
+) -> CheckpointBatch {
+    encode_image_batch(image.image(), epoch, prev_seal, collect_every)
+}
+
+fn encode_image_batch(
     image: &MachineImage,
     epoch: u64,
     prev_seal: &str,
@@ -3843,7 +3872,9 @@ pub fn validate_store(
 /// content identity (design decision 6) and full interchange with the
 /// blob path.
 pub fn export_to_container(store: &dyn HeapStore) -> Result<Vec<u8>, StoreError> {
-    Ok(crate::image::write_machine(&store_to_image(store)?))
+    Ok(crate::image::write_machine(&crate::image::GatedImage::new(
+        store_to_image(store)?,
+    )?))
 }
 
 /// Seed a store from canonical container bytes (a full epoch-1 write),
@@ -3870,7 +3901,11 @@ pub fn import_from_container(
             "stored property id outside the name and symbol-key tables",
         )));
     }
-    store.commit(&image_to_batch(&image, 1, ""))
+    store.commit(&image_to_batch(
+        &crate::image::GatedImage::new(image)?,
+        1,
+        "",
+    ))
 }
 
 /// The store state's **logical identity**: the SHA-256 of its canonical
@@ -4087,7 +4122,7 @@ impl HeapStore for MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::{read_machine, write_machine};
+    use crate::image::read_machine;
     use crate::machine::MachineSnapshot;
     use ironhorse_vm::Interp;
 
@@ -4107,7 +4142,7 @@ mod tests {
         let mut m = Interp::new();
         let a = m.run(&PROG_A);
         assert!(a.completed);
-        m.snapshot_image(&sig()).expect("gated image")
+        m.snapshot_image_for_testing(&sig()).expect("gated image")
     }
 
     #[test]
@@ -4306,7 +4341,7 @@ mod tests {
     #[test]
     fn container_import_export_is_byte_identical() {
         let image = ran_image();
-        let bytes = write_machine(&image);
+        let bytes = crate::image::write_machine_unchecked(&image);
 
         let mut store = MemoryStore::new();
         import_from_container(&bytes, &sig(), &mut store).expect("imports");
@@ -4330,7 +4365,7 @@ mod tests {
         let mut chunks = ChunkArena::from_image(image.chunks);
         chunks.alloc(&raw.to_be_bytes());
         image.chunks = chunks.raw_vec();
-        let canonical = write_machine(&image);
+        let canonical = crate::image::write_machine_unchecked(&image);
         let record = crate::slot_codec::encode_slots(&[Slot::number(f64::NAN)]);
         let offsets: Vec<_> = canonical
             .windows(record.len())
@@ -4345,14 +4380,14 @@ mod tests {
             panic!("expected number")
         };
         assert_eq!(n.to_bits(), raw);
-        assert_eq!(write_machine(&decoded), canonical);
+        assert_eq!(crate::image::write_machine_unchecked(&decoded), canonical);
         let mut store = MemoryStore::new();
         import_from_container(&legacy, &sig(), &mut store).unwrap();
         validate_store(&store, &sig()).unwrap();
         assert_eq!(export_to_container(&store).unwrap(), canonical);
         assert_eq!(store_to_image(&store).unwrap().chunks, image.chunks);
         assert_eq!(
-            write_machine(&read_machine(&canonical, &sig()).unwrap()),
+            crate::image::write_machine_unchecked(&read_machine(&canonical, &sig()).unwrap()),
             canonical
         );
     }
@@ -4364,7 +4399,7 @@ mod tests {
         let image = ran_image();
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
             .expect("commits");
         let back = store_to_image(&store).expect("reads back");
         assert_eq!(back, image);
@@ -4374,7 +4409,9 @@ mod tests {
     fn validate_accepts_a_committed_store() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         let validated = validate_store(&store, &sig()).expect("validates");
         let manifest = validated.manifest();
         let small = validated.small();
@@ -4396,7 +4433,9 @@ mod tests {
     fn validate_fails_closed_on_signature_mismatch() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         match validate_store(&store, &Signature::new("other-host")) {
             Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
             other => panic!("expected signature mismatch, got {other:?}"),
@@ -4408,7 +4447,9 @@ mod tests {
         let mut image = ran_image();
         image.meter.cost_table_version = "ironhorse-meter-999".to_string();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         match validate_store(&store, &sig()) {
             Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { .. })) => {}
             other => panic!("expected cost-table mismatch, got {other:?}"),
@@ -4440,7 +4481,9 @@ mod tests {
     fn validate_fails_closed_on_missing_row() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         // Drop a promised page: the inventory scan must name it.
         store.slot_pages.remove(&0);
         assert_eq!(
@@ -4453,7 +4496,9 @@ mod tests {
     fn validate_fails_closed_on_row_length_mismatch() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         let short = store.slot_pages.get(&0).unwrap()[..SLOT_RECORD_BYTES].to_vec();
         store.slot_pages.insert(0, short);
         match validate_store(&store, &sig()) {
@@ -4481,7 +4526,9 @@ mod tests {
         ];
         for mutate in mutations {
             let mut store = MemoryStore::new();
-            store.commit(&image_to_batch(&image, 1, "")).unwrap();
+            store
+                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .unwrap();
             mutate(store.manifest.as_mut().unwrap());
             assert!(validate_store(&store, &sig()).is_err());
             assert!(store_to_image(&store).is_err());
@@ -4500,7 +4547,9 @@ mod tests {
         ];
         for mutate in mutations {
             let mut store = MemoryStore::new();
-            store.commit(&image_to_batch(&ran_image(), 1, "")).unwrap();
+            store
+                .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+                .unwrap();
             let manifest = store.manifest.as_mut().unwrap();
             mutate(manifest);
             manifest.seal = seal_commit(&manifest.parent_seal, manifest, &[], &[], &[], &[], &[]);
@@ -4519,7 +4568,9 @@ mod tests {
     #[test]
     fn small_state_rejects_legacy_empty_sections_until_migrated() {
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&ran_image(), 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+            .unwrap();
         let canonical = store.read_small_state().unwrap();
         let mut offset = 0;
         for _ in 0..6 {
@@ -4563,7 +4614,9 @@ mod tests {
         // Recompute both the root and seal so accounting is the failing gate.
         corrupt.slot_live += 1;
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&corrupt, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&corrupt, 1, ""))
+            .unwrap();
         match validate_store(&store, &sig()) {
             Err(StoreError::Snapshot(SnapshotError::Corrupt(
                 "store live/free/count accounting mismatch",
@@ -4578,7 +4631,9 @@ mod tests {
     fn commit_drops_rows_beyond_the_new_geometry() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         let exts_before = chunk_extent_count(store.manifest().unwrap().chunk_len);
 
         // Same machine state, chunk arena "compacted" to empty. A real
@@ -4600,7 +4655,7 @@ mod tests {
         // together with the arena bytes.
         shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
         let prev = store.manifest().unwrap().seal;
-        let mut batch = image_to_batch(&shrunk, 2, &prev);
+        let mut batch = image_to_batch_unchecked(&shrunk, 2, &prev);
         batch.chunk_extents.clear(); // nothing to write; drop-only
         store.commit(&batch).unwrap();
 
@@ -4614,7 +4669,7 @@ mod tests {
     fn memory_store_reports_commit_stats() {
         let image = ran_image();
         let mut store = MemoryStore::new();
-        let batch = image_to_batch(&image, 1, "");
+        let batch = image_to_batch_unchecked(&image, 1, "");
         store.commit(&batch).unwrap();
         assert_eq!(
             store.last_commit_stats(),
@@ -4667,9 +4722,11 @@ mod tests {
         // the next open as a length mismatch.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig()).expect("gated image");
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image1, 1, ""))
+            .unwrap();
         let prev = store.manifest().unwrap();
 
         let mut image2 = image1.clone();
@@ -4682,21 +4739,23 @@ mod tests {
 
         // A well-formed batch for the shrunk image commits fine (the
         // tail extent travels with its new length)…
-        let good = image_to_batch(&image2, 2, &prev.seal);
+        let good = image_to_batch_unchecked(&image2, 2, &prev.seal);
         assert!(
             good.chunk_extents.iter().any(|(e, _)| *e == tail_ext),
             "image_to_batch ships the affected tail extent"
         );
         {
             let mut s2 = MemoryStore::new();
-            s2.commit(&image_to_batch(&image1, 1, "")).unwrap();
-            s2.commit(&image_to_batch(&image2, 2, &prev.seal)).unwrap();
+            s2.commit(&image_to_batch_unchecked(&image1, 1, ""))
+                .unwrap();
+            s2.commit(&image_to_batch_unchecked(&image2, 2, &prev.seal))
+                .unwrap();
         }
 
         // …but the same batch with the tail extent OMITTED (and the
         // seal recomputed, so succession passes) is refused with the
         // precise missing-row error.
-        let mut crafted = image_to_batch(&image2, 2, &prev.seal);
+        let mut crafted = image_to_batch_unchecked(&image2, 2, &prev.seal);
         crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
         reseal_batch(&mut crafted);
         assert_eq!(
@@ -4768,8 +4827,8 @@ mod tests {
         // geometry fields overridden — only the counts drive the math.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image = m.snapshot_image(&sig()).expect("gated image");
-        let template = image_to_batch(&image, 1, "").manifest;
+        let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
+        let template = image_to_batch_unchecked(&image, 1, "").manifest;
 
         let leaf_bytes = |i: u32, salt: u8| -> Vec<u8> { vec![salt, i as u8, (i >> 8) as u8] };
         let mut small = b"small-0".to_vec();
@@ -4886,9 +4945,9 @@ mod tests {
         // store accepted.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig()).expect("gated image");
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = MemoryStore::new();
-        let batch1 = image_to_batch(&image1, 1, "");
+        let batch1 = image_to_batch_unchecked(&image1, 1, "");
         store.commit(&batch1).unwrap();
 
         let mut ledger = RootLedger::build(&batch1.small, Vec::new(), Vec::new(), Vec::new(), &[]);
@@ -4905,8 +4964,8 @@ mod tests {
         assert_eq!(root1, batch1.manifest.root);
 
         assert!(m.run(&PROG_A).completed, "second crank grows the heap");
-        let image2 = m.snapshot_image(&sig()).expect("gated image");
-        let batch2 = image_to_batch(&image2, 2, &store.manifest().unwrap().seal);
+        let image2 = m.snapshot_image_for_testing(&sig()).expect("gated image");
+        let batch2 = image_to_batch_unchecked(&image2, 2, &store.manifest().unwrap().seal);
         store.commit(&batch2).unwrap();
         let root2 = ledger
             .apply(
@@ -4932,12 +4991,14 @@ mod tests {
         // letting its two checks require different rows.
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let image1 = m.snapshot_image(&sig()).expect("gated image");
+        let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image1, 1, ""))
+            .unwrap();
         let prev = store.manifest().unwrap();
 
-        let batch = image_to_batch(&image1, 2, &prev.seal);
+        let batch = image_to_batch_unchecked(&image1, 2, &prev.seal);
         let mut pages = store.leaf_pages.clone();
         let mut exts = store.leaf_exts.clone();
         let mut frees = store.leaf_frees.clone();

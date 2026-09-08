@@ -13,7 +13,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
     MachineSnapshot,
@@ -291,7 +291,7 @@ fn malformed_generator_rows_are_refused() {
     );
 
     let expect = |crafted: &ironhorse_snapshot::image::MachineImage, want: &'static str| {
-        match from_snapshot_bytes(&write_machine(crafted), &sig()) {
+        match from_snapshot_bytes(&write_machine_unchecked(crafted), &sig()) {
             Err(SnapshotError::Corrupt(msg)) if msg == want => {}
             Err(other) => panic!("refused, but not by the named gate ({want}): {other:?}"),
             Ok(_) => panic!("crafted generator rows must not restore ({want})"),
@@ -311,7 +311,7 @@ fn malformed_generator_rows_are_refused() {
     expect(&duplicated, "generators: owners not strictly ascending");
 
     // And the honest row still restores.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }
 
 /// The resume cursor and every saved-handler target must name an
@@ -382,7 +382,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
     assert!(!starts.contains(&operand), "an operand byte is not a start");
 
     let expect = |crafted: &ironhorse_snapshot::image::MachineImage, want: &'static str| {
-        match from_snapshot_bytes(&write_machine(crafted), &sig()) {
+        match from_snapshot_bytes(&write_machine_unchecked(crafted), &sig()) {
             Err(SnapshotError::Corrupt(msg)) if msg == want => {}
             Err(other) => panic!("refused, but not by the named gate ({want}): {other:?}"),
             Ok(_) => panic!("a crafted generator pc must not restore ({want})"),
@@ -401,7 +401,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
         crafted.generators[0].frame.as_mut().unwrap().resume_pc = pc;
         assert!(
             matches!(
-                from_snapshot_bytes(&write_machine(&crafted), &sig()),
+                from_snapshot_bytes(&write_machine_unchecked(&crafted), &sig()),
                 Err(SnapshotError::Corrupt(CURSOR))
             ),
             "resume_pc at {name} must be refused"
@@ -426,7 +426,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
             flag: 1,
         });
     assert!(
-        from_snapshot_bytes(&write_machine(&with_handler), &sig()).is_ok(),
+        from_snapshot_bytes(&write_machine_unchecked(&with_handler), &sig()).is_ok(),
         "the honest handler still restores"
     );
     for pc in [code.len() as u64, body_end, operand, sibling_start] {
@@ -461,7 +461,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
     expect(&overflow, HANDLER);
 
     // The honest image is untouched by all of it.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }
 
 /// The sibling-body arm above has a one-level-down twin: a NESTED
@@ -503,11 +503,11 @@ fn a_generator_pc_inside_a_nested_body_is_refused() {
 
     let mut crafted = image.clone();
     crafted.generators[0].frame.as_mut().unwrap().resume_pc = nested;
-    match from_snapshot_bytes(&write_machine(&crafted), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&crafted), &sig()) {
         Err(SnapshotError::Corrupt("generator frame: invalid resume cursor or scope map")) => {}
         Err(other) => panic!("refused, but not by the named gate: {other:?}"),
         Ok(_) => panic!("a cursor inside a nested body must not restore"),
     }
     // The honest image still restores.
-    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_ok());
 }

@@ -5,7 +5,7 @@ mod common;
 
 use common::TempDir;
 
-use ironhorse_snapshot::image::{read_machine, write_machine};
+use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
     begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
     MachineSnapshot,
@@ -234,7 +234,7 @@ fn malformed_accessor_rows_are_refused() {
 
     let mut duplicate = image.clone();
     duplicate.accessors.push(duplicate.accessors[0].clone());
-    match from_snapshot_bytes(&write_machine(&duplicate), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&duplicate), &sig()) {
         Err(SnapshotError::Corrupt("accessor state: rows not strictly ascending")) => {}
         Err(other) => panic!("wrong duplicate-row refusal: {other:?}"),
         Ok(_) => panic!("duplicate accessors must not restore"),
@@ -242,7 +242,7 @@ fn malformed_accessor_rows_are_refused() {
 
     let mut bad_id = image;
     bad_id.accessors[0].id = 0;
-    match from_snapshot_bytes(&write_machine(&bad_id), &sig()) {
+    match from_snapshot_bytes(&write_machine_unchecked(&bad_id), &sig()) {
         Err(SnapshotError::Corrupt("accessor state: id outside the property-key tables")) => {}
         Err(other) => panic!("wrong accessor-id refusal: {other:?}"),
         Ok(_) => panic!("an unregistered accessor id must not restore"),
