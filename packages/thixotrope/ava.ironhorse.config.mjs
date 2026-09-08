@@ -12,6 +12,7 @@ export default {
     'test/ironhorse/mailbox.js',
     'test/ironhorse/http.js',
     'test/ironhorse/http-crash.js',
+    'test/ironhorse/alarms.js',
   ],
   timeout: '3m',
   concurrency: 1,
