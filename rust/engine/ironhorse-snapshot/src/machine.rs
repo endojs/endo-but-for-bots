@@ -286,6 +286,7 @@ fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
     .with_meter(interp.meter_state())
     .with_side_tables(
         tables.arrays,
+        tables.index_props,
         tables.collections,
         tables.registry,
         tables.errors,
@@ -320,6 +321,7 @@ fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
 /// (ascending) order.
 struct SideTableImages {
     arrays: Vec<crate::image::ArrayImage>,
+    index_props: Vec<crate::image::IndexPropsImage>,
     collections: Vec<crate::image::CollectionImage>,
     registry: Vec<crate::image::RegistryImage>,
     errors: Vec<crate::image::ErrorImage>,
@@ -350,6 +352,15 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         .map(|(owner, length, items)| crate::image::ArrayImage {
             owner,
             length,
+            items,
+        })
+        .collect();
+    let index_props = interp
+        .index_props_snapshot()
+        .into_iter()
+        .map(|(owner, high_water, items)| crate::image::IndexPropsImage {
+            owner,
+            high_water,
             items,
         })
         .collect();
@@ -457,6 +468,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let promise_cluster = interp.promise_cluster_snapshot();
     SideTableImages {
         arrays,
+        index_props,
         collections,
         registry,
         errors,
@@ -494,6 +506,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
 fn restore_side_tables(
     interp: &mut Interp,
     arrays: Vec<crate::image::ArrayImage>,
+    index_props: Vec<crate::image::IndexPropsImage>,
     collections: Vec<crate::image::CollectionImage>,
     registry: Vec<crate::image::RegistryImage>,
     errors: Vec<crate::image::ErrorImage>,
@@ -521,6 +534,10 @@ fn restore_side_tables(
         arrays
             .into_iter()
             .map(|a| (a.owner, a.length, a.items))
+            .collect(),
+        index_props
+            .into_iter()
+            .map(|r| (r.owner, r.high_water, r.items))
             .collect(),
         collections
             .into_iter()
@@ -734,6 +751,7 @@ pub fn image_to_interp(
     restore_side_tables(
         &mut interp,
         image.arrays,
+        image.index_props,
         image.collections,
         image.registry,
         image.errors,
@@ -979,6 +997,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         symbols: crate::image::SymbolKeyImage { next_id, pairs },
         meter: MeterImage::of(interp.meter_state()),
         arrays: tables.arrays,
+        index_props: tables.index_props,
         collections: tables.collections,
         registry: tables.registry,
         errors: tables.errors,
@@ -1702,6 +1721,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     restore_side_tables(
         &mut interp,
         small.arrays,
+        small.index_props,
         small.collections,
         small.registry,
         small.errors,

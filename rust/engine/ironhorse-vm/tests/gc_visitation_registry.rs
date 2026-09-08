@@ -307,6 +307,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("private_accessors", &[Req::Edges], "private accessor cells + fns"),
     ("wrapper_data", &[Req::Edges], "boxed primitive values"),
     ("arrays", &[Req::Edges], "exotic array items (counted bulk)"),
+    ("index_props", &[Req::Edges], "ordinary index-property items (counted bulk)"),
     ("collections", &[Req::Edges, Req::Ephemeron], "Map/Set entries (counted bulk; weak kinds via ephemerons)"),
     ("typed_arrays", &[Req::Edges], "view→buffer edges"),
     ("data_views", &[Req::Edges], "view→buffer edges"),

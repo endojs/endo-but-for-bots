@@ -194,6 +194,7 @@ fn incremental_batch(
         seal: String::new(),
     };
     let small = SmallState {
+        index_props: Vec::new(),
         stack: Vec::new(),
         slot_free: slots.free_list().to_vec(),
         keys: Vec::new(),

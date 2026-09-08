@@ -234,6 +234,14 @@ pub enum SideTable {
     WrapperData,
     /// `arrays` — exotic array length + item chunk.
     Arrays,
+    /// `index_props` — an ORDINARY object's integer-indexed properties,
+    /// stored by index rather than by name (XS's internal `XS_ARRAY_KIND`
+    /// slot). Serialized in the `IDXP` atom, mirroring `ARRY`'s discipline:
+    /// owner-ascending rows, item indices strictly ascending, so
+    /// `import ∘ export` stays the identity the CAS key rests on. Unlike
+    /// `ARRY` there is no `length` to bound the indices against — an ordinary
+    /// object has no array `length` semantics.
+    IndexProps,
     /// `collections` — Map/Set/WeakMap/WeakSet internal slots.
     Collections,
     /// `array_buffers` — ArrayBuffer backing-store geometry (the bytes
@@ -425,6 +433,7 @@ impl SideTable {
         SideTable::Accessors,
         SideTable::WrapperData,
         SideTable::Arrays,
+        SideTable::IndexProps,
         SideTable::Collections,
         SideTable::ArrayBuffers,
         SideTable::TypedArrays,
@@ -545,6 +554,7 @@ impl SideTable {
             // `tests/side_table_ledger.rs` (incl. lazy resume + full
             // collect under the debug parity net) are the locks.
             SideTable::Arrays => ("arrays", Serialized),
+            SideTable::IndexProps => ("index_props", Serialized),
             SideTable::Collections => ("collections", Serialized),
             SideTable::ArrayBuffers => ("array_buffers", Serialized),
             SideTable::TypedArrays => ("typed_arrays", Serialized),
@@ -660,7 +670,7 @@ mod tests {
     fn all_is_exhaustive() {
         // Count of variants, kept beside the enum. Bump when a variant is
         // added — the assertion below then forces the ALL entry too.
-        const VARIANT_COUNT: usize = 41;
+        const VARIANT_COUNT: usize = 42;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 
         // No duplicates: each field name appears once.
@@ -727,6 +737,7 @@ mod tests {
             "accessors",
             "wrapper_data",
             "arrays",
+            "index_props",
             "collections",
             "array_buffers",
             "typed_arrays",

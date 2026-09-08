@@ -152,6 +152,25 @@ pub struct ArrayImage {
     pub items: Vec<(u32, Slot)>,
 }
 
+/// One ordinary object's serialized index-property row (the `IDXP` atom /
+/// small-state index-props section): the owning slot, its high-water mark, and
+/// its sparse index→value map ascending by index. Values are ordinary slot
+/// records, exactly as [`ArrayImage`]'s items are.
+///
+/// `high_water` is NOT an array `length`: an ordinary object has no array
+/// `length` semantics, so nothing bounds the indices — the one invariant
+/// `ARRY` has that this row deliberately does not. It is the greatest index
+/// ever stored plus one, and it only rises, so a row may carry a mark with an
+/// EMPTY item list: that is the tombstone the array-iterator cursor domain
+/// rests on once a property is deleted, and it has to travel or a resumed
+/// machine forgets an index it once held.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndexPropsImage {
+    pub owner: u32,
+    pub high_water: u32,
+    pub items: Vec<(u32, Slot)>,
+}
+
 /// One collection instance's serialized side-table row (the `COLL`
 /// atom / small-state collections section): the owning slot, the
 /// frozen kind code (0 Map, 1 Set, 2 WeakMap, 3 WeakSet), XS's
@@ -360,6 +379,8 @@ pub struct MachineImage {
     pub meter: MeterImage,
     /// `ARRY`: the arrays side table (side-table ledger), owner-ascending.
     pub arrays: Vec<ArrayImage>,
+    /// `IDXP`: an ordinary object's integer-indexed properties, owner-ascending.
+    pub index_props: Vec<IndexPropsImage>,
     /// `COLL`: the collections side table (ledger), owner-ascending.
     pub collections: Vec<CollectionImage>,
     /// `REGY`: the `Symbol.for` registry (ledger), key-ascending.
@@ -468,6 +489,7 @@ impl MachineImage {
             symbols,
             meter: MeterImage::current(),
             arrays: Vec::new(),
+            index_props: Vec::new(),
             collections: Vec::new(),
             registry: Vec::new(),
             errors: Vec::new(),
@@ -553,6 +575,7 @@ impl MachineImage {
     pub fn with_side_tables(
         mut self,
         arrays: Vec<ArrayImage>,
+        index_props: Vec<IndexPropsImage>,
         collections: Vec<CollectionImage>,
         registry: Vec<RegistryImage>,
         errors: Vec<ErrorImage>,
@@ -561,6 +584,7 @@ impl MachineImage {
         data_views: Vec<DataViewImage>,
     ) -> MachineImage {
         self.arrays = arrays;
+        self.index_props = index_props;
         self.collections = collections;
         self.registry = registry;
         self.errors = errors;
@@ -917,6 +941,81 @@ pub(crate) fn encode_arrays(arrays: &[ArrayImage]) -> Vec<u8> {
         }
     }
     v
+}
+
+pub(crate) fn encode_index_props(rows: &[IndexPropsImage]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for r in rows {
+        v.extend_from_slice(&r.owner.to_be_bytes());
+        v.extend_from_slice(&r.high_water.to_be_bytes());
+        v.extend_from_slice(&(r.items.len() as u32).to_be_bytes());
+        for (index, value) in &r.items {
+            v.extend_from_slice(&index.to_be_bytes());
+            crate::slot_codec::encode_slot(value, &mut v);
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_index_props(p: &[u8]) -> Result<Vec<IndexPropsImage>, SnapshotError> {
+    let mut c = Cursor::new(p, "index-props side table");
+    let count = c.u32()? as usize;
+    // Each row costs at least 12 header bytes; clamp the reservation like the
+    // neighbouring decoders do.
+    let mut out: Vec<IndexPropsImage> = Vec::with_capacity(count.min(p.len() / 12));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        let high_water = c.u32()?;
+        let item_count = c.u32()? as usize;
+        let mut items = Vec::with_capacity(item_count.min(p.len() / 24));
+        let mut prev_index: Option<u32> = None;
+        for _ in 0..item_count {
+            let index = c.u32()?;
+            let value = c.slot()?;
+            // Strictly-ascending item indices, for `decode_arrays`' reason:
+            // `restore_bulk_side_tables` inserts into a `BTreeMap`, so a
+            // crafted duplicate or out-of-order pair is silently deduped and
+            // re-sorted by a resume, and resume-then-re-snapshot would emit
+            // different bytes than it read — breaking the import∘export
+            // identity the CAS key rests on.
+            if prev_index.is_some_and(|prev| index <= prev) {
+                return Err(SnapshotError::Corrupt(
+                    "index-props side table: item indices not strictly ascending",
+                ));
+            }
+            prev_index = Some(index);
+            items.push((index, value));
+        }
+        // No length bound to check, unlike `decode_arrays`: an ordinary
+        // object's index property may sit at any `u32`, and `4294967295` is a
+        // perfectly ordinary name-shaped key that never reaches this table.
+        //
+        // The high-water mark must still cover the items present. `restore`
+        // raises it to the greatest index it inserts, so a row claiming less
+        // would come back out of a resume larger than it went in, and
+        // resume-then-re-snapshot would emit different bytes than it read —
+        // the same import∘export identity the ascending rules above protect.
+        // A mark ABOVE the greatest index is the ordinary tombstone case (a
+        // deleted index, or every index deleted), so only the shortfall is
+        // refused.
+        if prev_index.is_some_and(|last| high_water <= last) {
+            return Err(SnapshotError::Corrupt(
+                "index-props side table: high-water mark below its own items",
+            ));
+        }
+        if out.last().is_some_and(|prev| owner <= prev.owner) {
+            return Err(SnapshotError::Corrupt(
+                "index-props side table: owners not strictly ascending",
+            ));
+        }
+        out.push(IndexPropsImage {
+            owner,
+            high_water,
+            items,
+        });
+    }
+    Ok(out)
 }
 
 pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> {
@@ -4536,6 +4635,11 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     if !image.arrays.is_empty() {
         w.atom(crate::format::ARRY, &encode_arrays(&image.arrays));
     }
+    // After `ARRY`, matching `CANONICAL_ATOM_ORDER`: the container reader
+    // walks that list with a cursor and refuses anything out of order.
+    if !image.index_props.is_empty() {
+        w.atom(crate::format::IDXP, &encode_index_props(&image.index_props));
+    }
     if !image.collections.is_empty() {
         w.atom(crate::format::COLL, &encode_collections(&image.collections));
     }
@@ -4765,6 +4869,13 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     // Side-table ledger atoms: absent means empty (a pre-ledger or
     // side-table-free container), exactly mirroring the writer's
     // emit-only-when-non-empty rule.
+    let index_props = match r.find(crate::format::IDXP) {
+        Some(a) => present_and_non_empty(
+            decode_index_props(a.payload)?,
+            "IDXP atom present but empty; the writer omits it",
+        )?,
+        None => Vec::new(),
+    };
     let arrays = match r.find(crate::format::ARRY) {
         Some(a) => present_and_non_empty(
             decode_arrays(a.payload)?,
@@ -5066,6 +5177,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     }
 
     Ok(MachineImage {
+        index_props,
         version,
         signature,
         creation,
@@ -6434,6 +6546,7 @@ mod tests {
     #[test]
     fn empty_machine_round_trips_byte_equal() {
         let img = MachineImage {
+            index_props: Vec::new(),
             version: Version::current(),
             signature: sig(),
             creation: CreationParams::default(),
@@ -6480,6 +6593,7 @@ mod tests {
     #[test]
     fn signature_mismatch_fails_closed() {
         let img = MachineImage {
+            index_props: Vec::new(),
             version: Version::current(),
             signature: Signature::new("written-under-v1"),
             creation: CreationParams::default(),
@@ -6600,6 +6714,7 @@ mod tests {
     #[test]
     fn string_and_symbol_tables_round_trip() {
         let img = MachineImage {
+            index_props: Vec::new(),
             version: Version::current(),
             signature: sig(),
             creation: CreationParams {

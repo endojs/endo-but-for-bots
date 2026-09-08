@@ -44,12 +44,13 @@ pub use interp::{
     dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, AsyncRow,
     BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, CompiledSource,
     DateTimeFormatData, DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot,
-    GeneratorRow, Halt, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow, ListFormatData,
-    LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData, PrivateAccessorRow,
-    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow,
-    PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError,
-    RunOutcome, SavedFrameRow, SavedJumpRow, SegmentIteratorData, SegmenterData, SegmentsData,
-    SourceCompileError, SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
+    GeneratorRow, Halt, IndexPropsSnapshot, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow,
+    ListFormatData, LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData,
+    PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
+    PromiseFnRow, PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
+    RelinkError, RunOutcome, SavedFrameRow, SavedJumpRow, SegmentIteratorData, SegmenterData,
+    SegmentsData, SourceCompileError, SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS,
+    TYPED_ARRAY_TYPES,
 };
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
