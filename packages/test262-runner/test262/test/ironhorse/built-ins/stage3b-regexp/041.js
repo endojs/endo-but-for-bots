@@ -1,7 +1,7 @@
 /*---
 description: stage3b-regexp corpus line 41 converted to a test262 case
 flags: [noStrict]
-features: [ironhorse-dual-run, ironhorse-meter-4-raw-16080504, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-5-raw-16080504, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-regexp.js line 41.
   Source: /c$/.test("abc")

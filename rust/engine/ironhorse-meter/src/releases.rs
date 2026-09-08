@@ -19,4 +19,9 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-4",
         "039b227725239e1da7f6c1c6be93b036a2c6582b2aab545e01bfd9d31c762490",
     ),
+    // Same weights, new compiler work reservation and refusal policy.
+    (
+        "ironhorse-meter-5",
+        "039b227725239e1da7f6c1c6be93b036a2c6582b2aab545e01bfd9d31c762490",
+    ),
 ];

@@ -261,6 +261,12 @@ fn strict_with_top_level_declarations(src: &str) -> bool {
 fn assert_identical(corpus: &[&str]) {
     let mut fails: Vec<String> = Vec::new();
     for &src in corpus {
+        let bounded = ironhorse_compile::compile_atoms_with_budget(src, false, u64::MAX);
+        assert_eq!(
+            bounded.result.unwrap(),
+            ironhorse_compile::compile_atoms_with(src, false).unwrap(),
+            "budgeted atoms differ for {src:?}"
+        );
         let want = match xs_oracle::run(src) {
             Some(o) => o.bytecode,
             None => {

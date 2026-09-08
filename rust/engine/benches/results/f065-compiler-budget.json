@@ -1,0 +1,1413 @@
+{
+  "finding": "F065",
+  "increment": "Compiler work budget and live charge callback; runtime charging still pending",
+  "before_revision": "055e01a2e",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS 26.6.2 arm64",
+  "cpu": "Apple M3 Max",
+  "fixtures_sha256": {
+    "rust/engine/ironhorse-compile/tests/performance_bench.rs": "076319e5699f6509dd23700d766ad659b62ffb59091cf7a60d503d46837e41bf",
+    "rust/engine/ironhorse-compile/tests/compile_budget_bench.rs": "ddbc9786f534d7cb8e8c68facb6e8a276ed421a67b9de120cee508f7d2286be1"
+  },
+  "method": "Same-host serial release runs without concurrent builds/tests. Baseline archived to separate source/target. Identical legacy performance fixture (one warmup, three measured, median). New API within-candidate comparison (one warmup, five measured, median), source construction and output equality excluded; callback meter destruction included. Admission one warmup plus seven measured. Final after run includes the reviewed using-scan charge.",
+  "command": "cargo test --locked --release -p ironhorse-compile --test performance_bench --test compile_budget_bench -- --ignored --nocapture --test-threads=1",
+  "baseline_command": "cargo test --locked --release -p ironhorse-compile --test performance_bench -- --ignored --nocapture --test-threads=1",
+  "limitations": [
+    "No legacy-path speedup claim: baseline and candidate both had noisy failing runs, retained below. Final baseline branch growth 2.535x fails the unchanged 2.5x gate; final candidate passes.",
+    "Budgeted and callback paths add intentional compilation charges under ironhorse-compile-meter-1; legacy raw=0 in new fixture means no host bill, not zero token telemetry. Legacy parse computrons remain identical in paired controls.",
+    "New API modes compare within this candidate, not APIs available in baseline. At 32k branches callback median is about 7% above legacy in reviewed run; no statistical-significance claim.",
+    "Admission timings near timer resolution only demonstrate pre-allocation refusal, not a precise nanosecond cost or meaningful speedup ratio.",
+    "Conservative reservations can overcharge simple long regexps and BigInts; cost units are deterministic policy, not calibrated CPU time.",
+    "VM eval, Function, and daemon compilation still need wiring to this API before F065 is complete."
+  ],
+  "new_api_measurements": [
+    {
+      "n": 4000,
+      "mode": "legacy",
+      "seconds": 0.012072291,
+      "raw": 0,
+      "computrons": 0
+    },
+    {
+      "n": 4000,
+      "mode": "budgeted",
+      "seconds": 0.012556875,
+      "raw": 92541681664,
+      "computrons": 1412074
+    },
+    {
+      "n": 4000,
+      "mode": "callback",
+      "seconds": 0.012752125,
+      "raw": 92541681664,
+      "computrons": 1412074
+    },
+    {
+      "n": 8000,
+      "mode": "legacy",
+      "seconds": 0.025908667,
+      "raw": 0,
+      "computrons": 0
+    },
+    {
+      "n": 8000,
+      "mode": "budgeted",
+      "seconds": 0.026717417,
+      "raw": 185078513664,
+      "computrons": 2824074
+    },
+    {
+      "n": 8000,
+      "mode": "callback",
+      "seconds": 0.0271895,
+      "raw": 185078513664,
+      "computrons": 2824074
+    },
+    {
+      "n": 16000,
+      "mode": "legacy",
+      "seconds": 0.054469917,
+      "raw": 0,
+      "computrons": 0
+    },
+    {
+      "n": 16000,
+      "mode": "budgeted",
+      "seconds": 0.057619541,
+      "raw": 370152177664,
+      "computrons": 5648074
+    },
+    {
+      "n": 16000,
+      "mode": "callback",
+      "seconds": 0.055497167,
+      "raw": 370152177664,
+      "computrons": 5648074
+    },
+    {
+      "n": 32000,
+      "mode": "legacy",
+      "seconds": 0.120856583,
+      "raw": 0,
+      "computrons": 0
+    },
+    {
+      "n": 32000,
+      "mode": "budgeted",
+      "seconds": 0.121472208,
+      "raw": 740299505664,
+      "computrons": 11296074
+    },
+    {
+      "n": 32000,
+      "mode": "callback",
+      "seconds": 0.129263708,
+      "raw": 740299505664,
+      "computrons": 11296074
+    }
+  ],
+  "runs": [
+    {
+      "name": "before-perf",
+      "legacy_growth_passed": true,
+      "legacy_measurements": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.013588125,
+          "computrons": 52001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.024284875,
+          "computrons": 104001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.051607833,
+          "computrons": 208001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.111206959,
+          "computrons": 416001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.00270175,
+          "computrons": 10001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005454583,
+          "computrons": 20001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.010759333,
+          "computrons": 40001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002673542,
+          "computrons": 10001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005311791,
+          "computrons": 20001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.010995583,
+          "computrons": 40001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002674166,
+          "computrons": 10001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005190542,
+          "computrons": 20001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.01084875,
+          "computrons": 40001
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.002708458,
+          "computrons": 10008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.005454708,
+          "computrons": 20008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.010751459,
+          "computrons": 40008
+        }
+      ],
+      "log": [
+        "    Finished `release` profile [optimized] target(s) in 0.01s",
+        "     Running tests/performance_bench.rs (target/release/deps/performance_bench-8fed9daed66bea7b)",
+        "",
+        "running 1 test",
+        "test compiler_growth ... ",
+        "COMPILER_METRIC branches n=4000 bytes=128000 seconds=0.013588125 computrons=52001",
+        "",
+        "COMPILER_METRIC branches n=8000 bytes=256000 seconds=0.024284875 computrons=104001",
+        "COMPILER_RATIO branches n=8000 time=1.787 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=16000 bytes=512000 seconds=0.051607833 computrons=208001",
+        "COMPILER_RATIO branches n=16000 time=2.125 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.111206959 computrons=416001",
+        "COMPILER_RATIO branches n=32000 time=2.155 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.002701750 computrons=10001",
+        "",
+        "COMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.005454583 computrons=20001",
+        "COMPILER_RATIO eval_declarations n=4000 time=2.019 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.010759333 computrons=40001",
+        "COMPILER_RATIO eval_declarations n=8000 time=1.973 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.002673542 computrons=10001",
+        "",
+        "COMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.005311791 computrons=20001",
+        "COMPILER_RATIO script_declarations n=4000 time=1.987 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.010995583 computrons=40001",
+        "COMPILER_RATIO script_declarations n=8000 time=2.070 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.002674166 computrons=10001",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.005190542 computrons=20001",
+        "COMPILER_RATIO strict_eval_declarations n=4000 time=1.941 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.010848750 computrons=40001",
+        "COMPILER_RATIO strict_eval_declarations n=8000 time=2.090 meter=2.000",
+        "",
+        "COMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.002708458 computrons=10008",
+        "",
+        "COMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.005454708 computrons=20008",
+        "COMPILER_RATIO function_declarations n=4000 time=2.014 meter=1.999",
+        "",
+        "COMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.010751459 computrons=40008",
+        "COMPILER_RATIO function_declarations n=8000 time=1.971 meter=2.000",
+        "ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s",
+        ""
+      ]
+    },
+    {
+      "name": "after-perf",
+      "legacy_growth_passed": false,
+      "legacy_measurements": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.012809292,
+          "computrons": 52001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.026402375,
+          "computrons": 104001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.054891625,
+          "computrons": 208001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.119747042,
+          "computrons": 416001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002848041,
+          "computrons": 10001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006129792,
+          "computrons": 20001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.035899083,
+          "computrons": 40001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.004618917,
+          "computrons": 10001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006699792,
+          "computrons": 20001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.017831916,
+          "computrons": 40001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002848833,
+          "computrons": 10001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.007130875,
+          "computrons": 20001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012339458,
+          "computrons": 40001
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.003228916,
+          "computrons": 10008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.005461166,
+          "computrons": 20008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.012116125,
+          "computrons": 40008
+        }
+      ],
+      "log": [
+        "    Finished `release` profile [optimized] target(s) in 0.06s",
+        "     Running tests/compile_budget_bench.rs (target/release/deps/compile_budget_bench-babd2f6a78c5c51c)",
+        "",
+        "running 1 test",
+        "test budgeted_compiler_cost ... COMPILE_BUDGET n=4000 bounded=false seconds=0.014784416 raw=0",
+        "COMPILE_BUDGET n=4000 bounded=true seconds=0.017189708 raw=92541681664",
+        "COMPILE_BUDGET n=8000 bounded=false seconds=0.041514083 raw=0",
+        "COMPILE_BUDGET n=8000 bounded=true seconds=0.042210792 raw=185078513664",
+        "COMPILE_BUDGET n=16000 bounded=false seconds=0.059056459 raw=0",
+        "COMPILE_BUDGET n=16000 bounded=true seconds=0.073312709 raw=370152177664",
+        "COMPILE_BUDGET n=32000 bounded=false seconds=0.168404250 raw=0",
+        "COMPILE_BUDGET n=32000 bounded=true seconds=0.152978584 raw=740299505664",
+        "COMPILE_ADMISSION n=1000 bounded=false seconds=0.000019583",
+        "COMPILE_ADMISSION n=1000 bounded=true seconds=0.000000083",
+        "COMPILE_ADMISSION n=10000 bounded=false seconds=0.000048250",
+        "COMPILE_ADMISSION n=10000 bounded=true seconds=0.000000083",
+        "COMPILE_ADMISSION n=1000000 bounded=false seconds=0.002992750",
+        "COMPILE_ADMISSION n=1000000 bounded=true seconds=0.000000042",
+        "ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.79s",
+        "",
+        "     Running tests/performance_bench.rs (target/release/deps/performance_bench-8fed9daed66bea7b)",
+        "",
+        "running 1 test",
+        "test compiler_growth ... ",
+        "COMPILER_METRIC branches n=4000 bytes=128000 seconds=0.012809292 computrons=52001",
+        "",
+        "COMPILER_METRIC branches n=8000 bytes=256000 seconds=0.026402375 computrons=104001",
+        "COMPILER_RATIO branches n=8000 time=2.061 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=16000 bytes=512000 seconds=0.054891625 computrons=208001",
+        "COMPILER_RATIO branches n=16000 time=2.079 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.119747042 computrons=416001",
+        "COMPILER_RATIO branches n=32000 time=2.182 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.002848041 computrons=10001",
+        "",
+        "COMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.006129792 computrons=20001",
+        "COMPILER_RATIO eval_declarations n=4000 time=2.152 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.035899083 computrons=40001",
+        "COMPILER_RATIO eval_declarations n=8000 time=5.856 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.004618917 computrons=10001",
+        "",
+        "COMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.006699792 computrons=20001",
+        "COMPILER_RATIO script_declarations n=4000 time=1.451 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.017831916 computrons=40001",
+        "COMPILER_RATIO script_declarations n=8000 time=2.662 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.002848833 computrons=10001",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.007130875 computrons=20001",
+        "COMPILER_RATIO strict_eval_declarations n=4000 time=2.503 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.012339458 computrons=40001",
+        "COMPILER_RATIO strict_eval_declarations n=8000 time=1.730 meter=2.000",
+        "",
+        "COMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.003228916 computrons=10008",
+        "",
+        "COMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.005461166 computrons=20008",
+        "COMPILER_RATIO function_declarations n=4000 time=1.691 meter=1.999",
+        "",
+        "COMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.012116125 computrons=40008",
+        "COMPILER_RATIO function_declarations n=8000 time=2.219 meter=2.000",
+        "",
+        "thread 'compiler_growth' (25012370) panicked at ironhorse-compile/tests/performance_bench.rs:97:5:",
+        "eval_declarations n=8000: time=5.856x meter=2.000x",
+        "script_declarations n=8000: time=2.662x meter=2.000x",
+        "strict_eval_declarations n=4000: time=2.503x meter=2.000x",
+        "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+        "FAILED",
+        "",
+        "failures:",
+        "",
+        "failures:",
+        "    compiler_growth",
+        "",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.56s",
+        "",
+        "error: test failed, to rerun pass `-p ironhorse-compile --test performance_bench`"
+      ]
+    },
+    {
+      "name": "before-perf-repeat",
+      "legacy_growth_passed": false,
+      "legacy_measurements": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.016364541,
+          "computrons": 52001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.030956708,
+          "computrons": 104001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.082590875,
+          "computrons": 208001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.179873792,
+          "computrons": 416001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.004094917,
+          "computrons": 10001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006042375,
+          "computrons": 20001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.016982542,
+          "computrons": 40001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.004651042,
+          "computrons": 10001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.008043916,
+          "computrons": 20001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.01538825,
+          "computrons": 40001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.004005417,
+          "computrons": 10001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.008242916,
+          "computrons": 20001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.017860875,
+          "computrons": 40001
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.003987083,
+          "computrons": 10008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.008202083,
+          "computrons": 20008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.016173125,
+          "computrons": 40008
+        }
+      ],
+      "log": [
+        "    Finished `release` profile [optimized] target(s) in 0.01s",
+        "     Running tests/performance_bench.rs (target/release/deps/performance_bench-8fed9daed66bea7b)",
+        "",
+        "running 1 test",
+        "test compiler_growth ... ",
+        "COMPILER_METRIC branches n=4000 bytes=128000 seconds=0.016364541 computrons=52001",
+        "",
+        "COMPILER_METRIC branches n=8000 bytes=256000 seconds=0.030956708 computrons=104001",
+        "COMPILER_RATIO branches n=8000 time=1.892 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=16000 bytes=512000 seconds=0.082590875 computrons=208001",
+        "COMPILER_RATIO branches n=16000 time=2.668 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.179873792 computrons=416001",
+        "COMPILER_RATIO branches n=32000 time=2.178 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.004094917 computrons=10001",
+        "",
+        "COMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.006042375 computrons=20001",
+        "COMPILER_RATIO eval_declarations n=4000 time=1.476 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.016982542 computrons=40001",
+        "COMPILER_RATIO eval_declarations n=8000 time=2.811 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.004651042 computrons=10001",
+        "",
+        "COMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.008043916 computrons=20001",
+        "COMPILER_RATIO script_declarations n=4000 time=1.729 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.015388250 computrons=40001",
+        "COMPILER_RATIO script_declarations n=8000 time=1.913 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.004005417 computrons=10001",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.008242916 computrons=20001",
+        "COMPILER_RATIO strict_eval_declarations n=4000 time=2.058 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.017860875 computrons=40001",
+        "COMPILER_RATIO strict_eval_declarations n=8000 time=2.167 meter=2.000",
+        "",
+        "COMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.003987083 computrons=10008",
+        "",
+        "COMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.008202083 computrons=20008",
+        "COMPILER_RATIO function_declarations n=4000 time=2.057 meter=1.999",
+        "",
+        "COMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.016173125 computrons=40008",
+        "COMPILER_RATIO function_declarations n=8000 time=1.972 meter=2.000",
+        "",
+        "thread 'compiler_growth' (25016495) panicked at ironhorse-compile/tests/performance_bench.rs:97:5:",
+        "branches n=16000: time=2.668x meter=2.000x",
+        "eval_declarations n=8000: time=2.811x meter=2.000x",
+        "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+        "FAILED",
+        "",
+        "failures:",
+        "",
+        "failures:",
+        "    compiler_growth",
+        "",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.95s",
+        "",
+        "error: test failed, to rerun pass `-p ironhorse-compile --test performance_bench`"
+      ]
+    },
+    {
+      "name": "after-perf-repeat",
+      "legacy_growth_passed": true,
+      "legacy_measurements": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.012233791,
+          "computrons": 52001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.026791417,
+          "computrons": 104001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.053846542,
+          "computrons": 208001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.121925875,
+          "computrons": 416001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003127417,
+          "computrons": 10001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005929,
+          "computrons": 20001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011262125,
+          "computrons": 40001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002691875,
+          "computrons": 10001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005870375,
+          "computrons": 20001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011471833,
+          "computrons": 40001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002769,
+          "computrons": 10001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005920875,
+          "computrons": 20001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011545917,
+          "computrons": 40001
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.002597833,
+          "computrons": 10008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.005789333,
+          "computrons": 20008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.011143375,
+          "computrons": 40008
+        }
+      ],
+      "log": [
+        "    Finished `release` profile [optimized] target(s) in 0.24s",
+        "     Running tests/performance_bench.rs (target/release/deps/performance_bench-8fed9daed66bea7b)",
+        "",
+        "running 1 test",
+        "test compiler_growth ... ",
+        "COMPILER_METRIC branches n=4000 bytes=128000 seconds=0.012233791 computrons=52001",
+        "",
+        "COMPILER_METRIC branches n=8000 bytes=256000 seconds=0.026791417 computrons=104001",
+        "COMPILER_RATIO branches n=8000 time=2.190 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=16000 bytes=512000 seconds=0.053846542 computrons=208001",
+        "COMPILER_RATIO branches n=16000 time=2.010 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.121925875 computrons=416001",
+        "COMPILER_RATIO branches n=32000 time=2.264 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.003127417 computrons=10001",
+        "",
+        "COMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.005929000 computrons=20001",
+        "COMPILER_RATIO eval_declarations n=4000 time=1.896 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.011262125 computrons=40001",
+        "COMPILER_RATIO eval_declarations n=8000 time=1.899 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.002691875 computrons=10001",
+        "",
+        "COMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.005870375 computrons=20001",
+        "COMPILER_RATIO script_declarations n=4000 time=2.181 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.011471833 computrons=40001",
+        "COMPILER_RATIO script_declarations n=8000 time=1.954 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.002769000 computrons=10001",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.005920875 computrons=20001",
+        "COMPILER_RATIO strict_eval_declarations n=4000 time=2.138 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.011545917 computrons=40001",
+        "COMPILER_RATIO strict_eval_declarations n=8000 time=1.950 meter=2.000",
+        "",
+        "COMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.002597833 computrons=10008",
+        "",
+        "COMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.005789333 computrons=20008",
+        "COMPILER_RATIO function_declarations n=4000 time=2.229 meter=1.999",
+        "",
+        "COMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.011143375 computrons=40008",
+        "COMPILER_RATIO function_declarations n=8000 time=1.925 meter=2.000",
+        "ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s",
+        ""
+      ]
+    },
+    {
+      "name": "final-before-perf",
+      "legacy_growth_passed": false,
+      "legacy_measurements": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.0161,
+          "computrons": 52001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.037314791,
+          "computrons": 104001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.075633458,
+          "computrons": 208001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.19172,
+          "computrons": 416001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.004082375,
+          "computrons": 10001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.0081945,
+          "computrons": 20001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.0158415,
+          "computrons": 40001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.004028084,
+          "computrons": 10001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.007639917,
+          "computrons": 20001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.016083583,
+          "computrons": 40001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003804083,
+          "computrons": 10001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.008204834,
+          "computrons": 20001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.01717675,
+          "computrons": 40001
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.003811292,
+          "computrons": 10008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.007961334,
+          "computrons": 20008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.017719792,
+          "computrons": 40008
+        }
+      ],
+      "log": [
+        "    Finished `release` profile [optimized] target(s) in 0.02s",
+        "     Running tests/performance_bench.rs (target/release/deps/performance_bench-8fed9daed66bea7b)",
+        "",
+        "running 1 test",
+        "test compiler_growth ... ",
+        "COMPILER_METRIC branches n=4000 bytes=128000 seconds=0.016100000 computrons=52001",
+        "",
+        "COMPILER_METRIC branches n=8000 bytes=256000 seconds=0.037314791 computrons=104001",
+        "COMPILER_RATIO branches n=8000 time=2.318 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=16000 bytes=512000 seconds=0.075633458 computrons=208001",
+        "COMPILER_RATIO branches n=16000 time=2.027 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.191720000 computrons=416001",
+        "COMPILER_RATIO branches n=32000 time=2.535 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.004082375 computrons=10001",
+        "",
+        "COMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.008194500 computrons=20001",
+        "COMPILER_RATIO eval_declarations n=4000 time=2.007 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.015841500 computrons=40001",
+        "COMPILER_RATIO eval_declarations n=8000 time=1.933 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.004028084 computrons=10001",
+        "",
+        "COMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.007639917 computrons=20001",
+        "COMPILER_RATIO script_declarations n=4000 time=1.897 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.016083583 computrons=40001",
+        "COMPILER_RATIO script_declarations n=8000 time=2.105 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.003804083 computrons=10001",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.008204834 computrons=20001",
+        "COMPILER_RATIO strict_eval_declarations n=4000 time=2.157 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.017176750 computrons=40001",
+        "COMPILER_RATIO strict_eval_declarations n=8000 time=2.093 meter=2.000",
+        "",
+        "COMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.003811292 computrons=10008",
+        "",
+        "COMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.007961334 computrons=20008",
+        "COMPILER_RATIO function_declarations n=4000 time=2.089 meter=1.999",
+        "",
+        "COMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.017719792 computrons=40008",
+        "COMPILER_RATIO function_declarations n=8000 time=2.226 meter=2.000",
+        "",
+        "thread 'compiler_growth' (25100360) panicked at ironhorse-compile/tests/performance_bench.rs:97:5:",
+        "branches n=32000: time=2.535x meter=2.000x",
+        "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+        "FAILED",
+        "",
+        "failures:",
+        "",
+        "failures:",
+        "    compiler_growth",
+        "",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.98s",
+        "",
+        "error: test failed, to rerun pass `-p ironhorse-compile --test performance_bench`"
+      ]
+    },
+    {
+      "name": "final-after-perf",
+      "legacy_growth_passed": true,
+      "legacy_measurements": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.012988625,
+          "computrons": 52001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.02510625,
+          "computrons": 104001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.052701959,
+          "computrons": 208001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.117912167,
+          "computrons": 416001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002834625,
+          "computrons": 10001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.00593125,
+          "computrons": 20001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012168417,
+          "computrons": 40001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002833791,
+          "computrons": 10001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.0059175,
+          "computrons": 20001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011832125,
+          "computrons": 40001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002918917,
+          "computrons": 10001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005841042,
+          "computrons": 20001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011821375,
+          "computrons": 40001
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.002849083,
+          "computrons": 10008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.00587875,
+          "computrons": 20008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.011861458,
+          "computrons": 40008
+        }
+      ],
+      "log": [
+        "    Finished `release` profile [optimized] target(s) in 0.02s",
+        "     Running tests/compile_budget_bench.rs (target/release/deps/compile_budget_bench-babd2f6a78c5c51c)",
+        "",
+        "running 1 test",
+        "test budgeted_compiler_cost ... COMPILE_BUDGET n=4000 mode=legacy seconds=0.012076333 raw=0",
+        "COMPILE_BUDGET n=4000 mode=budgeted seconds=0.012712250 raw=92541681664",
+        "COMPILE_BUDGET n=4000 mode=callback seconds=0.012905625 raw=92541681664",
+        "COMPILE_BUDGET n=8000 mode=legacy seconds=0.024877666 raw=0",
+        "COMPILE_BUDGET n=8000 mode=budgeted seconds=0.025889083 raw=185078513664",
+        "COMPILE_BUDGET n=8000 mode=callback seconds=0.026121833 raw=185078513664",
+        "COMPILE_BUDGET n=16000 mode=legacy seconds=0.054155458 raw=0",
+        "COMPILE_BUDGET n=16000 mode=budgeted seconds=0.055332458 raw=370152177664",
+        "COMPILE_BUDGET n=16000 mode=callback seconds=0.056282500 raw=370152177664",
+        "COMPILE_BUDGET n=32000 mode=legacy seconds=0.116817459 raw=0",
+        "COMPILE_BUDGET n=32000 mode=budgeted seconds=0.122333959 raw=740299505664",
+        "COMPILE_BUDGET n=32000 mode=callback seconds=0.124035291 raw=740299505664",
+        "COMPILE_ADMISSION n=1000 bounded=false seconds=0.000020166",
+        "COMPILE_ADMISSION n=1000 bounded=true seconds=0.000000083",
+        "COMPILE_ADMISSION n=10000 bounded=false seconds=0.000045583",
+        "COMPILE_ADMISSION n=10000 bounded=true seconds=0.000000084",
+        "COMPILE_ADMISSION n=1000000 bounded=false seconds=0.003033125",
+        "COMPILE_ADMISSION n=1000000 bounded=true seconds=0.000000084",
+        "ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.12s",
+        "",
+        "     Running tests/performance_bench.rs (target/release/deps/performance_bench-8fed9daed66bea7b)",
+        "",
+        "running 1 test",
+        "test compiler_growth ... ",
+        "COMPILER_METRIC branches n=4000 bytes=128000 seconds=0.012988625 computrons=52001",
+        "",
+        "COMPILER_METRIC branches n=8000 bytes=256000 seconds=0.025106250 computrons=104001",
+        "COMPILER_RATIO branches n=8000 time=1.933 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=16000 bytes=512000 seconds=0.052701959 computrons=208001",
+        "COMPILER_RATIO branches n=16000 time=2.099 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.117912167 computrons=416001",
+        "COMPILER_RATIO branches n=32000 time=2.237 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.002834625 computrons=10001",
+        "",
+        "COMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.005931250 computrons=20001",
+        "COMPILER_RATIO eval_declarations n=4000 time=2.092 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.012168417 computrons=40001",
+        "COMPILER_RATIO eval_declarations n=8000 time=2.052 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.002833791 computrons=10001",
+        "",
+        "COMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.005917500 computrons=20001",
+        "COMPILER_RATIO script_declarations n=4000 time=2.088 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.011832125 computrons=40001",
+        "COMPILER_RATIO script_declarations n=8000 time=2.000 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.002918917 computrons=10001",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.005841042 computrons=20001",
+        "COMPILER_RATIO strict_eval_declarations n=4000 time=2.001 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.011821375 computrons=40001",
+        "COMPILER_RATIO strict_eval_declarations n=8000 time=2.024 meter=2.000",
+        "",
+        "COMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.002849083 computrons=10008",
+        "",
+        "COMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.005878750 computrons=20008",
+        "COMPILER_RATIO function_declarations n=4000 time=2.063 meter=1.999",
+        "",
+        "COMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.011861458 computrons=40008",
+        "COMPILER_RATIO function_declarations n=8000 time=2.018 meter=2.000",
+        "ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s",
+        ""
+      ]
+    },
+    {
+      "name": "reviewed-after-perf",
+      "legacy_growth_passed": true,
+      "legacy_measurements": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.014214333,
+          "computrons": 52001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.025745917,
+          "computrons": 104001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.05557675,
+          "computrons": 208001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.121531167,
+          "computrons": 416001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002832292,
+          "computrons": 10001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005911958,
+          "computrons": 20001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011475083,
+          "computrons": 40001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002814625,
+          "computrons": 10001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005791709,
+          "computrons": 20001
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011839125,
+          "computrons": 40001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002880125,
+          "computrons": 10001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.00584875,
+          "computrons": 20001
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011807375,
+          "computrons": 40001
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.0028515,
+          "computrons": 10008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.005773958,
+          "computrons": 20008
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.011746459,
+          "computrons": 40008
+        }
+      ],
+      "log": [
+        "    Finished `release` profile [optimized] target(s) in 0.03s",
+        "     Running tests/compile_budget_bench.rs (target/release/deps/compile_budget_bench-babd2f6a78c5c51c)",
+        "",
+        "running 1 test",
+        "test budgeted_compiler_cost ... COMPILE_BUDGET n=4000 mode=legacy seconds=0.012072291 raw=0",
+        "COMPILE_BUDGET n=4000 mode=budgeted seconds=0.012556875 raw=92541681664",
+        "COMPILE_BUDGET n=4000 mode=callback seconds=0.012752125 raw=92541681664",
+        "COMPILE_BUDGET n=8000 mode=legacy seconds=0.025908667 raw=0",
+        "COMPILE_BUDGET n=8000 mode=budgeted seconds=0.026717417 raw=185078513664",
+        "COMPILE_BUDGET n=8000 mode=callback seconds=0.027189500 raw=185078513664",
+        "COMPILE_BUDGET n=16000 mode=legacy seconds=0.054469917 raw=0",
+        "COMPILE_BUDGET n=16000 mode=budgeted seconds=0.057619541 raw=370152177664",
+        "COMPILE_BUDGET n=16000 mode=callback seconds=0.055497167 raw=370152177664",
+        "COMPILE_BUDGET n=32000 mode=legacy seconds=0.120856583 raw=0",
+        "COMPILE_BUDGET n=32000 mode=budgeted seconds=0.121472208 raw=740299505664",
+        "COMPILE_BUDGET n=32000 mode=callback seconds=0.129263708 raw=740299505664",
+        "COMPILE_ADMISSION n=1000 bounded=false seconds=0.000018333",
+        "COMPILE_ADMISSION n=1000 bounded=true seconds=0.000000083",
+        "COMPILE_ADMISSION n=10000 bounded=false seconds=0.000049000",
+        "COMPILE_ADMISSION n=10000 bounded=true seconds=0.000000083",
+        "COMPILE_ADMISSION n=1000000 bounded=false seconds=0.002907792",
+        "COMPILE_ADMISSION n=1000000 bounded=true seconds=0.000000083",
+        "ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.18s",
+        "",
+        "     Running tests/performance_bench.rs (target/release/deps/performance_bench-8fed9daed66bea7b)",
+        "",
+        "running 1 test",
+        "test compiler_growth ... ",
+        "COMPILER_METRIC branches n=4000 bytes=128000 seconds=0.014214333 computrons=52001",
+        "",
+        "COMPILER_METRIC branches n=8000 bytes=256000 seconds=0.025745917 computrons=104001",
+        "COMPILER_RATIO branches n=8000 time=1.811 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=16000 bytes=512000 seconds=0.055576750 computrons=208001",
+        "COMPILER_RATIO branches n=16000 time=2.159 meter=2.000",
+        "",
+        "COMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.121531167 computrons=416001",
+        "COMPILER_RATIO branches n=32000 time=2.187 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.002832292 computrons=10001",
+        "",
+        "COMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.005911958 computrons=20001",
+        "COMPILER_RATIO eval_declarations n=4000 time=2.087 meter=2.000",
+        "",
+        "COMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.011475083 computrons=40001",
+        "COMPILER_RATIO eval_declarations n=8000 time=1.941 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.002814625 computrons=10001",
+        "",
+        "COMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.005791709 computrons=20001",
+        "COMPILER_RATIO script_declarations n=4000 time=2.058 meter=2.000",
+        "",
+        "COMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.011839125 computrons=40001",
+        "COMPILER_RATIO script_declarations n=8000 time=2.044 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.002880125 computrons=10001",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.005848750 computrons=20001",
+        "COMPILER_RATIO strict_eval_declarations n=4000 time=2.031 meter=2.000",
+        "",
+        "COMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.011807375 computrons=40001",
+        "COMPILER_RATIO strict_eval_declarations n=8000 time=2.019 meter=2.000",
+        "",
+        "COMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.002851500 computrons=10008",
+        "",
+        "COMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.005773958 computrons=20008",
+        "COMPILER_RATIO function_declarations n=4000 time=2.025 meter=1.999",
+        "",
+        "COMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.011746459 computrons=40008",
+        "COMPILER_RATIO function_declarations n=8000 time=2.034 meter=2.000",
+        "ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s",
+        ""
+      ]
+    }
+  ]
+}

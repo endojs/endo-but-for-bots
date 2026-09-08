@@ -1,4 +1,4 @@
-# ironhorse-meter-4 runtime cost corpus: label, source, halt, result, raw, computrons
+# ironhorse-meter-5 runtime cost corpus: label, source, halt, result, raw, computrons
 dispatch	1+2*3	return	7	804120	12
 slots	var a={x:1,y:2}; a.x+a.y	return	3	2247776	34
 default-key	var a={}; a.length=3; a.length	return	3	1886512	28

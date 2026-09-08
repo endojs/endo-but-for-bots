@@ -89,7 +89,9 @@ A resource refusal maps to `HeapExhausted`; a work refusal maps to `MeterAbort`.
 
 ## Cost table and validation
 
-The cost table is **`ironhorse-meter-4`**.
+W2 landed under **`ironhorse-meter-4`**.
+The current compiler-policy release is `ironhorse-meter-5`; it retains W2's
+execution weights and these execution-only raw totals.
 Moving admission before later guest exceptions changes retained charges, and
 new parser, conversion, collection, and formatting work has explicit costs.
 Completed armed and unarmed runs agree under version 4.

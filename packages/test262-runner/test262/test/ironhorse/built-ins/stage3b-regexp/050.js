@@ -1,7 +1,7 @@
 /*---
 description: stage3b-regexp corpus line 50 converted to a test262 case
 flags: [raw]
-features: [ironhorse-dual-run, ironhorse-meter-4-raw-3892872, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-5-raw-3892872, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-regexp.js line 50.
   Source: /(foo|bar)+/.exec("foobarfoo")
