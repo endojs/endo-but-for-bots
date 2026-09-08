@@ -89,15 +89,18 @@ A resource refusal maps to `HeapExhausted`; a work refusal maps to `MeterAbort`.
 
 ## Cost table and validation
 
-The cost table is **`ironhorse-meter-2`**.
+The cost table is **`ironhorse-meter-4`**.
 Moving admission before later guest exceptions changes retained charges, and
 new parser, conversion, collection, and formatting work has explicit costs.
-Completed armed and unarmed runs agree under version 2.
+Completed armed and unarmed runs agree under version 4.
+This release builds on the shared UTF-16 prices and compilation meter from
+versions 2 and 3; their digest ledger entries remain unchanged.
 Pure regexp matching retains the existing XS schedule, but regexp compilation
-and the newly charged builtin work deliberately have version-2 totals.
-Historical version-1 snapshots fail the cost-table gate.
-Migration tests use temporary restamped copies to test the independent format
-migration path; checked-in historical fixtures are unchanged.
+and the newly charged builtin work deliberately have version-4 totals.
+Historical snapshots with a different cost-table identity fail the gate.
+Migration tests use synthetic stores with the current boot identity to test
+the independent format migration path; historical fixtures remain unchanged
+and are refused when their boot fingerprint or cost-table identity is missing.
 
 Regression coverage includes `allocation_admission_audit`, `heap_ceiling`,
 `meter_bounds`, `native_recursion_budget`, regexp `work_limits` and compile

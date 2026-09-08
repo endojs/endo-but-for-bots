@@ -33,7 +33,7 @@ fn agrees(source: &str) {
     );
 }
 
-fn agrees_version_two(source: &str) {
+fn agrees_version_four(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
     assert!(run.result_agrees, "{source}: {run:?}");
@@ -53,7 +53,7 @@ fn callable_proxy_dispatch_is_metered_at_each_call_layer() {
         "var p=new Proxy(Math.max,{});p(1,2)",
         "var p=new Proxy(Math.max,{});p.call(null,1,2)",
     ] {
-        agrees_version_two(source);
+        agrees_version_four(source);
     }
 }
 
@@ -122,7 +122,7 @@ fn apply_reads_arguments_length_through_the_property_mop() {
 }
 
 #[test]
-fn apply_array_like_reads_have_version_two_costs() {
+fn apply_array_like_reads_have_version_four_costs() {
     for source in [
         "Math.max.apply(null,{length:2,0:3,1:8})",
         "Math.max.apply(null,[,8])",
@@ -130,7 +130,7 @@ fn apply_array_like_reads_have_version_two_costs() {
         "var f=(function(a,b){return a+b}).bind(null);f.apply(null,{length:2,0:3,1:8})",
         "(function(){return Math.max.apply(null,arguments)})(3,8)",
     ] {
-        agrees_version_two(source);
+        agrees_version_four(source);
     }
 }
 
@@ -138,7 +138,7 @@ fn apply_array_like_reads_have_version_two_costs() {
 /// and bound callees have independent raw residuals, covered above only at
 /// whole-computron precision.
 #[test]
-fn apply_array_like_credits_have_version_two_raw_costs() {
+fn apply_array_like_credits_have_version_four_raw_costs() {
     for source in [
         "Math.max.apply(null,{length:2,0:3,1:8})",
         "(function(a,b){return a+b}).apply(null,{length:2,0:3,1:8})",

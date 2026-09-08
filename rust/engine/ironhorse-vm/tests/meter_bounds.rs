@@ -171,11 +171,11 @@ fn caught_late_json_failure_retains_admitted_work() {
     for (source, expected_raw) in [
         (
             "try { JSON.stringify([1,1n]); } catch (_) { 'caught'; }",
-            4_574_688,
+            4_574_760,
         ),
         (
             "try { JSON.stringify({a:1,get b(){throw 'late'}}); } catch (_) { 'caught'; }",
-            4_610_744,
+            4_610_816,
         ),
     ] {
         let (code, names) = compile(source);
@@ -186,13 +186,13 @@ fn caught_late_json_failure_retains_admitted_work() {
         assert_eq!(out.result, "caught");
         assert_eq!(
             out.meter_raw, expected_raw,
-            "version-2 admission accounting"
+            "version-4 admission accounting"
         );
     }
 }
 
 #[test]
-fn version_two_scratch_collection_costs_are_frozen() {
+fn version_four_scratch_collection_costs_are_frozen() {
     let (code, names) = compile("new Uint8Array([3,1,2]).sort().join(',')");
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
@@ -236,7 +236,7 @@ fn unicode_and_dense_array_work_check_before_running() {
 }
 
 #[test]
-fn version_two_unicode_parse_and_argument_costs_are_frozen() {
+fn version_four_unicode_parse_and_argument_costs_are_frozen() {
     let cases = [
         ("'abc   '.trim()", "abc"),
         ("[1,2,3].reduce((a,b)=>a+b,0)", "6"),
@@ -259,7 +259,7 @@ fn version_two_unicode_parse_and_argument_costs_are_frozen() {
         .collect();
     assert_eq!(
         raw,
-        vec![935_752, 6_411_096, 1_264_288, 1_328_472, 3_065_864, 2_265_824]
+        vec![935_752, 6_411_096, 1_264_288, 1_328_472, 3_065_864, 2_282_848]
     );
 }
 

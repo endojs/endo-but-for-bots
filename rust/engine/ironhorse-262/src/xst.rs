@@ -421,7 +421,7 @@ struct Eval {
 /// [`evaluate`] path and the async path ([`run_async_case`]), which supplies
 /// its own dual-run so it can additionally read the completion latch.
 // Proprietary corpus cases may pin an engine-versioned raw total rather than
-// XS computrons: ironhorse-meter-2-raw-N. Keep semantics and strict-mode rules
+// XS computrons: ironhorse-meter-4-raw-N. Keep semantics and strict-mode rules
 // identical, and reject malformed/conflicting pins when the gate is enabled.
 fn is_exact_meter_feature(feature: &str) -> bool {
     feature.starts_with("ironhorse-meter-") && feature != "ironhorse-meter-determinism"
@@ -442,19 +442,19 @@ fn verdict_for(cfg: &Config, run: &DualRun, fm: &Frontmatter, meter_exact_gate: 
     if meter_exact_gate && !pins.is_empty() {
         if pins.len() != 1
             || fm.features.iter().any(|f| f == "ironhorse-meter-exact")
-            || ironhorse_vm::meter::COST_TABLE_VERSION != "ironhorse-meter-2"
+            || ironhorse_vm::meter::COST_TABLE_VERSION != "ironhorse-meter-4"
         {
-            return Verdict::Fail("invalid or incompatible version-2 meter pin".into());
+            return Verdict::Fail("invalid or incompatible version-4 meter pin".into());
         }
         let Some(expected) = pins[0]
-            .strip_prefix("ironhorse-meter-2-raw-")
+            .strip_prefix("ironhorse-meter-4-raw-")
             .and_then(|n| n.parse::<u64>().ok())
         else {
-            return Verdict::Fail("invalid version-2 raw meter pin".into());
+            return Verdict::Fail("invalid version-4 raw meter pin".into());
         };
         if matches!(outcome, Verdict::Covered) && run.ironhorse_meter_raw != expected {
             return Verdict::Fail(format!(
-                "version-2 meter violation: expected={expected} actual={} raw",
+                "version-4 meter violation: expected={expected} actual={} raw",
                 run.ironhorse_meter_raw
             ));
         }
@@ -3547,14 +3547,14 @@ mod tests {
     }
 
     #[test]
-    fn version_two_meter_pins_preserve_semantics_and_fail_closed() {
+    fn version_four_meter_pins_preserve_semantics_and_fail_closed() {
         let cfg = Config::default();
         let mut run = synthetic_abort(Halt::Return, "");
         run.agreement = Agreement::BothComplete;
         run.result_agrees = true;
         run.ironhorse_meter_raw = 42;
         let mut fm = Frontmatter {
-            features: vec!["ironhorse-meter-2-raw-42".into()],
+            features: vec!["ironhorse-meter-4-raw-42".into()],
             ..Frontmatter::default()
         };
         assert!(matches!(
@@ -3568,12 +3568,12 @@ mod tests {
         ));
         run.result_agrees = true;
         for tags in [
-            vec!["ironhorse-meter-2-raw-0"],
-            vec!["ironhorse-meter-2-raw-nope"],
-            vec!["ironhorse-meter-2-raw-18446744073709551616"],
+            vec!["ironhorse-meter-4-raw-0"],
+            vec!["ironhorse-meter-4-raw-nope"],
+            vec!["ironhorse-meter-4-raw-18446744073709551616"],
             vec!["ironhorse-meter-3-raw-42"],
-            vec!["ironhorse-meter-2-raw-42", "ironhorse-meter-2-raw-42"],
-            vec!["ironhorse-meter-exact", "ironhorse-meter-2-raw-42"],
+            vec!["ironhorse-meter-4-raw-42", "ironhorse-meter-4-raw-42"],
+            vec!["ironhorse-meter-exact", "ironhorse-meter-4-raw-42"],
         ] {
             fm.features = tags.into_iter().map(str::to_owned).collect();
             assert!(
@@ -3582,7 +3582,7 @@ mod tests {
                 fm.features
             );
         }
-        fm.features = vec!["ironhorse-meter-2-raw-0".into()];
+        fm.features = vec!["ironhorse-meter-4-raw-0".into()];
         run.ironhorse_meter_raw = 0;
         assert!(matches!(
             verdict_for(&cfg, &run, &fm, true),

@@ -1,7 +1,7 @@
 /*---
 description: stage4-object-integrity corpus line 26 converted to a test262 case
 flags: [raw]
-features: [ironhorse-dual-run, ironhorse-meter-2-raw-3101288, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-4-raw-3101384, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage4-object-integrity.js line 26.
   Source: var o={a:1,b:2}; Object.freeze(o); Object.isFrozen(o);

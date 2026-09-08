@@ -32,9 +32,9 @@ fn crank(m: &mut Interp, source: &str) -> String {
 
 #[test]
 fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
-    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-3");
+    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-4");
     let corpus = include_str!("fixtures/state_golden.tsv");
-    assert!(corpus.starts_with("# ironhorse-meter-3 "));
+    assert!(corpus.starts_with("# ironhorse-meter-4 "));
     let sig = Signature::new("w4-determinism-corpus");
     let mut labels = BTreeSet::new();
     for line in corpus.lines().skip(1) {

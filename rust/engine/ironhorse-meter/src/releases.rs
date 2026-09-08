@@ -14,4 +14,9 @@ pub const PINNED: &[(&str, &str)] = &[
         "ironhorse-meter-3",
         "039b227725239e1da7f6c1c6be93b036a2c6582b2aab545e01bfd9d31c762490",
     ),
+    // W2 changes admission/charging points, retaining the shared weights.
+    (
+        "ironhorse-meter-4",
+        "039b227725239e1da7f6c1c6be93b036a2c6582b2aab545e01bfd9d31c762490",
+    ),
 ];

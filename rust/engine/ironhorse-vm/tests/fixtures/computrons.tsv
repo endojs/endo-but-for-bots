@@ -1,4 +1,4 @@
-# ironhorse-meter-3 runtime cost corpus: label, source, halt, result, raw, computrons
+# ironhorse-meter-4 runtime cost corpus: label, source, halt, result, raw, computrons
 dispatch	1+2*3	return	7	804120	12
 slots	var a={x:1,y:2}; a.x+a.y	return	3	2247776	34
 default-key	var a={}; a.length=3; a.length	return	3	1886512	28
@@ -7,10 +7,10 @@ call	function f(x){return x+1} f(4)	return	5	2708336	41
 closure	function f(x){return function(y){return x+y}} f(2)(3)	return	5	4169912	63
 string	"日本語".repeat(4).slice(1,8).length	return	7	1427304	21
 join	["日本","語"].join("").length	return	3	2362384	36
-json	JSON.parse(JSON.stringify({a:["日本",2]})).a[0].length	return	2	4232648	64
-bigint	((12345678901234567890n*123456789n)/97n).toString().length	return	26	1492432	22
+json	JSON.parse(JSON.stringify({a:["日本",2]})).a[0].length	return	2	4478408	68
+bigint	((12345678901234567890n*123456789n)/97n).toString().length	return	26	2328016	35
 array	[3,1,2].map(function(x){return x*2}).sort().join(",")	return	2,4,6	7299296	111
-regexp	/a(b+)/.exec("abbb")[1].length	return	3	2904592	44
+regexp	/a(b+)/.exec("abbb")[1].length	return	3	2946576	44
 map	var m=new Map(); m.set("a",1); m.set("b",2); m.get("a")+m.size	return	3	3412456	52
 set	var s=new Set([1,1,2]); s.size	return	2	3281552	50
 typed	var a=new Uint8Array([1,2,3]); a.slice(1).join(",")	return	2,3	4348080	66
@@ -28,7 +28,7 @@ proxy-get	new Proxy({x:1},{get:function(t,k){return t[k]}}).x	return	1	3528896	5
 proxy-set	var p=new Proxy({},{set:function(t,k,v){t[k]=v;return true}}); p.x=2; p.x	return	2	4856824	74
 proxy-has	"x" in new Proxy({x:1},{has:function(){return true}})	return	true	2889360	44
 proxy-delete	var p=new Proxy({x:1},{deleteProperty:function(t,k){return delete t[k]}}); delete p.x	return	true	4233944	64
-proxy-ownkeys	Reflect.ownKeys(new Proxy({x:1},{ownKeys:function(){return ["x"]}})).length	return	1	4136504	63
+proxy-ownkeys	Reflect.ownKeys(new Proxy({x:1},{ownKeys:function(){return ["x"]}})).length	return	1	4152888	63
 proxy-gopd	Object.getOwnPropertyDescriptor(new Proxy({x:1},{getOwnPropertyDescriptor:function(t,k){return Object.getOwnPropertyDescriptor(t,k)}}),"x").value	return	1	4367096	66
 proxy-define	var p=new Proxy({},{defineProperty:function(t,k,d){Object.defineProperty(t,k,d);return true}}); Object.defineProperty(p,"x",{value:3}); p.x	return	3	6578688	100
 proxy-getproto	Object.getPrototypeOf(new Proxy({},{getPrototypeOf:function(){return null}}))===null	return	true	3216696	49
@@ -40,13 +40,13 @@ proxy-construct	new (new Proxy(function(){},{construct:function(){return {x:4}}}
 async-await	var x=0; async function f(){x=await Promise.resolve(4)} f(); 1	return	1	5168768	78
 async-generator	async function* g(){yield 1} g().next(); 1	return	1	3676272	56
 disposal	var x=0;var d=new DisposableStack();d.defer(function(){x=1});d.dispose();x	return	1	4084840	62
-harden	harden({x:{y:1}}).x.y	return	1	7257720	110
-petrify	petrify({x:1}).x	return	1	1493576	22
-integrity	Object.freeze({x:1}).x	return	1	1559112	23
+harden	harden({x:{y:1}}).x.y	return	1	10993272	167
+petrify	petrify({x:1}).x	return	1	1509960	23
+integrity	Object.freeze({x:1}).x	return	1	1575496	24
 weakmap	var k={};new WeakMap([[k,3]]).get(k)	return	3	4297192	65
 weakset	var k={};new WeakSet([k]).has(k)	return	true	3133288	47
 atomics	var a=new Int32Array(new SharedArrayBuffer(4));Atomics.store(a,0,3);Atomics.add(a,0,2)	return	3	3214928	49
-bind-apply	function f(x,y){return x+y} f.bind(null,2).apply(null,[3])	return	5	5104144	77
+bind-apply	function f(x,y){return x+y} f.bind(null,2).apply(null,[3])	return	5	5251600	80
 with	var x=1;with({x:3}){x+1}	return	4	2460744	37
 intl	new Intl.NumberFormat("en-US").format(123)	return	123	1197384	18
 temporal	Temporal.PlainDate.from("2026-09-08").year	return	2026	1066296	16

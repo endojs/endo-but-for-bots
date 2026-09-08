@@ -25,3 +25,23 @@ fn literal_host_refusal_is_distinct_from_syntax() {
         .expect("meter refusal");
     assert!(matches!(error, CompileError::MeterAbort));
 }
+
+#[test]
+fn host_refusal_interrupts_regexp_inner_work() {
+    let source = r"/[\u{0}-\u{10ffff}]/iu";
+    let stride =
+        ironhorse_regexp::COMPILE_CHECK_STRIDE * ironhorse_regexp::XS_PARSE_REGEXP_METERING;
+    assert!((source.len() as u64) * ironhorse_meter::COMPILE_SOURCE_BYTE_METERING < stride);
+    let mut refused = false;
+    let result = compile_atoms_budgeted(source, Goal::Eval, false, &mut |delta| {
+        assert!(!refused, "no callbacks after a refusal");
+        if delta >= stride {
+            refused = true;
+            false
+        } else {
+            true
+        }
+    });
+    assert!(refused, "reached regexp work beyond source/token admission");
+    assert!(matches!(result, Err(CompileError::MeterAbort)));
+}

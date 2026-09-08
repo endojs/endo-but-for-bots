@@ -1802,9 +1802,9 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
 
 /// Version-2 builtin families retain oracle semantics checks and independently
 /// require identical armed/unarmed outcomes and raw costs. Their work schedule
-/// intentionally differs from XS; frozen version-2 costs live in VM and corpus
+/// intentionally differs from XS; frozen version-4 costs live in VM and corpus
 /// regression tests. Unaffected families still use the XS-exact checker.
-pub fn differential_check_meter_v2(source: &str) -> Result<(), Divergence> {
+pub fn differential_check_meter_v4(source: &str) -> Result<(), Divergence> {
     differential_check_symbols_mode(source, true)
 }
 
@@ -1827,7 +1827,7 @@ fn differential_check_symbols_mode(source: &str, version_two: bool) -> Result<()
             return Err(Divergence {
                 source: source.into(),
                 detail: format!(
-                    "version-2 armed/unarmed disagreement: armed={outcome:?} unarmed={ironhorse:?}"
+                    "version-4 armed/unarmed disagreement: armed={outcome:?} unarmed={ironhorse:?}"
                 ),
             });
         }
@@ -2460,7 +2460,7 @@ mod tests {
             "finding program is a RegExp.source: {}",
             prog
         );
-        match differential_check_meter_v2(&prog) {
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding a136f9038a1001fb must not diverge: {:?}", d),
         }
@@ -2490,7 +2490,7 @@ mod tests {
             "finding program is a RegExp.source: {}",
             prog
         );
-        match differential_check_meter_v2(&prog) {
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding ab889c8f6184c60d must not diverge: {:?}", d),
         }
@@ -2515,7 +2515,7 @@ mod tests {
             program.ends_with(".source"),
             "finding program must exercise RegExp.source"
         );
-        match differential_check_meter_v2(&program) {
+        match differential_check_meter_v4(&program) {
             Ok(()) => {}
             Err(divergence) => {
                 panic!("finding 2276f4edebdcb3bb must not diverge: {divergence:?}")
@@ -2542,7 +2542,7 @@ mod tests {
             program.ends_with(".source"),
             "finding program must exercise RegExp.source"
         );
-        match differential_check_meter_v2(&program) {
+        match differential_check_meter_v4(&program) {
             Ok(()) => {}
             Err(divergence) => {
                 panic!("finding 6f0b586a80019097 must not diverge: {divergence:?}")
@@ -2589,7 +2589,7 @@ mod tests {
             "finding program is a RegExp.toString(): {}",
             prog
         );
-        match differential_check_meter_v2(&prog) {
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 493390fc03979205 must not diverge: {:?}", d),
         }
@@ -2619,7 +2619,7 @@ mod tests {
             "finding program is a RegExp.toString(): {}",
             prog
         );
-        match differential_check_meter_v2(&prog) {
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 3ea435c58b4c588e must not diverge: {:?}", d),
         }
@@ -2655,7 +2655,7 @@ mod tests {
             "finding program overflows the old buffer: {}",
             prog.len()
         );
-        match differential_check_meter_v2(&prog) {
+        match differential_check_meter_v4(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 91afec2d990bc402 must not diverge: {:?}", d),
         }
@@ -3025,7 +3025,7 @@ mod tests {
                 || prog.contains("[[")
                 || prog.contains("[{")
                 || prog.contains("{") && prog.contains("[");
-            match differential_check_meter_v2(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b json-metering differential divergence on {:?}: {:?}",
@@ -3071,7 +3071,7 @@ mod tests {
             object |= prog.contains('{');
             array |= prog.contains('[');
             prim |= !prog.contains('{') && !prog.contains('[');
-            match differential_check_meter_v2(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b json-parse differential divergence on {:?}: {:?}",
@@ -3174,7 +3174,7 @@ mod tests {
             // The differential check skips an out-of-subset pattern honestly
             // (ironhorse halts `Unsupported`, `differential_check` returns Ok
             // without comparing); count coverage by the checks that ran.
-            match differential_check_meter_v2(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b regexp-surface differential divergence on {:?}: {:?}",
@@ -3263,7 +3263,7 @@ mod tests {
             } else {
                 shapes[0] = true;
             }
-            match differential_check_meter_v2(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!("stage-3 re-entrant differential divergence: {:?}", d),
             }
@@ -3458,7 +3458,7 @@ mod tests {
                 || prog.contains(".forEach(cf.bind(")
                 || prog.contains(".filter(cf.bind(")
                 || prog.contains(".reduce(cf.bind(");
-            match differential_check_meter_v2(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b fundamentals-followup differential divergence on {:?}: {:?}",
@@ -3514,7 +3514,7 @@ mod tests {
             saw_computed |= prog.contains("var k=");
             saw_defprop |= prog.contains("Object.defineProperty(");
             saw_in |= prog.contains(" in o");
-            match differential_check_meter_v2(&prog) {
+            match differential_check_meter_v4(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b object-statics differential divergence on {:?}: {:?}",

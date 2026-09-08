@@ -374,8 +374,8 @@ fn array_unscopables_key_order() {
     let run = dual_run(source).expect("oracle starts");
     assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
     assert!(run.result_agrees, "{run:?}");
-    // Freeze version-2 enumeration work independently of XS rounding.
-    assert_eq!(run.ironhorse_meter_raw, 3_250_648);
+    // Freeze version-4 enumeration work independently of XS rounding.
+    assert_eq!(run.ironhorse_meter_raw, 3_251_120);
 }
 
 #[test]

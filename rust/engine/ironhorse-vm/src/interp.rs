@@ -13816,9 +13816,9 @@ impl Interp {
 
     fn charge_chunk_work(&mut self, bytes: u64) -> Result<(), Step> {
         let aligned = bytes
-            .checked_add(7)
-            .map(|n| n & !7)
-            .and_then(|n| n.checked_add(16))
+            .checked_add(ironhorse_meter::CHUNK_ALIGNMENT - 1)
+            .map(|n| n & !(ironhorse_meter::CHUNK_ALIGNMENT - 1))
+            .and_then(|n| n.checked_add(ironhorse_meter::CHUNK_HEADER_BYTES))
             .and_then(|n| n.checked_mul(crate::meter::CHUNK_ALLOCATION_METERING))
             .ok_or(Step::Host(Halt::MeterAbort))?;
         self.charge_and_check(aligned)
@@ -13845,7 +13845,7 @@ impl Interp {
             if length == 0 {
                 0
             } else {
-                ((length + 8) & !7) + 16
+                string_chunk_cost(length)
             }
         };
         self.charge_and_check(charge(units as u64) - charge(previous))?;
@@ -13853,8 +13853,6 @@ impl Interp {
     }
 
     /// Extend a string output only after admitting its complete new size.
-    /// For UTF-8 scratch output the byte count conservatively bounds UTF-16
-    /// storage; those legacy paths also meter the byte count.
     fn extend_reserved_units<T: Copy>(
         &mut self,
         output: &mut Vec<T>,
@@ -13875,6 +13873,24 @@ impl Interp {
             .try_reserve(addition.len())
             .map_err(|_| Step::Host(Halt::HeapExhausted))?;
         output.extend_from_slice(addition);
+        Ok(())
+    }
+
+    /// Admit UTF-8 scratch bytes while pricing the stored UTF-16 code units.
+    /// The running unit count avoids rescanning the accumulated result.
+    fn extend_reserved_text(
+        &mut self,
+        output: &mut Vec<u8>,
+        addition: &[u8],
+        units: &mut u64,
+    ) -> Result<(), Step> {
+        let added = String::from_utf8_lossy(addition).encode_utf16().count() as u64;
+        let next = units
+            .checked_add(added)
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.reserve_units_growth(*units, next)?;
+        self.extend_prepaid_scratch(output, addition)?;
+        *units = next;
         Ok(())
     }
 
@@ -14666,6 +14682,7 @@ impl Interp {
                     dispatched: self.n_dispatched,
                     meter_raw: self.meter.raw(),
                     halt: Halt::HeapExhausted,
+                    host_render_halt: None,
                 }
             }
             Err(payload) => std::panic::resume_unwind(payload),
@@ -37774,13 +37791,14 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc(); // `fxNewInstance` (the key list)
                 let mut out: Vec<u8> = Vec::new();
+                let mut output_units = 0;
                 for i in 0..length {
                     let item = self.arrays[&inst].items().get(&i).copied();
                     // Every index is read (`mxGetIndex`) regardless of type.
                     self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
                     if i > 0 {
                         self.meter.tick_slot_alloc(); // the separator key slot
-                        self.extend_reserved_units(&mut out, &sep)?;
+                        self.extend_reserved_text(&mut out, &sep, &mut output_units)?;
                     }
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
@@ -37791,13 +37809,13 @@ impl Interp {
                             }
                             self.meter.tick_slot_alloc(); // the element key slot
                             let bytes = self.to_string_bytes_metered(s);
-                            self.extend_reserved_units(&mut out, &bytes)?;
+                            self.extend_reserved_text(&mut out, &bytes, &mut output_units)?;
                         }
                         _ => {}
                     }
                 }
                 if out.is_empty() {
-                    self.charge_and_check(24)?; // legacy empty join chunk
+                    self.charge_and_check(string_chunk_cost(0))?; // empty join chunk
                 }
                 let off = self.alloc_str_text(&out);
                 Slot::of(Kind::String, Payload::String(off))
@@ -37849,12 +37867,13 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc();
                 let mut out: Vec<u8> = Vec::new();
+                let mut output_units = 0;
                 for i in 0..length {
                     self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
                     let item = self.arrays[&inst].items().get(&i).copied();
                     if i > 0 {
                         self.meter.tick_slot_alloc();
-                        self.extend_reserved_units(&mut out, b",")?;
+                        self.extend_reserved_text(&mut out, b",", &mut output_units)?;
                     }
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
@@ -37865,7 +37884,7 @@ impl Interp {
                             }
                             self.meter.tick_slot_alloc();
                             let bytes = self.to_string_bytes_metered(s);
-                            self.extend_reserved_units(&mut out, &bytes)?;
+                            self.extend_reserved_text(&mut out, &bytes, &mut output_units)?;
                         }
                         _ => {}
                     }
@@ -56332,10 +56351,7 @@ impl Interp {
         let mut seen: Vec<ReadKey> = self.reserve_scratch(trap_keys.len())?;
         for k in &trap_keys {
             let key = self.to_read_key(code, *k)?;
-            self.meter.tick_builtin_some(seen.len() as u64);
-            if self.check_meter() == MeterCheck::Abort {
-                return Err(Step::Host(Halt::MeterAbort));
-            }
+            self.charge_builtin_work(seen.len() as u64)?;
             if seen.contains(&key) {
                 return Err(self.catchable_type_error_msg("(proxy).ownKeys: duplicate key".into()));
             }
@@ -56371,10 +56387,7 @@ impl Interp {
         }
         let mut unchecked = seen.clone();
         for tid in &target_nonconfigurable {
-            self.meter.tick_builtin_some(unchecked.len() as u64);
-            if self.check_meter() == MeterCheck::Abort {
-                return Err(Step::Host(Halt::MeterAbort));
-            }
+            self.charge_builtin_work(unchecked.len() as u64)?;
             match unchecked.iter().position(|u| u == tid) {
                 Some(pos) => {
                     unchecked.remove(pos);
@@ -56390,10 +56403,7 @@ impl Interp {
             return Ok(trap_keys);
         }
         for tid in &target_configurable {
-            self.meter.tick_builtin_some(unchecked.len() as u64);
-            if self.check_meter() == MeterCheck::Abort {
-                return Err(Step::Host(Halt::MeterAbort));
-            }
+            self.charge_builtin_work(unchecked.len() as u64)?;
             match unchecked.iter().position(|u| u == tid) {
                 Some(pos) => {
                     unchecked.remove(pos);
@@ -56878,12 +56888,23 @@ impl Interp {
         let name = self
             .symbol_ids
             .iter()
-            .find_map(|(name, property_id)| (*property_id == id).then(|| name.clone()))
+            .find_map(|(name, property_id)| (*property_id == id).then_some(name))
             .ok_or(Step::Host(Halt::EngineInvariant(
                 "ordinary-ownKeys:unknown-key",
             )))?;
-        let units = name.to_units();
-        self.meter.tick_string(units.len() as u64);
+        // Canonical CESU-8 has one leading byte per UTF-16 code unit.
+        let count = name
+            .as_bytes()
+            .iter()
+            .filter(|b| **b & 0xc0 != 0x80)
+            .count();
+        self.charge_and_check(string_chunk_cost(count as u64))?;
+        self.admit_scratch::<u16>(count)?;
+        let units = self
+            .symbol_ids
+            .iter()
+            .find_map(|(name, property_id)| (*property_id == id).then(|| name.to_units()))
+            .expect("admission does not change symbol identities");
         let offset = self.chunks.alloc(&units_to_be16(&units));
         Ok(Slot::of(Kind::String, Payload::String(offset)))
     }

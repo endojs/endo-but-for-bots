@@ -1,7 +1,7 @@
 /*---
 description: stage3b-regexp corpus line 77 converted to a test262 case
 flags: [raw]
-features: [ironhorse-dual-run, ironhorse-meter-2-raw-4656928, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-4-raw-4656928, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-regexp.js line 77.
   Source: "a,b".split(/,/, 5)
