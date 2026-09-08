@@ -34,6 +34,8 @@ try {
     }
   } else if (
     [
+      'clock-grant',
+      'alarms',
       'http-grant',
       'http-services',
       'revoke-invite',
@@ -58,7 +60,11 @@ try {
   ) {
     const client = await connectLocalControl(join(statePath, 'control.sock'));
     try {
-      if (command === 'http-grant') {
+      if (command === 'clock-grant') {
+        console.log(JSON.stringify(await client.call('clockGrant', args[0])));
+      } else if (command === 'alarms') {
+        console.log(JSON.stringify(await client.call('alarmStatus'), null, 2));
+      } else if (command === 'http-grant') {
         const [key, port] = args;
         console.log(
           JSON.stringify(
@@ -169,7 +175,7 @@ try {
     }
   } else {
     console.log(
-      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|http-grant|http-services|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|http-grant|http-services|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
