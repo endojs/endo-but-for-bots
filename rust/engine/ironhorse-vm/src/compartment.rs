@@ -395,6 +395,7 @@ impl Compartment {
             completed: false,
             result: String::new(),
             coercion_error: None,
+            host_render_halt: None,
             computrons: 0,
             dispatched: 0,
             meter_raw: 0,

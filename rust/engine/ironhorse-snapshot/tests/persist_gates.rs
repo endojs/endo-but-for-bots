@@ -1077,8 +1077,20 @@ fn a_completed_crank_after_a_halt_restores_quiescence() {
 /// review).
 #[test]
 fn an_uncoercible_completion_leaves_a_quiescent_machine_whose_twins_agree() {
+    // Cyclic rendering deliberately reaches the native depth budget. Use
+    // the VM's documented stack contract, as the recursion-budget suite does.
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(uncoercible_completion_twins)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn uncoercible_completion_twins() {
     for (name, completion) in [
         ("a Symbol completion", "let s = Symbol('k'); s"),
+        ("a cyclic completion", "let s = []; s[0] = s; s"),
         (
             "a null-prototype completion",
             "let s = Object.create(null); s",
@@ -1092,7 +1104,7 @@ fn an_uncoercible_completion_leaves_a_quiescent_machine_whose_twins_agree() {
         // registers — exactly the roots the restore path never
         // reinstates. (`g` is the one global the observation reads.)
         let pre = "var g; var t; \
-                   if (0) { let a = 0; let b = 0; let s = 0; a.p; b.q; g.q; \
+                   if (0) { let a = 0; let b = 0; let s = 0; a.p; b.q; g.q; s.length; \
                             Symbol('k'); Object.create(null); } ";
         let (b1, n1) = compile(&format!(
             "{pre} let a = {{ p: 1 }}; let b = {{ q: 2 }}; g = b; {completion}"
@@ -1109,9 +1121,11 @@ fn an_uncoercible_completion_leaves_a_quiescent_machine_whose_twins_agree() {
             o.halt
         );
         assert!(
-            o.coercion_error.is_some(),
+            o.coercion_error.is_some() || o.host_render_halt.is_some(),
             "{name}: the harness's post-run coercion travels beside it"
         );
+        assert_eq!(o.halt, ironhorse_vm::Halt::Return);
+        assert!(!o.clone().host_coerced().completed);
         assert!(
             cont.is_quiescent(),
             "{name}: the engine's crank completed, so the machine is at a boundary"
