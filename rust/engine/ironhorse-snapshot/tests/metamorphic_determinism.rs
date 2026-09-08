@@ -315,7 +315,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format 15 stamps lossless CESU-8 NAME encoding.
         // W4: METR carries the digest of the UTF-16/Proxy meter-2 release.
         // Meter release 3 adds compilation weights to the shared METR identity.
-        "82327d6a23ad797fa16a7f720ee0af09d4f49b28952db32d2efed10de4e57f32",
+        // Format 16 makes canonical container bytes an admission rule.
+        "a8931743cd2ef7a3461b726954ffdb223ab09cfb62b3031c1b23ac3ec1b660b1",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -520,7 +521,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // which appends the index-props small-state section.
         // Format 15 / store schema 26 change the manifest in the seal.
         // W4: METR digest changes each committed small-state hash.
-        "19e4057b92985f382097797a5ac69c1317884856f9eb8aea39da05306c033aca",
+        // Format 16 also travels in the manifest signed by each seal.
+        "3e9a8458570fe8ac214fc52271a2a1f8373db94904f2df5bdad6fa4e876243f0",
         "epoch-3 seal chain"
     );
 }

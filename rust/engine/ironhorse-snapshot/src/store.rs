@@ -4118,6 +4118,7 @@ mod tests {
         use ironhorse_vm::{ChunkArena, Payload, Slot};
         let raw = 0xfff0_0000_0000_0001u64;
         let mut image = ran_image();
+        image.version.format_version = 15;
         let slot_index = image.slots.len();
         image.slots.push(Slot::number(f64::NAN));
         image.slot_live += 1;

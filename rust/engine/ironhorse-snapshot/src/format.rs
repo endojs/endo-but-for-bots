@@ -210,7 +210,9 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 15;
+// Version 16 requires canonical container bytes, including exact core
+// payload lengths and CREA's declared BLOC length.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 16;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
@@ -267,6 +269,9 @@ impl Version {
         if payload.len() < 10 {
             return Err(VersionError::Truncated);
         }
+        if payload.len() != 10 {
+            return Err(VersionError::TrailingBytes);
+        }
         if payload[0..4] != IRONHORSE_MAGIC {
             let mut m = [0u8; 4];
             m.copy_from_slice(&payload[0..4]);
@@ -318,6 +323,7 @@ impl Version {
 #[derive(Debug, PartialEq, Eq)]
 pub enum VersionError {
     Truncated,
+    TrailingBytes,
     /// The `VERS` payload did not carry the [`IRONHORSE_MAGIC`] discriminator —
     /// a foreign (e.g. XS) snapshot, whose import is out of scope.
     NotIronhorse([u8; 4]),
