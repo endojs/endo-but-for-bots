@@ -71,16 +71,26 @@ Protocol retransmission with the same identity differs from invoking the method 
 Deterministic replay can re-execute internal computation while suppressing duplicate observable
 messages; this does not establish exactly-once effects in an arbitrary external service.
 
-The selected direction is lazy connection for each call that needs a connection.
-Reuse a healthy connection; otherwise attempt to connect when the call is made.
-If that attempt fails, reject the call while leaving the durable reference usable for a later call.
-A lost reply to a sent call leaves its outcome uncertain; the call must not be automatically retried
-as a new application invocation.
-Connection-attempt deadlines and coordination of concurrent attempts remain to be specified.
+The selected boundary is durable acceptance, not physical transmission.
+Once a vat has committed a send, the node owns an outbox obligation even if dialing subsequently fails.
+Temporary connection loss must neither discard that obligation nor reject an unsettled application
+promise.
+A connection-acquisition operation can reject before an invocation is accepted, leaving the durable
+reference usable; it cannot retroactively unaccept a committed send.
+This refines the earlier shorthand that an ordinary call should reject on connection failure.
 
-An explicit user-space store-and-forward proxy can offer durable waiting to applications that want it.
-That proxy needs policies for expiry, ordering, cancellation, capacity, and result delivery.
-A durable reference by itself does not require indefinite waiting or a new socket for every call.
+An unconfirmed delivery is a message awaiting the next owner's durable acceptance acknowledgement.
+An unsettled application promise is waiting for a result, possibly long after invocation delivery
+has completed.
+Disconnection does not reject that promise or its listeners.
+When settlement occurs, it is sent as another message through the same durable delivery machinery.
+
+[Layered message delivery](message-delivery.md) records the intended handoffs and an implementation
+sketch, including transfers within a single node.
+Protocol recovery of an accepted send is mandatory node responsibility.
+An explicit user-space store-and-forward proxy instead owns policy for waiting before initiating
+calls, scheduling, and making new application attempts after defined failures.
+Its expiry or cancellation policy cannot silently retract an already accepted delivery.
 
 ### User-space retry proxy and runtime support
 
@@ -94,11 +104,12 @@ A socket opening alone does not establish the destination's identity or authorit
 The proxy can own the durable queue, retry policy, deadlines, and result promises while Thixotrope
 provides destination-scoped connection availability and access to usable routes.
 The design should not require exposing raw sockets, session credentials, or all peer activity.
-Whether the proxy also needs transport assistance with stable dispatch identities and acceptance
-status depends on which delivery guarantees it offers.
+The runtime owns stable delivery identities and acceptance recovery for every accepted send.
+The proxy may need an admission receipt to distinguish its own waiting work from an accepted send;
+the public form of that receipt remains an interface question.
 A new connection is an opportunity to deliver; it is not evidence that an earlier sent call failed.
-Retrying work known not to have been sent differs from recovering an uncertain dispatch without
-creating duplicate application effects.
+Initiating work not yet admitted differs from recovering an accepted dispatch without creating
+duplicate application effects.
 
 Open interface questions include how a proxy subscribes without missing a connection between its
 availability check and subscription, how subscriptions survive proxy sleep or daemon restart, and
@@ -114,32 +125,25 @@ produce terminal failure rather than endless retries.
 
 ### Current implementation and gaps
 
-- The [worker transport](../src/durable-worker-transport.js) journals an incoming frame before
-  delivering it to the worker and saves the hub delivery identifier used to suppress retries.
-- The [hub](../src/hub.js) commits an incoming processed watermark, routing changes, and outgoing
-  frames together before sending those frames.
-  Destination journals recognize repeated hub delivery identifiers.
-- The [remote transport](../src/durable-netlayer.js) retains outgoing frames and supports durable
-  acceptor-side session recovery.
-  Originator-side recovery across process restart is not implemented.
-- There is an acknowledgement gap: the remote transport records a receive watermark and sends
-  `ack` before calling the message handler.
-  It does not journal the incoming payload there.
-  If the peer receives that ack and discards its copy, then the receiver crashes before the hub
-  commits the dispatch, neither side necessarily retains the work.
-  Reporting the hub's older committed watermark on resume cannot recover an already discarded frame.
-  A committed-acceptance protocol or durable inbox is required to close this gap.
-- Physical socket failure currently stays hidden behind automatic reconnect and queued sends.
-  This differs from the proposed prompt-failure default with an explicit store-and-forward proxy.
-  Retransmission buffers are unbounded, and a disconnected acceptor session can remain parked
-  indefinitely.
-- Existing process-crash tests cover several local journal, heap, output, and snapshot boundaries.
-  They do not establish the remote commit-acknowledgement contract or hardware power-loss safety.
+The worker transport confirms acceptance only after journaling the frame and its hub delivery identity.
+The hub retains work when a durable adapter declines acceptance, and commits its processed watermark,
+routing changes, and onward outboxes before exposing effects.
+A failed storage commit is retried before duplicate delivery can release output.
 
-A decisive regression test for the acknowledgement gap should let the sender receive the ack and
-release its frame, kill the receiver before handler commit, and then restart and resume both sides.
-The intended contract must recover the accepted dispatch without duplicating its effects.
-This document records the gap; it does not change transport behavior.
+The version 2 remote transport atomically records incoming payloads before acknowledgement.
+Accepted inbox entries survive restart independently of the sender's copy, and hub watermark
+suppression covers a crash between dispatch commit and inbox cleanup.
+Originator and acceptor sessions preserve their role, handshake identity, and outbox across restart.
+Duplicate deliveries are acknowledged again; invalid future acknowledgements cannot release work.
+Explicit retirement uses persistent tombstones and reconnect-time terminal notifications.
+
+Peer acceptance scope is explicit: restart-safe with the persistence adapter, process-lifetime without it.
+Version 1 peers and snapshots are not automatically migrated.
+Retransmission buffers and parked session retention remain unbounded; admission quotas, the public
+connection-acquisition interface, and user-space availability subscriptions remain separate work.
+Resume tokens require protection by the base transport; TCP testing does not authenticate or encrypt it.
+Tests exercise durable handoff failure boundaries and reconnect/restart recovery, not hardware
+power-loss behavior or exactly-once arbitrary external effects.
 
 ## Host-directed vat retirement
 

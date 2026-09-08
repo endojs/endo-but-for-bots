@@ -246,8 +246,9 @@ export const makeOcapnHub = ({
    *   nextExport: bigint,
    *   nextAnswer: bigint,
    *   answersOwed: Map<string, AnswerRoute>,
-   *   processedUpTo: number,
+   *   processedUpTo: bigint,
    *   durable: boolean,
+   *   retired: boolean,
    *   queue: Array<string>,
    *   queueSequences: Array<string>,
    *   nextDelivery: bigint,
@@ -257,7 +258,8 @@ export const makeOcapnHub = ({
    *   pendingWithdraws: Array<PendingWithdraw>,
    *   nextHandoffCount: bigint,
    *   dialLocation: any,
-   *   send: (bytes: Uint8Array, deliverySequence?: string) => void,
+   *   send: (bytes: Uint8Array, deliverySequence?: string) => unknown,
+   *   requireAcceptance: boolean,
    *   attached: boolean,
    *   remote: boolean,
    *   onAbort: ((error: unknown) => void) | undefined,
@@ -341,7 +343,6 @@ export const makeOcapnHub = ({
     if (!dirty) {
       return;
     }
-    dirty = false;
     /** @type {any} */
     const state = {
       version: STATE_VERSION,
@@ -370,8 +371,9 @@ export const makeOcapnHub = ({
         nextExport: String(session.nextExport),
         nextAnswer: String(session.nextAnswer),
         answersOwed: Object.fromEntries(session.answersOwed),
-        processedUpTo: session.processedUpTo,
+        processedUpTo: String(session.processedUpTo),
         durable: session.durable,
+        retired: session.retired,
         queue: [...session.queue],
         queueSequences: [...session.queueSequences],
         nextDelivery: String(session.nextDelivery),
@@ -390,6 +392,7 @@ export const makeOcapnHub = ({
       [...giftWaiters.entries()].map(([key, list]) => [key, [...list]]),
     );
     store.setState(state);
+    dirty = false;
   };
 
   /** @param {string} sessionKey */
@@ -404,8 +407,9 @@ export const makeOcapnHub = ({
         // a PositiveInteger, which cannot encode 0.
         nextAnswer: 1n,
         answersOwed: new Map(),
-        processedUpTo: 0,
+        processedUpTo: 0n,
         durable: false,
+        retired: false,
         queue: [],
         queueSequences: [],
         nextDelivery: 0n,
@@ -418,6 +422,7 @@ export const makeOcapnHub = ({
         send: () => {
           throw Error(`ocapn hub: session ${sessionKey} is not attached`);
         },
+        requireAcceptance: false,
         attached: false,
         remote: false,
         onAbort: undefined,
@@ -465,7 +470,8 @@ export const makeOcapnHub = ({
       session.nextExport = BigInt(sd.nextExport ?? '1');
       session.nextAnswer = BigInt(sd.nextAnswer ?? '1');
       session.answersOwed = new Map(Object.entries(sd.answersOwed ?? {}));
-      session.processedUpTo = Number(sd.processedUpTo ?? 0);
+      session.processedUpTo = BigInt(sd.processedUpTo ?? 0);
+      session.retired = sd.retired ?? false;
       session.durable = Boolean(sd.durable);
       session.queue = [...(sd.queue ?? [])];
       session.queueSequences = sd.queueSequences
@@ -975,6 +981,8 @@ export const makeOcapnHub = ({
     session.flushing = true;
     try {
       while (session.queue.length > 0 && session.attached) {
+        // Retry a failed table commit before exposing any of its effects.
+        persist();
         // The destination journals the stable sequence with the bytes. A
         // crash after send but before removal resends the same sequence.
         if (session.queueSequences[0] === '') {
@@ -983,7 +991,19 @@ export const makeOcapnHub = ({
           dirty = true;
           persist();
         }
-        session.send(bytesFromHex(session.queue[0]), session.queueSequences[0]);
+        const accepted = session.send(
+          bytesFromHex(session.queue[0]),
+          session.queueSequences[0],
+        );
+        // Durable adapters return true only once they own the bytes. A
+        // closed/full adapter must leave responsibility with this outbox.
+        // Legacy ephemeral adapters retain their synchronous void contract.
+        if (
+          accepted === false ||
+          (session.requireAcceptance && accepted !== true)
+        ) {
+          break;
+        }
         session.queue.shift();
         session.queueSequences.shift();
         dirty = true;
@@ -1917,6 +1937,10 @@ export const makeOcapnHub = ({
    */
   const retireSessionInternal = sessionKey => {
     const session = provideSessionState(sessionKey);
+    if (session.retired) {
+      persist();
+      return;
+    }
     session.attached = false;
     session.durable = false;
     session.remote = false;
@@ -1926,7 +1950,7 @@ export const makeOcapnHub = ({
     session.answersOwed.clear();
     session.nextExport = 1n;
     session.nextAnswer = 1n;
-    session.processedUpTo = 0;
+    session.processedUpTo = 0n;
     session.queue.length = 0;
     session.queueSequences.length = 0;
     session.identity = undefined;
@@ -1976,6 +2000,7 @@ export const makeOcapnHub = ({
         maybeReleaseRef(row);
       }
     }
+    session.retired = true;
     dirty = true;
     persist();
   };
@@ -1990,7 +2015,10 @@ export const makeOcapnHub = ({
      *
      * @param {string} sessionKey
      * @param {object} powers
-     * @param {(bytes: Uint8Array, deliverySequence?: string) => void} powers.send
+     * @param {(bytes: Uint8Array, deliverySequence?: string) => unknown} powers.send
+     * @param {boolean} [powers.requireAcceptance] release an outbox entry only
+     *   on a synchronous true receipt for that delivery; false retains it.
+     *   Reattach or a subsequent delivery retries retained work.
      * @param {boolean} [powers.durable] frames toward this session
      *   queue in the tables while it is detached, instead of breaking
      *   to their senders
@@ -2009,6 +2037,7 @@ export const makeOcapnHub = ({
       {
         send,
         durable = false,
+        requireAcceptance = false,
         remote = false,
         onAbort = undefined,
         identity = undefined,
@@ -2016,7 +2045,9 @@ export const makeOcapnHub = ({
     ) => {
       const session = provideSessionState(sessionKey);
       session.send = send;
+      session.requireAcceptance = requireAcceptance;
       session.attached = true;
+      session.retired = false;
       session.durable = durable;
       session.remote = remote;
       session.onAbort = onAbort;
@@ -2058,7 +2089,7 @@ export const makeOcapnHub = ({
       return harden({
         /**
          * @param {Uint8Array} bytes one inbound OCapN frame
-         * @param {number} [sequenceNumber] the frame's position in the
+         * @param {number | bigint} [sequenceNumber] the frame's position in the
          *   session's inbound order; frames at or below the recorded
          *   watermark are duplicates from a transport replay and are
          *   skipped, making processing exactly-once — the watermark
@@ -2067,8 +2098,10 @@ export const makeOcapnHub = ({
         deliver: (bytes, sequenceNumber = undefined) => {
           if (
             sequenceNumber !== undefined &&
-            sequenceNumber <= session.processedUpTo
+            BigInt(sequenceNumber) <= session.processedUpTo
           ) {
+            // A prior attempt may have changed RAM but failed to commit.
+            persist();
             for (const key of sessions.keys()) flushOutbox(key);
             return;
           }
@@ -2084,7 +2117,7 @@ export const makeOcapnHub = ({
               frameError(sessionKey, error);
             }
             if (sequenceNumber !== undefined) {
-              session.processedUpTo = sequenceNumber;
+              session.processedUpTo = BigInt(sequenceNumber);
               dirty = true;
             }
           } finally {
@@ -2094,6 +2127,11 @@ export const makeOcapnHub = ({
           // frame together before any destination can observe the delivery.
           persist();
           for (const key of sessions.keys()) flushOutbox(key);
+        },
+        /** Retry retained outbox work when a destination becomes writable. */
+        flush: () => {
+          persist();
+          flushOutbox(sessionKey);
         },
         detach: () => {
           session.attached = false;
@@ -2160,8 +2198,25 @@ export const makeOcapnHub = ({
      * publications of its objects are withdrawn.
      *
      * @param {string} sessionKey
+     * @param {number} [expectedEpoch] retire only this incarnation, so an
+     *   old transport tombstone cannot retire a replacement under the alias
      */
-    retireSession: sessionKey => retireSessionInternal(sessionKey),
+    retireSession: (sessionKey, expectedEpoch = undefined) => {
+      if (
+        expectedEpoch !== undefined &&
+        (sessions.get(sessionKey)?.epoch ?? 0) !== expectedEpoch
+      ) {
+        // Also complete a previous retirement whose durable commit failed.
+        persist();
+        return;
+      }
+      retireSessionInternal(sessionKey);
+    },
+    /**
+     * Read the incarnation namespace without creating a session table.
+     * @param {string} sessionKey
+     */
+    getSessionEpoch: sessionKey => sessions.get(sessionKey)?.epoch ?? 0,
     /**
      * Retire a session whose key will NEVER be reused (an ephemeral
      * connection, a deleted worker): same as `retireSession`, then the
@@ -2180,15 +2235,15 @@ export const makeOcapnHub = ({
     },
     /**
      * The highest inbound sequence number whose effects this hub has
-     * committed for a session (0 for none). An embedder that resumes
-     * a durable transport reports THIS as its receive watermark, so
-     * the peer retransmits exactly what the hub has not absorbed and
-     * the hub's own watermark drops any overlap: exactly once.
+     * processed for a session (0n for none). The durable transport's
+     * accepted watermark may be ahead of this: its inbox still owns
+     * those payloads. Replaying that inbox uses this watermark to avoid
+     * repeating committed hub routing effects.
      *
      * @param {string} sessionKey
      */
     inboundWatermark: sessionKey =>
-      sessions.get(sessionKey)?.processedUpTo ?? 0,
+      sessions.get(sessionKey)?.processedUpTo ?? 0n,
     /**
      * Outbound sessions with work waiting on a connection: pending
      * gift withdrawals or queued frames toward a dialable, detached

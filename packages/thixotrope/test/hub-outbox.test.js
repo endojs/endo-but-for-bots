@@ -181,7 +181,7 @@ test.serial(
     let physicalHandlers;
     /** @type {any} */
     let logical;
-    /** @type {Array<{n: number, sequence: string | undefined}>} */
+    /** @type {Array<{n: bigint, sequence: string | undefined}>} */
     const recorded = [];
     const layer = await makeDurableNetLayer({
       handlers: /** @type {any} */ ({
@@ -200,9 +200,17 @@ test.serial(
       resumption: {
         isDurableToken: () => true,
         onHello: () => {},
+        listSessions: () => [],
+        isRetired: () => false,
+        recordRetirementConfirmed: () => {},
+        recordPeerDurability: () => {},
+        recordProcessed: () => {},
         loadForResume: () => ({
-          recvSeq: 0,
-          sendSeq: 10,
+          recvSeq: '0',
+          sendSeq: '10',
+          ackSeq: '10',
+          isOriginator: false,
+          inbox: [],
           hubDelivery: '7',
           frames: [],
         }),
@@ -225,13 +233,15 @@ test.serial(
     });
     physicalHandlers.handleMessageData(
       physical,
-      new TextEncoder().encode('{"t":"resume","tok":"token","rcv":10}\n'),
+      new TextEncoder().encode(
+        '{"v":2,"t":"resume","tok":"0123456789abcdef0123456789abcdef","rcv":"10","durability":"restart"}\n',
+      ),
     );
     logical.write(new Uint8Array([8]), '8');
     logical.write(new Uint8Array([9]), '9');
     t.deepEqual(recorded, [
-      { n: 11, sequence: '8' },
-      { n: 12, sequence: '9' },
+      { n: 11n, sequence: '8' },
+      { n: 12n, sequence: '9' },
     ]);
   },
 );

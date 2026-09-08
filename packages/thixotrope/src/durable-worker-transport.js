@@ -257,14 +257,14 @@ export const makeDurableWorkerTransport = ({
      * @param {string} [hubSequence] durable outbox sequence, decimal bigint
      */
     write: (bytes, hubSequence) => {
-      if (destroyed) {
-        return;
+      if (destroyed || store.getMeta().failure !== undefined) {
+        return false;
       }
       if (
         hubSequence !== undefined &&
         BigInt(hubSequence) <= receivedHubSequence
       )
-        return;
+        return true;
       const b64 = encodeBase64(bytes);
       const index = store.journalLength();
       // Journal before the duct: a frame the OCapN layer believes it
@@ -300,6 +300,7 @@ export const makeDurableWorkerTransport = ({
           error,
         );
       });
+      return true;
     },
     end: () => {
       destroyed = true;
