@@ -38,8 +38,10 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   guestStore.set('user', harden({}));
   // The capabilities the session holds and may attach: the fake host
   // resolves each by pet name to a formula id.
-  guestStore.set('project', harden({ kind: 'mount-cap' }));
-  guestStore.set('notes', harden({ kind: 'mount-cap' }));
+  const capNames = ['project', 'notes', 'archive', 'scratch'];
+  for (const name of capNames) {
+    guestStore.set(name, harden({ kind: 'mount-cap' }));
+  }
   const guest = Far('TestGuest', {
     has: name => guestStore.has(name),
     lookup: name => guestStore.get(name),
@@ -53,9 +55,7 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
     locate: () => 'test-locator',
     identify: (...path) => {
       const name = path.join('/');
-      return name === 'project' || name === 'notes'
-        ? `formula-${name}`
-        : undefined;
+      return capNames.includes(name) ? `formula-${name}` : undefined;
     },
     followMessages: () => {
       const inbox = makeBufferedReader();
@@ -75,6 +75,9 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   /** @type {Promise<void> | undefined} */
   let createGate;
   let rejectDeclared = false;
+  let rejectEveryCreate = false;
+  /** Destinations whose declaration the sandbox will not attest. */
+  const rejectDestinations = new Set();
   /** @type {any} */
   let hostedTools;
   const backend = Far('TestBackend', {
@@ -105,7 +108,16 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
       // Recorded before the gate, so a test can see a create in flight.
       creates.push({ spec, admin });
       if (createGate) await createGate;
-      if (rejectDeclared && (spec.containerMounts || []).length > 0) {
+      if (rejectEveryCreate) {
+        throw Error('hosted backend is unavailable');
+      }
+      const declaredHere = spec.containerMounts || [];
+      if (
+        (rejectDeclared && declaredHere.length > 0) ||
+        declaredHere.some((/** @type {any} */ attach) =>
+          rejectDestinations.has(attach.destination),
+        )
+      ) {
         throw Error('slice policy attestation failed: attach not proved');
       }
       return harden({
@@ -130,6 +142,8 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   const bridged = [];
   /** @type {string[]} */
   const released = [];
+  /** @type {((key: string) => Promise<void> | void) | undefined} */
+  let onRelease;
   const bridgeProvider = Far('TestBridgeProvider', {
     provideContainerMountBridge: ({ key, capId, mode }) => {
       bridged.push({ key, capId, mode });
@@ -139,8 +153,11 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
         mountPoint: `/host/mounts/claude-attach-${key}`,
       });
     },
-    releaseContainerMountBridge: key => {
+    releaseContainerMountBridge: async key => {
       released.push(key);
+      // A hook inside the registrar lock a detach holds: the one place a
+      // test can act while a shed is mid-flight.
+      if (onRelease) await onRelease(key);
     },
   });
 
@@ -203,6 +220,33 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
     /** Make the backend refuse any create that declares an attach. */
     rejectDeclaredCreates: () => {
       rejectDeclared = true;
+    },
+    /**
+     * Make the backend refuse only creates declaring this destination, so a
+     * shed can be provoked without condemning every later bind too.
+     *
+     * @param {string} destination
+     */
+    rejectAttachAt: destination => {
+      rejectDestinations.add(destination);
+    },
+    /** Make every backend create fail, mounts or not. */
+    rejectAllCreates: () => {
+      rejectEveryCreate = true;
+    },
+    /** @param {(key: string) => Promise<void> | void} hook */
+    onBridgeRelease: hook => {
+      onRelease = hook;
+    },
+    /** The inner paths the registrar's newest journal snapshot records. */
+    records: () => {
+      const journal = [...hostStore.keys()]
+        .filter(name => name.startsWith('floot-container-mounts-v1-'))
+        .sort();
+      const latest = /** @type {any} */ (hostStore.get(journal.at(-1) || ''));
+      return [...(latest?.records || [])].map(
+        (/** @type {any} */ record) => record.innerPath,
+      );
     },
     /** The attaches the most recent backend session was created with. */
     lastDeclared: () =>
@@ -478,4 +522,112 @@ test('a recreate the sandbox refuses drops the bind, releases its bridge, and re
   );
   await runTurn(factory);
   t.is(world.sends.at(-1), 2);
+});
+
+test('a bind that lands while a refused recreate sheds is applied, not stranded', async t => {
+  t.timeout(20_000);
+  const world = makeWorld();
+  const factory = make(world.host);
+  t.teardown(async () => {
+    world.closeInboxes();
+    await E(factory).deleteSession('one');
+  });
+  await runTurn(factory);
+  /**
+   * @param {string} petName
+   * @param {string} innerPath
+   */
+  const attach = (petName, innerPath) =>
+    E(world.hostedTools()).execute('attachContainerMount', {
+      petName,
+      innerPath,
+    });
+
+  // Two binds the sandbox attests, so the shed below has two to walk and
+  // frees the registrar lock between them.
+  await attach('project', '/mnt/project');
+  await untilCreates(world, 2);
+  await attach('notes', '/mnt/notes');
+  await untilCreates(world, 3);
+
+  // A third bind the sandbox will not attest. Its recreate is refused, so
+  // the shed drops all three — and while it releases the first bridge, a
+  // fourth attach lands and takes the lock the shed has just let go. Its
+  // own recreate is suppressed (the shed still has the floor) but the
+  // registrar has already recorded it as pushed, so nothing offers it
+  // again: a declaration wiped wholesale at the end of the shed leaves
+  // that record with no bind behind it, permanently.
+  world.rejectAttachAt('/mnt/archive');
+  /** @type {Promise<string> | undefined} */
+  let landed;
+  world.onBridgeRelease(() => {
+    if (!landed) landed = attach('scratch', '/mnt/scratch');
+  });
+  await attach('archive', '/mnt/archive');
+  await until(
+    () => landed !== undefined,
+    () => 'the fourth attach to land inside the shed',
+  );
+  t.regex(
+    String(await landed),
+    /Attached "scratch"/,
+    'the mid-shed attach itself succeeded',
+  );
+
+  // Whatever the interleaving, one invariant decides it: the records and
+  // the container agree. A record with no bind behind it is the failure.
+  await until(
+    () => {
+      const destinations = new Set(
+        world.lastDeclared().map(entry => entry.destination),
+      );
+      const records = world.records();
+      return (
+        records.length === destinations.size &&
+        records.every(record => destinations.has(record))
+      );
+    },
+    () =>
+      `the records ${JSON.stringify(world.records())} to match the container's ${JSON.stringify(world.lastDeclared())}`,
+  );
+  t.deepEqual(world.records(), ['/mnt/scratch']);
+});
+
+test('a backend that fails for its own reasons is not reported as a mount refusal', async t => {
+  t.timeout(10_000);
+  const world = makeWorld();
+  const factory = make(world.host);
+  t.teardown(async () => {
+    world.closeInboxes();
+    await E(factory).deleteSession('one');
+  });
+  await runTurn(factory);
+  await E(world.hostedTools()).execute('attachContainerMount', {
+    petName: 'project',
+    innerPath: '/mnt/project',
+  });
+  await untilCreates(world, 2);
+
+  // The backend is down. Detaching leaves nothing declared, so the recreate
+  // that fails cannot have failed because of a mount: the failure is the
+  // backend's own. Shedding here would report a fiction — binds that are
+  // not there — and create twice against a backend already failing.
+  world.rejectAllCreates();
+  const createsBefore = world.creates.length;
+  await E(world.hostedTools()).execute('detachContainerMount', {
+    innerPath: '/mnt/project',
+  });
+  await untilCreates(world, createsBefore + 1);
+  await delay(200);
+  t.is(
+    world.creates.length,
+    createsBefore + 1,
+    'one create attempt, not a shed and a second try',
+  );
+  const events = await runTurn(factory).then(
+    turnEvents => JSON.stringify(turnEvents),
+    error => error.message,
+  );
+  t.notRegex(events, /bind\(s\) were dropped/);
+  t.regex(events, /hosted backend is unavailable/);
 });
