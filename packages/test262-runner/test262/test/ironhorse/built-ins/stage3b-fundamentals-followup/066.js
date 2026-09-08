@@ -1,7 +1,7 @@
 /*---
 description: stage3b-fundamentals-followup corpus line 66 converted to a test262 case
 flags: [noStrict]
-features: [ironhorse-dual-run, ironhorse-meter-2-raw-19970392, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-4-raw-19970392, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-fundamentals-followup.js line 66.
   Source: [1,2,3].forEach(function(){}.bind(null))

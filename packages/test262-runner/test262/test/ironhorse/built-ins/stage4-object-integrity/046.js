@@ -1,7 +1,7 @@
 /*---
 description: stage4-object-integrity corpus line 46 converted to a test262 case
 flags: [raw]
-features: [ironhorse-dual-run, ironhorse-meter-2-raw-1969584, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-4-raw-1969608, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage4-object-integrity.js line 46.
   Source: Object.entries({a:1})[0][0];

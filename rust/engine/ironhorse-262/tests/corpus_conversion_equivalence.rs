@@ -8,7 +8,7 @@
 //! divergence** (every case the covered grammar reaches meets the runner's
 //! bar), and the **same bit-exact set under `--gate-meter-exact`** (every
 //! unchanged meter-exact case reproduces historical computron agreement;
-//! W2-affected cases carry explicit version-2 raw pins instead). It runs the checked-in `cases/` tree through the same
+//! W2-affected cases carry explicit version-4 raw pins instead). It runs the checked-in `cases/` tree through the same
 //! `endot-ih` machinery a nightly run uses.
 //!
 //! The oracle accumulates process RSS across machine create/destroy cycles;

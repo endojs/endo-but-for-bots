@@ -395,6 +395,28 @@ pub mod engine {
         }
     }
 
+    /// Compiler resource failures use the same host outcomes as runtime failures.
+    fn refuse_compile(
+        error: ironhorse_compile::CompileError,
+        spent: u64,
+        limit: Option<u64>,
+    ) -> MachineError {
+        match error {
+            ironhorse_compile::CompileError::MeterAbort => refuse(Halt::MeterAbort, spent, limit),
+            ironhorse_compile::CompileError::Parse(error) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                    ..
+                }) => refuse(Halt::HeapExhausted, spent, limit),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                    ..
+                }) => refuse(Halt::MeterAbort, spent, limit),
+                _ => MachineError::Compile(error.to_string()),
+            },
+        }
+    }
+
     /// A machine backed by the Rust engine.
     ///
     /// Mirrors the slice of the `xsnap::Machine` surface the daemon's
@@ -458,15 +480,8 @@ pub mod engine {
                 strict,
                 &mut |raw| interp.charge_compilation(raw),
             )
-            .map_err(|error| match error {
-                ironhorse_compile::CompileError::Parse(error) => {
-                    MachineError::Compile(error.to_string())
-                }
-                ironhorse_compile::CompileError::MeterAbort => refuse(
-                    Halt::MeterAbort,
-                    interp.meter_index() >> 16,
-                    self.bounds.crank_limit(),
-                ),
+            .map_err(|error| {
+                refuse_compile(error, interp.meter_index() >> 16, self.bounds.crank_limit())
             })?;
             let outcome = self.inner.new_compartment().evaluate_with_symbols_on(
                 interp,
@@ -943,16 +958,11 @@ pub mod engine {
                 Ok(compiled) => compiled,
                 Err(error) => {
                     self.rewind_to_last_checkpoint()?;
-                    return Err(match error {
-                        ironhorse_compile::CompileError::Parse(error) => {
-                            MachineError::Compile(error.to_string())
-                        }
-                        ironhorse_compile::CompileError::MeterAbort => refuse(
-                            Halt::MeterAbort,
-                            compile_end_raw.saturating_sub(crank_start_raw) >> 16,
-                            self.meter.crank_limit(),
-                        ),
-                    });
+                    return Err(refuse_compile(
+                        error,
+                        compile_end_raw.saturating_sub(crank_start_raw) >> 16,
+                        self.meter.crank_limit(),
+                    ));
                 }
             };
             let (bytecode, symbols) = (compiled.bytecode, compiled.symbols);

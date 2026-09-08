@@ -3,9 +3,9 @@ use ironhorse_compile::{compile_atoms_budgeted, compile_atoms_with, parse_comput
 
 #[test]
 fn frozen_lexical_and_compilation_computrons() {
-    assert_eq!(ironhorse_meter::COST_TABLE_VERSION, "ironhorse-meter-3");
+    assert_eq!(ironhorse_meter::COST_TABLE_VERSION, "ironhorse-meter-4");
     let corpus = include_str!("fixtures/computrons.tsv");
-    assert!(corpus.starts_with("# ironhorse-meter-3 "));
+    assert!(corpus.starts_with("# ironhorse-meter-4 "));
     let mut count = 0;
     for line in corpus.lines().skip(1) {
         let fields: Vec<_> = line.split('\t').collect();

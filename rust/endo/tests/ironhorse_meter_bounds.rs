@@ -419,3 +419,35 @@ fn guest_allocations_are_refused_inside_the_builtin() {
     }
     assert_eq!(machine.eval("1+2").unwrap(), "3");
 }
+
+#[test]
+fn regexp_compilation_heap_refusal_preserves_the_persistent_checkpoint() {
+    let mut source = String::from("/[");
+    for n in (0x1000..0x5000).step_by(2) {
+        source.push_str(&format!("\\u{{{n:x}}}"));
+    }
+    source.push_str("]/u");
+    fn assert_refusal<T: std::fmt::Debug>(result: Result<T, MachineError>) {
+        assert!(
+            matches!(
+                result,
+                Err(MachineError::Halt(ironhorse_vm::Halt::HeapExhausted))
+            ),
+            "{result:?}"
+        );
+    }
+    assert_refusal(Machine::with_bounds(MeterBounds::Unbounded).eval(&source));
+    let dir = tempfile::tempdir().unwrap();
+    let opts = options(dir.path(), MeterBounds::Unbounded);
+    let mut machine = PersistentMachine::open(&opts).unwrap();
+    machine.eval("var saved = 7; saved").unwrap();
+    let epoch = machine.epoch().unwrap();
+    assert_refusal(machine.eval(&source));
+    assert_eq!(machine.epoch().unwrap(), epoch);
+    assert_eq!(machine.eval("saved").unwrap().result, "7");
+    machine.close().unwrap();
+    let mut resumed = PersistentMachine::open(&opts).unwrap();
+    assert_refusal(resumed.eval(&source));
+    assert_eq!(resumed.eval("saved").unwrap().result, "7");
+    resumed.close().unwrap();
+}

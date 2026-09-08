@@ -1,7 +1,7 @@
 /*---
 description: stage3b-json-metering corpus line 7 converted to a test262 case
 flags: [noStrict]
-features: [ironhorse-dual-run, ironhorse-meter-2-raw-16527600, ironhorse-meter-determinism]
+features: [ironhorse-dual-run, ironhorse-meter-4-raw-16527696, ironhorse-meter-determinism]
 info: |
   Converted from corpora/stage3b-json-metering.js line 7.
   Source: JSON.stringify({t:true,f:false,n:null})
