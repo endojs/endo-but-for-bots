@@ -349,9 +349,23 @@ impl Meter {
     /// interval; on refusal, signal an abort.
     #[inline]
     pub fn check<F: FnMut(u64) -> bool>(&mut self, host: &mut F) -> MeterCheck {
+        self.check_inner(host, false)
+    }
+
+    /// Compilation receipts require a monotone accumulated index. Saturate
+    /// the next deadline instead of adopting XS's execution-window wrap/reset.
+    pub(crate) fn check_compilation<F: FnMut(u64) -> bool>(&mut self, host: &mut F) -> MeterCheck {
+        self.check_inner(host, true)
+    }
+
+    fn check_inner<F: FnMut(u64) -> bool>(&mut self, host: &mut F, monotone: bool) -> MeterCheck {
         if self.interval != 0 && self.index > self.count {
             self.last_reported = self.computrons();
             if host(self.last_reported) {
+                if monotone {
+                    self.count = self.index.saturating_add(self.interval);
+                    return MeterCheck::Continue;
+                }
                 // XS advances `meterCount` in unsigned (`txU8`)
                 // arithmetic, which wraps on overflow; mirror that with a
                 // wrapping add so the guard below can observe the wrap.

@@ -256,6 +256,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "dispatch:control-transfer-escaped",
     "dub_at:stack-underflow",
     "end:frame-underflow",
+    "eval:compile-charge-receipt",
     "eval:frame-underflow",
     "eval:relink",
     "exponentiation:stack-underflow",

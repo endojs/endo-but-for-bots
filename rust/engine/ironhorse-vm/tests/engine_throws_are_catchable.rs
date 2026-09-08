@@ -20,12 +20,14 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
         &self,
         source: &str,
         strict: bool,
+        raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted(
+        match ironhorse_compile::compile_atoms_budgeted_with_limit(
             source,
             ironhorse_compile::Goal::Eval,
             strict,
+            raw_budget,
             charge,
         ) {
             Ok(compiled) => Ok(ironhorse_vm::CompiledSource {

@@ -11,13 +11,15 @@ impl SourceCompiler for Compiler {
         &self,
         source: &str,
         strict: bool,
+        raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<CompiledSource, SourceCompileError> {
         self.compiling.set(true);
-        let result = ironhorse_compile::compile_atoms_budgeted(
+        let result = ironhorse_compile::compile_atoms_budgeted_with_limit(
             source,
             ironhorse_compile::Goal::Eval,
             strict,
+            raw_budget,
             &mut |raw| {
                 self.spent.set(self.spent.get() + raw);
                 !self.charge_vm || charge(raw)
@@ -28,8 +30,12 @@ impl SourceCompiler for Compiler {
             Ok(c) => Ok(CompiledSource {
                 bytecode: c.bytecode,
                 symbols: c.symbols,
-                parse_meter_raw: c.parse_meter_raw,
-                parse_computrons: c.parse_computrons,
+                parse_meter_raw: if self.charge_vm { c.parse_meter_raw } else { 0 },
+                parse_computrons: if self.charge_vm {
+                    c.parse_computrons
+                } else {
+                    0
+                },
             }),
             Err(ironhorse_compile::CompileError::MeterAbort) => Err(SourceCompileError::MeterAbort),
             Err(ironhorse_compile::CompileError::Parse(e)) => {

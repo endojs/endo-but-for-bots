@@ -178,14 +178,14 @@ fn resumed_machine_checkpoints_its_restored_error_rows() {
         .map_err(|(_, e)| e)
         .expect("begin");
     drop(session);
-    let mut session = resume_from_store(&mut store, &sig()).expect("resume");
+    let mut session = resume_from_store(&store, &sig()).expect("resume");
     let (done, _, result, _) = crank(session.machine_mut(), "var e; var t; t = e.message; t");
     assert!(done, "observation completes");
     assert_eq!(result, "u");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint after resume");
     validate_store(&store, &sig()).expect("post-crank store validates");
     // And the SECOND resume still renders through the re-serialized row.
-    let mut session = resume_from_store(&mut store, &sig()).expect("second resume");
+    let mut session = resume_from_store(&store, &sig()).expect("second resume");
     let (done, halt, _, _) = crank(session.machine_mut(), "var e; var t; throw e;");
     assert!(!done);
     assert_eq!(halt, "Throw(\"URIError: u\")");

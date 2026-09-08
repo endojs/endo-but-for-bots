@@ -359,3 +359,53 @@ cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-compile --test compile_budget_bench \
   -- --ignored --nocapture --test-threads=1
 ```
+
+## Live runtime compilation charges (F065, third increment)
+
+`SourceCompiler` now receives a raw allowance and a borrowed live charge callback.
+The VM drives it for both `eval` and `Function`, records charges before subsequent
+work, and treats refusal as uncatchable `MeterAbort` before relinking or retaining
+compiled code.
+A successful `CompiledSource.parse_meter_raw` is a receipt checked against callback
+deltas; the VM does not charge it again.
+The conformance compiler retains its shared meter across its unwind boundary.
+Tests compare charged and legacy compilation on the same outer program, proving
+that successful, nested, and caught-syntax-error paths add exactly the compiler bill.
+Compilation checks saturate the next threshold, preserving the accumulated index
+when an accepting host's interval would otherwise wrap it to zero.
+
+The integrated implementation uses the shared `ironhorse-meter-4` release.
+Its upstream source/token/work weights and immutable earlier release pins remain
+intact; the runtime seam adds a checked raw allowance and verifies live receipts.
+Historical snapshots retain their named cost-table refusals and migration tests
+continue to authenticate both the version and table digest.
+
+The compiler-budget growth fixture now runs in the nightly compiler scaling lane.
+Top-level daemon and worker source compilation still require integration; F065 is
+not complete at this increment.
+
+[results/f065-runtime-compilation.json](results/f065-runtime-compilation.json)
+records the original pre-rebase same-host release pair against the compiler-budget
+commit, using its earlier cost policy; these are not release 4 measurements.
+At 4,000 branches, eval measures 6.34 ms before and 6.27 ms after; Function measures
+5.10 ms before and 5.61 ms after (about 10% overhead).
+The 1 MB comment case refuses earlier, falling from 5.87 ms to 2.56 ms.
+These medians do not establish statistical significance or an eval speedup.
+A rejected live source admission retains its full reserved charge before host
+refusal, which can exceed the host threshold; the artifact records all raw bills.
+The fixture excludes outer compilation and realm creation/linking, while timing
+nested source preparation, compilation, relinking, and execution together.
+Successful fixtures pin their results (`1` for eval, `undefined` for Function).
+Refusal timings compare deliberately changed outcomes: the old 1,000- and
+10,000-byte comment cases complete, while the old 1 MB case already aborts later.
+Earlier termination is not a same-work compiler acceleration, and timed caller
+string allocation/decoding means these measurements do not establish constant-time
+VM refusal.
+Byte identity is established by the compiler corpus; runtime tests separately check
+result equality and exact added charges.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-262 --test runtime_compile_bench \
+  -- --ignored --nocapture --test-threads=1
+```

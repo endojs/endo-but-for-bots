@@ -42,8 +42,10 @@ use ironhorse_vm::{Halt, RunOutcome};
 /// (a coverage gap the VM surfaces as `Halt::NotImplemented`), never a harness
 /// crash. A structured parse reject splits on its kind exactly as
 /// [`compile_for`] does: an `Unsupported` parse (an unported-but-valid
-/// construct) is a coverage gap; every other reject is a genuine early error,
-/// which the bridge throws as a realm-local, catchable `SyntaxError`.
+/// construct) is a coverage gap. Meter refusal becomes an uncatchable
+/// `MeterAbort`; other rejects become realm-local, catchable `SyntaxError`s.
+/// Charges reach the live VM before each work step, and a shared receipt
+/// survives this compiler's unwind boundary.
 pub struct IronhorseSourceCompiler;
 
 impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
@@ -51,43 +53,50 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
         &self,
         source: &str,
         strict: bool,
+        raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            ironhorse_compile::compile_atoms_budgeted(
-                source,
-                ironhorse_compile::Goal::Eval,
-                strict,
-                charge,
-            )
+        let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms_with_meter(source, strict, meter.clone())
         }));
-        let result = result.map_err(|payload| {
-            ironhorse_vm::SourceCompileError::Unsupported(panic_message(payload.as_ref()))
-        })?;
-        match result {
-            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
-                bytecode: compiled.bytecode,
-                symbols: compiled.symbols,
-                parse_meter_raw: compiled.parse_meter_raw,
-                parse_computrons: compiled.parse_computrons,
+        if meter.exhausted() {
+            return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+        }
+        match compiled {
+            Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+                bytecode,
+                symbols,
+                parse_meter_raw: meter.raw(),
+                parse_computrons: meter.computrons(),
             }),
-            Err(ironhorse_compile::CompileError::MeterAbort) => {
-                Err(ironhorse_vm::SourceCompileError::MeterAbort)
+            Ok(Err(e)) => {
+                match e.kind {
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                    ironhorse_compile::parser::ParseErrorKind::MeterLimit => {
+                        Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                    }
+                    ironhorse_compile::parser::ParseErrorKind::Unsupported => {
+                        Err(ironhorse_vm::SourceCompileError::Unsupported(e.to_string()))
+                    }
+                    // Carry the bare diagnostic (`e.message`, no `line N:`
+                    // prefix) so the bridge's realm-local `SyntaxError` renders
+                    // with XS's exact wording — the pinned oracle's thrown
+                    // `String(exception)` is `SyntaxError: <message>`, and the
+                    // differential harness compares the whole string.
+                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
+                }
             }
-            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
-                ironhorse_compile::ParseErrorKind::Unsupported => Err(
-                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
-                ),
-                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
-            },
+            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
+                panic_message(payload.as_ref()),
+            )),
         }
     }
 }
@@ -1098,7 +1107,7 @@ mod tests {
         }
         use ironhorse_vm::SourceCompiler;
         assert!(IronhorseSourceCompiler
-            .compile_source(r#"({"\uD800": 1})"#, false, &mut |_| true)
+            .compile_source(r#"({"\uD800": 1})"#, false, u64::MAX, &mut |_| true)
             .is_ok());
     }
 

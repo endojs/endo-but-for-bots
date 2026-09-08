@@ -674,6 +674,14 @@ pub fn print_report(
     Ok(())
 }
 
+/// Walk `dir` collecting `.js` files (recursively, sorted), skipping
+/// `staging/` and `_FIXTURE.js` — the same selection the dual-run runner
+/// uses, re-exported here so the `compile-diff` binary can address a
+/// test262 subtree without depending on the runner's private walker.
+pub fn collect_js(dir: &Path) -> Vec<PathBuf> {
+    crate::test262::collect_js(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -908,12 +916,4 @@ mod tests {
         // engines — it must stay a both-reject agreement (`OracleRejected`).
         assert_eq!(compile_one("var = ;"), CompileVerdict::OracleRejected);
     }
-}
-
-/// Walk `dir` collecting `.js` files (recursively, sorted), skipping
-/// `staging/` and `_FIXTURE.js` — the same selection the dual-run runner
-/// uses, re-exported here so the `compile-diff` binary can address a
-/// test262 subtree without depending on the runner's private walker.
-pub fn collect_js(dir: &Path) -> Vec<PathBuf> {
-    crate::test262::collect_js(dir)
 }
