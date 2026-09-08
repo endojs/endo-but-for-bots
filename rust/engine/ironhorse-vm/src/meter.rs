@@ -273,6 +273,19 @@ impl Meter {
         self.index += n;
     }
 
+    /// Admit work before it allocates or executes. `n` is a raw 16.16
+    /// charge, using the same weights as the corresponding `tick_*` call.
+    /// An unrepresentable total fails closed, even when checks are disabled;
+    /// wrapping it would let guest work erase its accrued cost.
+    #[inline]
+    pub fn charge_and_check<F: FnMut(u64) -> bool>(&mut self, n: u64, host: &mut F) -> MeterCheck {
+        let Some(index) = self.index.checked_add(n) else {
+            return MeterCheck::Abort;
+        };
+        self.index = index;
+        self.check(host)
+    }
+
     /// Subtract `n` raw 16.16 units (reverse a prior [`Self::tick_raw`]). Used
     /// to undo a speculatively-charged host-escape residual when a throw is
     /// actually caught by a native `mxTry` (a promise reaction handler / a
@@ -364,6 +377,43 @@ impl Meter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admission_charges_before_consulting_host() {
+        let mut meter = Meter::new();
+        meter.begin(1);
+        let mut seen = None;
+        assert_eq!(
+            meter.charge_and_check(2 * CODE_METERING, &mut |spent| {
+                seen = Some(spent);
+                false
+            }),
+            MeterCheck::Abort
+        );
+        assert_eq!(seen, Some(2));
+        assert_eq!(meter.raw(), 2 * CODE_METERING);
+    }
+
+    #[test]
+    fn admission_preserves_unarmed_costs_without_consulting_host() {
+        let mut meter = Meter::new();
+        assert_eq!(
+            meter.charge_and_check(123, &mut |_| panic!("unarmed host")),
+            MeterCheck::Continue
+        );
+        assert_eq!(meter.raw(), 123);
+    }
+
+    #[test]
+    fn admission_rejects_unrepresentable_total_without_wrapping() {
+        let mut meter = Meter::new();
+        meter.tick_raw(u64::MAX);
+        assert_eq!(
+            meter.charge_and_check(1, &mut |_| panic!("overflow host")),
+            MeterCheck::Abort
+        );
+        assert_eq!(meter.raw(), u64::MAX);
+    }
 
     #[test]
     fn check_disabled_when_interval_zero() {
