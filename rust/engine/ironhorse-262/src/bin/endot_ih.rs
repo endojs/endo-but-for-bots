@@ -478,7 +478,7 @@ OPTIONS:
                              an oracle-only one is an infrastructure skip
                              (default 10; 0 = off)
     --gate-meter-exact       legacy flag; oracle computron drift is always advisory
-    --repeat N               re-run ironhorse N times; require identical computrons
+    --repeat N               re-run N times; require identical results, halts, and raw costs
     --features-include F[,F] opt features OUT of the skip set (e.g. ses-xs-parity)
     --feature-filter F[,F]   run ONLY cases carrying a feature (test262-harness
                              --features-include semantics; e.g. ses-xs-parity)

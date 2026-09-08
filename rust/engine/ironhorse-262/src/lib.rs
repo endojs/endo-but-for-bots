@@ -213,6 +213,8 @@ pub struct DualRun {
     /// needs the oracle's own parse signal reads [`Self::oracle_parsed`], never
     /// this field.
     pub bytecode: Vec<u8>,
+    /// The selected compiler's symbols atom, retained for determinism checks.
+    pub symbols: Vec<u8>,
     /// Whether the XS **oracle** emitted bytecode — normally evidence that it
     /// parsed and coded the source. Some lexer-owned errors are represented by
     /// a small bytecode stub that throws the reported SyntaxError, so an early-
@@ -424,7 +426,9 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
         _ => run_program_with_symbols(&bytecode, &symbols),
     };
 
-    Some(build_dual_run(source, oracle, ironhorse, compile, bytecode))
+    Some(build_dual_run(
+        source, oracle, ironhorse, compile, bytecode, symbols,
+    ))
 }
 
 /// MULTI-CRANK differential mode (the wave-6 pattern-2 antidote): run
@@ -499,12 +503,14 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
         ironhorse.computrons = crank_raw >> 16;
         ironhorse.meter_raw = crank_raw;
         let stop = !(oracle.completed && ironhorse.completed);
+        let symbols = oracle.symbols.clone();
         out.push(build_dual_run(
             source,
             oracle,
             ironhorse,
             IronhorseCompile::NotAttempted,
             bytecode,
+            symbols,
         ));
         if stop {
             break;
@@ -524,6 +530,7 @@ fn build_dual_run(
     ironhorse: RunOutcome,
     ironhorse_compile: IronhorseCompile,
     bytecode: Vec<u8>,
+    symbols: Vec<u8>,
 ) -> DualRun {
     let agreement = match (oracle.completed, ironhorse.completed) {
         (true, true) => Agreement::BothComplete,
@@ -573,6 +580,7 @@ fn build_dual_run(
         ironhorse_halt: ironhorse.halt,
         ironhorse_compile,
         bytecode,
+        symbols,
         oracle_parsed,
         oracle_exit_status: oracle.exit_status,
     }
@@ -618,7 +626,7 @@ pub fn dual_run_async(source: &str, signal_name: &str) -> Option<AsyncDualRun> {
     let ironhorse_unhandled_rejection = interp.has_unhandled_rejection();
 
     Some(AsyncDualRun {
-        run: build_dual_run(source, oracle, ironhorse, compile, bytecode),
+        run: build_dual_run(source, oracle, ironhorse, compile, bytecode, symbols),
         ironhorse_signal,
         ironhorse_unhandled_rejection,
     })
@@ -1215,6 +1223,7 @@ mod tests {
             ironhorse_halt,
             ironhorse_compile: IronhorseCompile::NotAttempted,
             bytecode: Vec::new(),
+            symbols: Vec::new(),
             oracle_parsed: false,
             oracle_exit_status: 0,
         }
