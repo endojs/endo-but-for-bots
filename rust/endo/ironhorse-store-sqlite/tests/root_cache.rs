@@ -8,8 +8,8 @@
 
 mod common;
 
-use ironhorse_snapshot::store::HeapStoreCommit;
 use common::TempDir;
+use ironhorse_snapshot::store::HeapStoreCommit;
 
 use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, MachineSnapshot};
 use ironhorse_snapshot::store::{
