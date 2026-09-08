@@ -359,126 +359,227 @@ struct SideTableImages {
 }
 
 fn side_tables_of(interp: &Interp) -> SideTableImages {
-    let arrays = interp
-        .arrays_snapshot()
-        .into_iter()
-        .map(|(owner, length, items)| crate::image::ArrayImage {
-            owner,
-            length,
-            items,
-        })
-        .collect();
-    let index_props = interp
-        .index_props_snapshot()
-        .into_iter()
-        .map(|(owner, high_water, items)| crate::image::IndexPropsImage {
-            owner,
-            high_water,
-            items,
-        })
-        .collect();
-    let collections = interp
-        .collections_snapshot()
-        .into_iter()
-        .map(
-            |(owner, kind, table_length, entries)| crate::image::CollectionImage {
+    side_tables_of_selected(interp, ironhorse_vm::SnapshotDirty::all())
+}
+
+fn side_tables_of_selected(interp: &Interp, dirty: ironhorse_vm::SnapshotDirty) -> SideTableImages {
+    use ironhorse_vm::SnapshotSection as S;
+    let arrays = if dirty.contains(S::Arrays) {
+        #[cfg(test)]
+        extraction_counts::record(S::Arrays);
+        interp
+            .arrays_snapshot()
+            .into_iter()
+            .map(|(owner, length, items)| crate::image::ArrayImage {
                 owner,
-                kind,
-                table_length,
-                entries,
-            },
-        )
-        .collect();
-    let registry = interp
-        .symbol_registry_snapshot()
-        .into_iter()
-        .map(|(key, descriptor)| crate::image::RegistryImage { key, descriptor })
-        .collect();
-    let errors = interp
-        .errors_snapshot()
-        .into_iter()
-        .map(|(owner, name, message, frames)| crate::image::ErrorImage {
-            owner,
-            name: name.to_string(),
-            message,
-            frames,
-        })
-        .collect();
-    let buffers = interp
-        .array_buffers_snapshot()
-        .into_iter()
-        .map(|(owner, data, length, flags)| crate::image::BufferImage {
-            owner,
-            data,
-            length,
-            flags,
-        })
-        .collect();
-    let typed_arrays = interp
-        .typed_arrays_snapshot()
-        .into_iter()
-        .map(
-            |(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
-                owner,
-                kind,
-                buffer,
-                offset,
                 length,
-            },
-        )
-        .collect();
-    let data_views = interp
-        .data_views_snapshot()
-        .into_iter()
-        .map(
-            |(owner, buffer, offset, size)| crate::image::DataViewImage {
+                items,
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
+    let index_props = if dirty.contains(S::IndexProperties) {
+        interp
+            .index_props_snapshot()
+            .into_iter()
+            .map(|(owner, high_water, items)| crate::image::IndexPropsImage {
                 owner,
-                buffer,
-                offset,
-                size,
-            },
-        )
-        .collect();
-    let wrappers = interp
-        .wrappers_snapshot()
-        .into_iter()
-        .map(|(owner, value)| crate::image::WrapperImage { owner, value })
-        .collect();
-    let regexps = interp
-        .regexps_snapshot()
-        .into_iter()
-        .map(
-            |(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
+                high_water,
+                items,
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
+    let collections = if dirty.contains(S::Collections) {
+        #[cfg(test)]
+        extraction_counts::record(S::Collections);
+        interp
+            .collections_snapshot()
+            .into_iter()
+            .map(
+                |(owner, kind, table_length, entries)| crate::image::CollectionImage {
+                    owner,
+                    kind,
+                    table_length,
+                    entries,
+                },
+            )
+            .collect()
+    } else {
+        Default::default()
+    };
+    let registry = if dirty.contains(S::Registry) {
+        interp
+            .symbol_registry_snapshot()
+            .into_iter()
+            .map(|(key, descriptor)| crate::image::RegistryImage { key, descriptor })
+            .collect()
+    } else {
+        Default::default()
+    };
+    let errors = if dirty.contains(S::Errors) || dirty.contains(S::ErrorFrames) {
+        interp
+            .errors_snapshot()
+            .into_iter()
+            .map(|(owner, name, message, frames)| crate::image::ErrorImage {
                 owner,
-                source,
+                name: name.to_string(),
+                message,
+                frames,
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
+    let buffers = if dirty.contains(S::Buffers) {
+        interp
+            .array_buffers_snapshot()
+            .into_iter()
+            .map(|(owner, data, length, flags)| crate::image::BufferImage {
+                owner,
+                data,
+                length,
                 flags,
-                last_index_bits,
-            },
-        )
-        .collect();
-    let arguments_brands = interp.arguments_brands_snapshot();
-    let (instants, durations, plains, zoneds) = interp.temporal_snapshot();
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
+    let typed_arrays = if dirty.contains(S::TypedArrays) {
+        interp
+            .typed_arrays_snapshot()
+            .into_iter()
+            .map(
+                |(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
+                    owner,
+                    kind,
+                    buffer,
+                    offset,
+                    length,
+                },
+            )
+            .collect()
+    } else {
+        Default::default()
+    };
+    let data_views = if dirty.contains(S::DataViews) {
+        interp
+            .data_views_snapshot()
+            .into_iter()
+            .map(
+                |(owner, buffer, offset, size)| crate::image::DataViewImage {
+                    owner,
+                    buffer,
+                    offset,
+                    size,
+                },
+            )
+            .collect()
+    } else {
+        Default::default()
+    };
+    let wrappers = if dirty.contains(S::Wrappers) {
+        interp
+            .wrappers_snapshot()
+            .into_iter()
+            .map(|(owner, value)| crate::image::WrapperImage { owner, value })
+            .collect()
+    } else {
+        Default::default()
+    };
+    let regexps = if dirty.contains(S::Regexps) {
+        interp
+            .regexps_snapshot()
+            .into_iter()
+            .map(
+                |(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
+                    owner,
+                    source,
+                    flags,
+                    last_index_bits,
+                },
+            )
+            .collect()
+    } else {
+        Default::default()
+    };
+    let arguments_brands = if dirty.contains(S::ArgumentsBrands) {
+        interp.arguments_brands_snapshot()
+    } else {
+        Default::default()
+    };
+    let (instants, durations, plains, zoneds) = if dirty.contains(S::Temporal) {
+        interp.temporal_snapshot()
+    } else {
+        Default::default()
+    };
     let temporal = crate::image::TemporalImage {
         instants,
         durations,
         plains,
         zoneds,
     };
-    let intl = interp.intl_snapshot();
-    let iterators = interp.iterators_snapshot();
-    let dates = interp
-        .dates_snapshot()
-        .into_iter()
-        .map(|(owner, value_bits)| crate::image::DateImage { owner, value_bits })
-        .collect();
-    let function_state = interp.function_state_snapshot();
-    let proxy_state = interp.proxy_state_snapshot();
-    let accessors = interp.accessors_snapshot();
-    let intl_bound_functions = interp.intl_bound_functions_snapshot();
-    let private_elements = interp.private_elements_snapshot();
-    let disposable_stacks = interp.disposable_stacks_snapshot();
-    let generators = interp.generators_snapshot();
-    let promise_cluster = interp.promise_cluster_snapshot();
+    let intl = if dirty.contains(S::Intl) {
+        interp.intl_snapshot()
+    } else {
+        Default::default()
+    };
+    let iterators = if dirty.contains(S::Iterators) {
+        interp.iterators_snapshot()
+    } else {
+        Default::default()
+    };
+    let dates = if dirty.contains(S::Dates) {
+        interp
+            .dates_snapshot()
+            .into_iter()
+            .map(|(owner, value_bits)| crate::image::DateImage { owner, value_bits })
+            .collect()
+    } else {
+        Default::default()
+    };
+    let function_state = if dirty.contains(S::Functions) {
+        interp.function_state_snapshot()
+    } else {
+        Default::default()
+    };
+    let proxy_state = if dirty.contains(S::Proxies) {
+        interp.proxy_state_snapshot()
+    } else {
+        Default::default()
+    };
+    let accessors = if dirty.contains(S::Accessors) {
+        interp.accessors_snapshot()
+    } else {
+        Default::default()
+    };
+    let intl_bound_functions = if dirty.contains(S::IntlBoundFunctions) {
+        interp.intl_bound_functions_snapshot()
+    } else {
+        Default::default()
+    };
+    let private_elements = if dirty.contains(S::PrivateElements) {
+        interp.private_elements_snapshot()
+    } else {
+        Default::default()
+    };
+    let disposable_stacks = if dirty.contains(S::DisposableStacks) {
+        interp.disposable_stacks_snapshot()
+    } else {
+        Default::default()
+    };
+    let generators = if dirty.contains(S::Generators) {
+        interp.generators_snapshot()
+    } else {
+        Default::default()
+    };
+    let promise_cluster = if dirty.contains(S::Promises) || dirty.contains(S::AsyncInstances) {
+        interp.promise_cluster_snapshot()
+    } else {
+        Default::default()
+    };
     SideTableImages {
         arrays,
         index_props,
@@ -897,6 +998,7 @@ struct LazyPin {
 }
 
 pub struct StoreSession {
+    snapshot_baseline: ironhorse_vm::SnapshotBaseline,
     interp: Interp,
     epoch: u64,
     seal: String,
@@ -1028,14 +1130,24 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) 
 /// collections, registry since schema 7 and errors since schema 9 —
 /// travel alongside, and the symbol-key table travels in the symbols
 /// section).
-fn small_state_of(interp: &Interp) -> SmallState {
-    let tables = side_tables_of(interp);
-    let (next_id, pairs) = interp.symbol_key_table();
+fn small_state_of(interp: &Interp, dirty: ironhorse_vm::SnapshotDirty) -> SmallState {
+    let tables = side_tables_of_selected(interp, dirty);
+    let (next_id, pairs) = if dirty.contains(ironhorse_vm::SnapshotSection::Symbols) {
+        interp.symbol_key_table()
+    } else {
+        Default::default()
+    };
     SmallState {
         stack: interp.stack_slots().to_vec(),
-        slot_free: interp.slots.free_list().to_vec(),
+        slot_free: Vec::new(),
         keys: Vec::new(),
-        names: interp.program_symbol_names().to_vec(),
+        names: if dirty.contains(ironhorse_vm::SnapshotSection::Names) {
+            #[cfg(test)]
+            extraction_counts::record(ironhorse_vm::SnapshotSection::Names);
+            interp.program_symbol_names().to_vec()
+        } else {
+            Vec::new()
+        },
         symbols: crate::image::SymbolKeyImage { next_id, pairs },
         meter: MeterImage::of(interp.meter_state()),
         arrays: tables.arrays,
@@ -1153,7 +1265,9 @@ pub fn begin_store_session_with_cadence(
     // exactly right for a fresh store.
     let gen_dirty: std::collections::BTreeSet<u32> =
         (0..crate::store::slot_page_count(batch.manifest.slot_count)).collect();
+    let snapshot_baseline = interp.acknowledge_snapshot();
     Ok(StoreSession {
+        snapshot_baseline,
         gen_dirty,
         interp,
         epoch: 1,
@@ -1346,21 +1460,22 @@ pub fn checkpoint_to_store(
         .map(|e| (e, interp.chunks.extent_bytes(e)))
         .collect();
 
-    // Storage increment: omit unchanged sections from the batch. Selecting
-    // before extraction still requires VM dirty tracking (F043 remains open).
+    // Select before extraction and encoding; hash only dirty candidates.
     let prior_sections =
         ledger
             .section_leaves()
             .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
                 "checkpoint ledger lacks section inventory",
             )))?;
-    let small_updates = small_state_of(interp)
-        .encode_sections()
+    let dirty = interp.snapshot_dirty_sections(&session.snapshot_baseline);
+    let small = small_state_of(interp, dirty);
+    let small_updates = crate::store_sections::SmallSection::ALL
         .into_iter()
-        .enumerate()
-        .filter_map(|(id, bytes)| {
-            let section = crate::store_sections::SmallSection::ALL[id];
-            (crate::store_sections::section_hash(section, &bytes) != prior_sections.hashes()[id])
+        .filter(|section| dirty.contains(section.vm_section()))
+        .filter_map(|section| {
+            let bytes = small.encode_section(section);
+            (crate::store_sections::section_hash(section, &bytes)
+                != prior_sections.hashes()[section.id() as usize])
                 .then_some(crate::store_sections::SectionUpdate { section, bytes })
         })
         .collect();
@@ -1425,6 +1540,7 @@ pub fn checkpoint_to_store(
         .interp
         .chunks
         .clear_dirty_after_commit(landed_in_backing);
+    session.snapshot_baseline = session.interp.acknowledge_snapshot();
     session.epoch = epoch;
     session.seal = seal.clone();
     if let Some(pin) = &session.pin {
@@ -1531,10 +1647,14 @@ pub fn resume_from_store(
         manifest.root,
         "seed from validated state"
     );
+    let interp = image_to_interp(ValidatedSnapshot::from_validated_image(image))
+        .map_err(StoreError::Snapshot)?;
+    // Restore can normalize older payloads; preserve that dirt until committed.
+    let snapshot_baseline = interp.snapshot_baseline();
     Ok(StoreSession {
+        snapshot_baseline,
         gen_dirty: std::collections::BTreeSet::new(),
-        interp: image_to_interp(ValidatedSnapshot::from_validated_image(image))
-            .map_err(StoreError::Snapshot)?,
+        interp,
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: None,
@@ -1753,7 +1873,10 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.iterators,
     )
     .map_err(StoreError::Snapshot)?;
+    // Restore can normalize older payloads; preserve that dirt until committed.
+    let snapshot_baseline = interp.snapshot_baseline();
     Ok(StoreSession {
+        snapshot_baseline,
         gen_dirty: std::collections::BTreeSet::new(),
         interp,
         epoch: manifest.epoch,
@@ -2368,5 +2491,123 @@ mod tests {
             b2.computrons, ub.computrons,
             "meter continued through the CAS round-trip"
         );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod extraction_counts {
+    use std::cell::Cell;
+    thread_local! {
+        static EXTRACT: Cell<[usize; 32]> = const { Cell::new([0; 32]) };
+        static ENCODE: Cell<[usize; 32]> = const { Cell::new([0; 32]) };
+    }
+    pub(super) fn record(section: ironhorse_vm::SnapshotSection) {
+        EXTRACT.with(|counts| {
+            let mut n = counts.get();
+            n[section as usize] += 1;
+            counts.set(n);
+        });
+    }
+    pub(crate) fn encode(section: crate::store_sections::SmallSection) {
+        ENCODE.with(|counts| {
+            let mut n = counts.get();
+            n[section.id() as usize] += 1;
+            counts.set(n);
+        });
+    }
+    fn reset() {
+        EXTRACT.set([0; 32]);
+        ENCODE.set([0; 32]);
+    }
+
+    #[test]
+    fn unchanged_bulk_sections_are_neither_extracted_nor_encoded() {
+        use super::*;
+        use crate::store::MemoryStore;
+        use crate::store_sections::SmallSection;
+        let signature = Signature::new("ironhorse-worker-v1");
+        let mut source =
+            String::from("var a=[]; var m=new Map(); for(var i=0;i<1000;i++){a[i]=i;m.set(i,i);}");
+        for i in 0..1000 {
+            source.push_str(&format!("var retained_name_{i}={i};"));
+        }
+        source.push_str("0");
+        let (code, names) = ironhorse_compile::compile_atoms(&source).unwrap();
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+        assert!(interp.run(&code).completed);
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(interp, &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let (hot, _) = ironhorse_compile::compile_atoms("1 + 1").unwrap();
+        for resumed in [false, true] {
+            if resumed {
+                session = resume_from_store(&store, &signature).unwrap();
+                checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+            }
+            reset();
+            assert!(session.machine_mut().run(&hot).completed);
+            checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+            for section in [
+                SmallSection::Arrays,
+                SmallSection::Collections,
+                SmallSection::Names,
+            ] {
+                assert_eq!(
+                    EXTRACT.get()[section.id() as usize],
+                    0,
+                    "{section:?} extraction"
+                );
+                assert_eq!(
+                    ENCODE.get()[section.id() as usize],
+                    0,
+                    "{section:?} encoding"
+                );
+            }
+            let restored = resume_from_store(&store, &signature).unwrap();
+            assert_eq!(
+                restored.machine().snapshot_image(&signature).unwrap(),
+                session.machine().snapshot_image(&signature).unwrap()
+            );
+        }
+        let store = std::rc::Rc::new(std::cell::RefCell::new(store));
+        let mut lazy = resume_from_store_lazy(store.clone(), &signature).unwrap();
+        checkpoint_to_store(&mut lazy, &signature, &mut *store.borrow_mut()).unwrap();
+        reset();
+        assert!(lazy.machine_mut().run(&hot).completed);
+        checkpoint_to_store(&mut lazy, &signature, &mut *store.borrow_mut()).unwrap();
+        for section in [
+            SmallSection::Arrays,
+            SmallSection::Collections,
+            SmallSection::Names,
+        ] {
+            assert_eq!(
+                EXTRACT.get()[section.id() as usize],
+                0,
+                "lazy {section:?} extraction"
+            );
+            assert_eq!(
+                ENCODE.get()[section.id() as usize],
+                0,
+                "lazy {section:?} encoding"
+            );
+        }
+        let restored = resume_from_store(&*store.borrow(), &signature).unwrap();
+        assert_eq!(
+            restored.machine().snapshot_image(&signature).unwrap(),
+            lazy.machine().snapshot_image(&signature).unwrap()
+        );
+        // Positive control: the counters observe real full materialization.
+        reset();
+        small_state_of(lazy.machine(), ironhorse_vm::SnapshotDirty::all()).encode_sections();
+        for section in [
+            SmallSection::Arrays,
+            SmallSection::Collections,
+            SmallSection::Names,
+        ] {
+            assert_eq!(EXTRACT.get()[section.id() as usize], 1);
+            assert_eq!(ENCODE.get()[section.id() as usize], 1);
+        }
     }
 }

@@ -47,6 +47,42 @@ pub enum SmallSection {
     IndexProperties = 31,
 }
 impl SmallSection {
+    pub const fn vm_section(self) -> ironhorse_vm::SnapshotSection {
+        match self {
+            Self::Stack => ironhorse_vm::SnapshotSection::Stack,
+            Self::RetiredFreeList => ironhorse_vm::SnapshotSection::RetiredFreeList,
+            Self::Keys => ironhorse_vm::SnapshotSection::Keys,
+            Self::Names => ironhorse_vm::SnapshotSection::Names,
+            Self::Symbols => ironhorse_vm::SnapshotSection::Symbols,
+            Self::Meter => ironhorse_vm::SnapshotSection::Meter,
+            Self::Arrays => ironhorse_vm::SnapshotSection::Arrays,
+            Self::Collections => ironhorse_vm::SnapshotSection::Collections,
+            Self::Registry => ironhorse_vm::SnapshotSection::Registry,
+            Self::Errors => ironhorse_vm::SnapshotSection::Errors,
+            Self::Buffers => ironhorse_vm::SnapshotSection::Buffers,
+            Self::TypedArrays => ironhorse_vm::SnapshotSection::TypedArrays,
+            Self::DataViews => ironhorse_vm::SnapshotSection::DataViews,
+            Self::Wrappers => ironhorse_vm::SnapshotSection::Wrappers,
+            Self::Regexps => ironhorse_vm::SnapshotSection::Regexps,
+            Self::ArgumentsBrands => ironhorse_vm::SnapshotSection::ArgumentsBrands,
+            Self::Temporal => ironhorse_vm::SnapshotSection::Temporal,
+            Self::Intl => ironhorse_vm::SnapshotSection::Intl,
+            Self::NameFloor => ironhorse_vm::SnapshotSection::NameFloor,
+            Self::Iterators => ironhorse_vm::SnapshotSection::Iterators,
+            Self::Dates => ironhorse_vm::SnapshotSection::Dates,
+            Self::Functions => ironhorse_vm::SnapshotSection::Functions,
+            Self::Proxies => ironhorse_vm::SnapshotSection::Proxies,
+            Self::Accessors => ironhorse_vm::SnapshotSection::Accessors,
+            Self::IntlBoundFunctions => ironhorse_vm::SnapshotSection::IntlBoundFunctions,
+            Self::PrivateElements => ironhorse_vm::SnapshotSection::PrivateElements,
+            Self::DisposableStacks => ironhorse_vm::SnapshotSection::DisposableStacks,
+            Self::Generators => ironhorse_vm::SnapshotSection::Generators,
+            Self::ErrorFrames => ironhorse_vm::SnapshotSection::ErrorFrames,
+            Self::Promises => ironhorse_vm::SnapshotSection::Promises,
+            Self::AsyncInstances => ironhorse_vm::SnapshotSection::AsyncInstances,
+            Self::IndexProperties => ironhorse_vm::SnapshotSection::IndexProperties,
+        }
+    }
     pub const ALL: [Self; SMALL_SECTION_COUNT] = [
         Self::Stack,
         Self::RetiredFreeList,

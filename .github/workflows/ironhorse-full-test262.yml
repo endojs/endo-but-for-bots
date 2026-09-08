@@ -163,6 +163,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee scaling.log
+      - name: Check unchanged checkpoint scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test checkpoint_scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee checkpoint-scaling.log
       - name: Check existing-property update scaling
         if: ${{ !cancelled() }}
         run: |
@@ -196,4 +201,5 @@ jobs:
             lifecycle.log
             classification.log
             property-lookup.log
+            checkpoint-scaling.log
           if-no-files-found: error

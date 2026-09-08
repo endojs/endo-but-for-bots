@@ -1,5 +1,6 @@
 //! Derived instance membership. The table owns every structural mutation;
 //! callers can mutate values but cannot bypass membership registration.
+use crate::snapshot_dirty::{SnapshotDirt, SnapshotSection};
 use crate::value::SlotIndex;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,7 +39,10 @@ impl ExoticKind {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct ClassIndex(Rc<RefCell<HashMap<SlotIndex, ExoticKind>>>);
+pub(crate) struct ClassIndex(
+    Rc<RefCell<HashMap<SlotIndex, ExoticKind>>>,
+    pub(crate) SnapshotDirt,
+);
 impl ClassIndex {
     pub(crate) fn get(&self, owner: SlotIndex) -> ExoticKind {
         self.0.borrow().get(&owner).copied().unwrap_or_default()
@@ -61,11 +65,15 @@ impl ClassIndex {
         row.0 = (row.0 & !mask.0) | bits.0;
     }
     pub(crate) fn fork(&self) -> Self {
-        Self(Rc::new(RefCell::new(self.0.borrow().clone())))
+        Self(
+            Rc::new(RefCell::new(self.0.borrow().clone())),
+            SnapshotDirt::default(),
+        )
     }
 }
 
 pub(crate) struct ClassMap<V> {
+    snapshot_mask: u32,
     rows: HashMap<SlotIndex, V>,
     kind: ExoticKind,
     index: ClassIndex,
@@ -99,13 +107,16 @@ impl<V> Drop for ValueUpdate<'_, V> {
 
 impl<V> ClassMap<V> {
     pub(crate) fn new(kind: ExoticKind, index: ClassIndex) -> Self {
-        Self {
+        let map = Self {
+            snapshot_mask: Self::dirty_mask(kind),
             rows: HashMap::new(),
             kind,
             index,
             refinement: None,
             refinement_mask: ExoticKind::default(),
-        }
+        };
+        map.mark_dirty();
+        map
     }
     pub(crate) fn new_refined(
         kind: ExoticKind,
@@ -119,6 +130,69 @@ impl<V> ClassMap<V> {
             refinement_mask,
             ..Self::new(kind, index)
         }
+    }
+    fn dirty_mask(kind: ExoticKind) -> u32 {
+        let mut mask = 0;
+        if kind.has(ExoticKind::ARRAYS) {
+            mask |= SnapshotSection::Arrays.mask();
+        }
+        if kind.has(ExoticKind::WRAPPER_DATA) {
+            mask |= SnapshotSection::Wrappers.mask();
+        }
+        if kind.has(ExoticKind::TEMPORAL_INSTANTS) {
+            mask |= SnapshotSection::Temporal.mask();
+        }
+        if kind.has(ExoticKind::TEMPORAL_DURATIONS) {
+            mask |= SnapshotSection::Temporal.mask();
+        }
+        if kind.has(ExoticKind::TEMPORAL_PLAINS) {
+            mask |= SnapshotSection::Temporal.mask();
+        }
+        if kind.has(ExoticKind::TEMPORAL_ZONEDS) {
+            mask |= SnapshotSection::Temporal.mask();
+        }
+        if kind.has(ExoticKind::DISPOSABLE_STACKS) {
+            mask |= SnapshotSection::DisposableStacks.mask();
+        }
+        if kind.has(ExoticKind::COLLECTIONS) {
+            mask |= SnapshotSection::Collections.mask() | SnapshotSection::Iterators.mask();
+        }
+        if kind.has(ExoticKind::ARRAY_BUFFERS) {
+            mask |= SnapshotSection::Buffers.mask();
+        }
+        if kind.has(ExoticKind::TYPED_ARRAYS) {
+            mask |= SnapshotSection::TypedArrays.mask();
+        }
+        if kind.has(ExoticKind::DATA_VIEWS) {
+            mask |= SnapshotSection::DataViews.mask();
+        }
+        if kind.has(ExoticKind::REGEXPS) {
+            mask |= SnapshotSection::Regexps.mask();
+        }
+        if kind.has(ExoticKind::LOCALES) {
+            mask |= SnapshotSection::Intl.mask();
+        }
+        if kind.has(ExoticKind::COLLATORS) {
+            mask |= SnapshotSection::Intl.mask();
+        }
+        if kind.has(ExoticKind::FUNCTIONS) {
+            mask |= SnapshotSection::Functions.mask()
+                | SnapshotSection::IntlBoundFunctions.mask()
+                | SnapshotSection::Promises.mask();
+        }
+        if kind.has(ExoticKind::PROXIES) {
+            mask |= SnapshotSection::Proxies.mask();
+        }
+        if kind.has(ExoticKind::BOUND_FUNCTIONS) {
+            mask |= SnapshotSection::Functions.mask();
+        }
+        if kind.has(ExoticKind::PROMISE_FUNCTIONS) {
+            mask |= SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask();
+        }
+        mask
+    }
+    fn mark_dirty(&self) {
+        self.index.1.mark(self.snapshot_mask);
     }
     fn refresh(&self, key: SlotIndex) {
         let bits = self
@@ -146,6 +220,7 @@ impl<V> ClassMap<V> {
         key: &SlotIndex,
         update: impl FnOnce(&mut V) -> R,
     ) -> Option<R> {
+        self.mark_dirty();
         let guard = ValueUpdate {
             value: self.rows.get_mut(key)?,
             key: *key,
@@ -164,6 +239,7 @@ impl<V> ClassMap<V> {
     where
         V: Default,
     {
+        self.mark_dirty();
         self.index.insert(key, self.kind);
         let guard = ValueUpdate {
             value: self.rows.entry(key).or_default(),
@@ -176,6 +252,7 @@ impl<V> ClassMap<V> {
         update(guard.value)
     }
     pub(crate) fn update_values(&mut self, mut update: impl FnMut(&mut V)) {
+        self.mark_dirty();
         for (key, value) in &mut self.rows {
             let guard = ValueUpdate {
                 value,
@@ -206,7 +283,9 @@ impl<V> ClassMap<V> {
     where
         V: Clone,
     {
+        index.1.mark(self.snapshot_mask);
         Self {
+            snapshot_mask: self.snapshot_mask,
             rows: self.rows.clone(),
             kind: self.kind,
             index,
@@ -215,6 +294,7 @@ impl<V> ClassMap<V> {
         }
     }
     pub(crate) fn insert(&mut self, key: SlotIndex, value: V) -> Option<V> {
+        self.mark_dirty();
         let previous = self.rows.insert(key, value);
         self.refresh(key);
         previous
@@ -222,12 +302,28 @@ impl<V> ClassMap<V> {
     pub(crate) fn remove(&mut self, key: &SlotIndex) -> Option<V> {
         let previous = self.rows.remove(key);
         if previous.is_some() {
+            self.mark_dirty();
             self.index
                 .remove(*key, self.kind.union(self.refinement_mask));
         }
         previous
     }
+    /// Filter membership without exposing values or reclassifying survivors.
+    /// A predicate that only sees keys cannot change refinement state.
+    pub(crate) fn retain_keys(&mut self, mut keep: impl FnMut(&SlotIndex) -> bool) {
+        self.rows.retain(|key, _| {
+            if keep(key) {
+                true
+            } else {
+                self.index.1.mark(self.snapshot_mask);
+                self.index
+                    .remove(*key, self.kind.union(self.refinement_mask));
+                false
+            }
+        });
+    }
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&SlotIndex, &mut V) -> bool) {
+        self.mark_dirty();
         self.rows.retain(|key, value| {
             let retained = {
                 let guard = ValueUpdate {
@@ -250,14 +346,17 @@ impl<V> ClassMap<V> {
         });
     }
     pub(crate) fn get_mut(&mut self, key: &SlotIndex) -> Option<&mut V> {
+        self.mark_dirty();
         self.assert_unrefined();
         self.rows.get_mut(key)
     }
     pub(crate) fn values_mut(&mut self) -> std::collections::hash_map::ValuesMut<'_, SlotIndex, V> {
+        self.mark_dirty();
         self.assert_unrefined();
         self.rows.values_mut()
     }
     pub(crate) fn iter_mut(&mut self) -> std::collections::hash_map::IterMut<'_, SlotIndex, V> {
+        self.mark_dirty();
         self.assert_unrefined();
         self.rows.iter_mut()
     }
@@ -285,6 +384,7 @@ impl<'a, V> IntoIterator for &'a mut ClassMap<V> {
     type Item = (&'a SlotIndex, &'a mut V);
     type IntoIter = std::collections::hash_map::IterMut<'a, SlotIndex, V>;
     fn into_iter(self) -> Self::IntoIter {
+        self.mark_dirty();
         self.assert_unrefined();
         self.rows.iter_mut()
     }
@@ -345,6 +445,106 @@ mod tests {
         assert!(!index.get(owner).has(ExoticKind::METHOD));
         functions.remove(&owner);
         assert_eq!(index.get(owner), ExoticKind::PROXIES);
+    }
+
+    #[test]
+    fn absent_removal_preserves_clean_sections_and_unrelated_membership() {
+        let index = ClassIndex::default();
+        let owner = SlotIndex(8);
+        let mut arrays = ClassMap::new(ExoticKind::ARRAYS, index.clone());
+        let mut proxies = ClassMap::new(ExoticKind::PROXIES, index.clone());
+        arrays.insert(owner, 1);
+        proxies.insert(owner, ());
+        index.1.clear();
+        assert_eq!(arrays.remove(&SlotIndex(9)), None);
+        assert!(!index.1.snapshot().contains(SnapshotSection::Arrays));
+        assert!(index.get(owner).has(ExoticKind::ARRAYS));
+        assert_eq!(arrays.remove(&owner), Some(1));
+        assert!(index.1.snapshot().contains(SnapshotSection::Arrays));
+        assert_eq!(index.get(owner), ExoticKind::PROXIES);
+        index.1.clear();
+        assert_eq!(arrays.remove(&owner), None);
+        assert!(!index.1.snapshot().contains(SnapshotSection::Arrays));
+        assert_eq!(index.get(owner), ExoticKind::PROXIES);
+    }
+
+    #[test]
+    fn key_retention_keeps_survivors_clean_and_preserves_overlapping_classes() {
+        let index = ClassIndex::default();
+        let mut functions = refined(index.clone());
+        let mut proxies = ClassMap::new(ExoticKind::PROXIES, index.clone());
+        let native = SlotIndex(8);
+        let method = SlotIndex(9);
+        functions.insert(native, 1);
+        functions.insert(method, 2);
+        proxies.insert(native, ());
+        index.1.clear();
+        {
+            // No-op retention must not even request a mutable classification
+            // borrow; every retained function keeps its existing refinement.
+            let classes = index.0.borrow();
+            functions.retain_keys(|_| true);
+            assert!(classes[&native].has(ExoticKind::NATIVE));
+            assert!(classes[&method].has(ExoticKind::METHOD));
+        }
+        for section in [
+            SnapshotSection::Functions,
+            SnapshotSection::IntlBoundFunctions,
+            SnapshotSection::Promises,
+        ] {
+            assert!(!index.1.snapshot().contains(section));
+        }
+        functions.retain_keys(|key| *key == method);
+        assert!(!functions.contains_key(&native));
+        assert_eq!(index.get(native), ExoticKind::PROXIES);
+        assert!(index.get(method).has(ExoticKind::METHOD));
+        assert!(!index.get(method).has(ExoticKind::NATIVE));
+        for section in [
+            SnapshotSection::Functions,
+            SnapshotSection::IntlBoundFunctions,
+            SnapshotSection::Promises,
+        ] {
+            assert!(index.1.snapshot().contains(section));
+        }
+    }
+
+    #[test]
+    fn key_retention_unwind_keeps_completed_removals_tracked() {
+        let index = ClassIndex::default();
+        let mut functions = refined(index.clone());
+        let mut proxies = ClassMap::new(ExoticKind::PROXIES, index.clone());
+        let owners = [SlotIndex(10), SlotIndex(11), SlotIndex(12)];
+        for owner in owners {
+            functions.insert(owner, 1);
+            proxies.insert(owner, ());
+        }
+        index.1.clear();
+        let mut removed = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            functions.retain_keys(|key| {
+                if removed.is_some() {
+                    panic!("after one completed removal");
+                }
+                removed = Some(*key);
+                false
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(functions.len(), 2);
+        for owner in owners {
+            let kept = Some(owner) != removed;
+            assert_eq!(functions.contains_key(&owner), kept);
+            assert_eq!(index.get(owner).has(ExoticKind::FUNCTIONS), kept);
+            assert_eq!(index.get(owner).has(ExoticKind::NATIVE), kept);
+            assert!(index.get(owner).has(ExoticKind::PROXIES));
+        }
+        for section in [
+            SnapshotSection::Functions,
+            SnapshotSection::IntlBoundFunctions,
+            SnapshotSection::Promises,
+        ] {
+            assert!(index.1.snapshot().contains(section));
+        }
     }
 
     #[test]

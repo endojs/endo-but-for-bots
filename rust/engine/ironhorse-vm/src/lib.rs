@@ -22,6 +22,8 @@
 
 mod bulk;
 mod classification;
+mod snapshot_dirty;
+pub use snapshot_dirty::{SnapshotBaseline, SnapshotDirty, SnapshotSection};
 pub mod compartment;
 pub mod cost;
 pub mod default_keys;
