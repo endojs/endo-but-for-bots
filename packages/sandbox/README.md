@@ -454,6 +454,11 @@ const slice = await E(sandbox).make({
     },
     // The whole mount table. `mounts` must be empty and there is no
     // scratch layer: an undeclared writable path is what this excludes.
+    // A `kind: 'attach'` entry is the one bind the table admits — a
+    // capability an operator-held bridge serves over 9P at a host
+    // mountpoint, bound under `/mnt/` — and it is admitted only because
+    // the attestation then reads the anchor's own mount table and proves
+    // the filesystem the slice sees there is 9P, not host data.
     mounts: [
       {
         role: 'workspace',
@@ -504,6 +509,7 @@ files, cores — stay `number`.
 | dropped capabilities        | `CapEff`, `CapPrm` and `CapBnd` all empty     |
 | uid / gid cannot be regained | real, saved and fs ids match the effective  |
 | no devices, no host binds   | resolved `Devices` and the mount table       |
+| a declared attach is 9P     | `/proc/<pid>/mountinfo` filesystem type      |
 | memory, swap, pids, cpu     | resolved `HostConfig`, and cgroup v2         |
 | `/dev/shm` ceiling          | resolved `HostConfig.ShmSize`                |
 | open-file and core ceilings | resolved `Ulimits`                           |

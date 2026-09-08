@@ -238,6 +238,24 @@ export type SlicePolicyMount =
       source: string;
       destination: string;
       sizeBytes: bigint;
+    }
+  | {
+      role: string;
+      /**
+       * A runtime attach: a capability an operator-held bridge already
+       * serves over 9P at a host mountpoint, bound into the slice under
+       * `/mnt/`. It carries no storage ceiling because it is not host
+       * storage — writes go through the capability to wherever that
+       * capability keeps its bytes. The attestation proves the mount the
+       * slice sees at `destination` is a 9P projection rather than host
+       * data; which capability it projects is the bridge's business.
+       */
+      kind: 'attach';
+      /** Absolute, normal host path of the 9P mountpoint. */
+      source: string;
+      /** Absolute, normal path under `/mnt/`. */
+      destination: string;
+      mode: 'ro' | 'rw';
     };
 
 /**
@@ -370,6 +388,17 @@ export type ObservedSliceState = {
     string,
     { sizeBytes: bigint | null; hostPath: string | null }
   >;
+  /**
+   * Per declared attach destination, the kernel's account of the mount
+   * there in the anchor's own mount namespace (`/proc/<pid>/mountinfo`):
+   * its filesystem type and per-mount options, or `null` when nothing is
+   * mounted at it. May be absent when the policy declares no attaches;
+   * an attach with no entry here is not proved.
+   */
+  attachMounts?: ReadonlyMap<
+    string,
+    { fstype: string; options: readonly string[] } | null
+  >;
   /** Host controls the ceilings depend on. */
   resources: { cgroupControllers: readonly string[] };
   /** Whether every descendant is inside something the driver removes. */
@@ -410,10 +439,11 @@ export type SlicePolicyAttestation = {
   /** The effective mount table, with the hardening options in force. */
   mounts: readonly {
     role: string;
-    /** `tmpfs`, or `volume:<name>`. */
+    /** `tmpfs`, `volume:<name>`, or `attach:<host mountpoint>`. */
     source: string;
     destination: string;
-    mode: 'rw';
+    /** `rw` for every volume and tmpfs; an attach reports its own mode. */
+    mode: 'ro' | 'rw';
     options: readonly string[];
   }[];
 };

@@ -7,8 +7,10 @@ import {
   countRoutableIpv6Routes,
   mapIdInward,
   parseIdMap,
+  parseMountInfo,
   parseNamespaceInode,
   parseNetDev,
+  readMountTable,
   readNetworkNamespace,
   readNetworkNamespaceIdAtPath,
   readProcessStatus,
@@ -348,4 +350,56 @@ test('a netns path nobody can stat is an error, not an identity', async t => {
     readNetworkNamespaceIdAtPath(proc, '/run/netns/broker-s1'),
     { message: /cannot identify the network namespace/ },
   );
+});
+
+const MOUNTINFO = `\
+22 28 0:21 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+28 1 0:24 / / rw,relatime - overlay overlay rw,lowerdir=/a,upperdir=/b
+101 28 0:47 / /workspace rw,nosuid,nodev,relatime - xfs /dev/mapper/vol rw,prjquota
+102 28 0:52 / /mnt/project rw,nosuid,nodev,relatime - 9p endo-fs rw,trans=unix,version=9p2000.L
+103 28 0:52 / /mnt/project ro,nosuid,nodev,relatime - 9p endo-fs rw,trans=unix,version=9p2000.L
+104 28 0:53 / /mnt/with\\040space rw,nosuid,nodev,relatime - 9p endo-fs rw,trans=unix
+`;
+
+test('parseMountInfo keys the kernel mount table by mount point, last mount on top', t => {
+  const table = parseMountInfo(MOUNTINFO);
+  t.deepEqual(table.get('/workspace'), {
+    fstype: 'xfs',
+    source: '/dev/mapper/vol',
+    options: ['rw', 'nosuid', 'nodev', 'relatime'],
+    superOptions: ['rw', 'prjquota'],
+  });
+  // Two mounts at one point: the later line is stacked on top, and it is
+  // the one a process at that path sees.
+  t.deepEqual(table.get('/mnt/project'), {
+    fstype: '9p',
+    source: 'endo-fs',
+    options: ['ro', 'nosuid', 'nodev', 'relatime'],
+    superOptions: ['rw', 'trans=unix', 'version=9p2000.L'],
+  });
+  // The kernel escapes the characters that would break its framing.
+  t.is(table.get('/mnt/with space')?.fstype, '9p');
+  t.is(table.get('/nowhere'), undefined);
+});
+
+test('parseMountInfo refuses a line it cannot frame', t => {
+  // A line with no `-` separator, and one whose right half is short:
+  // evidence that cannot be read must fail the proof, not drop a mount.
+  t.throws(() => parseMountInfo('22 28 0:21 / /proc rw proc proc rw\n'), {
+    message: /unrecognized mountinfo line/,
+  });
+  t.throws(() => parseMountInfo('22 28 0:21 / /proc rw - proc\n'), {
+    message: /unrecognized mountinfo line/,
+  });
+  // Blank lines are framing, not evidence.
+  t.is(parseMountInfo('\n\n').size, 0);
+});
+
+test('readMountTable reads the anchor pid and names a missing table', async t => {
+  const proc = makeFixtureProc({ '/proc/4242/mountinfo': MOUNTINFO }, {});
+  const table = await readMountTable(proc, 4242);
+  t.is(table.get('/mnt/project')?.fstype, '9p');
+  await t.throwsAsync(() => readMountTable(proc, 4243), {
+    message: /cannot read the mount table of pid 4243/,
+  });
 });

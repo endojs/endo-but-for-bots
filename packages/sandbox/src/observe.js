@@ -454,3 +454,86 @@ export const readNetworkNamespaceIdAtPath = async (proc, netnsPath) => {
   return `net-${inode}`;
 };
 harden(readNetworkNamespaceIdAtPath);
+
+/**
+ * Decode the octal escapes `/proc/<pid>/mountinfo` uses for the four
+ * characters that would otherwise break its whitespace framing: space
+ * (`\040`), tab (`\011`), newline (`\012`) and backslash (`\134`).
+ *
+ * @param {string} field
+ * @returns {string}
+ */
+const unescapeMountInfoField = field =>
+  field.replace(/\\([0-7]{3})/g, (_match, octal) =>
+    String.fromCharCode(parseInt(octal, 8)),
+  );
+
+/**
+ * Parse `/proc/<pid>/mountinfo` into the mount the kernel has at each
+ * mount point of that process's mount namespace.
+ *
+ * Each line is `id parent major:minor root mountPoint options
+ * [optional…] - fstype source superOptions`. The optional fields end at
+ * the lone `-` separator, which is how the two halves are told apart.
+ * Later lines for one mount point are mounts stacked on top of earlier
+ * ones, and the topmost is what a process at that path sees, so the
+ * last line wins.
+ *
+ * A line in any other shape throws. This file is evidence for an
+ * attestation, and "we could not read this" must fail the proof rather
+ * than silently drop a mount from it.
+ *
+ * @param {string} text
+ * @returns {Map<string, { fstype: string, source: string, options: readonly string[], superOptions: readonly string[] }>}
+ */
+export const parseMountInfo = text => {
+  /** @type {Map<string, { fstype: string, source: string, options: readonly string[], superOptions: readonly string[] }>} */
+  const table = new Map();
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const tokens = line.split(' ');
+    const separator = tokens.indexOf('-');
+    if (separator < 6 || tokens.length < separator + 4) {
+      throw makeError(X`unrecognized mountinfo line ${q(line)}`);
+    }
+    const mountPoint = unescapeMountInfoField(tokens[4]);
+    const options = harden(tokens[5].split(','));
+    const fstype = unescapeMountInfoField(tokens[separator + 1]);
+    const source = unescapeMountInfoField(tokens[separator + 2]);
+    const superOptions = harden(tokens[separator + 3].split(','));
+    table.set(mountPoint, harden({ fstype, source, options, superOptions }));
+  }
+  return table;
+};
+harden(parseMountInfo);
+
+/**
+ * Read the mount table of a live process's own mount namespace.
+ *
+ * A policy attach is a bind of a host path the attestation must prove
+ * is a 9P projection rather than host data, and the container runtime's
+ * inspect record cannot say what filesystem sits under a bind source.
+ * The kernel can: inside the anchor's private mount namespace the bind
+ * at the attach destination carries the filesystem type of what it was
+ * bound from.
+ *
+ * @param {ProcReader} proc
+ * @param {number} pid
+ * @returns {Promise<ReturnType<typeof parseMountInfo>>}
+ */
+export const readMountTable = async (proc, pid) => {
+  await null;
+  let text;
+  try {
+    text = await proc.readFile(`/proc/${pid}/mountinfo`);
+  } catch (e) {
+    throw makeError(
+      X`cannot read the mount table of pid ${q(pid)}: ${q(/** @type {Error} */ (e).message)}`,
+    );
+  }
+  return parseMountInfo(text);
+};
+harden(readMountTable);

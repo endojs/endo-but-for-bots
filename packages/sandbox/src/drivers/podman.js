@@ -10,6 +10,7 @@ import { makeCgroup2Probe } from '../limits.js';
 import {
   makeProcReader,
   parseNamespaceInode,
+  readMountTable,
   readNamespaceIdentities,
   readNetworkNamespace,
   readNetworkNamespaceIdAtPath,
@@ -1502,18 +1503,27 @@ export const makePodmanDriver = ({
         throw makeError(X`podman policy anchor is not running`);
       }
       const proc = await getProcfs();
+      const attachDeclared = request.mounts.filter(
+        mount => mount.kind === 'attach',
+      );
       const [
         namespaces,
         anchorNetwork,
         processIdentity,
         brokerNamespaceId,
         rootless,
+        anchorMountTable,
       ] = await Promise.all([
         readNamespaceIdentities(proc, pid),
         readNetworkNamespace(proc, pid),
         readProcessStatus(proc, pid),
         resolveBrokerNamespaceId(cp, runtime, proc, request.brokerSidecar),
         isRootless(cp, runtime),
+        // The kernel's account of the anchor's own mount namespace, read
+        // only when the table declares an attach: it is what proves the
+        // bind at each attach destination is a 9P projection and not host
+        // data, which the runtime's inspect record cannot say.
+        attachDeclared.length > 0 ? readMountTable(proc, pid) : undefined,
       ]);
       // Everything above read `/proc/<pid>/…`. If the anchor exited
       // partway — an `attestationArgv` that does not in fact block, or
@@ -1540,6 +1550,18 @@ export const makePodmanDriver = ({
             }),
         ),
       );
+      /** @type {Map<string, { fstype: string, options: readonly string[] } | null>} */
+      const attachMounts = new Map(
+        attachDeclared.map(mount => {
+          const kernel = anchorMountTable?.get(mount.destination);
+          return [
+            mount.destination,
+            kernel === undefined
+              ? null
+              : harden({ fstype: kernel.fstype, options: kernel.options }),
+          ];
+        }),
+      );
       const attestation = attestSlicePolicy(request, {
         inspect,
         rootless,
@@ -1547,6 +1569,7 @@ export const makePodmanDriver = ({
         network: harden({ ...anchorNetwork, brokerNamespaceId }),
         processIdentity,
         volumes,
+        attachMounts,
         resources: harden({ cgroupControllers: cgroup2.controllers }),
         // A private pid namespace puts every descendant — setsid,
         // double-forked, or backgrounded — inside the container the
