@@ -1694,6 +1694,23 @@ impl ChunkArena {
         self.view(start, start + len)
     }
 
+    /// A bounded subrange of one payload. Validate against the block header,
+    /// then visit only the requested extents (not the intervening payload).
+    /// This is the indexed-string read path on attached heaps.
+    #[inline]
+    pub(crate) fn payload_range(
+        &self,
+        off: ChunkOffset,
+        range: std::ops::Range<usize>,
+    ) -> Option<ChunkSlice<'_>> {
+        if range.start > range.end || range.end > self.len_of(off) {
+            return None;
+        }
+        let start = (off.0 as usize).checked_add(range.start)?;
+        let end = (off.0 as usize).checked_add(range.end)?;
+        Some(self.view(start, end))
+    }
+
     /// The whole payload of the block at `off`, using its stored length.
     #[inline]
     pub fn payload(&self, off: ChunkOffset) -> ChunkSlice<'_> {

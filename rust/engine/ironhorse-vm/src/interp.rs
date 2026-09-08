@@ -14266,6 +14266,7 @@ impl Interp {
 
     /// The string value's code units (`str_content` decoded from UTF-16BE).
     fn str_units(&self, off: crate::value::ChunkOffset) -> Vec<u16> {
+        string_decode_instrumentation::record();
         be16_to_units(&self.str_content(off))
     }
 
@@ -14279,10 +14280,9 @@ impl Interp {
     /// ~18,000 computrons — work the meter cannot see, which is a denial of
     /// service in a metered engine even though nothing is minted.
     fn str_unit_at(&self, off: crate::value::ChunkOffset, index: u32) -> Option<u16> {
-        let content = self.str_content(off);
-        let bytes: &[u8] = &content;
         let at = (index as usize).checked_mul(2)?;
-        Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
+        let bytes = self.chunks.payload_range(off, at..at.checked_add(2)?)?;
+        Some(u16::from_be_bytes([bytes[0], bytes[1]]))
     }
 
     /// The string value's code-unit length (`length`, O(1) — half the stored
@@ -41659,10 +41659,18 @@ impl Interp {
     /// skip — `String.prototype` methods on a non-string `this` are not modeled
     /// this stage).
     fn string_receiver_units(&self, this: Slot) -> Option<Vec<u16>> {
+        self.string_receiver_offset(this)
+            .map(|off| self.str_units(off))
+    }
+
+    /// Retain an immutable string's arena address rather than materializing it.
+    /// Primitive and boxed-string receivers follow the same branding path as
+    /// `string_receiver_units`; other receivers still use its ToString path.
+    fn string_receiver_offset(&self, this: Slot) -> Option<crate::value::ChunkOffset> {
         match this.value {
-            Payload::String(off) => Some(self.str_units(off)),
+            Payload::String(off) => Some(off),
             Payload::Reference(r) => match self.wrapper_data.get(&r).map(|s| s.value) {
-                Some(Payload::String(off)) => Some(self.str_units(off)),
+                Some(Payload::String(off)) => Some(off),
                 _ => None,
             },
             _ => None,
@@ -41928,7 +41936,10 @@ impl Interp {
     /// calls and catchable BigInt/Symbol errors. Meters exactly the pin's
     /// `mxMeterSome` + `fxNewChunk` (re-based to code-unit length), plus the
     /// (zero) native frame.
-    fn call_string(
+    /// Index-addressed String methods never decode the whole primitive/wrapper
+    /// receiver. Reacquire the arena slice for each read, so guest coercions may
+    /// allocate without a live ChunkSlice borrow across that re-entry.
+    fn call_string_indexed(
         &mut self,
         m: NativeMethod,
         this: Slot,
@@ -41936,19 +41947,38 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let content = self.string_this_units(code, this)?;
-        let ulen = content.len() as i64; // UTF-16 code-unit length
-                                         // Clamp a (possibly negative / out-of-range) code-unit position to a
-                                         // valid slice index into `content` (units). Replaces the CESU-8
-                                         // byte-offset lookup — with UTF-16 storage the unit index *is* the
-                                         // slice index.
-        let clamp = |unit: i64| -> usize {
-            if unit <= 0 {
-                0
-            } else if unit >= ulen {
-                content.len()
-            } else {
-                unit as usize
+        if this.kind == Kind::Undefined {
+            return Err(self.catchable_type_error_msg("this: undefined".into()));
+        }
+        if this.kind == Kind::Null {
+            return Err(self.catchable_type_error_msg("this: null".into()));
+        }
+        let branded = self.string_receiver_offset(this);
+        let primitive = if branded.is_none() && this.kind == Kind::Reference {
+            self.to_primitive(code, this, true)?
+        } else {
+            this
+        };
+        let offset = branded.or(match primitive.value {
+            Payload::String(off) => Some(off),
+            _ => None,
+        });
+        let fallback = if offset.is_none() {
+            // Non-string primitives need formatting; a string returned by a
+            // generic receiver's ToPrimitive retains its offset above too.
+            self.to_string_units(code, primitive)?
+        } else {
+            Vec::new()
+        };
+        let length = offset.map_or(fallback.len(), |off| self.str_len(off));
+        let ulen = length as i64;
+        let clamp = |unit: i64| -> usize { unit.clamp(0, ulen) as usize };
+        let unit_at = |machine: &Self, index: usize| -> u16 {
+            match offset {
+                Some(off) => machine
+                    .str_unit_at(off, index as u32)
+                    .expect("in-range string index"),
+                None => fallback[index],
             }
         };
         let args: Vec<Slot> = (0..argc)
@@ -41977,7 +42007,7 @@ impl Interp {
                     _ => 0,
                 };
                 if pos < ulen {
-                    Slot::integer(content[pos as usize] as i32)
+                    Slot::integer(unit_at(self, pos as usize) as i32)
                 } else {
                     Slot::number(f64::NAN)
                 }
@@ -41992,9 +42022,9 @@ impl Interp {
                     _ => 0,
                 };
                 if pos >= 0 && pos < ulen {
-                    let hi = content[pos as usize] as u32;
+                    let hi = unit_at(self, pos as usize) as u32;
                     let cp = if (0xD800..=0xDBFF).contains(&hi) && pos + 1 < ulen {
-                        let lo = content[(pos + 1) as usize] as u32;
+                        let lo = unit_at(self, (pos + 1) as usize) as u32;
                         if (0xDC00..=0xDFFF).contains(&lo) {
                             0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
                         } else {
@@ -42020,7 +42050,7 @@ impl Interp {
                 if pos < 0 || pos >= ulen {
                     self.new_string_units(&[])
                 } else {
-                    self.new_string_units(&[content[pos as usize]])
+                    self.new_string_units(&[unit_at(self, pos as usize)])
                 }
             }
             // at(index): the one-unit string at `index` (negative from the
@@ -42034,9 +42064,206 @@ impl Interp {
                 if idx < 0 || idx >= ulen {
                     Slot::undefined()
                 } else {
-                    self.new_string_units(&[content[idx as usize]])
+                    self.new_string_units(&[unit_at(self, idx as usize)])
                 }
             }
+            // startsWith / endsWith: reject `IsRegExp(searchString)`, then
+            // `ToString(searchString)`, then mxMeterSome(searchUnitLen) and a
+            // byte compare (no per-byte meter).
+            StringStartsWith | StringEndsWith => {
+                let search = argn(0).unwrap_or_else(Slot::undefined);
+                if self.string_is_regexp(code, search)? {
+                    return Err(self.catchable_type_error_msg("future editions".into()));
+                }
+                let sub = self.to_string_units(code, search)?;
+                let sub_units = sub.len() as u64;
+                let is_start = m == StringStartsWith;
+                // The position argument (code unit), clamped to [0, ulen].
+                let pos = if is_start {
+                    self.string_arg_to_position(code, argn(1), 0, ulen)?
+                } else {
+                    self.string_arg_to_position(code, argn(1), ulen, ulen)?
+                };
+                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
+                self.charge_builtin_work(sub_units)?;
+                let at = clamp(pos);
+                let matches = if is_start {
+                    length >= at + sub.len()
+                        && sub
+                            .iter()
+                            .enumerate()
+                            .all(|(i, &unit)| unit_at(self, at + i) == unit)
+                } else {
+                    at >= sub.len()
+                        && sub
+                            .iter()
+                            .enumerate()
+                            .all(|(i, &unit)| unit_at(self, at - sub.len() + i) == unit)
+                };
+                Slot::boolean(matches)
+            }
+            // includes(search[,from]): whether `search` occurs. Charges the
+            // fixed search-argument residual; its `includes_aux` scan does NOT
+            // meter the per-byte compares (measured against the pin — a
+            // distinct host-frame shape from `indexOf`), so the search runs
+            // unmetered.
+            StringIncludes => {
+                let search = argn(0).unwrap_or_else(Slot::undefined);
+                if self.string_is_regexp(code, search)? {
+                    return Err(self.catchable_type_error_msg("future editions".into()));
+                }
+                let sub = self.to_string_units(code, search)?;
+                let from = self.string_arg_to_position(code, argn(1), 0, ulen)?;
+                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
+                let bfrom = clamp(from).min(length);
+                let found = sub.is_empty()
+                    || (sub.len() <= length - bfrom
+                        && (bfrom..=length - sub.len()).any(|at| {
+                            sub.iter()
+                                .enumerate()
+                                .all(|(i, &unit)| unit_at(self, at + i) == unit)
+                        }));
+                Slot::boolean(found)
+            }
+            // indexOf / lastIndexOf: search in UTF-16 code units, after the
+            // observable ToString(searchString) and ToIntegerOrInfinity(position)
+            // coercions. XS's inner UTF-8 scan meters only the matching prefix
+            // at each candidate (one raw tick per CESU-8 leading byte because
+            // of the pinned macro-precedence quirk), including a full match;
+            // `string_search_match_meter` translates that charge to the VM's
+            // UTF-16 storage without losing astral/lone-surrogate behavior.
+            StringIndexOf | StringLastIndexOf => {
+                let search = self.to_string_units(code, argn(0).unwrap_or_else(Slot::undefined))?;
+                let last = m == StringLastIndexOf;
+                let position =
+                    if last && (argc < 2 || argn(1).is_some_and(|v| v.kind == Kind::Undefined)) {
+                        f64::INFINITY
+                    } else if argc < 2 {
+                        0.0
+                    } else if last {
+                        // `lastIndexOf` maps *any* NaN position to +INFINITY, not
+                        // only a missing or `undefined` one, so it cannot share
+                        // `ToIntegerOrInfinity`'s NaN-to-zero rule.
+                        self.string_last_index_of_position(
+                            code,
+                            argn(1).unwrap_or_else(Slot::undefined),
+                        )?
+                    } else {
+                        self.array_to_integer_or_infinity(
+                            code,
+                            argn(1).unwrap_or_else(Slot::undefined),
+                        )?
+                    };
+                let start = if position == f64::INFINITY {
+                    length
+                } else if position == f64::NEG_INFINITY || position <= 0.0 {
+                    0
+                } else if position >= length as f64 {
+                    length
+                } else {
+                    position as usize
+                };
+                self.meter.tick_raw(STRING_INDEX_FRAME_METERING);
+
+                if search.is_empty() {
+                    Self::array_index_number(start as u64)
+                } else if search.len() > length {
+                    Slot::integer(-1)
+                } else if last {
+                    let mut candidate = start.min(length - search.len());
+                    loop {
+                        let mut matched = 0usize;
+                        while matched < search.len()
+                            && unit_at(self, candidate + matched) == search[matched]
+                        {
+                            self.charge_and_check(1)?;
+                            matched += 1;
+                        }
+                        if matched == search.len() {
+                            break Self::array_index_number(candidate as u64);
+                        }
+                        if candidate == 0 {
+                            break Slot::integer(-1);
+                        }
+                        candidate -= 1;
+                    }
+                } else if start + search.len() > length {
+                    Slot::integer(-1)
+                } else {
+                    let limit = length - search.len();
+                    let mut candidate = start;
+                    loop {
+                        let mut matched = 0usize;
+                        while matched < search.len()
+                            && unit_at(self, candidate + matched) == search[matched]
+                        {
+                            self.charge_and_check(1)?;
+                            matched += 1;
+                        }
+                        if matched == search.len() {
+                            break Self::array_index_number(candidate as u64);
+                        }
+                        if candidate == limit {
+                            break Slot::integer(-1);
+                        }
+                        candidate += 1;
+                    }
+                }
+            }
+            _ => unreachable!("only indexed String methods enter this helper"),
+        };
+        Ok(result)
+    }
+
+    fn call_string(
+        &mut self,
+        m: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Step> {
+        if matches!(
+            m,
+            NativeMethod::StringCharCodeAt
+                | NativeMethod::StringCodePointAt
+                | NativeMethod::StringCharAt
+                | NativeMethod::StringAt
+                | NativeMethod::StringStartsWith
+                | NativeMethod::StringEndsWith
+                | NativeMethod::StringIncludes
+                | NativeMethod::StringIndexOf
+                | NativeMethod::StringLastIndexOf
+        ) {
+            return self.call_string_indexed(m, this, base, argc, code);
+        }
+        let content = self.string_this_units(code, this)?;
+        let ulen = content.len() as i64; // UTF-16 code-unit length
+                                         // Clamp a (possibly negative / out-of-range) code-unit position to a
+                                         // valid slice index into `content` (units). Replaces the CESU-8
+                                         // byte-offset lookup — with UTF-16 storage the unit index *is* the
+                                         // slice index.
+        let clamp = |unit: i64| -> usize {
+            if unit <= 0 {
+                0
+            } else if unit >= ulen {
+                content.len()
+            } else {
+                unit as usize
+            }
+        };
+        let args: Vec<Slot> = (0..argc)
+            .map(|i| {
+                self.stack
+                    .get(base + 4 + i)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined)
+            })
+            .collect();
+        let argn = |i: usize| -> Option<Slot> { args.get(i).copied() };
+        self.meter.tick_raw(STRING_METHOD_FRAME_METERING);
+        use NativeMethod::*;
+        let result = match m {
             // slice([start[,end]]): the substring `[start,end)` with negative
             // offsets counted from the end.
             StringSlice => {
@@ -42109,138 +42336,6 @@ impl Interp {
                     out.extend_from_slice(&content);
                 }
                 self.new_reserved_string_units(&out)
-            }
-            // startsWith / endsWith: reject `IsRegExp(searchString)`, then
-            // `ToString(searchString)`, then mxMeterSome(searchUnitLen) and a
-            // byte compare (no per-byte meter).
-            StringStartsWith | StringEndsWith => {
-                let search = argn(0).unwrap_or_else(Slot::undefined);
-                if self.string_is_regexp(code, search)? {
-                    return Err(self.catchable_type_error_msg("future editions".into()));
-                }
-                let sub = self.to_string_units(code, search)?;
-                let sub_units = sub.len() as u64;
-                let is_start = m == StringStartsWith;
-                // The position argument (code unit), clamped to [0, ulen].
-                let pos = if is_start {
-                    self.string_arg_to_position(code, argn(1), 0, ulen)?
-                } else {
-                    self.string_arg_to_position(code, argn(1), ulen, ulen)?
-                };
-                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
-                self.charge_builtin_work(sub_units)?;
-                let at = clamp(pos);
-                let matches = if is_start {
-                    content.len() >= at + sub.len() && content[at..at + sub.len()] == sub[..]
-                } else {
-                    at >= sub.len() && content[at - sub.len()..at] == sub[..]
-                };
-                Slot::boolean(matches)
-            }
-            // includes(search[,from]): whether `search` occurs. Charges the
-            // fixed search-argument residual; its `includes_aux` scan does NOT
-            // meter the per-byte compares (measured against the pin — a
-            // distinct host-frame shape from `indexOf`), so the search runs
-            // unmetered.
-            StringIncludes => {
-                let search = argn(0).unwrap_or_else(Slot::undefined);
-                if self.string_is_regexp(code, search)? {
-                    return Err(self.catchable_type_error_msg("future editions".into()));
-                }
-                let sub = self.to_string_units(code, search)?;
-                let from = self.string_arg_to_position(code, argn(1), 0, ulen)?;
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                let bfrom = clamp(from).min(content.len());
-                let hay = &content[bfrom..];
-                let found = sub.is_empty()
-                    || (sub.len() <= hay.len() && hay.windows(sub.len()).any(|w| w == &sub[..]));
-                Slot::boolean(found)
-            }
-            // indexOf / lastIndexOf: search in UTF-16 code units, after the
-            // observable ToString(searchString) and ToIntegerOrInfinity(position)
-            // coercions. XS's inner UTF-8 scan meters only the matching prefix
-            // at each candidate (one raw tick per CESU-8 leading byte because
-            // of the pinned macro-precedence quirk), including a full match;
-            // `string_search_match_meter` translates that charge to the VM's
-            // UTF-16 storage without losing astral/lone-surrogate behavior.
-            StringIndexOf | StringLastIndexOf => {
-                let search = self.to_string_units(code, argn(0).unwrap_or_else(Slot::undefined))?;
-                let last = m == StringLastIndexOf;
-                let position =
-                    if last && (argc < 2 || argn(1).is_some_and(|v| v.kind == Kind::Undefined)) {
-                        f64::INFINITY
-                    } else if argc < 2 {
-                        0.0
-                    } else if last {
-                        // `lastIndexOf` maps *any* NaN position to +INFINITY, not
-                        // only a missing or `undefined` one, so it cannot share
-                        // `ToIntegerOrInfinity`'s NaN-to-zero rule.
-                        self.string_last_index_of_position(
-                            code,
-                            argn(1).unwrap_or_else(Slot::undefined),
-                        )?
-                    } else {
-                        self.array_to_integer_or_infinity(
-                            code,
-                            argn(1).unwrap_or_else(Slot::undefined),
-                        )?
-                    };
-                let length = content.len();
-                let start = if position == f64::INFINITY {
-                    length
-                } else if position == f64::NEG_INFINITY || position <= 0.0 {
-                    0
-                } else if position >= length as f64 {
-                    length
-                } else {
-                    position as usize
-                };
-                self.meter.tick_raw(STRING_INDEX_FRAME_METERING);
-
-                if search.is_empty() {
-                    Self::array_index_number(start as u64)
-                } else if search.len() > length {
-                    Slot::integer(-1)
-                } else if last {
-                    let mut candidate = start.min(length - search.len());
-                    loop {
-                        let mut matched = 0usize;
-                        while matched < search.len()
-                            && content[candidate + matched] == search[matched]
-                        {
-                            self.charge_and_check(1)?;
-                            matched += 1;
-                        }
-                        if matched == search.len() {
-                            break Self::array_index_number(candidate as u64);
-                        }
-                        if candidate == 0 {
-                            break Slot::integer(-1);
-                        }
-                        candidate -= 1;
-                    }
-                } else if start + search.len() > length {
-                    Slot::integer(-1)
-                } else {
-                    let limit = length - search.len();
-                    let mut candidate = start;
-                    loop {
-                        let mut matched = 0usize;
-                        while matched < search.len()
-                            && content[candidate + matched] == search[matched]
-                        {
-                            self.charge_and_check(1)?;
-                            matched += 1;
-                        }
-                        if matched == search.len() {
-                            break Self::array_index_number(candidate as u64);
-                        }
-                        if candidate == limit {
-                            break Slot::integer(-1);
-                        }
-                        candidate += 1;
-                    }
-                }
             }
             // toLowerCase / toUpperCase: Unicode Default Case Conversion over
             // scalar values, preserving lone UTF-16 surrogates unchanged.
@@ -62942,6 +63037,92 @@ mod tests {
     }
 
     #[test]
+    fn generic_indexed_receiver_keeps_the_string_returned_by_to_primitive() {
+        let source = "var o={toString(){return 'abcdefghijklmnop';}}; for(var i=0;i<1000;i++){String.prototype.charCodeAt.call(o,0);} 0";
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&crate::parse_symbols(&symbols));
+        string_decode_instrumentation::STRING_UNITS_CALLS.with(|count| count.set(0));
+        let outcome = interp.run(&code);
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        assert_eq!(outcome.result, "0");
+        assert_eq!(
+            string_decode_instrumentation::STRING_UNITS_CALLS.with(|count| count.get()),
+            0
+        );
+    }
+
+    #[test]
+    fn indexed_string_reads_fault_only_header_and_requested_units() {
+        use crate::value::{ChunkArena, PageSource, CHUNK_EXTENT_BYTES};
+        struct Source {
+            bytes: Vec<u8>,
+            reads: Rc<RefCell<Vec<u32>>>,
+        }
+        impl PageSource for Source {
+            fn slot_page(&self, _page: u32) -> Vec<Slot> {
+                panic!("no slot reads");
+            }
+            fn chunk_extent(&self, ext: u32) -> Vec<u8> {
+                self.reads.borrow_mut().push(ext);
+                let start = ext as usize * CHUNK_EXTENT_BYTES as usize;
+                self.bytes[start..(start + CHUNK_EXTENT_BYTES as usize).min(self.bytes.len())]
+                    .to_vec()
+            }
+        }
+        let extent = CHUNK_EXTENT_BYTES as usize;
+        let mut interp = Interp::new();
+        let mut chunks = ChunkArena::new();
+        chunks.alloc(&vec![0; extent - 9]);
+        let off = chunks.alloc(&units_to_be16(&vec![0x1234; extent * 3]));
+        assert_eq!(off.0 as usize, extent - 1, "first unit straddles extents");
+        let bytes = chunks.raw_vec();
+        let reads = Rc::new(RefCell::new(Vec::new()));
+        interp.chunks = ChunkArena::lazy_from_parts(
+            bytes.len(),
+            Rc::new(Source {
+                bytes,
+                reads: reads.clone(),
+            }),
+        );
+        assert_eq!(interp.str_unit_at(off, 0), Some(0x1234));
+        assert_eq!(*reads.borrow(), [0, 1]);
+        assert_eq!(
+            interp.str_unit_at(off, (extent * 3 - 1) as u32),
+            Some(0x1234)
+        );
+        assert_eq!(*reads.borrow(), [0, 1, 6]);
+        for _ in 0..100000 {
+            assert_eq!(interp.str_unit_at(off, 0), Some(0x1234));
+        }
+        assert_eq!(interp.str_unit_at(off, (extent * 3) as u32), None);
+        assert_eq!(interp.str_unit_at(off, u32::MAX), None);
+        assert_eq!(
+            *reads.borrow(),
+            [0, 1, 6],
+            "resident reads and misses do not fault"
+        );
+        assert_eq!(interp.chunks.resident_extent_count(), 3);
+    }
+
+    #[test]
+    fn char_code_at_does_not_decode_the_receiver_100000_times() {
+        let source =
+            "var s = 'abcdefghijklmnop'; for (var i = 0; i < 100000; i++) { s.charCodeAt(0); } 0";
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&crate::parse_symbols(&symbols));
+        string_decode_instrumentation::STRING_UNITS_CALLS.with(|count| count.set(0));
+        let outcome = interp.run(&code);
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        assert_eq!(outcome.result, "0");
+        assert_eq!(
+            string_decode_instrumentation::STRING_UNITS_CALLS.with(|count| count.get()),
+            0
+        );
+    }
+
+    #[test]
     fn internal_transfers_cannot_be_reported_as_host_completions() {
         let mut interp = Interp::new();
         for step in [
@@ -64340,9 +64521,9 @@ mod tests {
         let mut interp = Interp::new();
         // 100×'a', 𝒜 (a surrogate pair), 100×'b', 𝒷 (a second pair), 'c'.
         let mut units: Vec<u16> = Vec::new();
-        units.extend(std::iter::repeat(b'a' as u16).take(100));
+        units.extend(std::iter::repeat_n(b'a' as u16, 100));
         units.extend("𝒜".encode_utf16());
-        units.extend(std::iter::repeat(b'b' as u16).take(100));
+        units.extend(std::iter::repeat_n(b'b' as u16, 100));
         units.extend("𝒷".encode_utf16());
         units.push(b'c' as u16);
         let off = str_off(&interp.new_string_units(&units));
@@ -66655,4 +66836,20 @@ impl Interp {
 #[cfg(test)]
 mod meter_consistency {
     include!("meter_consistency.rs");
+}
+
+#[cfg(test)]
+mod string_decode_instrumentation {
+    std::thread_local! {
+        pub(super) static STRING_UNITS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    pub(super) fn record() {
+        STRING_UNITS_CALLS.with(|count| count.set(count.get() + 1));
+    }
+}
+
+#[cfg(not(test))]
+mod string_decode_instrumentation {
+    #[inline(always)]
+    pub(super) fn record() {}
 }

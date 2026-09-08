@@ -676,3 +676,26 @@ fn regexp_split_protocol_has_frozen_version_four_totals() {
         );
     }
 }
+
+#[test]
+fn indexed_string_paths_preserve_units_and_reentrant_argument_coercion() {
+    for source in [
+        "var s='a\\uD800\\uDC00\\uD801b'; [s.charCodeAt(1),s.codePointAt(1),s.charAt(3).charCodeAt(0),s.at(-2).charCodeAt(0),s[3].charCodeAt(0)].join(',')",
+        "var s='a\\uD800\\uDC00\\uD801b'; [s.startsWith('\\uDC00',2),s.endsWith('\\uD801',4),s.includes('\\uD800\\uDC00'),s.indexOf('\\uDC00'),s.lastIndexOf('\\uD801')].join(',')",
+        "var s=new String('a\\uD800b'); [s.charCodeAt(1),s.charAt(1).charCodeAt(0),s.includes('\\uD800'),s.indexOf('b')].join(',')",
+        "var s='abc'; var p={valueOf(){var a=[]; for(var i=0;i<1000;i++){a.push('x'.repeat(100));} s='changed'; return 1;}}; 'abc'.charAt(p)",
+        "var log=[]; var receiver={toString(){log.push('receiver');return 'abc';}}; var needle={toString(){log.push('needle');return 'b';}}; var position={valueOf(){log.push('position');return 1;}}; String.prototype.indexOf.call(receiver,needle,position)+':'+log.join(',')",
+        "['', 'abc'].map(function(s){return [s.charCodeAt(NaN),s.codePointAt(-Infinity),s.charAt(NaN),s.at(-Infinity),s.indexOf('',Infinity),s.lastIndexOf('',NaN)].join(':')}).join('|')",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn char_code_at_infinity_is_out_of_range() {
+    // The pinned XS oracle incorrectly coerces +Infinity to zero in charCodeAt.
+    // Preserve the standards result rather than copying that oracle defect.
+    let run = dual_run("'abc'.charCodeAt(Infinity)").unwrap();
+    assert_eq!(run.agreement, Agreement::BothComplete);
+    assert_eq!(run.ironhorse_result, "NaN");
+}
