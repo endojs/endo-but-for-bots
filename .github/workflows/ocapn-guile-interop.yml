@@ -6,6 +6,12 @@ name: OCapN Guile interop
 # This currently targets Spritely git repos directly (both goblins + goblin-chat),
 # pinned by commit. The flow asserts full Guile-hosted/Endo-joined interoperability:
 # sturdyref publication, websocket session establishment, and bilateral message exchange.
+#
+# Because those repos come from a third-party forge, the job can also pass
+# without having tested anything: when Codeberg serves none of the pinned
+# sources, every step after "Obtain Spritely" is skipped and the run says so
+# in its summary. See the comment on that step for what is and is not
+# tolerated that way.
 
 on:
   pull_request:
@@ -30,6 +36,15 @@ env:
   # See designs/ci-no-npm-lifecycle.md.
   YARN_ENABLE_SCRIPTS: 'false'
   npm_config_ignore_scripts: 'true'
+  # The Spritely sources, pinned by commit. Each commit is paired with the
+  # git tree hash it names, which is what every source of those bytes is
+  # checked against; see the "Obtain Spritely" step below. To bump a pin,
+  # update the commit and read back the matching tree with
+  # `git rev-parse <commit>^{tree}`. The two must move together.
+  GOBLINS_COMMIT: 'd42d3a4ff560ecd2a1ac8ef0e44e52ad9e20bdb6'
+  GOBLINS_TREE: '1131bfb6430766c7c864652386ac9cfdd4149027'
+  GOBLIN_CHAT_COMMIT: 'fd0b3fcec186e54f978fb24b23bb46a65ae2e0a7'
+  GOBLIN_CHAT_TREE: '52c7cc063e8c708edff49e3dc3939a96648c8082'
   # Pin to a specific Guix release rather than tracking nightly. The
   # nightly tarball lives behind `ci.guix.gnu.org`, which periodically
   # returns sustained 502s for hours and which is also the substitute
@@ -54,23 +69,206 @@ jobs:
           path: endo
           persist-credentials: false
 
-      - name: Clone Spritely Goblins + goblin-chat from Codeberg
-        run: |
-          # Both repos are hosted on Codeberg. We pin to explicit commits so CI
-          # stays deterministic while still tracking git repositories directly.
-          GOBLINS_COMMIT=d42d3a4ff560ecd2a1ac8ef0e44e52ad9e20bdb6
-          GOBLIN_CHAT_COMMIT=fd0b3fcec186e54f978fb24b23bb46a65ae2e0a7
-          git clone https://codeberg.org/spritely/goblins goblins
-          git -C goblins checkout --detach "$GOBLINS_COMMIT"
-          git clone https://codeberg.org/spritely/goblin-chat goblin-chat
-          git -C goblin-chat checkout --detach "$GOBLIN_CHAT_COMMIT"
-          echo "GOBLINS_COMMIT=$GOBLINS_COMMIT" >> "$GITHUB_ENV"
-          echo "GOBLIN_CHAT_COMMIT=$GOBLIN_CHAT_COMMIT" >> "$GITHUB_ENV"
+      # Both Spritely repos are hosted on Codeberg and pinned to explicit
+      # commits, so CI stays deterministic while still tracking git
+      # repositories directly. A plain `git clone` of them was this job's
+      # first step and its most fragile: on 2026-09-08 Codeberg's git
+      # endpoint answered `504 Bad Gateway` and the job died before doing
+      # any work. Three layers now sit between that outage and a red run.
+      #
+      #   1. A cache keyed on the pinned commits. The commits are
+      #      immutable, so a hit is always correct and most runs never
+      #      contact Codeberg at all. Pull request runs can read caches
+      #      saved on the base branch.
+      #   2. Two independent Codeberg endpoints per repo. A depth-1 fetch
+      #      of just the pinned commit is tried first, then
+      #      `/archive/<commit>.tar.gz`, which Forgejo serves from its
+      #      archive cache without going through `git-upload-pack` at all.
+      #      During the 504 window above the archive endpoint served these
+      #      exact commits normally, so the two fail independently.
+      #   3. If no source serves them, the job is skipped rather
+      #      than failed: an upstream forge being down is not a result
+      #      about this pull request. Every later step carries the
+      #      matching `if:`, so nothing runs half-configured.
+      #
+      # As with the Guix tarball below, the trust anchor is the pinned hash
+      # and not the source: bytes are accepted only if they reconstruct the
+      # tree of the pinned commit. The git path gets that check from git
+      # itself; the archive path, which is otherwise only as good as the
+      # transport, is held to the same value, and so is a restored cache.
+      #
+      # A pin that no longer resolves is a different failure and must not
+      # be swallowed by the skip: when Codeberg answers but reports the
+      # commit gone (an upstream force-push, a rename), this step fails
+      # loudly instead, because that one is actionable here.
+      #
+      # The GitLab mirrors are no use as a third source: they stopped
+      # tracking upstream in 2024 (goblins) and 2022 (goblin-chat) and
+      # contain neither pinned commit. Software Heritage has the goblins
+      # revision but not goblin-chat's, and extracting a tree from it needs
+      # the asynchronous vault-cooking API.
+      - name: Restore Spritely source cache
+        id: spritely-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            goblins
+            goblin-chat
+          key: spritely-source-${{ env.GOBLINS_COMMIT }}-${{ env.GOBLIN_CHAT_COMMIT }}
 
-      - run: corepack enable
+      - name: Obtain Spritely Goblins + goblin-chat
+        id: spritely
+        env:
+          # Empty rather than 'true' when the cache missed.
+          CACHE_HIT: ${{ steps.spritely-cache.outputs.cache-hit }}
+          # Worst case per repo is ATTEMPTS x both source timeouts plus the
+          # waits between attempts -- 3 x 120s + 2 x 20s, under seven
+          # minutes -- so even with every source timing out, both repos
+          # resolve well inside the job's 45-minute budget. Nothing
+          # expensive has run yet at this point, and nothing will if this
+          # step reports the sources unavailable.
+          ATTEMPTS: '3'
+          RETRY_WAIT: '20'
+          SOURCE_TIMEOUT: '60'
+        run: |
+          set -uo pipefail
+
+          # Reconstruct the git tree hash of a plain directory, so bytes
+          # from the git endpoint, from the archive endpoint and from the
+          # cache are all held to the same pinned value. The index and
+          # object store live outside the tree, so verifying leaves nothing
+          # behind for the Guile load path to trip over.
+          tree_hash() { # dir
+            local scratch
+            scratch="$(mktemp -d)"
+            git init -q --bare "$scratch/git" || return 1
+            # `-f` so a `.gitignore` inside the tree cannot drop a tracked
+            # file from the reconstruction and turn a mismatch into a pass.
+            GIT_DIR="$scratch/git" GIT_WORK_TREE="$1" GIT_INDEX_FILE="$scratch/index" \
+              git -c core.bare=false add -A -f || return 1
+            GIT_DIR="$scratch/git" GIT_INDEX_FILE="$scratch/index" git write-tree
+          }
+
+          verify_tree() { # dir expected-tree
+            local got
+            got="$(tree_hash "$1")" || return 1
+            [ -n "$got" ] && [ "$got" = "$2" ]
+          }
+
+          from_git() { # dir slug commit
+            rm -rf "$1"
+            mkdir -p "$1"
+            git -C "$1" init -q &&
+              timeout "$SOURCE_TIMEOUT" git -C "$1" fetch -q --depth 1 \
+                "https://codeberg.org/$2" "$3" &&
+              git -C "$1" checkout -q --detach FETCH_HEAD || return 1
+            # Only the working tree is used downstream, and dropping `.git`
+            # keeps both sources shaped identically for the cache.
+            rm -rf "$1/.git"
+          }
+
+          from_tarball() { # dir slug commit
+            rm -rf "$1" "$1.tar.gz"
+            mkdir -p "$1"
+            timeout "$SOURCE_TIMEOUT" curl -fsSL --max-time "$SOURCE_TIMEOUT" \
+              "https://codeberg.org/$2/archive/$3.tar.gz" -o "$1.tar.gz" &&
+              tar -xzf "$1.tar.gz" --strip-components=1 -C "$1"
+          }
+
+          obtain() { # dir slug commit tree
+            local attempt source
+            for attempt in $(seq 1 "$ATTEMPTS"); do
+              for source in from_git from_tarball; do
+                if "$source" "$1" "$2" "$3" && verify_tree "$1" "$4"; then
+                  echo "$1: $source served tree $4 (attempt $attempt)"
+                  return 0
+                fi
+                echo "::warning::$1: $source did not yield tree $4 (attempt $attempt of $ATTEMPTS)"
+              done
+              if [ "$attempt" -lt "$ATTEMPTS" ]; then sleep "$RETRY_WAIT"; fi
+            done
+            rm -rf "$1"
+            return 1
+          }
+
+          # Forgejo's API answers 200 for a commit it holds and 404 for one
+          # it does not, which separates "the forge is degraded" from "the
+          # pin is stale". Anything else (5xx, a timeout, no answer at all)
+          # is inconclusive and therefore treated as degraded.
+          pin_state() { # slug commit -> live | absent | unknown
+            local code
+            code="$(timeout 45 curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+              "https://codeberg.org/api/v1/repos/$1/git/commits/$2" 2>/dev/null || true)"
+            case "$code" in
+            200) echo live ;;
+            404) echo absent ;;
+            *) echo unknown ;;
+            esac
+          }
+
+          fetched=false
+          if [ "${CACHE_HIT:-}" = 'true' ] &&
+            verify_tree goblins "$GOBLINS_TREE" &&
+            verify_tree goblin-chat "$GOBLIN_CHAT_TREE"; then
+            status=ok
+            echo 'Restored both Spritely source trees from cache; pinned trees verified.'
+          else
+            if [ "${CACHE_HIT:-}" = 'true' ]; then
+              echo '::warning::Cached Spritely sources do not match the pinned trees; refetching.'
+            fi
+            if obtain goblins spritely/goblins "$GOBLINS_COMMIT" "$GOBLINS_TREE" &&
+              obtain goblin-chat spritely/goblin-chat "$GOBLIN_CHAT_COMMIT" "$GOBLIN_CHAT_TREE"; then
+              status=ok
+              fetched=true
+            elif [ "$(pin_state spritely/goblins "$GOBLINS_COMMIT")" = absent ] ||
+              [ "$(pin_state spritely/goblin-chat "$GOBLIN_CHAT_COMMIT")" = absent ]; then
+              status=stale-pin
+            else
+              status=unavailable
+            fi
+          fi
+
+          case "$status" in
+          ok)
+            printf 'available=true\nfetched=%s\n' "$fetched" >> "$GITHUB_OUTPUT"
+            ;;
+          stale-pin)
+            echo '::error::Codeberg is answering, but no longer resolves a commit pinned by this workflow. Update GOBLINS_COMMIT/GOBLINS_TREE or GOBLIN_CHAT_COMMIT/GOBLIN_CHAT_TREE.'
+            exit 1
+            ;;
+          *)
+            printf 'available=false\nfetched=false\n' >> "$GITHUB_OUTPUT"
+            echo '::warning::Could not obtain the pinned Spritely sources from Codeberg; skipping the Guile interop test. This is an upstream availability failure, not a result about this pull request.'
+            {
+              echo '### OCapN Guile interop skipped'
+              echo
+              echo 'No Codeberg source served the pinned Spritely commits, so the'
+              echo 'interop test did not run. Nothing here says anything about this'
+              echo 'pull request; re-run the job once Codeberg recovers.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            ;;
+          esac
+
+      - name: Save Spritely source cache
+        # Saved from the pristine trees, before the compatibility `sed`s in
+        # the host step below edit them in place, so that a later restore
+        # can be held to the same pinned tree hashes. A concurrent run may
+        # have claimed the key first; that is a warning, not a failure.
+        if: steps.spritely.outputs.fetched == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            goblins
+            goblin-chat
+          key: spritely-source-${{ env.GOBLINS_COMMIT }}-${{ env.GOBLIN_CHAT_COMMIT }}
+
+      - if: steps.spritely.outputs.available == 'true'
+        run: corepack enable
         working-directory: endo
 
       - name: Use Node.js 20.17.x
+        if: steps.spritely.outputs.available == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20.17.x
@@ -78,10 +276,12 @@ jobs:
           cache-dependency-path: endo/yarn.lock
 
       - name: Install Node dependencies
+        if: steps.spritely.outputs.available == 'true'
         working-directory: endo
         run: yarn install --immutable
 
       - name: Build Endo
+        if: steps.spritely.outputs.available == 'true'
         working-directory: endo
         run: yarn build
 
@@ -96,8 +296,10 @@ jobs:
       # `ftp.gnu.org` rather than the nightly tarball on
       # `ci.guix.gnu.org`.
       - name: Set LANG
+        if: steps.spritely.outputs.available == 'true'
         run: echo LANG=en_US.utf8 >> $GITHUB_ENV
       - name: Restore Guix tarball cache
+        if: steps.spritely.outputs.available == 'true'
         id: guix-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -139,7 +341,7 @@ jobs:
         # attempts are needed than before: the worst case is
         # 3 attempts x 6 minutes plus two 30-second waits, 19 minutes,
         # inside the job's 45-minute budget.
-        if: steps.guix-cache.outputs.cache-hit != 'true'
+        if: steps.spritely.outputs.available == 'true' && steps.guix-cache.outputs.cache-hit != 'true'
         uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
         with:
           max_attempts: 3
@@ -168,6 +370,7 @@ jobs:
             echo "::error::No source served ${TARBALL} matching GUIX_TARBALL_SHA256"
             exit 1
       - name: Verify cached tarball checksum
+        if: steps.spritely.outputs.available == 'true'
         # Belt-and-suspenders: if a previous run cached a different
         # blob (for example because someone updated `GUIX_VERSION`
         # without bumping `GUIX_TARBALL_SHA256`, or vice versa), we
@@ -177,6 +380,7 @@ jobs:
           set -euo pipefail
           echo "${GUIX_TARBALL_SHA256}  guix-binary.x86_64-linux.tar.xz" | sha256sum --check --strict
       - name: Install Guix
+        if: steps.spritely.outputs.available == 'true'
         run: |
           sudo -- tar --extract --file "guix-binary.x86_64-linux.tar.xz" -C / --no-overwrite-dir
           sudo -- groupadd --system guixbuild
@@ -237,6 +441,7 @@ jobs:
 
           echo "$GUIX_PATH/bin" >> "$GITHUB_PATH"
       - name: Authorize build farm
+        if: steps.spritely.outputs.available == 'true'
         # Authorizes both ci.guix.gnu.org and bordeaux.guix.gnu.org;
         # both .pub files ship inside the Guix tarball under
         # share/guix/.
@@ -245,9 +450,11 @@ jobs:
               sudo /var/guix/profiles/per-user/root/current-guix/bin/guix archive --authorize < "$F"
           done
       - name: Generate keys
+        if: steps.spritely.outputs.available == 'true'
         run: sudo /var/guix/profiles/per-user/root/current-guix/bin/guix archive --generate-key
 
       - name: Report Guix version
+        if: steps.spritely.outputs.available == 'true'
         run: guix describe || guix --version
 
       # The substitute fetches that follow inherit `--substitute-urls`
@@ -260,6 +467,7 @@ jobs:
       # the daemon socket not being ready for the first few seconds
       # after Install.
       - name: Resolve Guix module paths
+        if: steps.spritely.outputs.available == 'true'
         uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
         with:
           max_attempts: 3
@@ -314,6 +522,7 @@ jobs:
             cat "$scratch" >> "$GITHUB_ENV"
 
       - name: Start Guile goblin-chat host
+        if: steps.spritely.outputs.available == 'true'
         working-directory: endo
         env:
           INTEROP_CLIENT: ${{ github.workspace }}/endo/packages/goblin-chat/test/guile-interop/interop-client.scm
@@ -389,6 +598,7 @@ jobs:
           echo "STURDYREF=$STURDYREF" >> $GITHUB_ENV
 
       - name: Run Endo interop client
+        if: steps.spritely.outputs.available == 'true'
         working-directory: endo
         env:
           # Newer Goblins reports CapTP version `1.0`.
@@ -408,6 +618,7 @@ jobs:
           cat /tmp/endo-interop.log
 
       - name: Assert interop success
+        if: steps.spritely.outputs.available == 'true'
         run: |
           test "${ENDO_EXIT:-1}" -eq 0
           # Verify Guile host started and published a sturdyref.
@@ -425,7 +636,7 @@ jobs:
           grep -Fq '*** Endo interop completed' /tmp/endo-interop.log
 
       - name: Show interop logs on failure
-        if: failure()
+        if: failure() && steps.spritely.outputs.available == 'true'
         run: |
           echo "=== Guile goblin-chat host log ==="
           cat /tmp/guile-interop.log || echo "(no log)"
