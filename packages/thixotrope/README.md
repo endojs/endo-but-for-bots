@@ -174,6 +174,44 @@ Unused application vats become eligible for ordinary vat collection.
 This initial version provides installation, not live code upgrades.
 
 
+## Persistent applications serving HTTP
+
+Grant a listener, then install an application with that capability:
+
+```sh
+thix http-grant ./private-state web 8080
+thix install ./private-state site ./examples/http-counter.js http=web
+thix http-services ./private-state
+curl -X POST http://127.0.0.1:8080/incr
+curl http://127.0.0.1:8080/read
+```
+
+The application calls `E(http).listen(handler)` once, with a guest handler implementing
+`handle({method, path, body})` and returning `{status, body}`.
+The host persists the listener's desired state and a publication of the guest handler.
+Stopping the supervisor closes sockets; restart binds the same port and restores the handler.
+The example's counter lives in its guest heap and survives restart.
+Binding failure remains visible in `http-services`; it does not discard desired state.
+
+`E(http).close()` permanently closes that listener identity and releases its publication.
+A new grant can reuse the port, but an old capability cannot close the replacement.
+An interrupted initial registration may be cancelled; inspect `status()` after an uncertain reply.
+Registration is single-use, so deliberately allocate a new listener to try again.
+
+The initial profile supports explicit ports 1024–65535 on IPv4 loopback only.
+Requests require the exact listener Host header, reject foreign browser Origins and cross-site
+Fetch Metadata, and offer no CORS access.
+This blocks ordinary cross-origin browser requests; it does not authenticate local processes.
+Anyone able to connect locally can invoke the application's HTTP interface.
+Requests and responses are limited to 64 KiB, with 16 concurrent requests and a five-second deadline.
+Only method, path, and text body cross into the guest; streaming and arbitrary headers are not exposed.
+
+Each request uses a disposable protocol session.
+Response, socket loss, timeout, and supervisor shutdown release that session and its references.
+Restart removes abandoned sessions and never recreates an old HTTP request or socket.
+A guest invocation already accepted can still finish and retain its effects after the client leaves.
+Other guest promise listeners remain durable; losing an HTTP response does not cancel guest work.
+
 ## Local introductions and capability mail
 
 Each supervisor also listens on `peers.sock`, a private Unix socket.

@@ -197,6 +197,27 @@ Bounded cleanup prevents a stalled guest cancellation from holding the superviso
 Removing a subscription makes its state eligible for ordinary collection; it does not prove physical
 heap reclamation has already happened.
 
+### Guest-owned HTTP listeners
+
+A granted listener capability lets a persistent guest publish an HTTP handler on a selected loopback port.
+The host records desired listener state and the handler publication before opening the socket.
+Restart reconstructs open listeners; binding failures remain inspectable.
+An explicit close persists the closed state before releasing sockets and the publication.
+Listener identities are single-use, so a stale capability cannot close a replacement on the same port.
+Interrupted initial registration is cancelled when its publication outcome cannot be safely resumed.
+
+HTTP request/response state belongs to a disposable protocol session.
+Socket loss, timeout, response completion, and shutdown release its references and pending answers.
+Startup removes sessions abandoned by a process crash.
+An already accepted guest invocation may complete after the HTTP client disappears; the host does not
+reissue the request or reject unrelated durable guest promise listeners.
+The durable listener recipe and guest handler persist, while sockets and request sessions do not.
+
+The initial HTTP profile bounds bodies, concurrency, and duration, and copies only method, path,
+and text body into the guest.
+Exact Host checks and browser Origin/Fetch Metadata checks reject cross-origin browser access.
+These checks do not authenticate local processes; the guest HTTP interface is available to local clients.
+
 ## Workspace and installed applications
 
 The local supervisor owns a persistent workspace and exposes administration over a private Unix socket.
