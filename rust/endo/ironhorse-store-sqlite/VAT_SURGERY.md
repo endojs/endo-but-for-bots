@@ -102,7 +102,7 @@ or complete incoming-reference relations.
 Next experiments should expose closure/environment links and side-state edges, then assess
 function replacement for future calls separately from migration of saved continuations.
 The first profile deliberately leaves those semantic problems unresolved.
-See [the upgrade experiment matrix](UPGRADE_EXPERIMENTS.md) for the broader test-only recipes,
+See [the upgrade experiment matrix](../../../designs/ironhorse-snapshot-schema-surgery.md) for the broader test-only recipes,
 including anonymous, named, and prototype function replacement.
 
 ## Plan a donor edit
@@ -126,3 +126,6 @@ Names are not globally unique across arbitrary heaps: review the actual selected
 The tests use controlled fixtures with unique keys and assert that the locator has one result.
 Use `functions.owner` to join callable objects to their code metadata, and `saved_frames.function`
 to find the generator/async activations that currently reference those functions.
+
+Schema requirements and related research are indexed in the
+[snapshot schema design](../../../designs/ironhorse-snapshot-schema.md).
