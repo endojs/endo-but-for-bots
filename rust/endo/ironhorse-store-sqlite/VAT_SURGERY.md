@@ -2,7 +2,8 @@
 
 This example explores SQL-assisted inspection and a deliberately narrow heap repair.
 It decodes a canonical Ironhorse snapshot into a disposable SQLite workspace, accepts
-integer-slot edits, and writes a new candidate snapshot after graph validation and eager restore.
+integer-slot and same-kind donor-value edits, and writes a new candidate snapshot after graph
+validation and eager restore.
 It does not edit a resident heap database or install the candidate into a Thixotrope host.
 
 The source container is backend-neutral: existing store tooling can obtain one through
@@ -50,16 +51,31 @@ They also compare the complete decoded images: only the selected scalar payload 
 
 ## Contract and limits
 
-- `snapshot` binds workspace version 1 to the SHA-256 of the exact source container bytes.
+- `snapshot` binds workspace version 2 to the SHA-256 of the exact source container bytes.
   An empty plan preserves those bytes exactly; noncanonical source encodings are refused.
+  Recreate older workspaces with `inspect`; the writer refuses their version.
 - `heap_slots` is inspection data, including free slots.
-  Editing it has no effect on the candidate; only `integer_edits` requests mutations.
+  Editing it has no effect on the candidate; only `integer_edits` and `donor_edits` request mutations.
   `is_free = 0` means allocated, not necessarily reachable or application-owned.
   Slot identifiers are meaningful only within the specified source snapshot.
-- Each edit requires the entire expected 20-byte canonical record, an allocated slot, and both
-  the Integer kind and Integer payload.
-  Replacement values are signed 32-bit integers because this profile edits the VM's `i32`
-  Integer arm; JavaScript Number, BigInt, references, and code are not supported edits.
+- Each `integer_edits` row requires the entire expected 20-byte canonical record, an allocated
+  slot, and both the Integer kind and Integer payload.
+  `integer_edits` replacement values are signed 32-bit integers because that profile edits the
+  VM's `i32` Integer arm.
+- `donor_edits` copies a payload from another allocated source slot of the same supported kind:
+  Boolean, Integer, Number, String, or Reference.
+  Both source records must match, all donors are read from the original image, and each target
+  may occur only once across both edit tables.
+  This supports swaps, exact floating-point bit preservation, and existing chunk/object reuse.
+  It preserves target descriptors and list links; internal Instance/Closure pointers are refused.
+  It neither allocates new strings/objects nor changes every alias when retargeting one reference.
+- `slot_values`, `names`, `functions`, and `saved_frames` provide additional decoded inspection.
+  Floating-point values are eight-byte big-endian bit BLOBs rather than SQLite REAL values.
+  References/chunks use source-local indices, including the VM's `4294967295` null sentinel.
+  `names` maps string-key IDs; symbol keys and non-key uses of slot IDs require separate decoding.
+  `saved_frames` lists generator/async frame ownership and resume addresses, not a complete
+  continuation or incoming-reference graph.
+  None of these inspection tables is an editable source of truth.
 - The writer validates SQLite values independently of editable SQL constraints, pins plan reads
   to one read transaction, and validates the complete candidate before creating its output.
   Existing outputs are refused, including empty files.
@@ -86,3 +102,27 @@ or complete incoming-reference relations.
 Next experiments should expose closure/environment links and side-state edges, then assess
 function replacement for future calls separately from migration of saved continuations.
 The first profile deliberately leaves those semantic problems unresolved.
+See [the upgrade experiment matrix](UPGRADE_EXPERIMENTS.md) for the broader test-only recipes,
+including anonymous, named, and prototype function replacement.
+
+## Plan a donor edit
+
+For a source with two uniquely named string-key slots, inspect their records and insert a plan:
+
+```sql
+SELECT h.slot, n.name, h.kind, hex(h.record)
+FROM heap_slots h JOIN names n ON n.property_id = h.property_id
+WHERE h.is_free = 0 AND n.name IN ('surgeryRef', 'donorRef');
+
+INSERT INTO donor_edits
+SELECT target.slot, target.record, donor.slot, donor.record
+FROM heap_slots target JOIN names tn ON tn.property_id = target.property_id
+CROSS JOIN heap_slots donor JOIN names dn ON dn.property_id = donor.property_id
+WHERE target.is_free = 0 AND donor.is_free = 0
+AND tn.name = 'surgeryRef' AND dn.name = 'donorRef';
+```
+
+Names are not globally unique across arbitrary heaps: review the actual selected slots.
+The tests use controlled fixtures with unique keys and assert that the locator has one result.
+Use `functions.owner` to join callable objects to their code metadata, and `saved_frames.function`
+to find the generator/async activations that currently reference those functions.
