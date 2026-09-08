@@ -86,3 +86,31 @@ fn unrelated_host_panics_are_not_misclassified_as_heap_exhaustion() {
         .expect_err("ordinary host panic must escape");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"host failure"));
 }
+
+#[test]
+fn guest_sized_temporary_buffers_are_refused_before_they_are_created() {
+    for source in [
+        "'abcdefgh'.repeat(100000000)",
+        "new ArrayBuffer(1000000)",
+        "'x'.padStart(1000000, 'y')",
+        "'x'.padEnd(1000000, 'y')",
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        vm.chunks.set_ceiling(vm.chunks.byte_size() + 4096);
+        let out = vm.run(&code);
+        assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
+    }
+}
+
+#[test]
+fn repeat_product_is_checked_independently_of_repeat_count() {
+    let (code, names) =
+        compile("try { 'abcdefgh'.repeat(2**30) } catch (e) { e instanceof RangeError }");
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&names);
+    let out = vm.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "true");
+}

@@ -13774,6 +13774,56 @@ impl Interp {
         self.check_meter() == MeterCheck::Continue
     }
 
+    /// Admission inside a built-in, including the restored/armed/no-host
+    /// fail-closed case. Call before allocating or doing the charged work.
+    fn charge_and_check(&mut self, raw: u64) -> Result<(), Step> {
+        let check = match self.meter_host.as_mut() {
+            Some(host) => self.meter.charge_and_check(raw, host),
+            None if self.meter.is_armed() => MeterCheck::Abort,
+            None => self.meter.charge_and_check(raw, &mut |_| true),
+        };
+        if check == MeterCheck::Abort {
+            Err(Step::Host(Halt::MeterAbort))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Bound and prepay a UTF-16 result before its scratch buffer is created.
+    /// The format ceiling is independent of the configurable heap policy.
+    /// Finish with `new_reserved_string_units`, so the charge is paid once.
+    fn reserve_units(&mut self, units: u64) -> Result<usize, Step> {
+        if units > 0x7fff_ffff {
+            return Err(self.catchable_range_error_msg("result too large".into()));
+        }
+        let units = units as usize;
+        if !self.chunks.can_allocate(units * 2) {
+            return Err(Step::Host(Halt::HeapExhausted));
+        }
+        let charge = if units == 0 {
+            0
+        } else {
+            (((units as u64 + 1) + 7) & !7) + 16
+        };
+        self.charge_and_check(charge)?;
+        Ok(units)
+    }
+
+    /// Materialize a capacity already admitted by `reserve_units` or a chunk
+    /// admission check. Host allocator refusal is also an execution halt.
+    fn reserved_vec<T>(capacity: usize) -> Result<Vec<T>, Step> {
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(capacity)
+            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        Ok(buffer)
+    }
+
+    fn new_reserved_string_units(&mut self, units: &[u16]) -> Slot {
+        let off = self.chunks.alloc(&units_to_be16(units));
+        Slot::of(Kind::String, Payload::String(off))
+    }
+
     /// Whether the meter is armed (`interval != 0`) — the state a
     /// snapshot carries — independent of whether a host callback is
     /// attached. An embedder resuming a machine consults this to decide
@@ -22965,7 +23015,7 @@ impl Interp {
                 let a = arg(0);
                 let byte_length = self.to_index_arg(code, a)?;
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
-                let inst = self.alloc_array_buffer(byte_length);
+                let inst = self.alloc_array_buffer(byte_length)?;
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             // `new SharedArrayBuffer(byteLength)` (`xsAtomics.c`
@@ -22982,7 +23032,7 @@ impl Interp {
                 let a = arg(0);
                 let byte_length = self.to_index_arg(code, a)?;
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
-                let inst = self.alloc_array_buffer(byte_length);
+                let inst = self.alloc_array_buffer(byte_length)?;
                 self.shared_buffers.insert(inst);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -23190,7 +23240,7 @@ impl Interp {
                         }
                         let byte_length = length << shift;
                         self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
-                        let buffer = self.alloc_array_buffer(byte_length);
+                        let buffer = self.alloc_array_buffer(byte_length)?;
                         let inst = self.slots.alloc(Slot::instance(proto));
                         let ta = TypedArrayData {
                             kind: idx,
@@ -23312,7 +23362,7 @@ impl Interp {
                         }
                         let byte_length = length << shift;
                         self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
-                        let buffer = self.alloc_array_buffer(byte_length);
+                        let buffer = self.alloc_array_buffer(byte_length)?;
                         let inst = self.slots.alloc(Slot::instance(proto));
                         self.typed_arrays.insert(
                             inst,
@@ -41563,7 +41613,7 @@ impl Interp {
                     _ => 0,
                 };
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                self.meter.tick_builtin_some(count as u64);
+                self.charge_and_check(count as u64 * crate::meter::BUILTIN_METERING)?;
                 // XS meters `count` above but guards its copy loop with
                 // `if (length)`. Repeating the empty string therefore returns
                 // immediately even for the maximum accepted count instead of
@@ -41571,11 +41621,12 @@ impl Interp {
                 if content.is_empty() {
                     return Ok(self.new_string_units(&[]));
                 }
-                let mut out = Vec::with_capacity(content.len() * count as usize);
+                let size = self.reserve_units(content.len() as u64 * count as u64)?;
+                let mut out = Self::reserved_vec(size)?;
                 for _ in 0..count {
                     out.extend_from_slice(&content);
                 }
-                self.new_string_units(&out)
+                self.new_reserved_string_units(&out)
             }
             // startsWith / endsWith: reject `IsRegExp(searchString)`, then
             // `ToString(searchString)`, then mxMeterSome(searchUnitLen) and a
@@ -41830,22 +41881,22 @@ impl Interp {
                                 "String.prototype.pad:result-too-large",
                             )));
                         }
-                        let target = target as usize;
+                        let target = self.reserve_units(target)?;
                         let needed = target - content.len();
-                        let mut padding = Vec::with_capacity(needed);
-                        while padding.len() < needed {
-                            let take = (needed - padding.len()).min(fill.len());
-                            padding.extend_from_slice(&fill[..take]);
-                        }
-                        let mut out = Vec::with_capacity(target);
+                        let mut out = Self::reserved_vec(target)?;
                         if m == StringPadEnd {
                             out.extend_from_slice(&content);
-                            out.extend_from_slice(&padding);
-                        } else {
-                            out.extend_from_slice(&padding);
+                        }
+                        let mut filled = 0;
+                        while filled < needed {
+                            let take = (needed - filled).min(fill.len());
+                            out.extend_from_slice(&fill[..take]);
+                            filled += take;
+                        }
+                        if m == StringPadStart {
                             out.extend_from_slice(&content);
                         }
-                        self.new_string_units(&out)
+                        self.new_reserved_string_units(&out)
                     }
                 }
             }
@@ -46640,7 +46691,7 @@ impl Interp {
         let copy_length = old_length.min(new_length);
         let source_buffer = self.array_buffers[&source];
         let bytes = self.chunks.payload(source_buffer.data)[..copy_length as usize].to_vec();
-        let result = self.alloc_array_buffer(new_length);
+        let result = self.alloc_array_buffer(new_length)?;
         if copy_length > 0 {
             let target_buffer = self.array_buffers[&result];
             let out = self
@@ -49089,9 +49140,14 @@ impl Interp {
     /// the buffer instance slot. Shared by the `ArrayBuffer` constructor and
     /// a length-form TypedArray construct (whose inner `new ArrayBuffer` this
     /// mirrors).
-    fn alloc_array_buffer(&mut self, byte_length: u32) -> crate::value::SlotIndex {
-        self.meter.tick_chunk_new(byte_length as u64);
-        let data = self.chunks.alloc(&vec![0u8; byte_length as usize]);
+    fn alloc_array_buffer(&mut self, byte_length: u32) -> Result<crate::value::SlotIndex, Step> {
+        if !self.chunks.can_allocate(byte_length as usize) {
+            return Err(Step::Host(Halt::HeapExhausted));
+        }
+        self.charge_and_check(((byte_length as u64 + 7) & !7) + 16)?;
+        let mut bytes = Self::reserved_vec(byte_length as usize)?;
+        bytes.resize(byte_length as usize, 0);
+        let data = self.chunks.alloc(&bytes);
         let inst = self.slots.alloc(Slot::instance(self.arraybuffer_proto));
         self.array_buffers.insert(
             inst,
@@ -49100,7 +49156,7 @@ impl Interp {
                 length: byte_length,
             },
         );
-        inst
+        Ok(inst)
     }
 
     /// `fxCheckMapKey`: normalize a collection key so `-0` is stored/compared
