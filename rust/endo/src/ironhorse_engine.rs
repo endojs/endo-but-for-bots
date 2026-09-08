@@ -42,7 +42,11 @@ pub mod engine {
     #[derive(Debug)]
     pub enum MachineError {
         /// `ironhorse_compile` rejected the source.
-        Compile(String),
+        Compile {
+            message: String,
+            /// Raw compilation charges retained even when the attempt fails.
+            meter_raw: u64,
+        },
         /// The program ran but did not complete normally.
         Halt(Halt),
         /// The engine seam is present but the requested surface is not
@@ -80,7 +84,7 @@ pub mod engine {
     impl std::fmt::Display for MachineError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                MachineError::Compile(e) => write!(f, "compile error: {e}"),
+                MachineError::Compile { message, .. } => write!(f, "compile error: {message}"),
                 MachineError::Halt(h) => write!(f, "{}", describe_halt(h)),
                 MachineError::MeterAbort { computrons, limit } => write!(
                     f,
@@ -382,6 +386,80 @@ pub mod engine {
         Box::new(move |computrons| computrons <= ceiling.get())
     }
 
+    fn compile_allowance(bounds: &MeterBounds, index: u64) -> u64 {
+        bounds
+            .crank_limit()
+            .map_or(u64::MAX, |limit| limit.saturating_mul(1 << 16))
+            .min(u64::MAX - index)
+    }
+
+    // The host owns this unwind boundary. Shared progress preserves the bill on
+    // parse errors, budget refusal, and coder panics before any bytecode executes.
+    fn compile_metered(
+        source: &str,
+        strict: bool,
+        budget: u64,
+        charge: impl FnMut(u64) -> bool,
+    ) -> Result<(Vec<u8>, Vec<u8>), MachineError> {
+        let meter = ironhorse_compile::ParseMeter::with_charge_callback(budget, charge);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms_with_meter(source, strict, meter.clone())
+        }));
+        if meter.exhausted() {
+            return Err(MachineError::Halt(Halt::MeterAbort));
+        }
+        match result {
+            Ok(Ok(atoms)) => Ok(atoms),
+            Ok(Err(error)) if error.kind == ironhorse_compile::ParseErrorKind::MeterLimit => {
+                Err(MachineError::Halt(Halt::MeterAbort))
+            }
+            Ok(Err(ironhorse_compile::ParseError {
+                kind:
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                        ..
+                    }),
+                ..
+            })) => Err(MachineError::Halt(Halt::HeapExhausted)),
+            Ok(Err(ironhorse_compile::ParseError {
+                kind:
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                        ..
+                    }),
+                ..
+            })) => Err(MachineError::Halt(Halt::MeterAbort)),
+            Ok(Err(error)) => Err(MachineError::Compile {
+                message: error.to_string(),
+                meter_raw: meter.raw(),
+            }),
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_else(|| "non-string compiler panic".to_string());
+                Err(MachineError::Halt(Halt::Panic(PanicKind::EngineFault {
+                    message,
+                    location: None,
+                })))
+            }
+        }
+    }
+
+    fn unrun_outcome(halt: Halt, meter_raw: u64) -> RunOutcome {
+        RunOutcome {
+            completed: false,
+            result: String::new(),
+            coercion_error: None,
+            host_render_halt: None,
+            computrons: meter_raw >> 16,
+            dispatched: 0,
+            meter_raw,
+            halt,
+        }
+    }
+
     /// Map a halt to its error, naming a meter refusal under a limit
     /// distinctly ([`MachineError::MeterAbort`]); `spent` is what the
     /// crank had spent when it halted.
@@ -392,28 +470,6 @@ pub mod engine {
                 limit,
             },
             (halt, _) => MachineError::Halt(halt),
-        }
-    }
-
-    /// Compiler resource failures use the same host outcomes as runtime failures.
-    fn refuse_compile(
-        error: ironhorse_compile::CompileError,
-        spent: u64,
-        limit: Option<u64>,
-    ) -> MachineError {
-        match error {
-            ironhorse_compile::CompileError::MeterAbort => refuse(Halt::MeterAbort, spent, limit),
-            ironhorse_compile::CompileError::Parse(error) => match error.kind {
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
-                    ..
-                }) => refuse(Halt::HeapExhausted, spent, limit),
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
-                    ..
-                }) => refuse(Halt::MeterAbort, spent, limit),
-                _ => MachineError::Compile(error.to_string()),
-            },
         }
     }
 
@@ -468,28 +524,35 @@ pub mod engine {
         /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to
         /// [`MachineError::MeterAbort`].
         pub fn evaluate(&self, source: &str, strict: bool) -> Result<EvalOutcome, MachineError> {
-            let mut interp = ironhorse_vm::Interp::new();
-            if let (Some(interval), Some(limit)) =
-                (self.bounds.check_interval(), self.bounds.crank_limit())
-            {
-                let ceiling = std::rc::Rc::new(std::cell::Cell::new(limit));
-                interp.arm_meter(interval, meter_host(&ceiling));
-            }
-            let compiled = ironhorse_compile::compile_atoms_budgeted(
-                source,
-                ironhorse_compile::Goal::Eval,
-                strict,
-                &mut |raw| interp.charge_compilation(raw),
-            )
-            .map_err(|error| {
-                refuse_compile(error, interp.meter_index() >> 16, self.bounds.crank_limit())
-            })?;
-            let outcome = self.inner.new_compartment().evaluate_with_symbols_on(
-                interp,
-                &compiled.bytecode,
-                &compiled.symbols,
-            );
-            Ok(outcome.into())
+            let mut meter = VMeter::new();
+            let mut host = match (self.bounds.check_interval(), self.bounds.crank_limit()) {
+                (Some(interval), Some(limit)) => {
+                    meter.begin(interval);
+                    Some(meter_host(&std::rc::Rc::new(std::cell::Cell::new(limit))))
+                }
+                _ => None,
+            };
+            let budget = compile_allowance(&self.bounds, meter.state().index);
+            let compiled = compile_metered(source, strict, budget, |raw| match host.as_mut() {
+                Some(host) => meter.charge_compilation(raw, Some(host)),
+                None => meter.charge_compilation(raw, None),
+            });
+            let (bytecode, symbols) = match compiled {
+                Ok(atoms) => atoms,
+                Err(MachineError::Halt(halt)) => {
+                    return Ok(unrun_outcome(halt, meter.state().index).into())
+                }
+                Err(error) => return Err(error),
+            };
+            let comp = self.inner.new_compartment();
+            Ok(comp
+                .evaluate_with_symbols_continuing_meter_shared(
+                    bytecode.into(),
+                    &symbols,
+                    meter,
+                    host,
+                )
+                .into())
         }
 
         /// Evaluate and return only the completion value, failing when
@@ -542,8 +605,10 @@ pub mod engine {
     /// reading on stderr, and fails loudly — naming the gap — when the
     /// program reaches a surface the port has not landed.
     pub fn run_script(path: &Path) -> Result<(), MachineError> {
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| MachineError::Compile(format!("cannot read {}: {e}", path.display())))?;
+        let source = std::fs::read_to_string(path).map_err(|e| MachineError::Compile {
+            message: format!("cannot read {}: {e}", path.display()),
+            meter_raw: 0,
+        })?;
         eprintln!("endor[run -e ironhorse]: {}", path.display());
         let machine = Machine::new();
         let outcome = machine.evaluate(&source, false)?;
@@ -919,6 +984,15 @@ pub mod engine {
             Ok(())
         }
 
+        fn rewind_preparation_error(&mut self, error: MachineError) -> MachineError {
+            match self.rewind_to_last_checkpoint() {
+                Ok(()) => error,
+                Err(rewind) => MachineError::Store(format!(
+                    "rewind failed after crank preparation ({error}): {rewind}"
+                )),
+            }
+        }
+
         /// Compile and run one crank against the persistent heap.
         ///
         /// A completed crank checkpoints before returning its outcome
@@ -930,14 +1004,19 @@ pub mod engine {
         /// is rewound the same way before the error is reported: a
         /// mutated machine whose outcome was never durably recorded
         /// must not seed a later crank (review finding).
+        /// Compilation and symbol preparation are part of the crank: their
+        /// failures also rewind, including completed but unflushed cranks when
+        /// `checkpoint_every > 1`. Compile errors carry their attempted raw
+        /// charge even though the persistent meter is restored with the heap.
         pub fn eval(&mut self, source: &str) -> Result<EvalOutcome, MachineError> {
             use ironhorse_snapshot::machine::checkpoint_to_store;
 
-            // Compilation and execution share one crank budget and admission
-            // window. Start it before any source-sized compiler allocation.
-            let (compiled, crank_start_raw, compile_end_raw) = {
+            // Compilation is part of the crank: arm before any source work,
+            // retain its live charges, and rewind failures under the same pending
+            // checkpoint window as execution failures.
+            let (compiled, crank_start_raw, compile_spent) = {
                 let session = self.session.as_mut().ok_or_else(|| {
-                    MachineError::Store("machine has no session (a rewind failed)".into())
+                    MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
                 let machine = session.machine_mut();
                 let start = machine.meter_index();
@@ -947,26 +1026,27 @@ pub mod engine {
                     self.crank_ceiling.set((start >> 16).saturating_add(limit));
                     machine.rearm_meter(interval, meter_host(&self.crank_ceiling));
                 }
-                let result = ironhorse_compile::compile_atoms_budgeted(
-                    source,
-                    ironhorse_compile::Goal::Eval,
-                    false,
-                    &mut |raw| machine.charge_compilation(raw),
-                );
-                (result, start, machine.meter_index())
+                let budget = compile_allowance(&self.meter, start);
+                let result =
+                    compile_metered(source, false, budget, |raw| machine.charge_compilation(raw));
+                (
+                    result,
+                    start,
+                    machine.meter_index().saturating_sub(start) >> 16,
+                )
             };
-            let compiled = match compiled {
-                Ok(compiled) => compiled,
+            let (bytecode, symbols) = match compiled {
+                Ok(atoms) => atoms,
                 Err(error) => {
-                    self.rewind_to_last_checkpoint()?;
-                    return Err(refuse_compile(
-                        error,
-                        compile_end_raw.saturating_sub(crank_start_raw) >> 16,
-                        self.meter.crank_limit(),
-                    ));
+                    let error = match error {
+                        MachineError::Halt(halt) => {
+                            refuse(halt, compile_spent, self.meter.crank_limit())
+                        }
+                        other => other,
+                    };
+                    return Err(self.rewind_preparation_error(error));
                 }
             };
-            let (bytecode, symbols) = (compiled.bytecode, compiled.symbols);
             let names = ironhorse_vm::parse_symbols(&symbols);
             // The cadence decision (deferred item I), taken up front
             // from replica-visible state: counted in completed cranks,
@@ -991,7 +1071,7 @@ pub mod engine {
             let checkpoint_due = pending_after >= self.cadence.checkpoint_every.max(1)
                 || collect_due
                 || self.checkpoint_after_rewind;
-            let (outcome, checkpointed, crank_start_raw) = {
+            let prepared = (|| -> Result<_, MachineError> {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
@@ -1028,23 +1108,21 @@ pub mod engine {
                 // runtime-intern extension refusal retired with the
                 // id-space unification — interned names live in the
                 // persisted table and symbol keys mint top-down, so
-                // extension aliases nothing). A refusal rewinds compilation
-                // charges and any linkage changes to the checkpoint too.
+                // extension aliases nothing). A preparation refusal now rewinds
+                // compilation charges and any partially extended symbol state.
                 let bytecode = if self.linked {
                     match session.machine_mut().relink_crank(&bytecode, &names) {
                         Ok(bytecode) => bytecode,
                         Err(error) => {
                             let message = format!("this crank's compiled table ({} names) could not be relinked onto the persisted table ({} names): {error:?}", names.len(), session.machine().program_symbol_names().len());
-                            self.rewind_to_last_checkpoint()?;
                             return Err(MachineError::SymbolMismatch(message));
                         }
                     }
                 } else {
                     bytecode
                 };
-                // Preserve the compilation baseline and its admission window.
                 let outcome = session.machine_mut().run_shared(bytecode.into());
-                if outcome.completed && checkpoint_due {
+                Ok(if outcome.completed && checkpoint_due {
                     let r = checkpoint_to_store(
                         session,
                         &self.signature,
@@ -1053,7 +1131,11 @@ pub mod engine {
                     (outcome, Some(r), crank_start_raw)
                 } else {
                     (outcome, None, crank_start_raw)
-                }
+                })
+            })();
+            let (outcome, checkpointed, crank_start_raw) = match prepared {
+                Ok(prepared) => prepared,
+                Err(error) => return Err(self.rewind_preparation_error(error)),
             };
             if !outcome.completed {
                 // Halted: rewind to the LAST CHECKPOINT — under
@@ -1336,6 +1418,48 @@ pub mod engine {
         use super::*;
 
         #[test]
+        fn top_level_compilation_adds_exact_live_charges() {
+            let source = "Object.keys({a:1}).length";
+            let report = ironhorse_compile::compile_atoms_with_budget(source, false, u64::MAX);
+            let raw = report.parse_meter_raw;
+            let (code, symbols) = report.result.unwrap();
+            let baseline = ironhorse_vm::Machine::new()
+                .new_compartment()
+                .evaluate_with_symbols(&code, &symbols);
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            for _ in 0..3 {
+                let actual = machine.evaluate(source, false).unwrap();
+                assert!(actual.completed);
+                assert_eq!(actual.result, baseline.result);
+                assert_eq!(actual.meter_raw, baseline.meter_raw + raw);
+            }
+        }
+
+        #[test]
+        fn top_level_admission_refuses_before_execution_and_retains_bill() {
+            let machine = Machine::with_bounds(MeterBounds::per_crank(32));
+            let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
+            let outcome = machine.evaluate(&source, false).unwrap();
+            assert!(!outcome.completed);
+            assert!(matches!(outcome.halt, Halt::MeterAbort));
+            assert_eq!(outcome.meter_raw, 32 << 16);
+            assert_eq!(outcome.dispatched, 0);
+        }
+
+        #[test]
+        fn top_level_parse_error_retains_compile_bill() {
+            let source = "var = ;";
+            let report = ironhorse_compile::compile_atoms_with_budget(source, false, u64::MAX);
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            match machine.evaluate(source, false) {
+                Err(MachineError::Compile { meter_raw, .. }) => {
+                    assert_eq!(meter_raw, report.parse_meter_raw)
+                }
+                other => panic!("expected charged compile error: {other:?}"),
+            }
+        }
+
+        #[test]
         fn machine_creates() {
             let _ = Machine::new();
         }
@@ -1375,7 +1499,7 @@ pub mod engine {
         fn compile_errors_surface_as_compile_errors() {
             let m = Machine::new();
             match m.evaluate("var = ;", false) {
-                Err(MachineError::Compile(_)) => {}
+                Err(MachineError::Compile { .. }) => {}
                 other => panic!("expected a compile error, got {other:?}"),
             }
         }

@@ -32,11 +32,11 @@ fn check(case: Case) -> Result<bool, String> {
 
     match compile(pattern, flags) {
         Err(CompileError::BudgetExceeded | CompileError::ResourceLimit) => {
-            return Err("regexp compilation resource refusal".into())
+            Err("regexp compilation resource refusal".into())
         }
         Err(CompileError::Unsupported(_)) => {
             // Honest named skip — the oracle may well compile it.
-            return Ok(false);
+            Ok(false)
         }
         Err(CompileError::Syntax(msg)) => {
             if oracle.compiled {
@@ -46,7 +46,7 @@ fn check(case: Case) -> Result<bool, String> {
                 ));
             }
             // Both reject — a matching compile error.
-            return Ok(true);
+            Ok(true)
         }
         Ok(program) => {
             if !oracle.compiled {

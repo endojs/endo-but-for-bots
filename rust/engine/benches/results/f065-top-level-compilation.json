@@ -1,0 +1,70 @@
+{
+  "finding": "F065",
+  "increment": "Top-level daemon and worker compilation charging",
+  "before_revision": "5b1e132d6",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "cpu": "Apple M3 Max",
+  "platform": "macOS 26.6.2 arm64",
+  "fixture_sha256": {
+    "rust/endo/tests/ironhorse_lifecycle_bench.rs": "db85b0450e48f9ff4e2459d4351cca49718e1df970ed6f234a7449d83528d6c5"
+  },
+  "method": "Same-host serial release measurements of identical fixture before and after source edits. One warmup and five measured rounds, median; 1000 evaluations per round. Includes compilation, fresh cached realm, execution, and result validation. No concurrent agent builds/tests during timing. Timing is total seconds for 1000 evaluations; raw and computrons are per evaluation, not aggregate.",
+  "command": "CARGO_INCREMENTAL=0 cargo test -p endo --release --test ironhorse_lifecycle_bench -- --ignored --nocapture --test-threads=1",
+  "cost_tables": {
+    "before": "ironhorse-meter-2",
+    "after": "ironhorse-meter-2",
+    "compiler": "ironhorse-compile-meter-1"
+  },
+  "limitations": [
+    "One pair of same-host medians is not a statistical significance claim. Scalar timing is about 2% slower; intrinsic-heavy timing about 16% slower.",
+    "The meter-2 rollout now reaches top-level daemon and worker compilation; raw charges intentionally increase. This is the same unmerged cost-table release as runtime compilation charging.",
+    "These timings cover stateless daemon lifecycle; worker and persistent-path correctness have separate tests."
+  ],
+  "measurements": [
+    {
+      "shape": "daemon_scalar",
+      "evaluations": 1000,
+      "before": {
+        "seconds": 0.027772334,
+        "raw": 541976,
+        "computrons": 8
+      },
+      "after": {
+        "seconds": 0.028344,
+        "raw": 7816472,
+        "computrons": 119
+      }
+    },
+    {
+      "shape": "daemon_intrinsics",
+      "evaluations": 1000,
+      "before": {
+        "seconds": 0.044649,
+        "raw": 2149216,
+        "computrons": 32
+      },
+      "after": {
+        "seconds": 0.05179725,
+        "raw": 42453856,
+        "computrons": 647
+      }
+    }
+  ],
+  "raw_logs": {
+    "before": "   Compiling xsnap v0.1.0 (/Users/xyz/Development/endo2/rust/endo/xsnap)\nwarning: xsnap@0.1.0: /Users/xyz/Development/endo2/rust/endo/xsnap/xsnap-platform.c:94:1: warning: missing field 'signature' initializer [-Wmissing-field-initializers]\nwarning: xsnap@0.1.0:    94 | };\nwarning: xsnap@0.1.0:       | ^\nwarning: xsnap@0.1.0: 1 warning generated.\nwarning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique\n   --> rust/endo/xsnap/src/lib.rs:227:37\n    |\n227 |             if !cbs.iter().any(|&c| c == callback) {\n    |                                     ^^^^^^^^^^^^^\n    |\n    = note: the address of the same function can vary between different codegen units\n    = note: furthermore, different functions could have the same address after being merged together\n    = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>\n    = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default\nhelp: refactor your code, or use `std::ptr::fn_addr_eq` to suppress the lint\n    |\n227 -             if !cbs.iter().any(|&c| c == callback) {\n227 +             if !cbs.iter().any(|&c| std::ptr::fn_addr_eq(c, callback)) {\n    |\n\n   Compiling endo v0.1.0 (/Users/xyz/Development/endo2/rust/endo)\nwarning: function `parse_dependencies` is never used\n   --> rust/endo/src/assemble.rs:235:4\n    |\n235 | fn parse_dependencies(\n    |    ^^^^^^^^^^^^^^^^^^\n    |\n    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default\n\nwarning: function `read_tree_dependencies` is never used\n   --> rust/endo/src/assemble.rs:275:4\n    |\n275 | fn read_tree_dependencies(\n    |    ^^^^^^^^^^^^^^^^^^^^^^\n\nwarning: `xsnap` (lib) generated 1 warning\nwarning: `endo` (lib) generated 2 warnings\n    Finished `release` profile [optimized] target(s) in 13.56s\n     Running tests/ironhorse_lifecycle_bench.rs (target/release/deps/ironhorse_lifecycle_bench-e2e1958126afbcf4)\n\nrunning 1 test\ntest repeated_stateless_evaluations ... LIFECYCLE daemon_scalar n=1000 seconds=0.027772334 raw=541976\nLIFECYCLE daemon_intrinsics n=1000 seconds=0.044649000 raw=2149216\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s\n\n",
+    "after": "\nrunning 1 test\ntest repeated_stateless_evaluations ... LIFECYCLE daemon_scalar n=1000 seconds=0.028344000 raw=7816472\nLIFECYCLE daemon_intrinsics n=1000 seconds=0.051797250 raw=42453856\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s\n\n"
+  },
+  "validation": {
+    "vm_unit_tests": 164,
+    "daemon_top_level_charge_tests": 3,
+    "meter_bounds_integration_tests": 10,
+    "store_worker_integration_tests": 7,
+    "worker_unit_tests": 2,
+    "script_budget_boundary_test": 1,
+    "clippy": "Pinned Rust 1.88 full engine workspace (--locked --workspace --no-deps -D warnings) and all worker targets pass.",
+    "compile_budget_tests": 12,
+    "daemon_clippy_limitation": "Rust 1.88 cannot build daemon dependencies requiring 1.91. Rust 1.91 clippy -p endo --lib --no-deps -D warnings reports 49 diagnostics at existing code sites. All but one are in unchanged files; the sole ironhorse_engine.rs diagnostic is its pre-existing total_after % collect_every expression. This is not a clean daemon Clippy result.",
+    "compiler_tests": 126
+  }
+}

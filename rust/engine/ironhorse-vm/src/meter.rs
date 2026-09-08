@@ -354,11 +354,39 @@ impl Meter {
 
     /// Compilation receipts require a monotone accumulated index. Saturate
     /// the next deadline instead of adopting XS's execution-window wrap/reset.
-    pub(crate) fn check_compilation<F: FnMut(u64) -> bool>(&mut self, host: &mut F) -> MeterCheck {
+    pub(crate) fn check_compilation<F: FnMut(u64) -> bool + ?Sized>(
+        &mut self,
+        host: &mut F,
+    ) -> MeterCheck {
         self.check_inner(host, true)
     }
 
-    fn check_inner<F: FnMut(u64) -> bool>(&mut self, host: &mut F, monotone: bool) -> MeterCheck {
+    /// Charge compiler work before a realm exists, using the same monotone
+    /// checkpoint policy as runtime compilation. Move this meter and its host
+    /// into the evaluator afterward; do not replay already delivered charges.
+    pub fn charge_compilation(
+        &mut self,
+        raw: u64,
+        host: Option<&mut dyn FnMut(u64) -> bool>,
+    ) -> bool {
+        let Some(next) = self.index.checked_add(raw) else {
+            return false;
+        };
+        self.index = next;
+        if next == u64::MAX {
+            return false;
+        }
+        match host {
+            Some(host) => self.check_compilation(host) == MeterCheck::Continue,
+            None => !self.is_armed(),
+        }
+    }
+
+    fn check_inner<F: FnMut(u64) -> bool + ?Sized>(
+        &mut self,
+        host: &mut F,
+        monotone: bool,
+    ) -> MeterCheck {
         if self.interval != 0 && self.index > self.count {
             self.last_reported = self.computrons();
             if host(self.last_reported) {

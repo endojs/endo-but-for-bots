@@ -2,6 +2,68 @@ use ironhorse_compile::{compile_atoms_with, compile_atoms_with_budget, ParseErro
 use ironhorse_meter::{COMPILE_SOURCE_BYTE_METERING, COMPILE_WORK_METERING};
 
 #[test]
+fn budgeted_script_preserves_goal_and_refuses_at_exact_boundary() {
+    use ironhorse_compile::{compile_atoms_goal, compile_atoms_goal_with_meter, Goal, ParseMeter};
+    for source in [
+        "var x = 1; x",
+        "\"use strict\"; var x = 1; x",
+        "function f(){return 2;} f()",
+    ] {
+        let meter = ParseMeter::with_budget(u64::MAX);
+        let actual = compile_atoms_goal_with_meter(
+            source,
+            ironhorse_compile::Goal::Script,
+            false,
+            meter.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            actual,
+            compile_atoms_goal(source, Goal::Script, false).unwrap()
+        );
+        let raw = meter.raw();
+        assert!(raw > 0);
+        assert_eq!(
+            compile_atoms_goal_with_meter(
+                source,
+                ironhorse_compile::Goal::Script,
+                false,
+                ParseMeter::with_budget(raw)
+            )
+            .unwrap(),
+            actual
+        );
+        let short = ParseMeter::with_budget(raw - 1);
+        assert_eq!(
+            compile_atoms_goal_with_meter(
+                source,
+                ironhorse_compile::Goal::Script,
+                false,
+                short.clone()
+            )
+            .unwrap_err()
+            .kind,
+            ParseErrorKind::MeterLimit
+        );
+        assert_eq!(short.raw(), raw - 1);
+    }
+    let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
+    let meter = ParseMeter::with_budget(32 << 16);
+    assert_eq!(
+        compile_atoms_goal_with_meter(
+            &source,
+            ironhorse_compile::Goal::Script,
+            false,
+            meter.clone()
+        )
+        .unwrap_err()
+        .kind,
+        ParseErrorKind::MeterLimit
+    );
+    assert_eq!(meter.raw(), 32 << 16);
+}
+
+#[test]
 fn using_disposal_slot_scans_are_precharged() {
     let n = 256u64;
     let declarations = (0..n)

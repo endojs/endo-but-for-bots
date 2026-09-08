@@ -13871,16 +13871,10 @@ impl Interp {
     /// compilation before a crank starts; failed admission prevents checkpointing
     /// until the managed lifecycle rewinds or a subsequent crank completes.
     pub fn charge_compilation(&mut self, raw: u64) -> bool {
-        let Some(next) = self.meter_index().checked_add(raw) else {
-            self.last_crank_completed = false;
-            return false;
+        let accepted = match self.meter_host.as_mut() {
+            Some(host) => self.meter.charge_compilation(raw, Some(host)),
+            None => self.meter.charge_compilation(raw, None),
         };
-        self.meter.tick_raw(raw);
-        let accepted = next < u64::MAX
-            && match self.meter_host.as_mut() {
-                Some(host) => self.meter.check_compilation(host) == MeterCheck::Continue,
-                None => !self.meter.is_armed(),
-            };
         if !accepted {
             self.last_crank_completed = false;
         }

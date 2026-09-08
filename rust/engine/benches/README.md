@@ -329,7 +329,8 @@ the lexer before its character/offset allocations.
 Tokens, scoper operations, coder nodes/records, symbol interning, and reserved scans
 use the shared token/work weights.
 BigInt conversion keeps upstream's incremental charges for each growing limb scan;
-regexp validation prepays squared body length, including string-set products.
+regexp validation retains upstream’s bounded inner-work checks, including string-set
+products, and charges each reported work delta exactly once.
 Repeated `using` disposal-slot searches reserve declaration count before traversal.
 Optimizer and serialization passes reserve linear scans before allocation.
 These weights are deterministic policy, not calibrated CPU time or XS parity.
@@ -374,19 +375,18 @@ that successful, nested, and caught-syntax-error paths add exactly the compiler 
 Compilation checks saturate the next threshold, preserving the accumulated index
 when an accepting host's interval would otherwise wrap it to zero.
 
-The integrated implementation uses the shared `ironhorse-meter-4` release.
+The integrated implementation uses the shared `ironhorse-meter-5` release.
 Its upstream source/token/work weights and immutable earlier release pins remain
 intact; the runtime seam adds a checked raw allowance and verifies live receipts.
 Historical snapshots retain their named cost-table refusals and migration tests
 continue to authenticate both the version and table digest.
 
 The compiler-budget growth fixture now runs in the nightly compiler scaling lane.
-Top-level daemon and worker source compilation still require integration; F065 is
-not complete at this increment.
+The following increment extends these charges to top-level daemon and worker source.
 
 [results/f065-runtime-compilation.json](results/f065-runtime-compilation.json)
 records the original pre-rebase same-host release pair against the compiler-budget
-commit, using its earlier cost policy; these are not release 4 measurements.
+commit, using its earlier cost policy; these are not release 5 measurements.
 At 4,000 branches, eval measures 6.34 ms before and 6.27 ms after; Function measures
 5.10 ms before and 5.61 ms after (about 10% overhead).
 The 1 MB comment case refuses earlier, falling from 5.87 ms to 2.56 ms.
@@ -409,3 +409,34 @@ cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-262 --test runtime_compile_bench \
   -- --ignored --nocapture --test-threads=1
 ```
+
+## Top-level compilation charges (F065, fourth increment)
+
+Daemon and worker source now enter the compiler with a hard raw allowance derived
+from the crank budget and remaining meter capacity.
+Source admission occurs before lexer allocation.
+The stateless daemon moves the actual meter and host callback into its cached realm,
+retaining the index and next consultation threshold without resetting or replaying
+compilation charges.
+Host consultation occurs outside the template cache borrow, allowing reentrancy.
+The persistent daemon arms before compilation and symbol preparation; failures
+rewind the entire pending checkpoint window, just as execution failures do.
+Compile errors report their attempted raw bill even though the heap and persistent
+meter rewind together.
+The worker uses a budgeted Script entry point to preserve declaration semantics;
+failed preparation exits before checkpointing or releasing a successful result.
+
+[results/f065-top-level-compilation.json](results/f065-top-level-compilation.json)
+records the original serial same-host release pair against `5b1e132d6`,
+using the pre-rebase cost policy; it is not a release 5 measurement.
+For 1,000 stateless evaluations, scalar time changes from 27.77 ms to 28.34 ms
+(about 2% overhead), and intrinsic-heavy time from 44.65 ms to 51.80 ms
+(about 16% overhead).
+Timings cover the whole batch; raw charges and computrons are per evaluation.
+The raw bills intentionally increase from 541,976 to 7,816,472 for the scalar and
+from 2,149,216 to 42,453,856 for the intrinsic-heavy source.
+These medians are not statistical significance claims or persistent-store timings.
+Tests separately verify exact charge deltas, Script parity, cache reuse and
+reentrancy, refusal before dispatch, and rollback of pending cranks.
+This completes top-level integration under the shared `ironhorse-meter-5` release.
+Upstream's periodic dispatch checkpoint is retained alongside compilation checks.
