@@ -1,29 +1,14 @@
-//! The parse meter — ironhorse's own deterministic, release-versioned cost
-//! table for compilation, threaded through the lexer from the first
-//! token (design § Metering; the accuracy-over-parity doctrine,
-//! maintainer-directed 2026-07-04).
-//!
-//! DOCTRINE: the meter is ironhorse's own frozen cost table, not a back-fit
-//! of XS's `XS_PARSE_CODE_METERING`. The oracle certifies RESULTS (and
-//! in stage 5, BYTES); computron-vs-oracle telemetry stays advisory. So
-//! the constants below are ironhorse's to freeze per release
-//! (`ironhorse-meter-N`); XS's `1 << 16`-per-parse-unit weight is recorded
-//! only as the historical reference that motivated a per-unit shape.
-//!
-//! Threading the hook now — one counter bump per scanned token — is
-//! cheap; retrofitting a meter into a finished lexer/parser is not. The
-//! calibrated weights arrive with the frozen release table; until then
-//! the shape (a monotone per-unit counter in 16.16 fixed point, read as
-//! whole computrons via `>> 16`) is what matters and is what later
-//! stages build on.
+//! Compilation uses the same frozen XS-derived release table as the VM.
+//! Oracle computrons are advisory. Every scanned token (including EOF)
+//! charges the shared parse-token weight; golden pairs pin that accounting.
 
 /// The frozen parse-meter release this table belongs to. Bump the suffix
 /// (and re-freeze the constants) only at a deliberate release boundary.
-pub const PARSE_METER_RELEASE: &str = "ironhorse-meter-0";
+pub use ironhorse_meter::COST_TABLE_VERSION as PARSE_METER_RELEASE;
 
 /// Cost charged per token the lexer produces, in 16.16 fixed point.
 /// ironhorse's own constant (advisory calibration; see module doc).
-pub const PARSE_TOKEN_METERING: u64 = 1 << 16;
+pub use ironhorse_meter::PARSE_TOKEN_METERING;
 
 /// A monotone parse-cost counter in 16.16 fixed point. Bumped once per
 /// scanned token; never reset mid-parse (a fresh [`ParseMeter::new`] per
