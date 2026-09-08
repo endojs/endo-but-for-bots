@@ -9,6 +9,15 @@
 
 ## Status
 
+**Orientation (this section stands on its own).** The originating § *Prompt* (the
+document's last section, quoted verbatim there) asks for a
+**hermetically-sandboxed** `claude -p`: a Claude invocation whose *only*
+capability surface is the Endo tool-call surface, achieved through OS-level
+isolation **and** a substituted tool surface together. It leaves the
+implementation free to use either the `claude` command-line interface (**the CLI
+path**) or the Claude Agent SDK. Read against that ask, this section reports where
+the work stands; you do not need to jump ahead to § *Prompt* first.
+
 The CLI path remains the default implementation path.
 `@endo/claude` is an **unconfined host caplet** that launches a fresh
 `claude -p --bare` process for each inference.
@@ -132,10 +141,21 @@ The caplet is accepted only when one live, version-pinned test demonstrates
 5. Repeat after omitting each core flag in turn and record the expected leak or
    refusal, so the test proves which flags are load-bearing rather than merely
    proving that the full invocation happened to work.
+6. Assert the isolation gate of *Design Decision 6*: `make` with **no**
+   `options.isolation` attestation **refuses to construct** (fails closed rather
+   than launching an unwrapped child against a co-located many-guest daemon), and
+   `make` with each recognized attestation (`separate-uid`, `sandbox-slice`,
+   `co-located-trusted`) constructs and threads that value through to
+   `makeGuestInference`. This step gates the one residual DD6 names as
+   load-bearing (cross-guest escalation on a co-located daemon), so the design's
+   own acceptance test cannot pass while that precondition is silently unenforced.
 
 This exact test is intentionally named here rather than run by this design job.
 Its positive assertion is load-bearing: a zero-tool process is not a successful
-confinement result.
+confinement result. Step 6 asserts the tool-surface substitution the caplet does
+enforce is not the whole boundary: the co-located-daemon residual DD6 flags must
+be an explicit, refused-by-default attestation, not an untested deployment
+convention.
 
 ### Interface to the one-guest MCP surface (#1206)
 
@@ -1303,7 +1323,7 @@ packages/claude/
 ├── index.js                # entry module; exports `make` (see below); no other public subpath
 ├── claude.types.d.ts       # the InferResult union (DD8), the powers record, and the branded 64-hex formula id live here (repo convention: <entry>.types.d.ts, the .gitignore !*.types.d.ts allow-form)
 ├── src/
-│   ├── harness.js          # make(powers, context, options) -> inferenceProvider exo (host-only, non-passable); makeGuestInference(guestFormulaId) -> Promise<per-guest infer exo> (DD8)
+│   ├── harness.js          # make(powers, context, options) -> inferenceProvider exo (host-only, non-passable; options.isolation attestation required, fails closed, DD6); makeGuestInference(guestFormulaId) -> Promise<per-guest infer exo> (DD8)
 │   ├── tool-permissions.js # guest tools/list snapshot -> membership-validated mcp__server__tool[] allow entries AND the built-in deny set / --tools "" baseline (DD2)
 │   ├── credentials-pool.js # allocator: swappable selectSubscription policy + issue(sessionTag) mechanism over a set of ClaudeCredentials; allocator-owned occupancy; reject-with-tag admission; renders the apiKeyHelper --settings file
 │   ├── mcp-config.js        # render the --mcp-config file (one endpoint; a bearer only under HTTP)
@@ -1334,7 +1354,11 @@ hand-added legacy-exception line and nothing in skel's `build` generates one):
 context this design leans on; and the `make*` key repo precedent —
 `packages/agent-tools/test/exports.test.js` deep-equals the `make*` key set, so the
 build PR has a named identifier to agree on): `powers` carries the daemon connection
-used to resolve a formula id to a facet and the `ClaudeCredentials` pool. `make`
+used to resolve a formula id to a facet and the `ClaudeCredentials` pool;
+`options` carries the `isolation` attestation DD6 requires (`separate-uid` /
+`sandbox-slice` / `co-located-trusted`), and `make` **fails closed** (it refuses
+to construct absent a recognized value rather than launching an unwrapped child
+against a co-located many-guest daemon). `make`
 returns an `inferenceProvider` exo (host-only and **non-passable**, DD8) whose
 `makeGuestInference(guestFormulaId)` resolves and closes over one facet and
 **returns a `Promise<inferExo>`** — the per-guest `infer(prompt, {model, cancelled})`
@@ -1524,12 +1548,27 @@ remaining, independent axis of who triggers an inference.)
    tool-surface bypass — arbitrary native code, a CLI defect, or a future
    escape — that opens that socket does not merely "reach the host filesystem or
    network": it holds the **full many-guest daemon endpoint**, i.e. cross-guest
-   escalation, exactly the threat the removed earlier text named. What keeps that
+   escalation. What keeps that
    out of reach is a **deployment constraint** the caller must supply: run the
    child under a **separate uid** with no route to the daemon socket, **or** apply
    the `@endo/claude-sandbox` OS slice that moves the socket outside the child's
    mount namespace. The constructed environment remains worthwhile defense in
    depth, not an OS sandbox, and does not by itself close this escalation.
+   Because that constraint is safety-critical yet exogenous to the tool-surface
+   flags, the harness must not model it as deployment *place* alone; it makes the
+   precondition a **checked value**. `make(powers, context, options)` takes an
+   `options.isolation` attestation with one of three explicit values: `separate-uid`
+   (the caller asserts the child runs under a uid with no route to the daemon
+   socket), `sandbox-slice` (the launch is wrapped by `@endo/claude-sandbox`), or
+   `co-located-trusted` (the caller knowingly accepts the cross-guest residual on a
+   co-located daemon). `make` **fails closed**: absent a recognized attestation it
+   refuses to construct rather than launching an unwrapped child against a
+   co-located many-guest daemon by default, and `makeGuestInference(guestFormulaId)`
+   inherits the attestation the surrounding `make` recorded. The attestation is a
+   value the harness observes and can refuse on, not an unenforced deployment
+   convention; it does not by itself impose OS isolation (only `sandbox-slice` and
+   a caller-supplied `separate-uid` do), but it forces the co-located residual to be
+   an explicit, auditable choice at construction rather than a silent default.
 7. **Credential and config files have a specified mode and lifetime.** The
    `--mcp-config` and `--settings` files are created per spawn with exclusive
    creation at mode `0600` inside a per-spawn directory at mode `0700`, then
