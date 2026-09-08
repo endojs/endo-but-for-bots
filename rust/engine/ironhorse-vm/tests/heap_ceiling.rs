@@ -94,6 +94,9 @@ fn guest_sized_temporary_buffers_are_refused_before_they_are_created() {
         "new ArrayBuffer(1000000)",
         "'x'.padStart(1000000, 'y')",
         "'x'.padEnd(1000000, 'y')",
+        "Array(1000000).join('x')",
+        "Array.prototype.join.call({length:1000000},'x')",
+        "String.raw({raw:{length:1000000,0:'x'}})",
     ] {
         let (code, names) = compile(source);
         let mut vm = Interp::new();

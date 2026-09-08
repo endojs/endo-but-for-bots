@@ -148,6 +148,9 @@ fn allocation_admission_preserves_completed_meter_totals() {
         "'x'.padStart(100, 'yz')",
         "'x'.padEnd(100, 'yz')",
         "new ArrayBuffer(100).byteLength",
+        "[1,2,3].join(':')",
+        "Array.prototype.join.call({length:3,0:'a',2:'b'},':')",
+        "String.raw({raw:['a','b','c']},1,2)",
     ] {
         let (code, names) = compile(source);
         let mut plain = Interp::new();
