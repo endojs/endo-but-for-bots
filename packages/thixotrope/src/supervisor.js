@@ -23,11 +23,14 @@ import { fileURLToPath } from 'node:url';
 
 import { makeApplicationRegistry } from './application-registry.js';
 import { makeThixotropeDaemon } from './daemon.js';
+import { makeDurableNetLayer } from './durable-netlayer.js';
 import { makeIronhorseEngine } from './ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
 import { makeObservableInventory } from './observable-inventory.js';
+import { makeMailbox } from './mailbox.js';
 import { makeFsStore } from './store-fs.js';
+import { assertUnixPeerLocation, makeUnixNetLayer } from './unix-netlayer.js';
 
 /** @import { WorkerEngine } from './worker-engine.js' */
 /** @import { Socket } from 'node:net' */
@@ -77,6 +80,7 @@ export const serveThixotrope = async (
     );
   }
   const socketPath = join(statePath, 'control.sock');
+  const peerPath = join(statePath, 'peers.sock');
   const packagePath = fileURLToPath(new URL('../', import.meta.url));
   const rawEngine =
     engine ??
@@ -137,6 +141,12 @@ export const serveThixotrope = async (
     requestStop = resolveStop;
   });
   let daemon;
+  /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
+  let peerNetlayer;
+  const closePeers = async () => {
+    peerNetlayer?.shutdown();
+    await peerNetlayer?.closed;
+  };
   const closeSocket = () => {
     for (const socket of sockets) socket.destroy();
   };
@@ -180,17 +190,22 @@ export const serveThixotrope = async (
       engine: measured,
       codec: syrupCodec,
       idleSleepMs,
-      makeNetlayer: async () =>
-        harden({
-          location: harden({
-            type: 'ocapn-peer',
-            network: 'thix-local',
-            transport: 'thix-local',
-            designator: 'supervisor',
-            hints: false,
-          }),
-          shutdown: closeSocket,
-        }),
+      makeNetlayer: async ({ handlers, logger, resumption }) => {
+        // makeThixotropeDaemon already holds the exclusive engine lease.
+        await rm(peerPath, { force: true });
+        return makeDurableNetLayer({
+          handlers,
+          logger,
+          resumption,
+          makeBaseNetlayer: async powers => {
+            peerNetlayer = await makeUnixNetLayer({
+              ...powers,
+              socketPath: peerPath,
+            });
+            return peerNetlayer;
+          },
+        });
+      },
     });
     const configPath = join(statePath, 'workspace.json');
     let config;
@@ -257,6 +272,30 @@ export const serveThixotrope = async (
     }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
     await rm(socketPath, { force: true });
+    const getMailbox = () =>
+      workspace.evaluate(
+        `(globalThis.mailbox ??= E(vats).createWorker('mailbox').then(worker => E(worker).getEvaluator()).then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})()`)})))`,
+      );
+    /** @param {unknown} text */
+    const parseInvitation = text => {
+      if (typeof text !== 'string' || text.length > 4096)
+        throw Error('Invalid invitation');
+      const invitation = JSON.parse(text);
+      const name = /** @type {unknown} */ (invitation?.name);
+      if (
+        invitation?.version !== 1 ||
+        typeof invitation.secret !== 'string' ||
+        !/^[0-9a-f]{32}$/.test(invitation.secret) ||
+        typeof name !== 'string' ||
+        !name.length ||
+        name.length > 128
+      )
+        throw Error('Invalid invitation');
+      return {
+        ...invitation,
+        location: assertUnixPeerLocation(invitation.location),
+      };
+    };
     const adminMethods = {
       help: () => 'Local supervisor: evaluate(source), status(), stop().',
       evaluate: async source => {
@@ -311,6 +350,54 @@ export const serveThixotrope = async (
       reachability: () => daemon.inspectReachability(),
       collect: () => daemon.collectVats(),
       inventoryStatus: () => E(inventory).subscriptionCounts(),
+      invite: async name => {
+        const invitation = await E(getMailbox()).invite(name);
+        const secret = daemon.publish(invitation);
+        return JSON.stringify({
+          version: 1,
+          location: daemon.location,
+          secret,
+          name,
+        });
+      },
+      connect: async (name, invitationText) => {
+        const invitation = parseInvitation(invitationText);
+        const remote = await daemon.importReference(
+          invitation.location,
+          invitation.secret,
+        );
+        return E(getMailbox()).connect(name, remote);
+      },
+      revokeInvitation: async text => {
+        const invitation = parseInvitation(text);
+        if (invitation.location.designator !== peerPath)
+          throw Error('Invitation belongs to another supervisor');
+        await E(getMailbox()).cancelInvitation(invitation.name);
+        daemon.unpublish(invitation.secret);
+        return true;
+      },
+      contacts: () => E(getMailbox()).contacts(),
+      inbox: () => E(getMailbox()).inbox(),
+      outbox: () => E(getMailbox()).outbox(),
+      send: async (name, text, key) => {
+        // Resolve the grant in the workspace so only the explicitly selected
+        // value crosses into the mailbox vat.
+        await getMailbox();
+        return workspace.evaluate(
+          'E(mailbox).send(name, text, inventory.get(key))',
+          { name, text, key },
+        );
+      },
+      takeOffer: async (id, key) => {
+        if (typeof key !== 'string' || !key.length)
+          throw Error('Expected inventory key');
+        await getMailbox();
+        return workspace.evaluate(
+          'E(mailbox).take(id).then(value => { inventory.set(key, value); return true; })',
+          { id, key },
+        );
+      },
+      discardOffer: id => E(getMailbox()).discard(id),
     };
     server.on('connection', socket => {
       if (requested) {
@@ -364,6 +451,7 @@ export const serveThixotrope = async (
           await closeControl();
         } finally {
           try {
+            await closePeers();
             await daemon.shutdown();
           } finally {
             closeSocket();
@@ -379,6 +467,7 @@ export const serveThixotrope = async (
       await closeControl();
     } finally {
       closeSocket();
+      await closePeers();
       await daemon?.crash();
     }
     throw error;
