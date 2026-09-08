@@ -3525,7 +3525,11 @@ pub fn export_to_container(store: &dyn HeapStore) -> Result<Vec<u8>, StoreError>
 /// Seed a store from canonical container bytes (a full epoch-1 write),
 /// enforcing the container gates against `expected_sig` exactly as
 /// [`crate::image::read_machine`] does. The identity lock is
-/// `export_to_container(import_from_container(bytes)) == bytes`.
+/// `export_to_container(import_from_container(bytes)) == bytes` for canonical
+/// current-writer output. Accepted legacy Number NaN encodings normalize on
+/// import/export, changing content identity once; raw buffer bytes do not.
+/// Opening an existing store still validates hashes over its stored bytes.
+/// Untouched legacy pages need not be rewritten until checkpoint dirties them.
 pub fn import_from_container(
     bytes: &[u8],
     expected_sig: &Signature,
@@ -3983,6 +3987,44 @@ mod tests {
         // And the exported bytes still pass the container reader's own
         // gates.
         assert_eq!(read_machine(&exported, &sig()).unwrap(), image);
+    }
+
+    #[test]
+    fn legacy_nan_import_normalizes_numbers_but_preserves_chunk_bytes() {
+        use ironhorse_vm::{ChunkArena, Payload, Slot};
+        let raw = 0xfff0_0000_0000_0001u64;
+        let mut image = ran_image();
+        let slot_index = image.slots.len();
+        image.slots.push(Slot::number(f64::NAN));
+        image.slot_live += 1;
+        let mut chunks = ChunkArena::from_image(image.chunks);
+        chunks.alloc(&raw.to_be_bytes());
+        image.chunks = chunks.raw_vec();
+        let canonical = write_machine(&image);
+        let record = crate::slot_codec::encode_slots(&[Slot::number(f64::NAN)]);
+        let offsets: Vec<_> = canonical
+            .windows(record.len())
+            .enumerate()
+            .filter_map(|(i, bytes)| (bytes == record).then_some(i))
+            .collect();
+        assert_eq!(offsets.len(), 1);
+        let mut legacy = canonical.clone();
+        legacy[offsets[0] + 10..offsets[0] + 18].copy_from_slice(&raw.to_be_bytes());
+        let decoded = read_machine(&legacy, &sig()).unwrap();
+        let Payload::Number(n) = decoded.slots[slot_index].value else {
+            panic!("expected number")
+        };
+        assert_eq!(n.to_bits(), raw);
+        assert_eq!(write_machine(&decoded), canonical);
+        let mut store = MemoryStore::new();
+        import_from_container(&legacy, &sig(), &mut store).unwrap();
+        validate_store(&store, &sig()).unwrap();
+        assert_eq!(export_to_container(&store).unwrap(), canonical);
+        assert_eq!(store_to_image(&store).unwrap().chunks, image.chunks);
+        assert_eq!(
+            write_machine(&read_machine(&canonical, &sig()).unwrap()),
+            canonical
+        );
     }
 
     /// A machine image survives the paged form exactly (every page and

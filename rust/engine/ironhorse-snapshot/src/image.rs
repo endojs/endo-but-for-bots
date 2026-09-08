@@ -25,6 +25,7 @@ use crate::format::{
     Signature, SnapshotError, Version, BLOC, CREA, HEAP, KEYS, METR, NAME, SIGN, STAC, SYMB, VERS,
 };
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
+use ironhorse_vm::value::canonicalize_nan;
 use ironhorse_vm::{
     dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
     IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, Payload,
@@ -262,7 +263,7 @@ pub struct RegExpImage {
 }
 
 /// One Date instance's serialized `[[DateValue]]`: owning slot and raw
-/// IEEE-754 bits. Raw bits preserve invalid dates and negative zero exactly.
+/// IEEE-754 bits. Encoding canonicalizes invalid-date NaNs and preserves negative zero.
 /// Ascending by owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DateImage {
@@ -1568,7 +1569,11 @@ pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
         let flags = r.flags.as_bytes();
         v.extend_from_slice(&(flags.len() as u32).to_be_bytes());
         v.extend_from_slice(flags);
-        v.extend_from_slice(&r.last_index_bits.to_be_bytes());
+        v.extend_from_slice(
+            &canonicalize_nan(f64::from_bits(r.last_index_bits))
+                .to_bits()
+                .to_be_bytes(),
+        );
     }
     v
 }
@@ -1611,7 +1616,11 @@ pub(crate) fn encode_dates(dates: &[DateImage]) -> Vec<u8> {
     v.extend_from_slice(&(dates.len() as u32).to_be_bytes());
     for d in dates {
         v.extend_from_slice(&d.owner.to_be_bytes());
-        v.extend_from_slice(&d.value_bits.to_be_bytes());
+        v.extend_from_slice(
+            &canonicalize_nan(f64::from_bits(d.value_bits))
+                .to_bits()
+                .to_be_bytes(),
+        );
     }
     v
 }
@@ -5283,7 +5292,25 @@ mod tests {
     }
 
     #[test]
-    fn date_decode_preserves_raw_bits_and_refuses_duplicate_owners() {
+    fn regexp_encoding_canonicalizes_legacy_nan() {
+        let rows = vec![RegExpImage {
+            owner: 7,
+            source: String::new(),
+            flags: String::new(),
+            last_index_bits: 0xfff0_0000_0000_0001,
+        }];
+        let encoded = encode_regexps(&rows);
+        let mut expected = rows.clone();
+        expected[0].last_index_bits = 0x7ff8_0000_0000_0000;
+        assert_eq!(decode_regexps(&encoded).unwrap(), expected);
+        let mut legacy = encoded.clone();
+        legacy[16..24].copy_from_slice(&rows[0].last_index_bits.to_be_bytes());
+        assert_eq!(decode_regexps(&legacy).unwrap(), rows);
+        assert_eq!(encode_regexps(&decode_regexps(&legacy).unwrap()), encoded);
+    }
+
+    #[test]
+    fn date_encoding_canonicalizes_nan_and_refuses_duplicate_owners() {
         let rows = vec![
             DateImage {
                 owner: 2,
@@ -5294,7 +5321,14 @@ mod tests {
                 value_bits: 0x7ff8_0000_0000_0042,
             },
         ];
-        assert_eq!(decode_dates(&encode_dates(&rows)).unwrap(), rows);
+        let mut expected = rows.clone();
+        expected[1].value_bits = 0x7ff8_0000_0000_0000;
+        let encoded = encode_dates(&rows);
+        assert_eq!(decode_dates(&encoded).unwrap(), expected);
+        let mut legacy = encoded.clone();
+        legacy[20..28].copy_from_slice(&rows[1].value_bits.to_be_bytes());
+        assert_eq!(decode_dates(&legacy).unwrap(), rows);
+        assert_eq!(encode_dates(&decode_dates(&legacy).unwrap()), encoded);
 
         let duplicate = vec![
             DateImage {

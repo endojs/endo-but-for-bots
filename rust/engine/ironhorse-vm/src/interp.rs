@@ -44,7 +44,9 @@
 use crate::bulk::{ArrayData, CollKind, CollectionData, SideRefCounts};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
-use crate::value::{number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena};
+use crate::value::{
+    canonicalize_nan, number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena,
+};
 
 /// A program compiled from a runtime source string for same-realm
 /// execution: the XS-shaped bytecode plus its `symbols` atom (the
@@ -18532,7 +18534,11 @@ impl Interp {
                             }
                         }
                         (Kind::Number, Payload::Number(n)) => {
-                            top.value = Payload::Number(if inc { n + 1.0 } else { n - 1.0 });
+                            top.value = Payload::Number(canonicalize_nan(if inc {
+                                n + 1.0
+                            } else {
+                                n - 1.0
+                            }));
                         }
                         // `ToNumeric` above yields an Integer, Number, or
                         // BigInt (handled before); anything else is the
@@ -58682,9 +58688,16 @@ fn encode_element_le(kind: u8, n: f64) -> Option<Vec<u8>> {
     Some(match kind {
         0 | 1 => return None,
         // Float32
-        2 => (n as f32).to_le_bytes().to_vec(),
+        2 => {
+            let value = if n.is_nan() {
+                f32::from_bits(0x7fc0_0000)
+            } else {
+                n as f32
+            };
+            value.to_le_bytes().to_vec()
+        }
         // Float64
-        3 => n.to_le_bytes().to_vec(),
+        3 => canonicalize_nan(n).to_le_bytes().to_vec(),
         // Int8 / Uint8
         4 | 7 => vec![to_wrapped(n, 8) as u8],
         // Int16 / Uint16
