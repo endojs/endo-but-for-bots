@@ -49,6 +49,7 @@ import { runClaudeTurn } from './src/claude-turn.js';
 import { runHostedTurn } from './src/hosted-turn.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
+import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply. A safety ceiling, not a work budget: a coding turn
@@ -825,6 +826,8 @@ const provisionPresetObjects = async (
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
  *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
+ * @param {Map<string, any>} [options.extraTools] - Session-specific tools
+ *   the factory built (see `makeFlootToolRegistry`).
  * @returns {Promise<{
  *   converse: (
  *     input: string | object,
@@ -850,6 +853,7 @@ export const makeStreamingAgent = async (
     modelId,
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
+    extraTools,
   } = {},
 ) => {
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
@@ -951,6 +955,7 @@ export const makeStreamingAgent = async (
   const settledMail = new Set();
   const toolRegistry = makeFlootToolRegistry(powers, {
     settledMail,
+    ...(extraTools ? { extraTools } : {}),
     ...(spawner ? { spawner, delegations } : {}),
     ...(accountOracle
       ? {
@@ -1951,6 +1956,38 @@ export const make = (hostPowers, _context, { env } = {}) => {
       acknowledge: checkpoint => E(client).acknowledge(checkpoint),
     });
 
+  // Runtime container-mount attach registrar
+  // (designs/runtime-container-fs-mount.md): validates guest-chosen /mnt/
+  // paths, proves cap possession against the session guest's own petstore,
+  // persists ref-counted attach records in this factory's petstore, and drives
+  // the sandbox client's bind set. The privileged 9P bridging runs in a
+  // separate provider holding the fs-mounter and root-host authority
+  // (@endo/claude-sandbox's container-mount-bridge.js, or a session
+  // provisioner that mixed its two methods in); a deployment with no such
+  // provider simply leaves attach unavailable, with a clear error.
+  const containerMountRegistrar = makeContainerMountRegistrar({
+    powers,
+    getBridgeProvider: async () => {
+      const providerName =
+        env?.FLOOT_CONTAINER_MOUNT_BRIDGE || 'container-mount-bridge';
+      if (!(await E(powers).has(providerName))) return undefined;
+      const provider = await E(powers).lookup(providerName);
+      try {
+        // Introspect rather than duck-type: a failed CapTP call per method
+        // is noise, and a provider without the pair cannot bridge anyway.
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(provider).__getMethodNames__();
+        if (methods.includes('provideContainerMountBridge')) {
+          return provider;
+        }
+      } catch {
+        // A provider without introspection cannot be checked, so it is not
+        // one this registrar knows how to drive.
+      }
+      return undefined;
+    },
+  });
+
   // Hosted backend factories are operator-endowed capabilities. Discovery is
   // explicit and bounded to configured petnames plus the conventional Codex
   // name; the session/model never receives a factory or lifecycle admin facet.
@@ -2047,6 +2084,216 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   /** @type {Map<string, any>} */
   const backendAdmins = new Map();
+  // Per session, the adapter that lets the container-mount registrar drive
+  // a hosted backend session's declared attaches
+  // (designs/runtime-container-fs-mount.md). Kept so deletion can wait for
+  // a recreate that is still in flight.
+  /** @type {Map<string, { close: () => Promise<void> }>} */
+  const hostedMountClients = new Map();
+
+  // A hosted backend refuses to stop under an unsettled Endo tool call — and
+  // the attach that asks for a recreate IS one until its result is back —
+  // so a recreate waits for the call to settle rather than deadlocking on it.
+  const HOSTED_RECREATE_SETTLE_INTERVAL_MS = 50;
+  const HOSTED_RECREATE_SETTLE_ATTEMPTS = 200;
+
+  /**
+   * The registrar's view of a hosted backend session: a client whose bind
+   * set is the `containerMounts` its next `create` declares. The attested
+   * runtime cannot change a live slice's mount table — the table is what it
+   * attests — so a changed set terminates the backend session and creates it
+   * again with the new declaration. The durable workspace, the Codex state
+   * volume and the thread survive that; the turn in flight does not, which
+   * the design accepts (attach is disruptive by design).
+   *
+   * The recreate is scheduled, never awaited by `setExtraMounts`: the
+   * registrar calls it from inside the attach tool, and the backend will not
+   * stop while that tool call is unsettled. A recreate the sandbox refuses —
+   * its attestation would not prove an attach — drops this session's binds
+   * (their records and bridges included) so no record claims a bind the
+   * container lacks, recreates without them, and reports why on the next
+   * turn.
+   *
+   * @param {object} options
+   * @param {string} options.id
+   * @param {any} options.backend
+   * @param {Record<string, any>} options.spec
+   * @param {() => any} options.getToolSet
+   * @param {() => Promise<void>} options.dropOwnBinds
+   */
+  const makeHostedMountClient = ({
+    id,
+    backend,
+    spec,
+    getToolSet,
+    dropOwnBinds,
+  }) => {
+    /** @type {readonly { key: string, source: string, destination: string, mode: 'ro' | 'rw' }[]} */
+    let declared = harden([]);
+    /** @type {{ run: any, admin: any } | undefined} */
+    let live;
+    /** The declaration the live backend session was created with. */
+    let liveDeclared = declared;
+    // Before `start`, a changed declaration is simply what the first create
+    // declares; after `close`, nothing is recreated any more.
+    let started = false;
+    let closed = false;
+    /** @type {Promise<void>} */
+    let chain = Promise.resolve();
+    // While the failure path is shedding binds, their detaches must only
+    // update the declaration; the one recreate at the end applies it.
+    let shedding = false;
+    /** @type {Error | undefined} */
+    let pendingReport;
+
+    const createLive = async () => {
+      const declaring = declared;
+      const session = await E(backend.factory).create(
+        harden({
+          ...spec,
+          ...(declaring.length > 0 ? { containerMounts: declaring } : {}),
+        }),
+        getToolSet(),
+      );
+      live = session;
+      liveDeclared = declaring;
+      backendAdmins.set(id, session.admin);
+    };
+    const liveIsCurrent = () =>
+      live !== undefined &&
+      JSON.stringify(liveDeclared) === JSON.stringify(declared);
+    const terminateLive = async () => {
+      if (!live) return;
+      const { admin } = live;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await E(admin).terminate();
+          break;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : `${error}`;
+          if (
+            !/unsettled Endo tool call/.test(message) ||
+            attempt >= HOSTED_RECREATE_SETTLE_ATTEMPTS
+          ) {
+            throw error;
+          }
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(resolve => {
+            setTimeout(resolve, HOSTED_RECREATE_SETTLE_INTERVAL_MS);
+          });
+        }
+      }
+      live = undefined;
+    };
+    const recreate = async () => {
+      // Idempotent, so scheduling one per declaration change is safe: a
+      // declaration that changed while a create was in flight is applied by
+      // the next entry on the chain, and one the live session already
+      // declares costs no restart.
+      if (closed || liveIsCurrent()) return;
+      await terminateLive();
+      try {
+        await createLive();
+      } catch (error) {
+        const dropped = declared.map(attach => attach.destination);
+        console.error(
+          `[floot-factory] the sandbox for session ${id} could not be recreated with ${dropped.join(', ')}; dropping the bind(s):`,
+          error instanceof Error ? error.message : String(error),
+        );
+        shedding = true;
+        try {
+          await dropOwnBinds();
+        } finally {
+          shedding = false;
+        }
+        declared = harden([]);
+        pendingReport = Error(
+          `The sandbox could not be recreated with ${dropped.join(', ')} and the bind(s) were dropped: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        await createLive();
+      }
+    };
+    /**
+     * Queue `step` behind everything scheduled so far. The returned promise
+     * carries the step's own failure; the chain itself never rejects.
+     *
+     * @param {() => Promise<void>} step
+     */
+    const enqueue = step => {
+      const run = chain.then(step);
+      chain = run.catch(() => {});
+      return run;
+    };
+    const requireLive = () => {
+      if (pendingReport) {
+        const report = pendingReport;
+        pendingReport = undefined;
+        throw report;
+      }
+      if (!live) {
+        throw Error(`Session ${id} has no running sandbox`);
+      }
+      return live.run;
+    };
+    return harden({
+      /**
+       * First creation, after the registrar has replayed its records. On
+       * the chain, so a declaration that changes during it is applied after.
+       */
+      start: () => {
+        started = true;
+        return enqueue(createLive);
+      },
+      /**
+       * Let a recreate in flight finish and schedule no more: the session is
+       * being torn down, and a successor created underneath that would leak.
+       */
+      close: async () => {
+        closed = true;
+        await chain;
+      },
+      /** @param {readonly any[]} extras */
+      async setExtraMounts(extras) {
+        declared = harden(
+          extras.map(extra => ({
+            key: extra.key,
+            source: extra.mountPoint,
+            destination: extra.innerPath,
+            mode: extra.mode,
+          })),
+        );
+        if (!started || shedding || closed) return;
+        enqueue(recreate).catch(error => {
+          console.error(
+            `[floot-factory] container-mount recreate failed for session ${id}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      },
+      run: harden({
+        send: async (prompt, opts) => {
+          // A turn sent during a recreate waits for the successor rather
+          // than failing. A (re)creation that failed, or a restart the
+          // backend refused for the whole settle budget, is retried here —
+          // by the turn, whose own failure it then is — rather than logged
+          // once and left inconsistent with the recorded binds.
+          await chain;
+          if (started && !closed && !liveIsCurrent()) {
+            await enqueue(recreate);
+          }
+          return E(requireLive()).send(prompt, opts);
+        },
+        // A session being recreated has no turn left to interrupt and no
+        // checkpoint left to acknowledge: the terminate ended them.
+        interrupt: () => (live ? E(live.run).interrupt() : undefined),
+        acknowledge: checkpoint =>
+          live ? E(live.run).acknowledge(checkpoint) : undefined,
+      }),
+    });
+  };
 
   // One streaming provider per model. Sessions that don't pin a model share the
   // entry under the empty-string key (the factory's configured default model).
@@ -2273,24 +2520,55 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // unpinned session follows the factory's configured default.
         // Persisted legacy CLI sessions fail instead of bypassing admission.
         let agentConfig;
+        /** @type {Map<string, any> | undefined} */
+        let extraTools;
         if (entry?.backendId) {
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
           }
+          // Runtime container-mount tools (designs/runtime-container-fs-mount.md):
+          // let the session bind capabilities it holds into its sandbox
+          // under /mnt/. Built before the tool catalog is pinned, so the
+          // hosted thread's toolSetId covers them; armed below with the
+          // adapter that turns the registrar's bind set into the backend
+          // session's declared attaches.
+          const mountKit = containerMountRegistrar.makeSessionKit({
+            sessionId: id,
+            sessionGuest,
+          });
+          extraTools = mountKit.tools;
           agentConfig = {
             provideHostedClient: async snapshot => {
-              const session = await E(backend.factory).create(
-                harden({
+              const toolSet = makeEndoToolSet(snapshot);
+              const mountClient = makeHostedMountClient({
+                id,
+                backend,
+                spec: harden({
                   sessionId: id,
                   model: entry.modelId || '',
                   reasoningEffort: entry.reasoningEffort || '',
                   systemPrompt: sessionPrompt,
                 }),
-                makeEndoToolSet(snapshot),
-              );
-              backendAdmins.set(id, session.admin);
-              return makeSendOnlyClient(session.run);
+                getToolSet: () => toolSet,
+                dropOwnBinds: async () => {
+                  for (const bind of await mountKit.list()) {
+                    if (bind.heldByThisSession) {
+                      // eslint-disable-next-line no-await-in-loop
+                      await mountKit
+                        .detach({ innerPath: bind.innerPath })
+                        .catch(() => undefined);
+                    }
+                  }
+                },
+              });
+              hostedMountClients.set(id, mountClient);
+              // Arm first: the replay hands the adapter this session's
+              // persisted binds, which the first create then declares —
+              // a restart costs no recreate.
+              await mountKit.arm({ clientKey: id, client: mountClient });
+              await mountClient.start();
+              return makeSendOnlyClient(mountClient.run);
             },
           };
         } else if (entry?.model === CLAUDE_CLI_MODEL_ID) {
@@ -2314,6 +2592,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sessionPrompt,
           harden({
             maxToolRounds,
+            ...(extraTools ? { extraTools } : {}),
             ...(sessionDepth < maxSubagentDepth
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
               : {}),
@@ -2502,6 +2781,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
         );
       }
     }
+    // A container-mount recreate still in flight would otherwise create a
+    // successor backend session underneath the teardown below.
+    const mountClient = hostedMountClients.get(id);
+    if (mountClient) {
+      await mountClient.close();
+      hostedMountClients.delete(id);
+    }
     const admin = backendAdmins.get(id);
     if (admin) {
       try {
@@ -2539,6 +2825,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
       throw new AggregateError(
         failures,
         `Floot session ${id} backend did not fully clean up`,
+      );
+    }
+    // Drop this session's container-mount attach references
+    // (designs/runtime-container-fs-mount.md); a last reference releases its
+    // 9P bridge and host mount name. Runs after the backend teardown above,
+    // so no container still binds the mountpoints being released. Failing to
+    // release a bridge must not strand the session record — the registrar
+    // logs which key was orphaned, and the records are gone either way.
+    try {
+      await containerMountRegistrar.releaseSession(id);
+    } catch (error) {
+      console.error(
+        `[floot-factory] could not release container mounts for ${id}:`,
+        error instanceof Error ? error.message : String(error),
       );
     }
     const host = getHost();
