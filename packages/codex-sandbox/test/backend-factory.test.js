@@ -13,6 +13,7 @@ import {
 import {
   HOSTED_AGENT_POLICY_V1,
   assertBrokerLeaseV1,
+  assertContainerMounts,
   assertHostedAgentPolicyV1,
   makeCodexBackendFactory,
   makeCodexResourceProvisioner,
@@ -895,4 +896,271 @@ test('an unsettled tool call blocks teardown without destroying the session', as
   }
   await session.admin.terminate();
   t.is(disposed, 1, 'and the retry tears it down');
+});
+
+// ---------------------------------------------------------------------------
+// Runtime attaches at the attested boundary
+// (designs/runtime-container-fs-mount.md)
+// ---------------------------------------------------------------------------
+
+const ATTACH_DECLARED = harden({
+  key: 'a1',
+  source: '/host/mounts/claude-attach-a1',
+  destination: '/mnt/project',
+  mode: 'rw',
+});
+const attachRow = (overrides = {}) =>
+  harden({
+    role: 'attach-a1',
+    destination: '/mnt/project',
+    mode: 'rw',
+    source: 'attach:a1',
+    options: harden(['nosuid', 'nodev']),
+    ...overrides,
+  });
+
+test('assertContainerMounts admits a bounded declaration and nothing else', t => {
+  t.deepEqual(assertContainerMounts(undefined), []);
+  t.deepEqual(assertContainerMounts([ATTACH_DECLARED]), [ATTACH_DECLARED]);
+  /** @type {[string, unknown, RegExp][]} */
+  const rejected = [
+    ['not an array', {}, /must be an array/],
+    [
+      'an extra field',
+      { ...ATTACH_DECLARED, cap: {} },
+      /unknown or missing fields/,
+    ],
+    [
+      'a key outside the alphabet',
+      { ...ATTACH_DECLARED, key: '../x' },
+      /not a portable key/,
+    ],
+    [
+      'a relative source',
+      { ...ATTACH_DECLARED, source: 'x' },
+      /host mountpoint/,
+    ],
+    [
+      'a destination outside /mnt/',
+      { ...ATTACH_DECLARED, destination: '/workspace' },
+      /under \/mnt\//,
+    ],
+    ['an unknown mode', { ...ATTACH_DECLARED, mode: 'rwx' }, /mode must be/],
+  ];
+  for (const [label, bad, message] of rejected) {
+    // The first row hands the non-array in directly; every other row is one
+    // malformed entry inside an otherwise well-formed list.
+    const candidates =
+      typeof bad === 'object' && bad !== null && Object.keys(bad).length === 0
+        ? bad
+        : [bad];
+    t.throws(() => assertContainerMounts(candidates), { message }, label);
+  }
+  t.throws(
+    () =>
+      assertContainerMounts([
+        ATTACH_DECLARED,
+        {
+          ...ATTACH_DECLARED,
+          destination: '/mnt/other',
+          source: '/host/mounts/other',
+        },
+      ]),
+    { message: /key.*duplicated/ },
+  );
+  t.throws(
+    () =>
+      assertContainerMounts([
+        ATTACH_DECLARED,
+        { ...ATTACH_DECLARED, key: 'a2', source: '/host/mounts/other' },
+      ]),
+    { message: /destination.*duplicated/ },
+  );
+});
+
+test('the attested table is the five roles plus exactly the declared attaches', t => {
+  const withAttach = harden({
+    ...validPolicy(),
+    mounts: harden([...validPolicy().mounts, attachRow()]),
+  });
+  // Declared and present: attested, in its declared mode.
+  const policy = assertHostedAgentPolicyV1(withAttach, {
+    containerMounts: [ATTACH_DECLARED],
+  });
+  t.is(policy.mounts.length, 6);
+  const ro = assertHostedAgentPolicyV1(
+    harden({
+      ...validPolicy(),
+      mounts: harden([...validPolicy().mounts, attachRow({ mode: 'ro' })]),
+    }),
+    { containerMounts: [{ ...ATTACH_DECLARED, mode: 'ro' }] },
+  );
+  t.is(ro.mounts.at(-1)?.mode, 'ro');
+
+  // Present but not declared: the undeclared mount the check exists for.
+  t.throws(() => assertHostedAgentPolicyV1(withAttach), {
+    message: /undeclared mount/,
+  });
+  // Declared but absent from the table.
+  t.throws(
+    () =>
+      assertHostedAgentPolicyV1(validPolicy(), {
+        containerMounts: [ATTACH_DECLARED],
+      }),
+    { message: /undeclared mount/ },
+  );
+  // Declared read-only, attested read-write: the mode is part of the claim.
+  t.throws(
+    () =>
+      assertHostedAgentPolicyV1(withAttach, {
+        containerMounts: [{ ...ATTACH_DECLARED, mode: 'ro' }],
+      }),
+    { message: /exact session table/ },
+  );
+  // A row under a declared key at the wrong destination.
+  t.throws(
+    () =>
+      assertHostedAgentPolicyV1(
+        harden({
+          ...validPolicy(),
+          mounts: harden([
+            ...validPolicy().mounts,
+            attachRow({ destination: '/mnt/elsewhere' }),
+          ]),
+        }),
+        { containerMounts: [ATTACH_DECLARED] },
+      ),
+    { message: /exact session table/ },
+  );
+});
+
+test('the provisioner declares attaches to the slice and keeps them out of the lease', async t => {
+  /** @type {{ makeSlice?: any, lease?: any }} */
+  const seen = {};
+  const provision = makeCodexResourceProvisioner({
+    imageDigest,
+    providerOrigin,
+    accountRef,
+    makeAuditJournal: async () => ({
+      writer: harden({ append: async () => undefined }),
+    }),
+    makeWorkspace: async () => harden({}),
+    mountWorkspace: async () => harden({ unmount: async () => undefined }),
+    issueBrokerLease: async spec => {
+      seen.lease = spec;
+      return harden({
+        revoke: async () => undefined,
+        attestation: async () => validLease(),
+      });
+    },
+    makeSlice: async options => {
+      seen.makeSlice = options;
+      return harden({
+        policy: async () =>
+          harden({
+            ...validPolicy(),
+            mounts: harden([...validPolicy().mounts, attachRow()]),
+          }),
+        dispose: async () => undefined,
+      });
+    },
+    startTransport: async () => harden({}),
+    loadThreadState: async () => harden({}),
+    saveThreadState: async () => undefined,
+  });
+  const resources = await provision(
+    harden({ sessionId: 'session-1', containerMounts: [ATTACH_DECLARED] }),
+  );
+  t.teardown(() => resources.dispose());
+  t.deepEqual(seen.makeSlice.spec.containerMounts, [ATTACH_DECLARED]);
+  t.false('containerMounts' in seen.lease);
+  t.is(resources.policy.mounts.length, 6);
+
+  // A slice that came back without the declared attach is refused at this
+  // boundary, before app-server can start.
+  const refusing = makeCodexResourceProvisioner({
+    imageDigest,
+    providerOrigin,
+    accountRef,
+    makeAuditJournal: async () => ({
+      writer: harden({ append: async () => undefined }),
+    }),
+    makeWorkspace: async () => harden({}),
+    mountWorkspace: async () => harden({ unmount: async () => undefined }),
+    issueBrokerLease: async () =>
+      harden({
+        revoke: async () => undefined,
+        attestation: async () => validLease(),
+      }),
+    makeSlice: async () =>
+      harden({
+        policy: async () => validPolicy(),
+        dispose: async () => undefined,
+      }),
+    startTransport: async () => harden({}),
+    loadThreadState: async () => harden({}),
+    saveThreadState: async () => undefined,
+  });
+  await t.throwsAsync(
+    () =>
+      refusing(
+        harden({ sessionId: 'session-1', containerMounts: [ATTACH_DECLARED] }),
+      ),
+    { message: /undeclared mount/ },
+  );
+});
+
+test('the backend factory attests the declared attaches at the authority handoff', async t => {
+  const events = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    destroy: async () => undefined,
+    listModels: async () => [],
+    provision: async spec => ({
+      start: async () => {
+        throw Error('not started by this lifecycle test');
+      },
+      dispose: async () => undefined,
+      policy: harden({
+        ...validPolicy(),
+        mounts: harden([
+          ...validPolicy().mounts,
+          ...(spec.containerMounts || []).map(attach =>
+            attachRow({
+              role: `attach-${attach.key}`,
+              source: `attach:${attach.key}`,
+              destination: attach.destination,
+              mode: attach.mode,
+            }),
+          ),
+        ]),
+      }),
+      auditWriter: harden({
+        append: async (kind, payload) => {
+          events.push({ kind, payload });
+        },
+      }),
+    }),
+  });
+  const session = await factory.create(
+    harden({ sessionId: 'session-1', containerMounts: [ATTACH_DECLARED] }),
+    makeToolSet(),
+  );
+  t.teardown(() => session.admin.terminate());
+  const attested = events.find(event => event.kind === 'sandbox-attested');
+  t.deepEqual(attested?.payload.containerMounts, [
+    { key: 'a1', destination: '/mnt/project', mode: 'rw' },
+  ]);
+  // A malformed declaration is refused before anything is provisioned.
+  await t.throwsAsync(
+    () =>
+      factory.create(
+        harden({
+          sessionId: 'session-2',
+          containerMounts: [{ ...ATTACH_DECLARED, destination: '/etc' }],
+        }),
+        makeToolSet(),
+      ),
+    { message: /under \/mnt\// },
+  );
 });

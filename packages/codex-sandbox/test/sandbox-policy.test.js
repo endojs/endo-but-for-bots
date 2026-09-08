@@ -56,9 +56,14 @@ const fixture = (changes = {}) => {
         limits: policy.resources,
         mounts: policy.mounts.map(mount => ({
           role: mount.role,
-          source: mount.kind === 'volume' ? `volume:${mount.source}` : 'tmpfs',
+          source:
+            mount.kind === 'volume'
+              ? `volume:${mount.source}`
+              : mount.kind === 'attach'
+                ? `attach:${mount.source}`
+                : 'tmpfs',
           destination: mount.destination,
-          mode: 'rw',
+          mode: mount.kind === 'attach' ? mount.mode : 'rw',
           options: ['nodev', 'nosuid'],
         })),
         ...outerOverrides,
@@ -153,9 +158,9 @@ const fixture = (changes = {}) => {
       outerOverrides = value;
     },
     request: () => request,
-    create: () =>
+    create: (spec = {}) =>
       makeSlice({
-        spec: { sessionId: 's1', model: 'model1' },
+        spec: { sessionId: 's1', model: 'model1', ...spec },
         workspaceMount: Far('workspace', {}),
         brokerLease,
       }),
@@ -376,4 +381,67 @@ test('attested resource provisioner wires verification into lifecycle and teardo
   await resource.dispose();
   t.deepEqual(f.events, ['make', 'verify', 'dispose', 'revoke', 'unmount']);
   await provision.retryCleanup();
+});
+
+test('a declared attach is bound as a policy mount and attested by key', async t => {
+  const f = fixture();
+  const slice = await f.create({
+    containerMounts: [
+      {
+        key: 'a1',
+        source: '/host/mounts/claude-attach-a1',
+        destination: '/mnt/project',
+        mode: 'ro',
+      },
+    ],
+  });
+  t.teardown(() => E(slice).dispose());
+  // The slice request carries the attach as the sandbox's own mount kind,
+  // in the declared mode, with no storage ceiling of its own.
+  const attach = f.request().policy.mounts.at(-1);
+  t.deepEqual(attach, {
+    role: 'attach-a1',
+    kind: 'attach',
+    source: '/host/mounts/claude-attach-a1',
+    destination: '/mnt/project',
+    mode: 'ro',
+  });
+  // The hosted policy names it by key, not by host path.
+  const policy = await E(slice).policy();
+  t.is(policy.mounts.length, 6);
+  t.deepEqual(policy.mounts.at(-1), {
+    role: 'attach-a1',
+    source: 'attach:a1',
+    destination: '/mnt/project',
+    mode: 'ro',
+    options: ['nodev', 'nosuid'],
+  });
+});
+
+test('an attach the outer attestation does not carry fails slice creation', async t => {
+  // The sandbox attested the fixed five but not the declared attach — the
+  // driver refused the bind, or the kernel saw host data under it.
+  const f = fixture({
+    outer: {
+      mounts: undefined,
+    },
+  });
+  // `outer.mounts: undefined` deletes the field; rebuild it as the five.
+  const five = fixture();
+  await t.throwsAsync(
+    () =>
+      f.create({
+        containerMounts: [
+          {
+            key: 'a1',
+            source: '/host/mounts/claude-attach-a1',
+            destination: '/mnt/project',
+            mode: 'rw',
+          },
+        ],
+      }),
+    { message: /not proved|unknown or missing/ },
+  );
+  t.is(f.events.at(-1), 'dispose');
+  void five;
 });

@@ -155,14 +155,88 @@ export const assertBrokerLeaseV1 = (lease, requirements) => {
 harden(assertBrokerLeaseV1);
 
 /**
+ * The key a declared runtime attach is known by. It names the attach's row
+ * in the attested table (`attach:<key>`) and its mount role
+ * (`attach-<key>`), so it is held to a role's alphabet. The floot attach
+ * registrar derives keys as content hashes of (client, cap, inner path).
+ */
+const ATTACH_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,99}$/;
+/** Where an attach may land in the slice: strictly under `/mnt/`. */
+const ATTACH_DESTINATION_PATTERN = /^\/mnt(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+/** The host mountpoint an attach binds: absolute, normal, bounded. */
+const ATTACH_SOURCE_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+
+/**
+ * Validate the runtime attaches a session spec declares
+ * (designs/runtime-container-fs-mount.md). Each names a host 9P
+ * mountpoint an operator-held bridge minted for a capability the session
+ * holds, a destination under `/mnt/`, and a mode. The slice binds each as a
+ * `kind: 'attach'` policy mount, and the sandbox attestation proves the
+ * bind is a 9P projection rather than host data.
+ *
+ * Runs at every boundary the spec crosses — the resource provisioner, the
+ * slice factory, and the backend factory's authority handoff — so no layer
+ * trusts the one before it to have looked.
+ *
+ * @param {unknown} candidates
+ * @returns {readonly { key: string, source: string, destination: string, mode: 'ro' | 'rw' }[]}
+ */
+export const assertContainerMounts = candidates => {
+  if (candidates === undefined) return harden([]);
+  if (!Array.isArray(candidates)) {
+    throw makeError(X`containerMounts must be an array`);
+  }
+  const keys = new Set();
+  const destinations = new Set();
+  const sources = new Set();
+  return harden(
+    candidates.map(candidate => {
+      (typeof candidate === 'object' &&
+        candidate !== null &&
+        Object.keys(candidate).sort().join(',') ===
+          'destination,key,mode,source') ||
+        Fail`container mount has unknown or missing fields`;
+      const { key, source, destination, mode } = candidate;
+      (typeof key === 'string' && ATTACH_KEY_PATTERN.test(key)) ||
+        Fail`container mount key ${q(key)} is not a portable key`;
+      (typeof source === 'string' && ATTACH_SOURCE_PATTERN.test(source)) ||
+        Fail`container mount ${q(key)} source must be an absolute normal host mountpoint`;
+      (typeof destination === 'string' &&
+        ATTACH_DESTINATION_PATTERN.test(destination)) ||
+        Fail`container mount ${q(key)} destination must lie under /mnt/`;
+      mode === 'ro' ||
+        mode === 'rw' ||
+        Fail`container mount ${q(key)} mode must be "ro" or "rw"`;
+      !keys.has(key) || Fail`container mount key ${q(key)} is duplicated`;
+      !destinations.has(destination) ||
+        Fail`container mount destination ${q(destination)} is duplicated`;
+      !sources.has(source) ||
+        Fail`container mount source ${q(source)} is mounted twice`;
+      keys.add(key);
+      destinations.add(destination);
+      sources.add(source);
+      return harden({ key, source, destination, mode });
+    }),
+  );
+};
+harden(assertContainerMounts);
+
+/**
  * Assert the machine-checkable outer sandbox contract required before Codex
  * may run with its inner approval prompts disabled.
  *
+ * The mount table is the profile's five fixed roles plus exactly the
+ * runtime attaches `requirements.containerMounts` declares, each reported
+ * as `attach:<key>` in its declared mode. An attach the table carries but
+ * the requirements do not, or the reverse, is the undeclared mount this
+ * check exists to refuse.
+ *
  * @param {any} policy
- * @param {{ imageDigest?: string, sessionId?: string }} [requirements]
+ * @param {{ imageDigest?: string, sessionId?: string, containerMounts?: unknown }} [requirements]
  */
 export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
   const expected = HOSTED_AGENT_POLICY_V1;
+  const containerMounts = assertContainerMounts(requirements.containerMounts);
   const imageDigest = policy?.imageDigest;
   if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest || '')) {
     throw makeError(X`hosted agent image must be pinned by SHA-256 digest`);
@@ -247,7 +321,7 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
   if (!Array.isArray(mounts)) {
     throw makeError(X`sandbox policy omitted its effective mount table`);
   }
-  if (mounts.length !== 5) {
+  if (mounts.length !== 5 + containerMounts.length) {
     throw makeError(X`sandbox attestation contains an undeclared mount`);
   }
   const expectedMounts = harden({
@@ -264,6 +338,16 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
     tmp: harden({ source: 'tmpfs', destination: '/tmp', mode: 'rw' }),
     run: harden({ source: 'tmpfs', destination: '/run', mode: 'rw' }),
     scratch: harden({ source: 'tmpfs', destination: '/scratch', mode: 'rw' }),
+    ...Object.fromEntries(
+      containerMounts.map(attach => [
+        `attach-${attach.key}`,
+        harden({
+          source: `attach:${attach.key}`,
+          destination: attach.destination,
+          mode: attach.mode,
+        }),
+      ]),
+    ),
   });
   const seenRoles = new Set();
   for (const mount of mounts) {
@@ -389,6 +473,13 @@ export const makeCodexResourceProvisioner = powers => {
     spec.cwd === undefined ||
       spec.cwd === '/workspace' ||
       Fail`Codex session cwd must be /workspace`;
+    const containerMounts = assertContainerMounts(spec.containerMounts);
+    // The broker lease is about provider access, not the mount table: the
+    // attaches stay out of its request so they neither ride into its audit
+    // record nor become something a lease issuer is asked to reason about.
+    const leaseSpec = Object.fromEntries(
+      Object.entries(spec).filter(([key]) => key !== 'containerMounts'),
+    );
     /** @type {Array<{ run: () => Promise<void>, done: boolean }>} */
     const undo = [];
     let auditJournal;
@@ -487,7 +578,7 @@ export const makeCodexResourceProvisioner = powers => {
       });
       const brokerLease = await powers.issueBrokerLease(
         harden({
-          ...spec,
+          ...leaseSpec,
           providerOrigin: powers.providerOrigin,
           accountRef: powers.accountRef,
         }),
@@ -513,6 +604,7 @@ export const makeCodexResourceProvisioner = powers => {
       assertHostedAgentPolicyV1(policy, {
         imageDigest: powers.imageDigest,
         sessionId: spec.sessionId,
+        containerMounts,
       });
       assertBrokerLeaseV1(brokerAttestation, {
         sessionId: spec.sessionId,
@@ -715,6 +807,7 @@ export const makeCodexBackendFactory = ({
       spec.cwd === '/workspace' ||
       Fail`Codex session cwd must be /workspace`;
     const tools = await E(toolSet).describe();
+    const containerMounts = assertContainerMounts(spec.containerMounts);
     // A predecessor that cannot stop — an unsettled Endo tool call — refuses
     // the successor rather than running beside it.
     await stopLive(spec.sessionId);
@@ -730,10 +823,18 @@ export const makeCodexBackendFactory = ({
       const policy = assertHostedAgentPolicyV1(resources.policy, {
         imageDigest,
         sessionId: spec.sessionId,
+        containerMounts,
       });
       await auditEvent('sandbox-attested', {
         imageDigest: policy.imageDigest,
         policyVersion: policy.version,
+        // The attaches are part of what was attested: the audit trail says
+        // which capabilities' trees the slice could see, by key and mode.
+        containerMounts: containerMounts.map(attach => ({
+          key: attach.key,
+          destination: attach.destination,
+          mode: attach.mode,
+        })),
       });
       client = makeCodexClient({
         start: resources.start,
