@@ -189,35 +189,48 @@ export const assertContainerMounts = candidates => {
   const keys = new Set();
   const destinations = new Set();
   const sources = new Set();
-  return harden(
-    candidates.map(candidate => {
-      (typeof candidate === 'object' &&
-        candidate !== null &&
-        Object.keys(candidate).sort().join(',') ===
-          'destination,key,mode,source') ||
-        Fail`container mount has unknown or missing fields`;
-      const { key, source, destination, mode } = candidate;
-      (typeof key === 'string' && ATTACH_KEY_PATTERN.test(key)) ||
-        Fail`container mount key ${q(key)} is not a portable key`;
-      (typeof source === 'string' && ATTACH_SOURCE_PATTERN.test(source)) ||
-        Fail`container mount ${q(key)} source must be an absolute normal host mountpoint`;
-      (typeof destination === 'string' &&
-        ATTACH_DESTINATION_PATTERN.test(destination)) ||
-        Fail`container mount ${q(key)} destination must lie under /mnt/`;
-      mode === 'ro' ||
-        mode === 'rw' ||
-        Fail`container mount ${q(key)} mode must be "ro" or "rw"`;
-      !keys.has(key) || Fail`container mount key ${q(key)} is duplicated`;
-      !destinations.has(destination) ||
-        Fail`container mount destination ${q(destination)} is duplicated`;
-      !sources.has(source) ||
-        Fail`container mount source ${q(source)} is mounted twice`;
-      keys.add(key);
-      destinations.add(destination);
-      sources.add(source);
-      return harden({ key, source, destination, mode });
-    }),
-  );
+  /** @type {{ key: string, source: string, destination: string, mode: 'ro' | 'rw' }[]} */
+  const validated = [];
+  // Iterated, not mapped: `map` skips array holes, so a sparse input would
+  // return a list whose `length` counts entries no check ever saw — and
+  // that length is what the attested table is sized against.
+  for (const candidate of candidates) {
+    (typeof candidate === 'object' &&
+      candidate !== null &&
+      Object.keys(candidate).sort().join(',') ===
+        'destination,key,mode,source') ||
+      Fail`container mount has unknown or missing fields`;
+    const { key, source, destination, mode } = candidate;
+    (typeof key === 'string' && ATTACH_KEY_PATTERN.test(key)) ||
+      Fail`container mount key ${q(key)} is not a portable key`;
+    (typeof source === 'string' && ATTACH_SOURCE_PATTERN.test(source)) ||
+      Fail`container mount ${q(key)} source must be an absolute normal host mountpoint`;
+    (typeof destination === 'string' &&
+      ATTACH_DESTINATION_PATTERN.test(destination)) ||
+      Fail`container mount ${q(key)} destination must lie under /mnt/`;
+    mode === 'ro' ||
+      mode === 'rw' ||
+      Fail`container mount ${q(key)} mode must be "ro" or "rw"`;
+    !keys.has(key) || Fail`container mount key ${q(key)} is duplicated`;
+    !destinations.has(destination) ||
+      Fail`container mount destination ${q(destination)} is duplicated`;
+    !sources.has(source) ||
+      Fail`container mount source ${q(source)} is mounted twice`;
+    // Nor may one destination sit inside another. Both would be declared
+    // and both attested, but the attested table has no ordering, so it
+    // could not say which projection the slice actually sees at the
+    // shadowed path — a record that cannot describe the result.
+    for (const taken of destinations) {
+      (!destination.startsWith(`${taken}/`) &&
+        !taken.startsWith(`${destination}/`)) ||
+        Fail`container mount destination ${q(destination)} nests with ${q(taken)}`;
+    }
+    keys.add(key);
+    destinations.add(destination);
+    sources.add(source);
+    validated.push(harden({ key, source, destination, mode }));
+  }
+  return harden(validated);
 };
 harden(assertContainerMounts);
 
@@ -321,9 +334,6 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
   if (!Array.isArray(mounts)) {
     throw makeError(X`sandbox policy omitted its effective mount table`);
   }
-  if (mounts.length !== 5 + containerMounts.length) {
-    throw makeError(X`sandbox attestation contains an undeclared mount`);
-  }
   const expectedMounts = harden({
     workspace: harden({
       source: `workspace:${policy.sessionId}`,
@@ -349,6 +359,12 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
       ]),
     ),
   });
+  // Counted against the table this function actually expects, rather than
+  // a literal that would silently desynchronize if a fixed role were ever
+  // added — at which point the table would become unattestable.
+  if (mounts.length !== Object.keys(expectedMounts).length) {
+    throw makeError(X`sandbox attestation contains an undeclared mount`);
+  }
   const seenRoles = new Set();
   for (const mount of mounts) {
     if (
