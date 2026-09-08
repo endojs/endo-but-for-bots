@@ -1,0 +1,131 @@
+{
+  "finding": "F176",
+  "before_revision": "4ec6fd1f71b23b96ce01f4a9b6d247bd7a3efc02",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M3 Max",
+  "fixtures_sha256": {
+    "rust/engine/ironhorse-snapshot/tests/lifecycle_bench.rs": "5c9485b043b466e20aaa9ce52471f27946ffe3d240369ad7099bb3abcace6a71",
+    "rust/endo/tests/ironhorse_lifecycle_bench.rs": "db85b0450e48f9ff4e2459d4351cca49718e1df970ed6f234a7449d83528d6c5"
+  },
+  "samples": "All measurements run serially on the same host; one warmup batch plus five batches of 1000 operations, reporting median batch seconds. Shared buffer creation and VM linking are excluded from shared_run. Fresh compartment rows include template instantiation/evaluation. Daemon rows include compilation and default metering. Shared_run raw is the batch total; other raw fields are per evaluation.",
+  "commands": [
+    "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test lifecycle_bench -- --ignored --nocapture --test-threads=1",
+    "cargo test --manifest-path rust/endo/Cargo.toml --locked --release --test ironhorse_lifecycle_bench -- --ignored --nocapture --test-threads=1"
+  ],
+  "baseline_setup": "Archived before_revision with identical fixtures. Shared the same pinned c/moddable checkout and copied identical locally generated XS bootstrap files required to link endo. These XS files are not executed by the Ironhorse measurements.",
+  "xs_sdk_revision": "23b4d6b0a65f35209d9118c4c13c6c9b3e68784d",
+  "xs_bootstrap_sha256": {
+    "rust/endo/xsnap/src/ses_boot.js": "12fbb2dbf412e03fb15f5a73b8fef448392a51e0c2132f6b0b1de477e1b0725a",
+    "rust/endo/xsnap/src/worker_bootstrap.js": "f55cb0464b0e9bf7b06d8b1e46e95ad2c92e7429908e4fcf1ae395f02e30db2f",
+    "rust/endo/xsnap/src/daemon_bootstrap.js": "10684c247fe2f3686f6d81dbb76bb2214a4fc4f6d635a2ba1af64bf68863167c"
+  },
+  "result": "Shared-buffer size gate fails before and passes afterward. Fresh VM and production evaluations improve; all measured raw charges are unchanged. Slice compatibility APIs still convert to owned code; freshly compiled Vec-to-Rc conversion remains once at the ownership boundary.",
+  "measurements": [
+    {
+      "shape": "shared_run",
+      "n": 7,
+      "before": {
+        "seconds": 0.000236625,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.000154292,
+        "raw_computrons": 541976000
+      },
+      "speedup": 1.5336180748191741
+    },
+    {
+      "shape": "shared_run",
+      "n": 4096,
+      "before": {
+        "seconds": 0.000327667,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.000149292,
+        "raw_computrons": 541976000
+      },
+      "speedup": 2.1948061517027035
+    },
+    {
+      "shape": "shared_run",
+      "n": 1048576,
+      "before": {
+        "seconds": 0.014683542,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.000151,
+        "raw_computrons": 541976000
+      },
+      "speedup": 97.242
+    },
+    {
+      "shape": "shared_run",
+      "n": 8388608,
+      "before": {
+        "seconds": 0.129479667,
+        "raw_computrons": 541976000
+      },
+      "after": {
+        "seconds": 0.000150333,
+        "raw_computrons": 541976000
+      },
+      "speedup": 861.2857256889704
+    },
+    {
+      "shape": "fresh_scalar",
+      "n": 1000,
+      "before": {
+        "seconds": 0.12189575,
+        "raw_computrons": 541976
+      },
+      "after": {
+        "seconds": 0.011121708,
+        "raw_computrons": 541976
+      },
+      "speedup": 10.96016457184454
+    },
+    {
+      "shape": "fresh_intrinsics",
+      "n": 1000,
+      "before": {
+        "seconds": 0.1405595,
+        "raw_computrons": 2149216
+      },
+      "after": {
+        "seconds": 0.0221595,
+        "raw_computrons": 2149216
+      },
+      "speedup": 6.343080845686952
+    },
+    {
+      "shape": "daemon_scalar",
+      "n": 1000,
+      "before": {
+        "seconds": 0.139869125,
+        "raw_computrons": 541976
+      },
+      "after": {
+        "seconds": 0.025617292,
+        "raw_computrons": 541976
+      },
+      "speedup": 5.459949669933887
+    },
+    {
+      "shape": "daemon_intrinsics",
+      "n": 1000,
+      "before": {
+        "seconds": 0.159625625,
+        "raw_computrons": 2149216
+      },
+      "after": {
+        "seconds": 0.041912583,
+        "raw_computrons": 2149216
+      },
+      "speedup": 3.808537044829711
+    }
+  ]
+}

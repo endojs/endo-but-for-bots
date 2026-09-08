@@ -158,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 rust/engine/benches/run.py --reference-baseline --check-baseline --output benchmark-report.json 2>&1 | tee benchmark.log
-      # F044/F045 are known failing gates, not expected failures or exemptions.
+      # The for-in construction gate remains failing, without an exemption.
       - name: Check elapsed time and computron scaling
         if: ${{ !cancelled() }}
         run: |
@@ -169,6 +169,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-compile --test performance_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee compiler-scaling.log
+      - name: Check shared-bytecode lifecycle scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test lifecycle_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee lifecycle.log
       - name: Upload performance measurements
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -179,4 +184,5 @@ jobs:
             benchmark.log
             scaling.log
             compiler-scaling.log
+            lifecycle.log
           if-no-files-found: error

@@ -19,7 +19,7 @@
 
 pub use ironhorse_text::SymbolName;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct SymbolIds(std::collections::HashMap<SymbolName, u16>);
 impl SymbolIds {
     pub fn get(&self, name: impl Into<SymbolName>) -> Option<&u16> {

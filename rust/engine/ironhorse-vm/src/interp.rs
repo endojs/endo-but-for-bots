@@ -4670,7 +4670,7 @@ pub struct Interp {
     /// buffer must live as long as the realm, not just the eval call. Held
     /// behind [`std::rc::Rc`] so a cross-segment dispatch can borrow the
     /// buffer locally without aliasing `&mut self`.
-    code_segments: Vec<std::rc::Rc<Vec<u8>>>,
+    code_segments: Vec<std::rc::Rc<[u8]>>,
     /// The segment index the current dispatch loop is running over, or `None`
     /// for the top-level program's external `code` buffer. A function call
     /// whose callee lives in a *different* segment must dispatch over that
@@ -4684,7 +4684,7 @@ pub struct Interp {
     /// once per [`Self::run`]; `None` before the program starts. Only read on
     /// the cross-segment call path, which is itself gated on
     /// [`Self::func_segments`] being non-empty (an eval having run).
-    top_level_code: Option<std::rc::Rc<Vec<u8>>>,
+    top_level_code: Option<std::rc::Rc<[u8]>>,
     /// Which retained [`Self::code_segments`] buffer a guest function's body
     /// lives in. Top-level crank buffers are promoted lazily at their first
     /// function definition; eval/`Function` buffers enter directly.
@@ -6182,6 +6182,9 @@ enum ResumeStatus {
     /// the exception from the top of stack and unwinds to the innermost handler.
     Throw,
 }
+
+mod boot;
+pub(crate) use boot::BootTemplate;
 
 impl Default for Interp {
     fn default() -> Self {
@@ -10251,7 +10254,7 @@ impl Interp {
         // eval (the completion, a stored global, the `Function` result) still
         // dispatches over the right bytes when called later.
         let segment = self.code_segments.len();
-        let buf = std::rc::Rc::new(code);
+        let buf: std::rc::Rc<[u8]> = code.into();
         self.code_segments.push(buf.clone());
 
         // Save the caller's activation and install a clean program frame for
@@ -11865,7 +11868,7 @@ impl Interp {
             .collect();
         let segments = referenced_segments
             .iter()
-            .map(|old| self.code_segments[*old].as_ref().clone())
+            .map(|old| self.code_segments[*old].to_vec())
             .collect();
 
         let mut functions: Vec<FunctionRow> = owners
@@ -11976,7 +11979,7 @@ impl Interp {
             return false;
         }
 
-        self.code_segments = state.segments.into_iter().map(std::rc::Rc::new).collect();
+        self.code_segments = state.segments.into_iter().map(std::rc::Rc::from).collect();
         self.func_segments.clear();
         for row in state.functions {
             let owner = crate::value::SlotIndex(row.owner);
@@ -14666,8 +14669,17 @@ impl Interp {
         out
     }
 
+    /// Run borrowed bytecode, copying it into an owned buffer so escaping
+    /// functions can retain it. Owners that already share their compiled
+    /// program should use [`Self::run_shared`] to avoid this conversion.
     pub fn run(&mut self, code: &[u8]) -> RunOutcome {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_inner(code))) {
+        self.run_shared(std::rc::Rc::from(code))
+    }
+
+    /// Execute caller-owned immutable bytecode without copying its bytes.
+    /// Escaping functions retain this same allocation across later cranks.
+    pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_inner(shared))) {
             Ok(outcome) => outcome,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
                 // All native activations have unwound. The interrupted heap
@@ -14689,7 +14701,8 @@ impl Interp {
         }
     }
 
-    fn run_inner(&mut self, code: &[u8]) -> RunOutcome {
+    fn run_inner(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
+        let code: &[u8] = &shared;
         if self.slots.capacity() > self.slots.ceiling()
             || self.chunks.byte_size() > self.chunks.ceiling()
         {
@@ -14728,11 +14741,11 @@ impl Interp {
         // back into a top-level function can be dispatched over the right
         // buffer from a nested segment. Only the cross-segment call path reads
         // it, and that path is gated on an eval having defined a function.
-        self.top_level_code = Some(std::rc::Rc::new(code.to_vec()));
+        self.top_level_code = Some(shared.clone());
         // Top-level functions defined by this crank lazily promote the
         // current buffer into `code_segments` at their first CODE opcode.
         // No-function cranks retain no segment and keep the common path
-        // allocation-free beyond the existing top-level copy.
+        // allocation-free when the caller shares the buffer.
         self.active_segment = None;
         // A crank's top level starts sloppy until its own `BEGIN_STRICT`
         // says otherwise (wave-6 W6-6: nothing reset this register at
@@ -21062,7 +21075,7 @@ impl Interp {
     fn resume_segment_buffer(
         &self,
         func: crate::value::SlotIndex,
-    ) -> (Option<usize>, Option<std::rc::Rc<Vec<u8>>>) {
+    ) -> (Option<usize>, Option<std::rc::Rc<[u8]>>) {
         let callee_seg = self.callee_segment(func);
         if callee_seg == self.active_segment {
             (self.active_segment, None)
@@ -21074,7 +21087,7 @@ impl Interp {
     /// The persisted bytecode buffer for `segment` (`None` ⇒ the top-level
     /// program). Returns an owned [`std::rc::Rc`] handle so the caller can
     /// dispatch over it without holding a borrow of `&mut self`.
-    fn segment_buffer(&self, segment: Option<usize>) -> Option<std::rc::Rc<Vec<u8>>> {
+    fn segment_buffer(&self, segment: Option<usize>) -> Option<std::rc::Rc<[u8]>> {
         match segment {
             Some(seg) => self.code_segments.get(seg).cloned(),
             None => self.top_level_code.clone(),
@@ -21085,7 +21098,7 @@ impl Interp {
     ///
     /// Eval/dynamic-Function dispatch installs its segment before entering.
     /// A top-level crank stays segment-free until its first function body is
-    /// defined, then promotes the `top_level_code` copy already owned by the
+    /// defined, then promotes the `top_level_code` buffer already shared with the
     /// machine. This is the crank-code retention half of cross-crank calls.
     fn ensure_active_code_segment(&mut self, code: &[u8]) -> usize {
         if let Some(segment) = self.active_segment {
@@ -21095,7 +21108,7 @@ impl Interp {
         let buffer = self
             .top_level_code
             .clone()
-            .unwrap_or_else(|| std::rc::Rc::new(code.to_vec()));
+            .unwrap_or_else(|| std::rc::Rc::from(code));
         self.code_segments.push(buffer);
         self.active_segment = Some(segment);
         segment
@@ -62868,7 +62881,7 @@ mod tests {
             |m| m.cur_target = true,
             |m| m.frame_slots = 1,
             |m| m.strict = true,
-            |m| m.top_level_code = Some(std::rc::Rc::new(Vec::new())),
+            |m| m.top_level_code = Some(std::rc::Rc::from([])),
             |m| m.active_segment = Some(0),
             |m| m.installing_intrinsics = true,
         ];
@@ -63055,6 +63068,33 @@ mod tests {
         m.pending_new_target = None;
         m.collect_garbage();
         assert!(m.slots.free_list().contains(&orphan.0));
+    }
+
+    #[test]
+    fn shared_program_and_escaping_function_retain_the_callers_allocation() {
+        let (bytes, symbols) =
+            ironhorse_compile::compile_atoms("function f(){return 42;} f()").unwrap();
+        let code: std::rc::Rc<[u8]> = bytes.into();
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&crate::parse_symbols(&symbols));
+        let result = interp.run_shared(code.clone());
+        assert!(result.completed);
+        assert_eq!(result.result, "42");
+        assert!(interp.top_level_code.is_none());
+        assert!(interp.is_quiescent());
+        assert!(interp
+            .code_segments
+            .iter()
+            .any(|segment| std::rc::Rc::ptr_eq(segment, &code)));
+        drop(code);
+        interp.collect_garbage();
+        let (bytes, symbols) = ironhorse_compile::compile_atoms("f()").unwrap();
+        let bytes = interp
+            .relink_crank(&bytes, &crate::parse_symbols(&symbols))
+            .unwrap();
+        let result = interp.run_shared(bytes.into());
+        assert!(result.completed, "{:?}", result.halt);
+        assert_eq!(result.result, "42");
     }
 
     #[test]
