@@ -6,8 +6,7 @@
 //!
 //! Offsets (`step`, `completion`, `loop_off`, `sequel`) are kept in
 //! **bytes** exactly as XS keeps them (`sizeof(txInteger) == 4`), so
-//! the compile meter (`parser->size * XS_PARSE_REGEXP_METERING`) is
-//! bit-exact and the emitted graph is structurally identical, which in
+//! the emitted graph is structurally identical to XS, which in
 //! turn makes the matcher's per-step meter bit-exact.
 //!
 //! Astral (`> 0xFFFF`) code points remain scalar values under `u`/`v` and are
@@ -16,6 +15,8 @@
 //! and named captures (`(?<name>)` / `\k<name>`) are
 //! ported: a named group codegens identically to its numbered peer, plus a
 //! name-slot operand the matcher records into its runtime `names[]` array.
+
+use std::cell::{Cell, RefCell};
 
 use crate::encoding::{utf8_decode, C_EOF};
 use crate::flags::*;
@@ -27,6 +28,10 @@ pub enum CompileError {
     /// A genuine syntax error — the same outcome XS reports through
     /// `fxCompileRegExp` returning 0. The string includes the consumed-pattern diagnostic context.
     Syntax(String),
+    /// The work budget or its host callback refused further compilation.
+    BudgetExceeded,
+    /// A deterministic compiler storage ceiling was reached.
+    ResourceLimit,
     /// A pin feature this stage has not ported yet. Named, never a wrong
     /// answer (the stage's honest-skip bar).
     Unsupported(&'static str),
@@ -47,7 +52,8 @@ pub struct Program {
     /// `code[4]`: quantifier count.
     pub quantifier_count: usize,
     /// Compile meter in raw 16.16 fixed point:
-    /// `size_bytes * XS_PARSE_REGEXP_METERING`.
+    /// Deterministic parser, set construction, measure, and emission work
+    /// multiplied by `XS_PARSE_REGEXP_METERING` (meter version 2).
     pub compile_meter_raw: u64,
     /// The declared named-capture groups in first-seen (name-slot) order:
     /// `(name, capture_index)`. The JS `RegExp` surface reads this to build
@@ -65,6 +71,87 @@ impl Program {
     /// `XS_REGEXP_N` when the pattern declares a named capture.
     pub fn flags(&self) -> u32 {
         self.code[0] as u32
+    }
+}
+
+/// Maximum retained parser nodes and emitted code bytes. These execution
+/// profile limits bound compiler memory independently of computation metering.
+pub const MAX_COMPILE_NODES: usize = 1_000_000;
+pub const MAX_PATTERN_BYTES: usize = 1 << 24;
+pub const MAX_CODE_BYTES: usize = 64 << 20;
+/// Cumulative parser payload allocation allowance, including transient copies.
+/// This conservatively bounds live memory without depending on allocator reuse.
+pub const MAX_COMPILE_PAYLOAD_BYTES: usize = 64 << 20;
+pub const COMPILE_CHECK_STRIDE: u64 = 1024;
+
+/// Compilation result plus work charged even when parsing fails.
+#[derive(Debug)]
+pub struct CompileOutcome {
+    pub result: PResult<Program>,
+    pub work_meter_raw: u64,
+}
+
+#[derive(Debug)]
+enum CompileStop {
+    Budget,
+    Resource,
+}
+
+fn stop(reason: CompileStop) -> ! {
+    std::panic::resume_unwind(Box::new(reason))
+}
+
+struct WorkBudget<'a> {
+    remaining: Cell<u64>,
+    payload_bytes: Cell<usize>,
+    spent: Cell<u64>,
+    checked: Cell<u64>,
+    check: RefCell<Option<&'a mut dyn FnMut(u64) -> bool>>,
+}
+
+impl WorkBudget<'_> {
+    fn allocate(&self, bytes: usize) {
+        let Some(total) = self
+            .payload_bytes
+            .get()
+            .checked_add(bytes)
+            .filter(|n| *n <= MAX_COMPILE_PAYLOAD_BYTES)
+        else {
+            stop(CompileStop::Resource)
+        };
+        self.payload_bytes.set(total);
+    }
+
+    fn charge(&self, units: u64) {
+        let Some(left) = self.remaining.get().checked_sub(units) else {
+            stop(CompileStop::Budget)
+        };
+        let Some(spent) = self
+            .spent
+            .get()
+            .checked_add(units)
+            .filter(|n| *n <= u64::MAX / XS_PARSE_REGEXP_METERING)
+        else {
+            stop(CompileStop::Budget)
+        };
+        self.remaining.set(left);
+        self.spent.set(spent);
+        if spent - self.checked.get() >= COMPILE_CHECK_STRIDE {
+            self.check_now();
+        }
+    }
+
+    fn check_now(&self) {
+        let raw = self.spent.get() * XS_PARSE_REGEXP_METERING;
+        self.checked.set(self.spent.get());
+        if self
+            .check
+            .borrow_mut()
+            .as_mut()
+            .is_some_and(|check| !check(raw))
+        {
+            stop(CompileStop::Budget);
+        }
     }
 }
 
@@ -166,7 +253,8 @@ const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 /// [`Compiler::measure`] and [`Compiler::emit`]).
 pub const MAX_NESTING_DEPTH: u32 = 512;
 
-struct Compiler {
+struct Compiler<'a, 'b> {
+    work: &'a WorkBudget<'b>,
     pattern: Vec<u8>, // NUL-terminated
     offset: usize,
     character: i64,
@@ -225,6 +313,52 @@ type PResult<T> = Result<T, CompileError>;
 /// syntax error, or a named unsupported feature (the stage's honest
 /// skip).
 pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
+    compile_checked(pattern, flags, u64::MAX, None).result
+}
+
+/// Compile with a work ceiling and an optional callback receiving cumulative
+/// raw work charges. Checks precede charged work; the last partial stride is
+/// reported on both success and syntax failure. Program work is included in
+/// `compile_meter_raw`, so callers subtract already charged callback totals.
+pub fn compile_checked(
+    pattern: &str,
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> CompileOutcome {
+    let work = WorkBudget {
+        remaining: Cell::new(budget),
+        payload_bytes: Cell::new(0),
+        spent: Cell::new(0),
+        checked: Cell::new(0),
+        check: RefCell::new(check),
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let result = compile_inner(pattern, flags, &work);
+        work.check_now();
+        result
+    }));
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => match payload.downcast::<CompileStop>() {
+            Ok(reason) => Err(match *reason {
+                CompileStop::Budget => CompileError::BudgetExceeded,
+                CompileStop::Resource => CompileError::ResourceLimit,
+            }),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+    };
+    CompileOutcome {
+        result,
+        work_meter_raw: work.spent.get() * XS_PARSE_REGEXP_METERING,
+    }
+}
+
+fn compile_inner(pattern: &str, flags: &str, work: &WorkBudget<'_>) -> PResult<Program> {
+    if pattern.len() > MAX_PATTERN_BYTES {
+        stop(CompileStop::Resource);
+    }
+    work.charge(pattern.len() as u64 + flags.len() as u64);
     let mut parser_flags: u32 = 0;
     // Flag modifier parse (fxCompileRegExp head).
     for c in flags.bytes() {
@@ -240,9 +374,11 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
             _ => return Err(CompileError::Syntax(" invalid flags".into())),
         }
     }
+    work.allocate(pattern.len() + 1);
     let mut pattern_bytes = pattern.as_bytes().to_vec();
     pattern_bytes.push(0);
     let mut c = Compiler {
+        work,
         pattern: pattern_bytes,
         offset: 0,
         character: 0,
@@ -272,7 +408,7 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
     c.compile_pattern()
 }
 
-impl Compiler {
+impl Compiler<'_, '_> {
     fn compile_pattern(&mut self) -> PResult<Program> {
         self.next()?;
         let mut term = self.disjunction_parse(C_EOF)?;
@@ -295,6 +431,7 @@ impl Compiler {
         // is known — `fxCaptureReferenceMeasure` errors on an out-of-range
         // number (e.g. `\11` with fewer than 11 groups; XS reads the whole
         // decimal greedily and rejects, it does not fall back to `\1`).
+        self.work.charge(self.nodes.len() as u64);
         for node in &self.nodes {
             if let Kind::CaptureReference { capture_index, .. } = &node.kind {
                 if *capture_index >= 0 && *capture_index >= self.capture_index {
@@ -305,7 +442,9 @@ impl Compiler {
         // `\k<name>` references resolve against the defined group names
         // (`fxCaptureNameGet`); an unresolved name is `mxInvalidReferenceName`
         // (a dangling groupname — a `SyntaxError`).
+        let name_search_work: u64 = self.capture_names.iter().map(|n| n.len() as u64 + 1).sum();
         for name in &self.named_refs {
+            self.work.charge(name_search_work);
             if !self.capture_names.iter().any(|n| n == name) {
                 return Err(self.error(&format!("invalid reference name \\k<{name}>")));
             }
@@ -316,6 +455,7 @@ impl Compiler {
         // named group completes) maps the slot to the live capture index. A
         // slot always exists here — the dangling-name check above already ran.
         for (node_id, name) in std::mem::take(&mut self.pending_named_refs) {
+            self.work.charge(name_search_work);
             let slot = self
                 .named_groups
                 .iter()
@@ -334,11 +474,18 @@ impl Compiler {
         // trailing match word is accounted, matching fxCompileRegExp).
         let match_offset = self.size;
         self.size += 4;
-        let compile_meter_raw = (self.size as u64) * XS_PARSE_REGEXP_METERING;
+        if self.size < 0 || self.size as u64 > MAX_CODE_BYTES as u64 {
+            stop(CompileStop::Resource);
+        }
+        self.work.charge(self.size as u64);
 
         // Allocate and zero the code buffer.
         let total_words = (self.size / 4) as usize;
-        self.code = vec![0; total_words];
+        self.work.allocate(total_words * 4);
+        self.code
+            .try_reserve_exact(total_words)
+            .unwrap_or_else(|_| stop(CompileStop::Resource));
+        self.code.resize(total_words, 0);
         self.code[0] = self.flags as i32;
         self.code[1] = self.capture_index;
         self.code[2] = self.name_index;
@@ -356,7 +503,7 @@ impl Compiler {
             name_count: self.name_index as usize,
             assertion_count: self.assertion_index as usize,
             quantifier_count: self.quantifier_index as usize,
-            compile_meter_raw,
+            compile_meter_raw: self.work.spent.get() * XS_PARSE_REGEXP_METERING,
             capture_group_names: std::mem::take(&mut self.named_groups),
         })
     }
@@ -371,6 +518,7 @@ impl Compiler {
     /// capture-name parsing, expose an astral scalar as its two UTF-16
     /// surrogate code units on successive calls.
     fn next(&mut self) -> PResult<()> {
+        self.work.charge(1);
         if self.surrogate != 0 {
             self.character = self.surrogate;
             self.surrogate = 0;
@@ -587,6 +735,8 @@ impl Compiler {
     /// group's ordinal, used only as the slot's representative index; the live
     /// value is resolved through the matcher's runtime `names[]` array.
     fn put_capture_name(&mut self, name: &str, capture_index: i32) -> i32 {
+        self.work
+            .charge(self.capture_names.iter().map(|n| n.len() as u64 + 1).sum());
         if let Some(pos) = self.capture_names.iter().position(|n| n == name) {
             return pos as i32;
         }
@@ -604,6 +754,7 @@ impl Compiler {
     fn participate_capture_name(&mut self, slot: i32) -> PResult<()> {
         let mut cur = self.participate_first;
         while cur >= 0 {
+            self.work.charge(1);
             let i = cur as usize;
             if self.participate_slot[i] == slot {
                 return Err(self.error("duplicate capture"));
@@ -642,6 +793,25 @@ impl Compiler {
     }
 
     fn add_node(&mut self, kind: Kind) -> NodeId {
+        self.work.charge(1);
+        if self.nodes.len() >= MAX_COMPILE_NODES {
+            stop(CompileStop::Resource);
+        }
+        self.work.allocate(std::mem::size_of::<Node>());
+        if let Kind::CharSet { chars, strings } = &kind {
+            self.work.allocate(
+                std::mem::size_of_val(chars.as_slice())
+                    + strings
+                        .iter()
+                        .map(|s| {
+                            std::mem::size_of::<Vec<u32>>() + std::mem::size_of_val(s.as_slice())
+                        })
+                        .sum::<usize>(),
+            );
+        }
+        self.nodes
+            .try_reserve(1)
+            .unwrap_or_else(|_| stop(CompileStop::Resource));
         self.nodes.push(Node {
             kind,
             step: 0,
@@ -831,6 +1001,12 @@ impl Compiler {
     fn charset_combine(&mut self, set1: NodeId, set2: NodeId, op: i32) -> PResult<NodeId> {
         let (c1, s1) = self.charset_parts(set1)?;
         let (c2, s2) = self.charset_parts(set2)?;
+        self.work.charge(
+            c1.len() as u64
+                + c2.len() as u64
+                + (s1.iter().map(|s| s.len() as u64 + 1).sum::<u64>())
+                    .saturating_mul(s2.len() as u64),
+        );
         let count1 = c1[0] as usize;
         let count2 = c2[0] as usize;
         let mut i1 = 1usize;
@@ -885,7 +1061,7 @@ impl Compiler {
                 .collect::<Vec<_>>(),
             _ => unreachable!("known charset combine operation"),
         };
-        Self::sort_strings(&mut strings);
+        self.sort_strings(&mut strings);
         Ok(self.add_node(Kind::CharSet {
             chars: out,
             strings,
@@ -921,18 +1097,37 @@ impl Compiler {
             let fold = self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
             let begin = c1[1];
             let end = c2[1];
-            let mut result = self.charset_empty();
-            let mut ch = begin;
-            while ch <= end {
-                let canon = crate::charcase::canonicalize(ch as i64, fold) as i32;
-                let single = self.add_node(Kind::CharSet {
-                    chars: vec![2, canon, canon + 1],
-                    strings: Vec::new(),
-                });
-                result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
-                ch += 1;
+            let count = (end - begin + 1) as usize;
+            self.work.charge(count as u64);
+            self.work.allocate(count * std::mem::size_of::<i32>());
+            let mut canonical = Vec::new();
+            canonical
+                .try_reserve_exact(count)
+                .map_err(|_| CompileError::ResourceLimit)?;
+            for ch in begin..=end {
+                self.work.charge(1);
+                canonical.push(crate::charcase::canonicalize(ch as i64, fold) as i32);
             }
-            return Ok(result);
+            // Admit a deterministic n*(floor(log2(n))+1) sorting envelope before
+            // sorting, independent of the standard library's comparison count.
+            self.work
+                .charge(count as u64 * (usize::BITS - count.leading_zeros()) as u64);
+            canonical.sort_unstable();
+            canonical.dedup();
+            let mut ranges = vec![0];
+            for ch in canonical {
+                self.work.charge(1);
+                if ranges.len() > 1 && ranges[ranges.len() - 1] == ch {
+                    *ranges.last_mut().unwrap() = ch + 1;
+                } else {
+                    ranges.extend_from_slice(&[ch, ch + 1]);
+                }
+            }
+            ranges[0] = (ranges.len() - 1) as i32;
+            return Ok(self.add_node(Kind::CharSet {
+                chars: ranges,
+                strings: Vec::new(),
+            }));
         }
         Ok(self.add_node(Kind::CharSet {
             chars: vec![2, c1[1], c2[2]],
@@ -944,12 +1139,38 @@ impl Compiler {
     /// erroring if the node is not a character set.
     fn charset_parts(&self, id: NodeId) -> PResult<(Vec<i32>, Vec<Vec<u32>>)> {
         match &self.nodes[id].kind {
-            Kind::CharSet { chars, strings } => Ok((chars.clone(), strings.clone())),
+            Kind::CharSet { chars, strings } => {
+                self.work.charge(
+                    chars.len() as u64 + strings.iter().map(|s| s.len() as u64).sum::<u64>(),
+                );
+                self.work.allocate(
+                    std::mem::size_of_val(chars.as_slice())
+                        + strings
+                            .iter()
+                            .map(|s| {
+                                std::mem::size_of::<Vec<u32>>()
+                                    + std::mem::size_of_val(s.as_slice())
+                            })
+                            .sum::<usize>(),
+                );
+                Ok((chars.clone(), strings.clone()))
+            }
             _ => Err(self.error("invalid pattern")),
         }
     }
 
-    fn sort_strings(strings: &mut Vec<Vec<u32>>) {
+    fn sort_strings(&self, strings: &mut Vec<Vec<u32>>) {
+        let count = strings.len() as u64;
+        let width = strings
+            .iter()
+            .map(|s| s.len() as u64 + 1)
+            .max()
+            .unwrap_or(0);
+        self.work.charge(
+            count
+                .saturating_mul(u64::BITS as u64 - count.leading_zeros() as u64)
+                .saturating_mul(width),
+        );
         strings.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| right.cmp(left)));
         strings.dedup();
     }
@@ -1262,6 +1483,10 @@ impl Compiler {
                         let single = self.charset_single(current[0] as i64);
                         result = self.charset_combine(result, single, MX_CHARSET_UNION_OP)?;
                     } else if current.len() > 1 {
+                        self.work.allocate(std::mem::size_of::<Vec<u32>>());
+                        strings
+                            .try_reserve(1)
+                            .unwrap_or_else(|_| stop(CompileStop::Resource));
                         strings.push(std::mem::take(&mut current));
                     }
                     if c == b'}' as i64 {
@@ -1280,12 +1505,16 @@ impl Compiler {
                     if self.flags & XS_REGEXP_I != 0 {
                         character = crate::charcase::canonicalize(character, true);
                     }
+                    self.work.allocate(std::mem::size_of::<u32>());
+                    current
+                        .try_reserve(1)
+                        .unwrap_or_else(|_| stop(CompileStop::Resource));
                     current.push(character as u32);
                     self.next()?;
                 }
             }
         }
-        Self::sort_strings(&mut strings);
+        self.sort_strings(&mut strings);
         if let Kind::CharSet {
             strings: target, ..
         } = &mut self.nodes[result].kind
@@ -1936,6 +2165,7 @@ impl Compiler {
     // ---- the measure pass (fx*Measure) ----
 
     fn measure(&mut self, id: NodeId, direction: i32) {
+        self.work.charge(1);
         // Split-borrow: read the kind's child ids first, mutate offsets
         // after. We recurse by id, so the arena stays coherent.
         //
@@ -1966,6 +2196,7 @@ impl Compiler {
                 let mut pending_rights: Vec<NodeId> = Vec::new();
                 let mut id = id;
                 loop {
+                    self.work.charge(1);
                     if let Shape::Disjunction(left, right) = self.child_shape(id) {
                         self.nodes[id].step = self.size as i32;
                         self.size += 12; // mxDisjunctionStepSize
@@ -1986,6 +2217,7 @@ impl Compiler {
                     // atom's step as its own, then continues into `right`.
                     let mut id = id;
                     loop {
+                        self.work.charge(1);
                         let Shape::Sequence(left, right) = self.child_shape(id) else {
                             self.measure(id, direction);
                             break;
@@ -2002,6 +2234,7 @@ impl Compiler {
                     let mut spine: Vec<(NodeId, NodeId)> = Vec::new();
                     let mut id = id;
                     loop {
+                        self.work.charge(1);
                         let Shape::Sequence(left, right) = self.child_shape(id) else {
                             break;
                         };
@@ -2064,6 +2297,7 @@ impl Compiler {
     // ---- the code pass (fx*Code) ----
 
     fn emit(&mut self, id: NodeId, direction: i32, sequel: i32) {
+        self.work.charge(1);
         match self.child_shape(id) {
             Shape::Term => {
                 let opcode = match &self.nodes[id].kind {
@@ -2080,7 +2314,10 @@ impl Compiler {
             }
             Shape::CharSet(count) => {
                 let chars: Vec<i32> = match &self.nodes[id].kind {
-                    Kind::CharSet { chars, .. } => chars.clone(),
+                    Kind::CharSet { chars, .. } => {
+                        self.work.charge(chars.len() as u64);
+                        chars.clone()
+                    }
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
@@ -2107,6 +2344,7 @@ impl Compiler {
                 let mut pending_rights: Vec<NodeId> = Vec::new();
                 let mut id = id;
                 loop {
+                    self.work.charge(1);
                     if let Shape::Disjunction(left, right) = self.child_shape(id) {
                         let at = (self.nodes[id].step / 4) as usize;
                         self.code[at] = CX_DISJUNCTION_STEP;
@@ -2129,6 +2367,7 @@ impl Compiler {
                     // last atom's sequel is the outer sequel.
                     let mut id = id;
                     loop {
+                        self.work.charge(1);
                         let Shape::Sequence(left, right) = self.child_shape(id) else {
                             self.emit(id, direction, sequel);
                             break;
@@ -2145,6 +2384,7 @@ impl Compiler {
                     let mut lefts: Vec<NodeId> = Vec::new();
                     let mut id = id;
                     loop {
+                        self.work.charge(1);
                         let Shape::Sequence(left, right) = self.child_shape(id) else {
                             break;
                         };
@@ -2510,10 +2750,15 @@ mod recursion_bounds {
             ] {
                 let program = compile(&nested(open, close, limit), flags)
                     .unwrap_or_else(|e| panic!("{open}…{close} at the limit must compile: {e:?}"));
-                assert!(
-                    match_regexp(&program, b"a", 0).matched,
-                    "{open}…{close} at the limit must still match"
-                );
+                let outcome = match_regexp(&program, b"a", 0);
+                if close == ")*" {
+                    assert!(outcome.resource_limit, "nested stars hit the state ceiling");
+                } else {
+                    assert!(
+                        outcome.matched,
+                        "{open}…{close} at the limit must still match"
+                    );
+                }
                 let past = compile(&nested(open, close, limit + 1), flags).map(|_| ());
                 assert!(
                     matches!(&past, Err(CompileError::Syntax(m)) if m.ends_with(" too much nesting")),

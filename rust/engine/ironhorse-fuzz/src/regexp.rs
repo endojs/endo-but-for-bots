@@ -227,6 +227,15 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
     };
 
     let program = match ironhorse_regexp::compile(pattern, flags) {
+        Err(
+            ironhorse_regexp::CompileError::BudgetExceeded
+            | ironhorse_regexp::CompileError::ResourceLimit,
+        ) => {
+            return Err(Divergence {
+                source,
+                detail: "regexp compilation resource refusal".into(),
+            })
+        }
         Ok(p) => p,
         Err(ironhorse_regexp::CompileError::Unsupported(_)) => return Ok(false),
         Err(ironhorse_regexp::CompileError::Syntax(_)) => {

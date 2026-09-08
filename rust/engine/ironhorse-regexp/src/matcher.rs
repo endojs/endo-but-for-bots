@@ -56,8 +56,10 @@ pub struct MatchOutcome {
     /// `true` when the caller's check callback refused further work
     /// ([`match_regexp_checked`]): the match was abandoned mid-way,
     /// `matched` is `false`, and `captures`/`names` are meaningless. The
-    /// unchecked [`match_regexp`] never sets it.
+    /// A finite dispatch budget can also set it.
     pub aborted: bool,
+    /// The deterministic scratch or backtracking storage ceiling was reached.
+    pub resource_limit: bool,
 }
 
 impl MatchOutcome {
@@ -115,6 +117,28 @@ fn match_character(chars: &[i32], base_at: usize, count: i32, character: i64) ->
 /// decides only *where* an armed crank can be interrupted inside a match,
 /// never what the match meters, so it is not part of the cost table.
 pub const MATCH_CHECK_STRIDE: u64 = 1024;
+/// Independent of metering: bounds retained states and their capture snapshots.
+pub const MAX_MATCH_STATES: usize = 65_536;
+pub const MAX_MATCH_BYTES: usize = 64 << 20;
+
+fn save_captures(
+    states: &mut Vec<State>,
+    captures: &[(i32, i32)],
+    base_bytes: usize,
+) -> Option<Vec<(i32, i32)>> {
+    let state_bytes = std::mem::size_of::<State>().checked_add(std::mem::size_of_val(captures))?;
+    let count = states.len().checked_add(1)?;
+    if count > MAX_MATCH_STATES
+        || base_bytes.checked_add(count.checked_mul(state_bytes)?)? > MAX_MATCH_BYTES
+    {
+        return None;
+    }
+    states.try_reserve(1).ok()?;
+    let mut saved = Vec::new();
+    saved.try_reserve_exact(captures.len()).ok()?;
+    saved.extend_from_slice(captures);
+    Some(saved)
+}
 
 /// Match a compiled `program` against `subject` (the caller's UTF-8 or XS
 /// CESU-8 byte spelling, no trailing NUL needed) starting at byte offset
@@ -139,6 +163,19 @@ pub fn match_regexp_checked(
     program: &Program,
     subject: &[u8],
     start: i32,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> MatchOutcome {
+    match_regexp_budgeted(program, subject, start, u64::MAX, check)
+}
+
+/// Match with a finite dispatch budget, even when no callback is attached.
+/// Callbacks receive cumulative raw work every `MATCH_CHECK_STRIDE` steps;
+/// the outcome also includes the final partial stride.
+pub fn match_regexp_budgeted(
+    program: &Program,
+    subject: &[u8],
+    start: i32,
+    mut work_budget: u64,
     mut check: Option<&mut dyn FnMut(u64) -> bool>,
 ) -> MatchOutcome {
     let code = &program.code;
@@ -146,6 +183,33 @@ pub fn match_regexp_checked(
     let base_flags = code[0];
     let capture_count = program.capture_count;
     let name_count = program.name_count;
+
+    let base_bytes = [
+        (capture_count, std::mem::size_of::<(i32, i32)>()),
+        (name_count, std::mem::size_of::<i32>()),
+        (
+            program.assertion_count,
+            std::mem::size_of::<AssertionData>(),
+        ),
+        (
+            program.quantifier_count,
+            std::mem::size_of::<QuantifierData>(),
+        ),
+    ]
+    .into_iter()
+    .try_fold(0usize, |sum, (n, width)| {
+        sum.checked_add(n.checked_mul(width)?)
+    });
+    let Some(base_bytes) = base_bytes.filter(|n| *n <= MAX_MATCH_BYTES) else {
+        return MatchOutcome {
+            matched: false,
+            captures: Vec::new(),
+            names: Vec::new(),
+            match_meter_raw: 0,
+            aborted: false,
+            resource_limit: true,
+        };
+    };
 
     let mut captures: Vec<(i32, i32)> = vec![(-1, -1); capture_count];
     let mut names: Vec<i32> = vec![-1; name_count];
@@ -170,6 +234,7 @@ pub fn match_regexp_checked(
     // Steps until the next consultation of `check` (unused unchecked).
     let mut until_check: u64 = MATCH_CHECK_STRIDE;
     let mut aborted = false;
+    let mut resource_limit = false;
     let mut result = false;
     let mut start = start;
 
@@ -191,6 +256,11 @@ pub fn match_regexp_checked(
                 let at = (step / 4) as usize;
                 let which = code[at];
                 let mut p = at + 1; // operand cursor (past the opcode)
+                if work_budget == 0 || meter > u64::MAX - XS_REGEXP_METERING {
+                    aborted = true;
+                    break 'scan;
+                }
+                work_budget -= 1;
                 meter += XS_REGEXP_METERING;
                 if let Some(check) = check.as_mut() {
                     until_check -= 1;
@@ -234,11 +304,17 @@ pub fn match_regexp_checked(
                         assertions[ai].offset = offset;
                         assertions[ai].first_state = states.len();
                         let sequel = code[p];
+                        let Some(saved_captures) =
+                            save_captures(&mut states, &captures, base_bytes)
+                        else {
+                            resource_limit = true;
+                            break 'scan;
+                        };
                         states.push(State {
                             step: sequel,
                             offset,
                             flags,
-                            captures: captures.clone(),
+                            captures: saved_captures,
                         });
                     }
                     CX_ASSERTION_NOT_COMPLETION => {
@@ -432,11 +508,17 @@ pub fn match_regexp_checked(
                         step = code[p];
                         p += 1;
                         let sequel = code[p];
+                        let Some(saved_captures) =
+                            save_captures(&mut states, &captures, base_bytes)
+                        else {
+                            resource_limit = true;
+                            break 'scan;
+                        };
                         states.push(State {
                             step: sequel,
                             offset,
                             flags,
-                            captures: captures.clone(),
+                            captures: saved_captures,
                         });
                     }
                     CX_EMPTY_STEP => {
@@ -504,11 +586,17 @@ pub fn match_regexp_checked(
                             step = sequel;
                         } else {
                             if quantifiers[qi].min == 0 {
+                                let Some(saved_captures) =
+                                    save_captures(&mut states, &captures, base_bytes)
+                                else {
+                                    resource_limit = true;
+                                    break 'scan;
+                                };
                                 states.push(State {
                                     step: sequel,
                                     offset,
                                     flags,
-                                    captures: captures.clone(),
+                                    captures: saved_captures,
                                 });
                             }
                             if from <= to {
@@ -531,11 +619,17 @@ pub fn match_regexp_checked(
                         if quantifiers[qi].max == 0 {
                             step = sequel;
                         } else if quantifiers[qi].min == 0 {
+                            let Some(saved_captures) =
+                                save_captures(&mut states, &captures, base_bytes)
+                            else {
+                                resource_limit = true;
+                                break 'scan;
+                            };
                             states.push(State {
                                 step,
                                 offset,
                                 flags,
-                                captures: captures.clone(),
+                                captures: saved_captures,
                             });
                             step = sequel;
                         } else if from <= to {
@@ -637,11 +731,12 @@ pub fn match_regexp_checked(
     }
 
     MatchOutcome {
-        matched: result && !aborted,
+        matched: result && !aborted && !resource_limit,
         captures,
         names,
         match_meter_raw: meter,
         aborted,
+        resource_limit,
     }
 }
 

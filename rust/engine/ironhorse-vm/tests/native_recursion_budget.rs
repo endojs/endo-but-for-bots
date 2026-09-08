@@ -605,6 +605,14 @@ impl ironhorse_vm::SourceCompiler for IronhorseCompiler {
                 Err(ironhorse_vm::SourceCompileError::MeterAbort)
             }
             Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
                 ironhorse_compile::ParseErrorKind::Unsupported => Err(
                     ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
                 ),
@@ -689,4 +697,25 @@ fn the_budget_is_released_when_a_deep_native_returns_or_unwinds() {
         "true",
         "the budget after a deep return and a deep unwind",
     );
+}
+
+#[test]
+fn regexp_compilation_refusal_bypasses_guest_catch_in_constructor_and_eval() {
+    for source in [
+        r"try { new RegExp('[\\u{0}-\\u{10ffff}]', 'iu'); } catch (_) { 'caught'; }",
+        r"try { eval('/[\\u{0}-\\u{10ffff}]/iu'); } catch (_) { 'caught'; }",
+    ] {
+        let (bytecode, names) = compile(source);
+        let mut machine = Interp::new();
+        machine.link_intrinsics(&names);
+        machine.set_source_compiler(std::rc::Rc::new(IronhorseCompiler));
+        machine.arm_meter(1, Box::new(|computrons| computrons < 10_000));
+        let out = machine.run(&bytecode);
+        assert!(
+            matches!(out.halt, Halt::MeterAbort),
+            "{source}: {:?}",
+            out.halt
+        );
+        assert!(!machine.is_quiescent());
+    }
 }

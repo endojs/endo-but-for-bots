@@ -75,6 +75,14 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
                 Err(ironhorse_vm::SourceCompileError::MeterAbort)
             }
             Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
                 ironhorse_compile::ParseErrorKind::Unsupported => Err(
                     ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
                 ),
@@ -345,6 +353,12 @@ fn compile_for(
                 Ok(Err(e)) => {
                     let rendered = e.to_string();
                     let signal = match e.kind {
+                        ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                            kind:
+                                ironhorse_compile::LexErrorKind::RegExpBudgetExceeded
+                                | ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                            ..
+                        }) => IronhorseCompile::Unsupported(rendered),
                         ironhorse_compile::parser::ParseErrorKind::Unsupported => {
                             IronhorseCompile::Unsupported(rendered)
                         }

@@ -89,6 +89,8 @@ pub enum SourceCompileError {
     /// The compiler reached a deferred/unported path (a valid construct it
     /// does not yet compile, or a coder panic). An honest coverage gap.
     Unsupported(String),
+    /// Regexp compilation exceeded its storage profile.
+    HeapExhausted,
 }
 
 /// The compiler seam the runtime source-execution bridge drives (design
@@ -111,6 +113,10 @@ pub trait SourceCompiler {
     /// caller's direct eval); an indirect eval of ordinary source is sloppy.
     /// The source itself may still opt into strict via a `"use strict"`
     /// prologue, which the compiler honors regardless of this hint.
+    /// Regexp literals share the same incremental admission callback as all
+    /// other compilation phases, including partial work before syntax errors.
+    /// A false callback or exhausted budget returns `MeterAbort`; storage
+    /// refusal returns `HeapExhausted`. Neither is a syntax error.
     fn compile_source(
         &self,
         source: &str,
@@ -10188,9 +10194,20 @@ impl Interp {
             Some(compiler) => compiler.clone(),
             None => return Err(Step::Host(Halt::NotImplemented("eval:no-compiler"))),
         };
-        let compiled = match compiler
-            .compile_source(source, strict, &mut |raw| self.charge_compilation(raw))
-        {
+        self.charge_and_check(0)?;
+        let mut refused = false;
+        let compiled = compiler.compile_source(source, strict, &mut |raw| {
+            if refused {
+                return false;
+            }
+            refused = !self.charge_compilation(raw);
+            !refused
+        });
+        if refused {
+            return Err(Step::Host(Halt::MeterAbort));
+        }
+        let compiled = match compiled {
+            Err(SourceCompileError::HeapExhausted) => return Err(Step::Host(Halt::HeapExhausted)),
             Ok(compiled) => compiled,
             Err(SourceCompileError::MeterAbort) => return Err(Step::Host(Halt::MeterAbort)),
             Err(SourceCompileError::Syntax(message)) => {
@@ -13772,8 +13789,7 @@ impl Interp {
     /// Source compilers must stop immediately on false. Costs already charged
     /// here must not be charged again from `CompiledSource` reporting fields.
     pub fn charge_compilation(&mut self, raw: u64) -> bool {
-        self.meter.tick_raw(raw);
-        self.check_meter() == MeterCheck::Continue
+        self.charge_and_check(raw).is_ok()
     }
 
     /// Admission inside a built-in, including the restored/armed/no-host
@@ -25604,7 +25620,31 @@ impl Interp {
     /// catchable `SyntaxError` (as `fxCompileRegExp` failing does); a
     /// not-yet-ported pattern feature self-names an honest skip.
     fn build_regexp(&mut self, pattern: String, flags: String) -> Result<Slot, Step> {
-        let program = match ironhorse_regexp::compile(&pattern, &flags) {
+        self.charge_and_check(0)?;
+        let budget = if self.meter.is_armed() {
+            (u64::MAX - self.meter.raw()) / XS_PARSE_REGEXP_METERING
+        } else {
+            u64::MAX
+        };
+        let mut charged = 0;
+        let outcome = {
+            let mut check = |raw| {
+                let delta = raw - charged;
+                charged = raw;
+                self.charge_and_check(delta).is_ok()
+            };
+            ironhorse_regexp::compile_checked(&pattern, &flags, budget, Some(&mut check))
+        };
+        if outcome.work_meter_raw > charged {
+            self.charge_and_check(outcome.work_meter_raw - charged)?;
+        }
+        let program = match outcome.result {
+            Err(ironhorse_regexp::CompileError::BudgetExceeded) => {
+                return Err(Step::Host(Halt::MeterAbort))
+            }
+            Err(ironhorse_regexp::CompileError::ResourceLimit) => {
+                return Err(Step::Host(Halt::HeapExhausted))
+            }
             Ok(p) => p,
             Err(ironhorse_regexp::CompileError::Syntax(reason)) => {
                 // An invalid pattern is a catchable `SyntaxError`, exactly as
@@ -25625,19 +25665,16 @@ impl Interp {
         for _ in 0..4 {
             self.meter.tick_slot_alloc();
         }
-        // `fxCompileRegExp`'s parse meter (`XS_PARSE_REGEXP_METERING` per
-        // byte of the code buffer), carried by the program.
-        self.meter.tick_raw(program.compile_meter_raw);
+        // Compiler work, including code emission, was prepaid above.
         // `fxCompileRegExp` allocates two `fxNewChunk`s: the `code` buffer
-        // (`parser->size` bytes — recoverable as `compile_meter_raw /
-        // XS_PARSE_REGEXP_METERING`) and the `data` scratch buffer, sized from
+        // (the emitted words times four) and the `data` scratch buffer, sized from
         // the term counts (`captureCount*sizeof(txCaptureData) +
         // nameCount*sizeof(txInteger) + assertionCount*sizeof(txAssertionData)
         // + quantifierCount*sizeof(txQuantifierData)`, the 64-bit oracle
         // struct sizes 8/4/16/12). Both scale with the pattern, so modeling
         // them explicitly keeps construction raw-exact across every pattern
         // shape (not just the calibration set).
-        let code_bytes = program.compile_meter_raw / XS_PARSE_REGEXP_METERING;
+        let code_bytes = program.code.len() as u64 * 4;
         self.meter.tick_chunk_new(code_bytes);
         let data_bytes = (program.capture_count * 8
             + program.name_count * 4
@@ -25778,31 +25815,37 @@ impl Interp {
         subject: &[u8],
         start: i32,
     ) -> Result<ironhorse_regexp::MatchOutcome, Step> {
+        self.charge_and_check(0)?;
         let program = &self.regexps[&inst].program;
-        if !self.meter.is_armed() && self.meter_host.is_none() {
-            let outcome = ironhorse_regexp::match_regexp(program, subject, start);
-            self.meter.tick_raw(outcome.match_meter_raw);
-            return Ok(outcome);
-        }
-        // Disjoint field borrows: the program is read from `regexps`
-        // while the meter and host are driven from the callback.
+        let budget = (u64::MAX - self.meter.raw()) / ironhorse_regexp::XS_REGEXP_METERING;
         let meter = &mut self.meter;
         let mut host = self.meter_host.as_mut();
         let mut charged: u64 = 0;
         let outcome = {
             let mut check = |raw: u64| -> bool {
-                meter.tick_raw(raw - charged);
+                let delta = raw - charged;
                 charged = raw;
                 match host.as_mut() {
-                    Some(h) => meter.check(h) == MeterCheck::Continue,
-                    // Armed, no host: fail closed (F014).
+                    Some(h) => meter.charge_and_check(delta, h) == MeterCheck::Continue,
+                    None if !meter.is_armed() => {
+                        meter.tick_raw(delta);
+                        true
+                    }
                     None => false,
                 }
             };
-            ironhorse_regexp::match_regexp_checked(program, subject, start, Some(&mut check))
+            ironhorse_regexp::match_regexp_budgeted(
+                program,
+                subject,
+                start,
+                budget,
+                Some(&mut check),
+            )
         };
-        // The tail the last stride did not cover.
-        meter.tick_raw(outcome.match_meter_raw - charged);
+        self.charge_and_check(outcome.match_meter_raw - charged)?;
+        if outcome.resource_limit {
+            return Err(Step::Host(Halt::HeapExhausted));
+        }
         if outcome.aborted {
             return Err(Step::Host(Halt::MeterAbort));
         }

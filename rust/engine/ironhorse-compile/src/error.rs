@@ -45,6 +45,10 @@ pub enum LexErrorKind {
     /// A `*` immediately after the opening `/` of a regexp (would open a
     /// comment), per XS's `fxGetNextRegExp` guard.
     InvalidRegExp,
+    /// Regexp compilation refused computation; never a guest SyntaxError.
+    RegExpBudgetExceeded,
+    /// Regexp compilation exceeded its deterministic storage profile.
+    RegExpResourceLimit,
     /// A `@` outside XS's host (`mxCFlag`) mode.
     InvalidAtSign,
     /// A single `\` (or `\` not followed by `.`) where XS expects `\u`.
@@ -70,6 +74,8 @@ impl fmt::Display for LexError {
             UnterminatedRegExp => write!(f, "end of file in regular expression"),
             LineTerminatorInRegExp => write!(f, "end of line in regular expression"),
             InvalidRegExp => write!(f, "invalid regular expression"),
+            RegExpBudgetExceeded => write!(f, "regexp work budget exhausted"),
+            RegExpResourceLimit => write!(f, "regexp storage limit exhausted"),
             InvalidAtSign => write!(f, "invalid character @"),
             UnexpectedCharacter(c) => write!(f, "invalid character {}", c),
             Overflow => write!(f, "buffer overflow"),
