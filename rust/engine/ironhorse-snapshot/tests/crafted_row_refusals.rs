@@ -257,9 +257,9 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
 /// well formed — same version, same atoms, same everything but the
 /// signature the writer stamped.
 #[test]
-fn a_container_from_a_foreign_boot_layout_is_refused() {
+fn a_container_from_a_foreign_host_layout_is_refused() {
     let m = quiescent_machine("var t = 0; t = 41 + 1; t");
-    // A different engine build: same wire schema, different boot layout,
+    // A different host callback layout: same wire schema and boot layout,
     // therefore a different signature.
     let other_build = Signature::new("ironhorse-worker-v1-boot2");
     let bytes = m
@@ -276,7 +276,7 @@ fn a_container_from_a_foreign_boot_layout_is_refused() {
             assert_eq!(found, other_build);
         }
         Err(other) => panic!("refused, but not by the signature gate: {other:?}"),
-        Ok(_) => panic!("a container from a foreign boot layout must not adopt"),
+        Ok(_) => panic!("a container from a foreign host layout must not adopt"),
     }
 
     // And the store path refuses at open, likewise before adoption.
@@ -288,7 +288,48 @@ fn a_container_from_a_foreign_boot_layout_is_refused() {
     match validate_store(&store, &sig()) {
         Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
         Err(other) => panic!("store refused, but not by the signature gate: {other:?}"),
-        Ok(_) => panic!("a store from a foreign boot layout must not validate"),
+        Ok(_) => panic!("a store from a foreign host layout must not validate"),
+    }
+}
+
+#[test]
+fn boot_mismatch_is_distinct_and_cannot_be_bypassed_by_the_expected_signature() {
+    let m = quiescent_machine("1");
+    let honest = m.snapshot_image(&sig()).unwrap();
+    let mut changed = sig().encode();
+    changed[4] ^= 1; // same host, different engine-derived layout
+    let foreign = Signature::decode(&changed).unwrap();
+    let legacy = Signature::decode(b"ironhorse-worker-v1|ironhorse-boot=21").unwrap();
+    for signature in [foreign, legacy] {
+        assert!(
+            m.write_snapshot(&signature).is_err(),
+            "writer cannot stamp a foreign boot"
+        );
+        let mut image = honest.clone();
+        image.signature = signature.clone();
+        let bytes = write_machine(&image);
+        for expected in [sig(), signature.clone()] {
+            assert!(matches!(
+                from_snapshot_bytes(&bytes, &expected),
+                Err(SnapshotError::BootLayoutMismatch { .. })
+            ));
+            let mut store = MemoryStore::new();
+            store.commit(&image_to_batch(&image, 1, "")).unwrap();
+            assert!(matches!(
+                validate_store(&store, &expected),
+                Err(StoreError::Snapshot(
+                    SnapshotError::BootLayoutMismatch { .. }
+                ))
+            ));
+            let before = store.manifest().unwrap();
+            assert!(matches!(
+                ironhorse_snapshot::store::migrate_store(&mut store, &expected),
+                Err(StoreError::Snapshot(
+                    SnapshotError::BootLayoutMismatch { .. }
+                ))
+            ));
+            assert_eq!(store.manifest().unwrap(), before);
+        }
     }
 }
 

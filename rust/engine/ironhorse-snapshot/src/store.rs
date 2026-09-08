@@ -2001,6 +2001,8 @@ pub fn migrate_store(
         Err(StoreError::Empty) => return Ok(false),
         Err(e) => return Err(e),
     };
+    manifest.signature.check_boot()?;
+    expected_sig.check_boot()?;
     if manifest.store_schema == STORE_SCHEMA_VERSION {
         return Ok(false);
     }
@@ -3403,6 +3405,8 @@ pub fn validate_store(
             "unsupported store schema version",
         )));
     }
+    manifest.signature.check_boot()?;
+    expected_sig.check_boot()?;
     if !manifest.signature.is_compatible_with(expected_sig) {
         return Err(StoreError::Snapshot(SnapshotError::SignatureMismatch {
             expected: expected_sig.clone(),

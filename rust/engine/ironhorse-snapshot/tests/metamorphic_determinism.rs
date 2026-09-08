@@ -316,7 +316,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // W4: METR carries the digest of the UTF-16/Proxy meter-2 release.
         // Meter release 3 adds compilation weights to the shared METR identity.
         // Format 16 makes canonical container bytes an admission rule.
-        "a8931743cd2ef7a3461b726954ffdb223ab09cfb62b3031c1b23ac3ec1b660b1",
+        // SIGN now binds the mechanically derived boot fingerprint.
+        "cf52e919592cde1ed81bf05c545b14587e33d1585ef3f5160deb406cdcd66b4f",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -522,7 +523,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format 15 / store schema 26 change the manifest in the seal.
         // W4: METR digest changes each committed small-state hash.
         // Format 16 also travels in the manifest signed by each seal.
-        "3e9a8458570fe8ac214fc52271a2a1f8373db94904f2df5bdad6fa4e876243f0",
+        // The structured boot signature also travels in the manifest.
+        "d357a786abdf21d659743ba67d358d4305170b45f21941c133a08777618428f5",
         "epoch-3 seal chain"
     );
 }

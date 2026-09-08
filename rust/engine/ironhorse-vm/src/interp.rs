@@ -5361,7 +5361,7 @@ pub struct Interp {
 /// machine chunk heap. Allocated once at [`Interp::new`], before any run,
 /// so `typeof` names a preexisting string (XS's `XS_STRING_X_KIND`
 /// interned strings) rather than allocating — dispatch-only, as XS.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct StaticStrings {
     undefined: crate::value::ChunkOffset,
     object: crate::value::ChunkOffset,
@@ -6374,6 +6374,184 @@ impl Interp {
         interp.create_intrinsics();
         interp.boot_slot_count = interp.slots.capacity();
         interp
+    }
+
+    /// Fingerprint of this engine's boot layout, independently of host
+    /// configuration. Computed once from a fresh boot, before guest mutation.
+    pub fn boot_fingerprint() -> [u8; 32] {
+        static FINGERPRINT: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+        *FINGERPRINT.get_or_init(|| Self::new().derive_boot_fingerprint())
+    }
+
+    fn derive_boot_fingerprint(&self) -> [u8; 32] {
+        use crate::sha256::Sha256;
+        let mut hash = Sha256::new();
+        hash.update(b"ironhorse-boot-layout-v1");
+        // Length-delimit every term so a boundary cannot be shifted into
+        // the next field. No pointers or randomized map iteration travel.
+        let mut term = |bytes: &[u8]| {
+            hash.update(&(bytes.len() as u64).to_be_bytes());
+            hash.update(bytes);
+        };
+        term(&self.boot_slot_count.to_be_bytes());
+        for slot in self
+            .slots
+            .records()
+            .iter()
+            .take(self.boot_slot_count as usize)
+        {
+            term(format!("{slot:?}").as_bytes());
+        }
+        term(&self.chunks.raw_vec());
+        let mut functions: Vec<_> = self.functions.iter().collect();
+        functions.sort_by_key(|(index, _)| index.0);
+        for (index, info) in functions {
+            term(&index.0.to_be_bytes());
+            // Derived Debug includes native/method variant names and their
+            // payloads, name/name_chunk, arity, and every FuncInfo field.
+            // A variant rename may conservatively refuse compatibility;
+            // reordering variants cannot silently remap stored natives.
+            term(format!("{info:?}").as_bytes());
+        }
+        let mut intrinsics: Vec<_> = self.intrinsics.iter().collect();
+        intrinsics.sort_by_key(|(name, _)| **name);
+        for (name, index) in intrinsics {
+            term(name.as_bytes());
+            term(&index.0.to_be_bytes());
+        }
+        term(format!("{:?}", self.proto_methods).as_bytes());
+        term(format!("{:?}", self.proto_data).as_bytes());
+        term(format!("{:?}", self.proto_accessors).as_bytes());
+        term(format!("{:?}", self.proto_value_data).as_bytes());
+        let mut default_keys: Vec<_> = self.default_keys.iter().copied().collect();
+        default_keys.sort_unstable();
+        term(format!("default_keys={default_keys:?}").as_bytes());
+        term(format!("global_obj={:?}", self.global_obj).as_bytes());
+        term(format!("intl_object={:?}", self.intl_object).as_bytes());
+        term(format!("temporal_object={:?}", self.temporal_object).as_bytes());
+        term(format!("temporal_now_object={:?}", self.temporal_now_object).as_bytes());
+        term(format!("math_object={:?}", self.math_object).as_bytes());
+        term(format!("static_str={:?}", self.static_str).as_bytes());
+        term(format!("well_known_symbols={:?}", self.well_known_symbols).as_bytes());
+        term(format!("string_iterator_method={:?}", self.string_iterator_method).as_bytes());
+        term(format!("async_iterator_identity={:?}", self.async_iterator_identity).as_bytes());
+        term(
+            format!(
+                "function_has_instance_method={:?}",
+                self.function_has_instance_method
+            )
+            .as_bytes(),
+        );
+        term(
+            format!(
+                "symbol_to_primitive_method={:?}",
+                self.symbol_to_primitive_method
+            )
+            .as_bytes(),
+        );
+        term(
+            format!(
+                "date_to_primitive_method={:?}",
+                self.date_to_primitive_method
+            )
+            .as_bytes(),
+        );
+        term(format!("iterator_identity={:?}", self.iterator_identity).as_bytes());
+        term(
+            format!(
+                "segments_iterator_method={:?}",
+                self.segments_iterator_method
+            )
+            .as_bytes(),
+        );
+        term(
+            format!(
+                "segment_iterator_identity={:?}",
+                self.segment_iterator_identity
+            )
+            .as_bytes(),
+        );
+        term(format!("error_stack_accessor={:?}", self.error_stack_accessor).as_bytes());
+        term(format!("template_cache={:?}", self.template_cache).as_bytes());
+        term(format!("object_proto={:?}", self.object_proto).as_bytes());
+        term(format!("function_proto={:?}", self.function_proto).as_bytes());
+        term(format!("array_proto={:?}", self.array_proto).as_bytes());
+        term(format!("map_proto={:?}", self.map_proto).as_bytes());
+        term(format!("set_proto={:?}", self.set_proto).as_bytes());
+        term(format!("weakmap_proto={:?}", self.weakmap_proto).as_bytes());
+        term(format!("weakset_proto={:?}", self.weakset_proto).as_bytes());
+        term(format!("arraybuffer_proto={:?}", self.arraybuffer_proto).as_bytes());
+        term(format!("dataview_proto={:?}", self.dataview_proto).as_bytes());
+        term(format!("array_iterator_proto={:?}", self.array_iterator_proto).as_bytes());
+        term(format!("string_proto={:?}", self.string_proto).as_bytes());
+        term(format!("number_proto={:?}", self.number_proto).as_bytes());
+        term(format!("boolean_proto={:?}", self.boolean_proto).as_bytes());
+        term(format!("symbol_proto={:?}", self.symbol_proto).as_bytes());
+        term(format!("bigint_proto={:?}", self.bigint_proto).as_bytes());
+        term(format!("promise_proto={:?}", self.promise_proto).as_bytes());
+        term(format!("generator_proto={:?}", self.generator_proto).as_bytes());
+        term(
+            format!(
+                "generator_function_proto={:?}",
+                self.generator_function_proto
+            )
+            .as_bytes(),
+        );
+        term(format!("async_function_proto={:?}", self.async_function_proto).as_bytes());
+        term(format!("async_generator_proto={:?}", self.async_generator_proto).as_bytes());
+        term(
+            format!(
+                "async_generator_function_proto={:?}",
+                self.async_generator_function_proto
+            )
+            .as_bytes(),
+        );
+        term(format!("regexp_proto={:?}", self.regexp_proto).as_bytes());
+        term(format!("regexp_replace_method={:?}", self.regexp_replace_method).as_bytes());
+        term(format!("regexp_match_method={:?}", self.regexp_match_method).as_bytes());
+        term(format!("regexp_match_all_method={:?}", self.regexp_match_all_method).as_bytes());
+        term(format!("regexp_search_method={:?}", self.regexp_search_method).as_bytes());
+        term(format!("regexp_split_method={:?}", self.regexp_split_method).as_bytes());
+        term(format!("iterator_proto={:?}", self.iterator_proto).as_bytes());
+        term(format!("iterator_wrapper_proto={:?}", self.iterator_wrapper_proto).as_bytes());
+        term(format!("map_iterator_proto={:?}", self.map_iterator_proto).as_bytes());
+        term(format!("set_iterator_proto={:?}", self.set_iterator_proto).as_bytes());
+        term(
+            format!(
+                "regexp_string_iterator_proto={:?}",
+                self.regexp_string_iterator_proto
+            )
+            .as_bytes(),
+        );
+        term(format!("date_proto={:?}", self.date_proto).as_bytes());
+        term(format!("locale_proto={:?}", self.locale_proto).as_bytes());
+        term(format!("collator_proto={:?}", self.collator_proto).as_bytes());
+        term(format!("list_format_proto={:?}", self.list_format_proto).as_bytes());
+        term(format!("plural_rules_proto={:?}", self.plural_rules_proto).as_bytes());
+        term(format!("segmenter_proto={:?}", self.segmenter_proto).as_bytes());
+        term(format!("segments_proto={:?}", self.segments_proto).as_bytes());
+        term(format!("segment_iterator_proto={:?}", self.segment_iterator_proto).as_bytes());
+        term(format!("date_time_format_proto={:?}", self.date_time_format_proto).as_bytes());
+        term(format!("number_format_proto={:?}", self.number_format_proto).as_bytes());
+        term(format!("temporal_instant_proto={:?}", self.temporal_instant_proto).as_bytes());
+        term(format!("temporal_duration_proto={:?}", self.temporal_duration_proto).as_bytes());
+        term(format!("temporal_plain_protos={:?}", self.temporal_plain_protos).as_bytes());
+        term(format!("temporal_zoned_proto={:?}", self.temporal_zoned_proto).as_bytes());
+        term(format!("byte_length_id={:?}", self.byte_length_id).as_bytes());
+        term(format!("byte_offset_id={:?}", self.byte_offset_id).as_bytes());
+        term(format!("buffer_id={:?}", self.buffer_id).as_bytes());
+        term(format!("size_id={:?}", self.size_id).as_bytes());
+        term(format!("length_id={:?}", self.length_id).as_bytes());
+        term(format!("name_id={:?}", self.name_id).as_bytes());
+        term(format!("value_id={:?}", self.value_id).as_bytes());
+        term(format!("done_id={:?}", self.done_id).as_bytes());
+        term(format!("then_id={:?}", self.then_id).as_bytes());
+        term(format!("constructor_id={:?}", self.constructor_id).as_bytes());
+        term(format!("last_index_id={:?}", self.last_index_id).as_bytes());
+        term(format!("prototype_key_id={:?}", self.prototype_key_id).as_bytes());
+        term(format!("regexp_getter_ids={:?}", self.regexp_getter_ids).as_bytes());
+        term(format!("regexp_result_ids={:?}", self.regexp_result_ids).as_bytes());
+        hash.finalize()
     }
 
     /// The cost-calibration histogram recorder (design stage C1). Present
@@ -61752,6 +61930,43 @@ mod tests {
 
     fn b(op: Opcode) -> u8 {
         op as u8
+    }
+
+    #[test]
+    fn boot_fingerprint_detects_reordered_native_bindings_without_a_version_bump() {
+        let m = Interp::new();
+        let expected = m.derive_boot_fingerprint();
+        assert_eq!(expected, Interp::boot_fingerprint());
+        for _ in 0..8 {
+            assert_eq!(Interp::new().derive_boot_fingerprint(), expected);
+        }
+        let mut changed = Interp::new();
+        std::mem::swap(&mut changed.object_proto, &mut changed.function_proto);
+        assert_ne!(
+            changed.derive_boot_fingerprint(),
+            expected,
+            "named prototype aliases must travel"
+        );
+        let mut changed = Interp::new();
+        changed.static_str.object = changed.static_str.function;
+        assert_ne!(
+            changed.derive_boot_fingerprint(),
+            expected,
+            "static chunk aliases must travel"
+        );
+        let mut changed = Interp::new();
+        let object = changed.intrinsics["Object"];
+        let array = changed.intrinsics["Array"];
+        let object_info = changed.functions[&object].clone();
+        let array_info = changed.functions[&array].clone();
+        changed.functions.insert(object, array_info);
+        changed.functions.insert(array, object_info);
+        assert_eq!(changed.boot_slot_count, m.boot_slot_count);
+        assert_ne!(changed.derive_boot_fingerprint(), expected);
+        let mut changed = Interp::new();
+        changed.slots.alloc(Slot::undefined());
+        changed.boot_slot_count = changed.slots.capacity();
+        assert_ne!(changed.derive_boot_fingerprint(), expected);
     }
 
     #[test]

@@ -40,7 +40,7 @@ fn incompatible_legacy_boot_containers_are_rejected_before_adoption() {
         "compat-a50-custom-arguments.container",
     ] {
         match from_snapshot_bytes(&fixture(name), &signature()) {
-            Err(SnapshotError::SignatureMismatch { .. }) => {}
+            Err(SnapshotError::BootLayoutMismatch { found: None, .. }) => {}
             Err(other) => panic!("{name} refused for the wrong reason: {other:?}"),
             Ok(_) => panic!("{name} must not reach arena adoption"),
         }
