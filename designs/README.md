@@ -444,6 +444,7 @@ LLM-agent stack).*
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | Not Started |
 | [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
 | [floot-admin-deploy-workflows](floot-admin-deploy-workflows.md) | 2026-08-18 | 2026-09-07 | In Progress |
+| [hosted-endo-self-update-loop](hosted-endo-self-update-loop.md) | 2026-08-07 | 2026-09-08 | **Complete** |
 | [gateway-package](gateway-package.md) | 2026-05-22 | 2026-06-29 | Proposed (absorbs the removed endo-gateway design) |
 | [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md) | 2026-06-01 | 2026-06-25 | Superseded |
 | [endo-agent-tools](endo-agent-tools.md) | 2026-06-03 | 2026-06-25 | In Progress |
@@ -485,6 +486,18 @@ LLM-agent stack).*
 
 **Current totals (2026-09-08, snapshot schema perspectives indexed):** 49 Complete/Implemented, 36 In Progress, 49 Not Started, 39 Proposed, 2 Active, 15 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (201 designs). The schema index and surgery record add two Reference documents; GC and debugging add two Proposed documents. This documentation consolidation adds no independent implementation estimate or critical-path change. This supersedes every count above, including the running **Totals:** line; the buckets are reproducible by tallying the Status column of the summary table. The 2026-09-08 pass flips [runtime-container-fs-mount](runtime-container-fs-mount.md) from In Progress to **Complete** (In Progress 37 → 36, Complete 48 → 49): the floot session wiring landed on the attested hosted backend, where an attach is a declared, kernel-proved `9p` row of the slice policy applied by a deferred recreate, rather than waiting on the Claude CLI runtime. The 2026-09-07 pass added it (In Progress), the session-guest attach of held filesystem capabilities into a Claude sandbox slice under `/mnt/`: the attach registrar, the 9P bridge, and the `ClaudeClient` slice-recreate path landed together, so In Progress went 36 → 37 and the design count 196 → 197. The 2026-08-29 rolling index refresh established the counts this line adjusts. This pass added six previously-unindexed design files to the summary table: the Ironhorse trio [ironhorse-engine](ironhorse-engine.md) (Approved), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) (Not Started), and [ironhorse-test262-convergence](ironhorse-test262-convergence.md) (In Progress) — also folded into the M11 (Rust Daemon `endor`) table alongside their `ironhorse-snapshot-store-seam` / `ironhorse-debugger-recovery-and-uncaught` siblings — plus [platform-neutral-hash](platform-neutral-hash.md) (In Progress), [conservative-regexp-subset](conservative-regexp-subset.md) (Not Started), and [readableblob-range-attenuation](readableblob-range-attenuation.md) (Proposed). It also reconciled stale Status cells against each design file's own Status field: the four-layer importLocation stack ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md), [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md)) Proposed -> Not Started (applying the 2026-07-10 flip the prose above already recorded but the table never carried); the git trio ([daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [daemon-git-next-steps](daemon-git-next-steps.md)) Proposed -> In Progress (accepted 2026-07-11, phases landed); [daemon-agent-network-identity](daemon-agent-network-identity.md) and [daemon-locator-terminology](daemon-locator-terminology.md) Not Started -> In Progress; [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and [endopi-edit-tool](endopi-edit-tool.md) Proposed -> In Progress; and [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) Proposed -> **Complete**. The 2026-08-23 pass flips [cli-edit-verb](cli-edit-verb.md) from Proposed to In Progress because its daemon-side pure core landed in #796.
 
+**Addendum (2026-09-08):** the summary table gains
+[hosted-endo-self-update-loop](hosted-endo-self-update-loop.md) (**Complete**),
+carried from `feat/hosted-endo-management` as a record of the implemented pin
+surface rather than the original proposal. The buckets above are *not* adjusted
+for it, because a tally of the Status column no longer reproduces them
+independently of this addition — the column now holds 217 rows against a stated
+201 designs, in more Status spellings than the buckets name. Re-deriving the
+totals from the table is the subject of a separate pass
+([#1146](https://github.com/endojs/endo-but-for-bots/pull/1146)); this entry
+deliberately leaves the arithmetic to it rather than adjusting numbers it cannot
+reproduce.
+
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
 **2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design -> 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
@@ -515,6 +528,15 @@ to M3 as a dependent of [endo-workflow](endo-workflow.md), so In Progress
 goes 35 -> 36 and the design count increases by one.
 Its estimate is the deploy half of the workflow reference flow and does not
 change the milestone's critical path.
+
+The 2026-09-08 port adds
+[hosted-endo-self-update-loop](hosted-endo-self-update-loop.md) (**Complete**)
+to M3 as a dependent of
+[floot-admin-deploy-workflows](floot-admin-deploy-workflows.md): the revision
+pin those charts operate on. It arrives already implemented — the capability
+landed with #1115 and its wiring with #1203 — so it adds no remaining work and
+does not change the milestone's critical path. See the addendum under the
+summary table for why the bucket counts are left to a separate pass.
 
 ## Roadmap
 
@@ -662,6 +684,7 @@ flowchart TD
         esheets[exo-google-sheets]
         eworkflow[endo-workflow<br/><i>IN PROGRESS</i>]
         efdeploy[floot-admin-deploy-workflows<br/><i>IN PROGRESS</i>]
+        eselfupd[hosted-endo-self-update-loop<br/><i>COMPLETE</i>]
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
@@ -670,6 +693,7 @@ flowchart TD
         eoauth --> esheets
         ereminder -.-> eworkflow
         eworkflow --> efdeploy
+        efdeploy --> eselfupd
     end
 
     subgraph OCapN
@@ -1006,6 +1030,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | endo-fetch (supersedes endoclaw-network-fetch) | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
 | endo-workflow | In Progress | `@endo/workflow`: durable, composable workflow system — pure statechart kernel (charts as passable pattern-guarded data) + unconfined service plugin (reminder packaging); runs journal as numbered marshals in pet stores (mailbox-store idiom), revive via `@pins`, effect via durable mail `ask`s and idempotency-keyed `invoke`s; journal = attributed audit log; snapshot status + seq-cursored `follow`; `space-workflow` UI. Motivating use case: agent-implements → multi-reviewer → CI → operator-approval → merge over the git stack ([endo-workflow](endo-workflow.md)). **Phases 1–4 + follow feeds + hardening round + `space-workflow` UI landed** (kernel, service, mail asks, composition, redaction/hash-chain/fail-loud/factories, Chat space, adversarial-review hardening; 81 tests incl. the feature-change flow with a mid-CI restart over a fake daemon agent); remaining: CLI verbs, live-substrate reference flow. Formula-type graduation path named; composes with agentry agents, forms, reminder, and the git trio. |
 | floot-admin-deploy-workflows | In Progress | The first production chart set for `@endo/workflow`: Floot's `machine-admin` preset proposes Endo releases and NixOS configuration changes as durable, operator-approved runs of the `endo-release` / `nixos-config-change` charts instead of driving the root-equivalent `NixosAdmin` caplet from prose ([floot-admin-deploy-workflows](floot-admin-deploy-workflows.md)). **Engine (#1029), performer (#1115), charts (#1118/#1191), and the wiring landed** — `@endo/workflow/setup.js`, factory-host grants and one proposal-only connection per chart from `floot-factory-setup.js`, the preset, prompt, and versioned prompt migration; remaining: the bounded `release-operator` preset (phase 4) and the gated change loop in front of the pin (phase 5). |
+| hosted-endo-self-update-loop | **Complete** | The revision pin the deploy charts operate on: `NixosAdmin.getEndoRev` / `stageRev` / `prebuildRev` make the pinned Endo commit part of the host configuration, so a generation rollback restores the revision with it, and staging is compensable by restaging what it reported replacing ([hosted-endo-self-update-loop](hosted-endo-self-update-loop.md)). **Capability landed with #1115, wiring with #1203**; the privileged applier is an installation concern specified by `packages/space-nixos-admin/PROTOCOL.md`, not Endo code. |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
 | ~~daemon-guest-eval-simplification~~ | **Implemented** | Eval-proposal handshake removed; guest eval delegates directly to `formulateEval`. Type-system cleanup and regression test in PR #92. |
 
@@ -1671,6 +1696,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endo-fetch (supersedes endoclaw-network-fetch) | S-M | ~1-2 days | 3 | `@endo/fetch` unconfined base provides direct HTTP; `@endo/confined-fetch` receives that base plus a VFS state directory, adds policy + TOFU persistence through `@endo/exo-http-client`, and revives through `@pins`; `makeHttpTool` binds only the confined client ([`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6) |
 | endo-workflow | L-XL | 2.5-3.5 weeks (phases 1-4: kernel M, service M-L, mail M, composition M; UI space + worked reference flow follow as M-L + M) | 3 | `@endo/workflow` durable workflow system: pure statechart kernel, plugin service with numbered-marshal journals, mail-backed `ask` effects, `@pins` revival, seq-cursored `follow`, `space-workflow`. No daemon changes; effort is concentrated in the kernel semantics, recovery discipline, and the Phase 6 end-to-end acceptance flow. **Phases 1-4 + follow feeds + the hardening rounds + the `space-workflow` UI landed (~2 days actual, 81 tests); CLI verbs and the live-substrate flow carry the remaining M** |
 | floot-admin-deploy-workflows | M-L | 1-2 weeks (phases 1-3: service provisioning S, performer reshape M, charts M, preset + prompt S-M; the bounded preset M and the gated loop L follow) | 3 | Floot `machine-admin` deploys as durable `@endo/workflow` runs: `workflow/setup.js`, the settlement-shaped `NixosAdmin` performer, the two deploy charts, factory-host grants with a proposal-only connection per chart, the preset, prompt, and versioned prompt migration. **Phases 0-3 landed across #1029, #1115, #1118/#1191, and the wiring port (~3 days actual); phases 4-5 carry the remaining M + L** |
+| hosted-endo-self-update-loop | — | — (landed with #1115 and #1203; documented retrospectively) | 3 | ✅ Complete |
 | ~~ci-no-npm-lifecycle~~ | S | — | 2 | ✅ Complete (PR #126 merged 2026-05-15) |
 | ~~chat-playwright-smoke~~ | S | — | 2 | ✅ Complete (PRs #91 design, #94 impl, #95+#104 fix; ~16 hours total) |
 | ~~base64-native-fallthrough~~ | S | — | 2 | ✅ Complete (via `actual/master` merge, commit `7325bbe15` from `endojs/endo#3216`) |
