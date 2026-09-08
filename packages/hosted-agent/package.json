@@ -28,7 +28,8 @@
     "./provider-pipe.js": "./src/provider-pipe.js",
     "./provider-worker.js": "./src/provider-worker.js",
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
-    "./provider-lease-issuer.js": "./src/provider-lease-issuer.js"
+    "./provider-lease-issuer.js": "./src/provider-lease-issuer.js",
+    "./secret-rotator.js": "./src/secret-rotator.js"
   },
   "scripts": {
     "build": "exit 0",

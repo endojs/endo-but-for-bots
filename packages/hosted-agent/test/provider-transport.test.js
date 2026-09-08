@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 
+import { isCredentialRejection } from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
 const request = harden({
@@ -113,6 +114,10 @@ test('invalid UTF8 and HTTP errors never expose raw payload or headers', async t
   await t.throwsAsync(() => E(lease.transport).request(request), {
     message: 'Provider transport failed',
   });
+  // A rejected credential is classified, because a refreshing broker has one
+  // decision to make and the status class is enough to make it. That is the
+  // only thing that crosses: the body and the `www-authenticate` challenge
+  // stay on this side, as this assertion's exact message proves.
   const denied = setup(
     async () =>
       new Response('canary-secret', {
@@ -120,7 +125,21 @@ test('invalid UTF8 and HTTP errors never expose raw payload or headers', async t
         headers: { 'www-authenticate': 'canary-secret' },
       }),
   );
-  await t.throwsAsync(() => E(denied.transport).request(request), {
+  const rejection = await t.throwsAsync(
+    () => E(denied.transport).request(request),
+    { message: 'Provider credential rejected' },
+  );
+  t.true(isCredentialRejection(rejection));
+  const forbidden = setup(
+    async () => new Response('canary-secret', { status: 403 }),
+  );
+  await t.throwsAsync(() => E(forbidden.transport).request(request), {
+    message: 'Provider credential rejected',
+  });
+  const refused = setup(
+    async () => new Response('canary-secret', { status: 500 }),
+  );
+  await t.throwsAsync(() => E(refused.transport).request(request), {
     message: 'Provider transport failed',
   });
   const broken = setup(async () => {

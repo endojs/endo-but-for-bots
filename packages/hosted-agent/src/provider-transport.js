@@ -5,6 +5,8 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
+import { isCredentialRejection } from './provider-broker.js';
+
 /** @import { UpstreamRequest } from './provider-broker.js' */
 
 /**
@@ -85,7 +87,10 @@ export const makeProviderFetchTransport = ({
             parts.push(chunk.value);
           }
           return harden({ status: response.status, body: parts.join('') });
-        } catch (_error) {
+        } catch (error) {
+          // The credential classification is the one detail worth preserving
+          // across the buffering wrapper; everything else collapses.
+          if (isCredentialRejection(error)) throw error;
           return Fail`Provider transport failed`;
         }
       },
@@ -96,6 +101,7 @@ export const makeProviderFetchTransport = ({
         /** @type {ReadableStreamDefaultReader<Uint8Array> | undefined} */
         let reader;
         let finished = false;
+        let credentialRejected = false;
         const cancelBody = () => {
           if (reader) {
             // Cancellation is best effort and cannot extend the request deadline.
@@ -151,6 +157,7 @@ export const makeProviderFetchTransport = ({
               'authorization',
               'x-api-key',
               'anthropic-version',
+              'anthropic-beta',
               'content-type',
             ].includes(name) &&
               typeof value === 'string' &&
@@ -179,6 +186,12 @@ export const makeProviderFetchTransport = ({
           // Only successful inference bodies are exposed; never redirects,
           // authentication challenges, response headers, or error payloads.
           reader = response.body?.getReader();
+          // The single bit a refreshing broker needs from a rejection: whether
+          // the credential itself was refused. The status class carries it; the
+          // challenge header, the error body, and the upstream's wording stay
+          // on this side of the seam.
+          if (response.status === 401 || response.status === 403)
+            credentialRejected = true;
           (Number.isInteger(response.status) &&
             response.status >= 200 &&
             response.status < 300 &&
@@ -241,6 +254,8 @@ export const makeProviderFetchTransport = ({
           return harden({ status: response.status, reader: stream });
         } catch (_error) {
           stop();
+          // This exact wording is the contract `isCredentialRejection` reads.
+          if (credentialRejected) return Fail`Provider credential rejected`;
           return Fail`Provider transport failed`;
         }
       },
