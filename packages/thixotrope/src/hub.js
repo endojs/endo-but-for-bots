@@ -12,6 +12,7 @@ import {
   makeSturdyRef,
 } from '@endo/ocapn';
 import { makeOcapnOperationsCodecs } from '@endo/ocapn/operations';
+import { locationToLocationId } from '@endo/ocapn/client/util';
 
 /**
  * Thixotrope's comms hub: an OCapN forwarding node that is NOT a
@@ -433,6 +434,28 @@ export const makeOcapnHub = ({
     return session;
   };
 
+  /**
+   * Imports and gift withdrawals must share one outgoing session per peer.
+   * Preserve existing persisted aliases,
+   * including import aliases written before these routes were unified.
+   * @param {any} location
+   */
+  const remoteSessionKey = location => {
+    const encoded = JSON.stringify(location);
+    const locationId = locationToLocationId(location);
+    for (const [key, session] of sessions) {
+      if (
+        key.startsWith('handoff:') &&
+        !session.retired &&
+        session.dialLocation !== undefined &&
+        locationToLocationId(session.dialLocation) === locationId
+      ) {
+        return key;
+      }
+    }
+    return `handoff:${swissnumHex(encoded)}`;
+  };
+
   const restore = () => {
     const state = store.getState();
     if (state === undefined) {
@@ -809,15 +832,13 @@ export const makeOcapnHub = ({
           );
         }
         const { exporterLocation } = signedGive.object;
-        const outKey = `handoff:${swissnumHex(
-          JSON.stringify(exporterLocation),
-        )}`;
+        const outKey = remoteSessionKey(exporterLocation);
         const outSession = provideSessionState(outKey);
         // Frames toward the exporter queue until the dial completes;
         // the location persists so a successor process (or a later
         // frame toward a dropped connection) can redial.
         outSession.durable = true;
-        outSession.dialLocation = exporterLocation;
+        outSession.dialLocation ??= exporterLocation;
         const position = outSession.nextAnswer;
         outSession.nextAnswer += 1n;
         const row = provideAnswerRef(outKey, position);
@@ -841,7 +862,7 @@ export const makeOcapnHub = ({
           // eslint-disable-next-line no-use-before-define
           queueMicrotaskFlush(outKey);
         } else {
-          handoffs.connect(exporterLocation, outKey);
+          handoffs.connect(outSession.dialLocation, outKey);
         }
         return refTokenFor(row.refId);
       },
@@ -2172,16 +2193,17 @@ export const makeOcapnHub = ({
     /**
      * Record a remote bootstrap route before admitting its first fetch.
      * Existing attached sessions keep their transport and reference identity.
-     * @param {string} sessionKey
      * @param {any} location
      */
-    prepareRemoteSession: (sessionKey, location) => {
+    prepareRemoteSession: location => {
+      const sessionKey = remoteSessionKey(location);
       const session = provideSessionState(sessionKey);
       if (session.retired) throw Error('Remote session has been retired');
       session.durable = true;
-      session.dialLocation = location;
+      session.dialLocation ??= location;
       dirty = true;
       persist();
+      return harden({ sessionKey, location: session.dialLocation });
     },
     /**
      * Publish the reference a session HOLDS at one of the hub's export
