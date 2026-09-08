@@ -61,7 +61,7 @@ const bench = async (label, fn, iterations = 1) => {
 // ---------------------------------------------------------------------------
 
 /**
- * @param {string} variant - "node" | "rust-xs"
+ * @param {string} variant - Report label for the selected daemon/worker engine
  * @param {ReturnType<makeConfig>} config
  * @param {Promise<never>} cancelled
  */
@@ -252,6 +252,18 @@ const printResults = (variant, results) => {
 // ---------------------------------------------------------------------------
 
 const main = async () => {
+  // F106: keep the fourth variant visible until its real worker protocol exists.
+  // Blocked by F054 host-function registration and the stage-4 SES boot bundle.
+  // Do not substitute eval-only execution for the daemon/CapTP workloads above.
+  const ironhorseBlocked =
+    'Rust+Ironhorse BLOCKED: endor worker -e ironhorse refuses the worker ' +
+    'protocol; CBOR transport, host functions, and SES boot are not implemented.';
+  if (process.argv.includes('--ironhorse-only')) {
+    throw Error(ironhorseBlocked);
+  }
+  if (!process.argv.includes('--node-only')) {
+    console.error(ironhorseBlocked);
+  }
   const endorBin =
     process.env.ENDO_BIN || path.resolve(dirname, '../../target/release/endor');
   const hasEndor = fs.existsSync(endorBin);

@@ -27,6 +27,8 @@
 //! cargo test --release -p ironhorse-snapshot --test gc_bench -- --ignored --nocapture
 //! ```
 
+mod bench_support;
+
 use std::time::Instant;
 
 use ironhorse_snapshot::machine::{begin_store_session, partial_collect};
@@ -183,10 +185,26 @@ fn gc_cost_across_heap_sizes() {
         assert!(m.run(&b).completed);
         m.collect_garbage();
         let free_len = m.slots.free_list().len();
-        let t0 = Instant::now();
-        m.collect_garbage();
-        let sweep_ns_per_slot = t0.elapsed().as_secs_f64() * 1e9 / m.slots.capacity() as f64;
+        let mut sweep_times = Vec::new();
+        for _ in 0..5 {
+            let t0 = Instant::now();
+            m.collect_garbage();
+            sweep_times.push(t0.elapsed().as_secs_f64() * 1e9 / m.slots.capacity() as f64);
+        }
+        let sweep_ns_per_slot = median(sweep_times);
 
+        for (name, values) in [
+            ("full_first", &first_ms),
+            ("full_steady", &steady_ms),
+            ("partial", &partial_ms),
+            ("gate", &gate_ms),
+            ("enum", &enum_ms),
+            ("query", &query_ms),
+            ("free", &free_ms),
+        ] {
+            bench_support::report(&format!("gc_{n}_{name}_ms"), median(values.clone()));
+        }
+        bench_support::report(&format!("gc_{n}_sweep_ns_per_slot"), sweep_ns_per_slot);
         println!(
             "slots={:>7} pages={:>5} | full-first {:>8.3} ms | full-steady {:>8.3} ms | \
              partial {:>7.3} ms (freed {}; gate {:.3}, enum {:.3}, query {:.3}, free {:.3} ms) | \
@@ -270,6 +288,8 @@ fn generational_steady_state_cost() {
             let _ = partial_collect(&mut s2, &store2).expect("partial");
             part_ms.push(t1.elapsed().as_secs_f64() * 1e3);
         }
+        bench_support::report(&format!("gc_{n}_generational_ms"), median(gen_ms.clone()));
+        bench_support::report(&format!("gc_{n}_full_partial_ms"), median(part_ms.clone()));
         println!(
             "slots={slots_total:>7} | generational {:>7.3} ms (freed {freed_gen}) | full partial {:>7.3} ms",
             median(gen_ms),
@@ -328,30 +348,52 @@ fn compaction_slide_checkpoint_cost() {
              for (i = 0; i < {n}; i = i + 1) {{ junk[i] = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; }} \
              junk = 0; t = 7;"
         );
-        let mut row = |label: &str, source: &str| {
-            let (b, names) = compile(source);
-            let mut m = Interp::new();
-            m.link_intrinsics(&names);
-            assert!(m.run(&b).completed);
-            let mut store = MemoryStore::new();
-            let mut session = begin_store_session(m, &sig(), &mut store)
-                .map_err(|(_, e)| e)
-                .unwrap();
-            let extents_before = (store.manifest().unwrap().chunk_len as usize)
-                .div_ceil(CHUNK_EXTENT_BYTES as usize);
-            session.machine_mut().collect_garbage();
-            let t0 = Instant::now();
-            checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
-            let ms = t0.elapsed().as_secs_f64() * 1e3;
-            let stats = store.last_commit_stats();
-            let extents_after = (store.manifest().unwrap().chunk_len as usize)
-                .div_ceil(CHUNK_EXTENT_BYTES as usize);
-            println!(
-                "chunks n={n:>5} {label}: extents {extents_before:>4}→{extents_after:>4} | \
+        let row = |label: &str, source: &str| {
+            let mut times = Vec::new();
+            let mut rows_written = None;
+            for round in 0..6 {
+                let (b, names) = compile(source);
+                let mut m = Interp::new();
+                m.link_intrinsics(&names);
+                assert!(m.run(&b).completed);
+                let mut store = MemoryStore::new();
+                let mut session = begin_store_session(m, &sig(), &mut store)
+                    .map_err(|(_, e)| e)
+                    .unwrap();
+                let extents_before = (store.manifest().unwrap().chunk_len as usize)
+                    .div_ceil(CHUNK_EXTENT_BYTES as usize);
+                session.machine_mut().collect_garbage();
+                let t0 = Instant::now();
+                checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+                let ms = t0.elapsed().as_secs_f64() * 1e3;
+                let stats = store.last_commit_stats();
+                let extents_after = (store.manifest().unwrap().chunk_len as usize)
+                    .div_ceil(CHUNK_EXTENT_BYTES as usize);
+                println!(
+                    "chunks n={n:>5} {label}: extents {extents_before:>4}→{extents_after:>4} | \
                  extent rows written {:>4} | slot pages written {:>4} | checkpoint {ms:>7.3} ms",
-                stats.chunk_extents_written, stats.slot_pages_written,
+                    stats.chunk_extents_written, stats.slot_pages_written,
+                );
+                if let Some(previous) = rows_written {
+                    assert_eq!(stats.chunk_extents_written, previous);
+                }
+                rows_written = Some(stats.chunk_extents_written);
+                if round > 0 {
+                    times.push(ms);
+                }
+            }
+            bench_support::report(
+                &format!(
+                    "slide_{n}_{}_ms",
+                    if label.starts_with("front") {
+                        "front"
+                    } else {
+                        "tail"
+                    }
+                ),
+                median(times),
             );
-            stats.chunk_extents_written
+            rows_written.unwrap()
         };
         let moved = row("front-garbage (slide)", &front);
         let unmoved = row("tail-garbage  (no-op)", &tail);

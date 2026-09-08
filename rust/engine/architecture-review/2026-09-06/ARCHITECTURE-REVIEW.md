@@ -7414,9 +7414,15 @@ that the program has no performance baseline or regression floor at any stage, s
 the third kill criterion has no early-warning device and becomes measurable only
 at the point it would fire.
 **Fix.** Give the four existing benches a checked-in baseline file and a
-`--check-baseline` mode, run them on the existing nightly workflow, and add the
-Ironhorse arm to `runBenchmarks` now, which is a third arm on an existing switch
-and turns the kill criterion into a number the program can watch trend.
+`--check-baseline` mode, run them on the existing nightly workflow, and explicitly
+report the Ironhorse daemon arm as blocked.
+The earlier recommendation described that arm as a switch change; that was incorrect.
+`endor worker -e ironhorse` refuses the deliver-payload protocol until the
+host-function registration surface (the open half of F054) and the SES boot bundle
+are implemented.
+A private eval-shaped substitute would not measure the daemon protocol.
+The four in-process benchmark files can instrument engine performance now;
+end-to-end Ironhorse daemon throughput remains dependent on that worker work.
 **Known.** No.
 
 #### F107 - Crate-root rustdoc is stage-frozen [low, high]
