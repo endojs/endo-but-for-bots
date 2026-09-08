@@ -22,6 +22,7 @@ import { inspect } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { makeApplicationRegistry } from './application-registry.js';
+import { makeClockService } from './clock-service.js';
 import { makeThixotropeDaemon } from './daemon.js';
 import { makeDurableNetLayer } from './durable-netlayer.js';
 import { makeIronhorseEngine } from './ironhorse-engine.js';
@@ -60,11 +61,11 @@ const save = async (path, value) => {
 /**
  * Run a single local supervisor. The engine lease encloses socket lifetime.
  * @param {string} statePath
- * @param {{engine?: WorkerEngine, idleSleepMs?: number}} [options]
+ * @param {{engine?: WorkerEngine, idleSleepMs?: number, alarmNow?: () => bigint}} [options]
  */
 export const serveThixotrope = async (
   statePath,
-  { engine, idleSleepMs = 30_000 } = {},
+  { engine, idleSleepMs = 30_000, alarmNow } = {},
 ) => {
   statePath = resolve(statePath);
   await mkdir(statePath, { recursive: true, mode: 0o700 });
@@ -153,6 +154,16 @@ export const serveThixotrope = async (
     });
     return httpServices;
   };
+  /** @type {ReturnType<typeof makeClockService> | undefined} */
+  let clockService;
+  const provideClockService = () => {
+    clockService ??= makeClockService({
+      statePath,
+      getDaemon: () => daemon,
+      ...(alarmNow === undefined ? {} : { now: alarmNow }),
+    });
+    return clockService;
+  };
   /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
   let peerNetlayer;
   const closePeers = async () => {
@@ -203,6 +214,8 @@ export const serveThixotrope = async (
       codec: syrupCodec,
       idleSleepMs,
       resources: {
+        'alarm-scheduler': description =>
+          provideClockService().resource(description),
         'http-listener': description =>
           provideHttpServices().resource(description),
       },
@@ -224,6 +237,7 @@ export const serveThixotrope = async (
       },
     });
     await provideHttpServices().start();
+    await provideClockService().start();
     const configPath = join(statePath, 'workspace.json');
     let config;
     try {
@@ -380,6 +394,25 @@ export const serveThixotrope = async (
         return E(listener).status();
       },
       httpServices: () => provideHttpServices().list(),
+      clockGrant: async key => {
+        if (requested) throw Error('Supervisor is stopping');
+        if (typeof key !== 'string' || !key.length || key.length > 128)
+          throw Error('Invalid inventory key');
+        const clock = await provideClockService().getClock();
+        await workspace.evaluate('(inventory.set(key, clock), true)', {
+          key,
+          clock,
+        });
+        return true;
+      },
+      alarmStatus: () => {
+        const status = provideClockService().status();
+        return harden({
+          ...status,
+          ...status.scheduler,
+          error: status.error ?? status.scheduler?.error,
+        });
+      },
       invite: async name => {
         const invitation = await E(getMailbox()).invite(name);
         const secret = daemon.publish(invitation);
@@ -482,7 +515,11 @@ export const serveThixotrope = async (
         } finally {
           try {
             try {
-              await httpServices?.shutdown();
+              try {
+                await clockService?.shutdown();
+              } finally {
+                await httpServices?.shutdown();
+              }
             } finally {
               await closePeers();
               await daemon.shutdown();
@@ -502,7 +539,11 @@ export const serveThixotrope = async (
     } finally {
       closeSocket();
       try {
-        await httpServices?.shutdown();
+        try {
+          await clockService?.shutdown();
+        } finally {
+          await httpServices?.shutdown();
+        }
       } finally {
         await closePeers();
         await daemon?.crash();
