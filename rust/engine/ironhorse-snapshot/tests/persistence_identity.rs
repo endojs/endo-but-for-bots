@@ -160,3 +160,40 @@ fn detached_buffer_keeps_backing_allocation_but_exposes_zero_length() {
         image.buffers
     );
 }
+
+#[test]
+fn first_relink_establishes_current_layout_before_suspension() {
+    let mut machine = Interp::new();
+    for source in [
+        "var b = new ArrayBuffer(8); var c = b.transfer(); b.byteLength",
+        "delete Array.prototype.join; var a = [1]; a.length",
+    ] {
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let code = machine
+            .relink_crank(&code, &ironhorse_vm::parse_symbols(&symbols))
+            .unwrap();
+        assert!(machine.run(&code).completed);
+        let before = machine.write_snapshot(&signature()).unwrap();
+        let resumed = from_snapshot_bytes(&before, &signature()).unwrap();
+        assert_eq!(resumed.write_snapshot(&signature()).unwrap(), before);
+        machine = resumed;
+    }
+}
+
+#[test]
+fn first_relink_preserves_tagged_template_cache_ids_across_cranks() {
+    let mut machine = Interp::new();
+    for source in [
+        "var saved; function tag(a) { if (saved === undefined) saved = a; return saved === a; } function f() { return tag`hello`; } f()",
+        "f()",
+    ] {
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let code = machine.relink_crank(&code, &ironhorse_vm::parse_symbols(&symbols)).unwrap();
+        let outcome = machine.run(&code);
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        assert_eq!(outcome.result, "true");
+        let bytes = machine.write_snapshot(&signature()).unwrap();
+        machine = from_snapshot_bytes(&bytes, &signature()).unwrap();
+        assert_eq!(machine.write_snapshot(&signature()).unwrap(), bytes);
+    }
+}
