@@ -111,7 +111,7 @@ fn io_err(e: std::io::Error) -> StoreError {
     StoreError::Io(e.to_string())
 }
 
-fn corrupt(what: &'static str) -> StoreError {
+fn file_corrupt(what: &'static str) -> StoreError {
     StoreError::Snapshot(SnapshotError::Corrupt(what))
 }
 
@@ -186,30 +186,30 @@ impl FileStore {
         let mut header = [0u8; 8];
         file.seek(SeekFrom::Start(0)).map_err(io_err)?;
         file.read_exact(&mut header)
-            .map_err(|_| corrupt("file store header truncated"))?;
+            .map_err(|_| file_corrupt("file store header truncated"))?;
         if header != FILE_MAGIC {
-            return Err(corrupt("file store magic"));
+            return Err(file_corrupt("file store magic"));
         }
 
         let read_u32 = |file: &mut File| -> Result<u32, StoreError> {
             let mut b = [0u8; 4];
             file.read_exact(&mut b)
-                .map_err(|_| corrupt("file store header truncated"))?;
+                .map_err(|_| file_corrupt("file store header truncated"))?;
             Ok(u32::from_be_bytes(b))
         };
         let read_block = |file: &mut File, what: &'static str| -> Result<Vec<u8>, StoreError> {
             let len = {
                 let mut b = [0u8; 4];
-                file.read_exact(&mut b).map_err(|_| corrupt(what))?;
+                file.read_exact(&mut b).map_err(|_| file_corrupt(what))?;
                 u32::from_be_bytes(b) as usize
             };
             // Clamp the reservation to what the file can hold before
             // trusting the length (malformed-count discipline).
             if (len as u64) > file_len {
-                return Err(corrupt(what));
+                return Err(file_corrupt(what));
             }
             let mut buf = vec![0u8; len];
-            file.read_exact(&mut buf).map_err(|_| corrupt(what))?;
+            file.read_exact(&mut buf).map_err(|_| file_corrupt(what))?;
             Ok(buf)
         };
 
@@ -222,21 +222,21 @@ impl FileStore {
         // Each directory entry is 12 bytes; a count the file cannot
         // hold is corruption, refused before any reservation.
         if (n_pages + n_exts) * 12 > file_len {
-            return Err(corrupt("file store directory truncated"));
+            return Err(file_corrupt("file store directory truncated"));
         }
         let mut read_dir = |n: u64| -> Result<Vec<DirEntry>, StoreError> {
             let mut dir = Vec::with_capacity(n as usize);
             for _ in 0..n {
                 let mut b = [0u8; 12];
                 file.read_exact(&mut b)
-                    .map_err(|_| corrupt("file store directory truncated"))?;
+                    .map_err(|_| file_corrupt("file store directory truncated"))?;
                 let offset = u64::from_be_bytes(b[0..8].try_into().unwrap());
                 let length = u32::from_be_bytes(b[8..12].try_into().unwrap());
                 let end = offset
                     .checked_add(length as u64)
-                    .ok_or_else(|| corrupt("file store directory entry overflows"))?;
+                    .ok_or_else(|| file_corrupt("file store directory entry overflows"))?;
                 if end > file_len {
-                    return Err(corrupt("file store directory entry out of range"));
+                    return Err(file_corrupt("file store directory entry out of range"));
                 }
                 dir.push(DirEntry { offset, length });
             }
@@ -248,14 +248,14 @@ impl FileStore {
         // The row-leaf hashes (phase 5), 32 bytes per row; the same
         // reservation clamp discipline as the directories.
         if (n_pages + n_exts) * 32 > file_len {
-            return Err(corrupt("file store leaf hashes truncated"));
+            return Err(file_corrupt("file store leaf hashes truncated"));
         }
         let mut read_leaves = |n: u64| -> Result<Vec<[u8; 32]>, StoreError> {
             let mut out = Vec::with_capacity(n as usize);
             for _ in 0..n {
                 let mut b = [0u8; 32];
                 file.read_exact(&mut b)
-                    .map_err(|_| corrupt("file store leaf hashes truncated"))?;
+                    .map_err(|_| file_corrupt("file store leaf hashes truncated"))?;
                 out.push(b);
             }
             Ok(out)
@@ -274,7 +274,7 @@ impl FileStore {
         for _ in 0..n_pages {
             let len = read_u32(file)? as u64;
             if len * 4 > file_len {
-                return Err(corrupt("file store page edges truncated"));
+                return Err(file_corrupt("file store page edges truncated"));
             }
             let mut ts = Vec::with_capacity(len as usize);
             for _ in 0..len {
@@ -287,27 +287,27 @@ impl FileStore {
         // outer vectors grow against real reads (see the edges note).
         let n_frees = read_u32(file)? as u64;
         if n_frees * 4 > file_len {
-            return Err(corrupt("file store free segments truncated"));
+            return Err(file_corrupt("file store free segments truncated"));
         }
         let mut free_segs: Vec<Vec<u8>> = Vec::new();
         for _ in 0..n_frees {
             let len = read_u32(file)? as u64;
             if len > file_len {
-                return Err(corrupt("file store free segments truncated"));
+                return Err(file_corrupt("file store free segments truncated"));
             }
             let mut b = vec![0u8; len as usize];
             file.read_exact(&mut b)
-                .map_err(|_| corrupt("file store free segments truncated"))?;
+                .map_err(|_| file_corrupt("file store free segments truncated"))?;
             free_segs.push(b);
         }
         if n_frees * 32 > file_len {
-            return Err(corrupt("file store free leaf hashes truncated"));
+            return Err(file_corrupt("file store free leaf hashes truncated"));
         }
         let mut leaf_frees: Vec<[u8; 32]> = Vec::with_capacity(n_frees as usize);
         for _ in 0..n_frees {
             let mut b = [0u8; 32];
             file.read_exact(&mut b)
-                .map_err(|_| corrupt("file store free leaf hashes truncated"))?;
+                .map_err(|_| file_corrupt("file store free leaf hashes truncated"))?;
             leaf_frees.push(b);
         }
 
@@ -317,15 +317,19 @@ impl FileStore {
         // open-time symmetry (the review found it deferred to
         // validation while pages/extents were checked here).
         if pages.len() != slot_page_count(manifest.slot_count) as usize {
-            return Err(corrupt("file store page directory disagrees with geometry"));
+            return Err(file_corrupt(
+                "file store page directory disagrees with geometry",
+            ));
         }
         if extents.len() != chunk_extent_count(manifest.chunk_len) as usize {
-            return Err(corrupt(
+            return Err(file_corrupt(
                 "file store extent directory disagrees with geometry",
             ));
         }
         if free_segs.len() != crate::store::free_seg_count(manifest.free_len) as usize {
-            return Err(corrupt("file store free segments disagree with geometry"));
+            return Err(file_corrupt(
+                "file store free segments disagree with geometry",
+            ));
         }
 
         Ok(Loaded {
@@ -626,7 +630,7 @@ impl HeapStore for FileStore {
         }
 
         let row_len = |len: usize, what: &'static str| -> Result<u32, StoreError> {
-            u32::try_from(len).map_err(|_| corrupt(what))
+            u32::try_from(len).map_err(|_| file_corrupt(what))
         };
         let mut sources: Vec<Source> = Vec::with_capacity((n_pages + n_exts) as usize);
         let mut lengths: Vec<u32> = Vec::with_capacity((n_pages + n_exts) as usize);
