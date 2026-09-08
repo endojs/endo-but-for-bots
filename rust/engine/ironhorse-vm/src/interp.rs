@@ -13879,6 +13879,29 @@ impl Interp {
         Self::reserved_vec(capacity)
     }
 
+    /// Bound each output expansion before copying, including `$` substitutions
+    /// whose expansion can be much larger than the replacement template.
+    fn extend_work_scratch<T: Copy>(
+        &mut self,
+        output: &mut Vec<T>,
+        addition: &[T],
+    ) -> Result<(), Step> {
+        let length = output
+            .len()
+            .checked_add(addition.len())
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.admit_scratch::<T>(length)?;
+        let charge = (addition.len() as u64)
+            .checked_mul(crate::meter::BUILTIN_METERING)
+            .ok_or(Step::Host(Halt::MeterAbort))?;
+        self.charge_and_check(charge)?;
+        output
+            .try_reserve(addition.len())
+            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        output.extend_from_slice(addition);
+        Ok(())
+    }
+
     fn admit_scratch<T>(&mut self, capacity: usize) -> Result<(), Step> {
         let bytes = capacity
             .checked_mul(std::mem::size_of::<T>())
@@ -13887,6 +13910,19 @@ impl Interp {
             return Err(Step::Host(Halt::HeapExhausted));
         }
         self.charge_and_check(0)
+    }
+
+    /// Reserve a bounded representation copy for immutable host diagnostics.
+    /// This helper cannot charge work; guest callers use their normal admission
+    /// checkpoints. It is restricted to copies, never guest numeric lengths.
+    fn reserve_copy_scratch<T>(&self, capacity: usize) -> Vec<T> {
+        let bytes = capacity
+            .checked_mul(std::mem::size_of::<T>())
+            .unwrap_or_else(|| crate::value::heap_exhausted());
+        if !self.chunks.can_allocate(bytes) {
+            crate::value::heap_exhausted();
+        }
+        Self::reserved_vec(capacity).unwrap_or_else(|_| crate::value::heap_exhausted())
     }
 
     /// Materialize a capacity already admitted by `reserve_units` or a chunk
@@ -16997,7 +17033,11 @@ impl Interp {
                             let g = self.regexp_getter_ids;
                             if Some(id) == g.source {
                                 self.meter.tick_raw(REGEXP_GETTER_METERING);
-                                let (bytes, allocated) = self.regexp_source_bytes(inst);
+                                let (bytes, allocated) =
+                                    match self.regexp_source_bytes_metered(inst) {
+                                        Ok(value) => value,
+                                        Err(step) => return step,
+                                    };
                                 if allocated {
                                     self.new_string_metered(&bytes)
                                 } else {
@@ -25743,8 +25783,10 @@ impl Interp {
         if advance && last_index > subject_len {
             // `lastIndex` past the end: no match, reset to 0.
             self.regexp_set_last_index(code, inst, Slot::integer(0))?;
-            let captures = vec![(-1, -1); self.regexps[&inst].program.capture_count];
-            let names = vec![-1; self.regexps[&inst].program.name_count];
+            let mut captures = self.reserve_scratch(self.regexps[&inst].program.capture_count)?;
+            captures.resize(self.regexps[&inst].program.capture_count, (-1, -1));
+            let mut names = self.reserve_scratch(self.regexps[&inst].program.name_count)?;
+            names.resize(self.regexps[&inst].program.name_count, -1);
             return Ok((false, captures, names));
         }
         if advance {
@@ -26278,9 +26320,9 @@ impl Interp {
     /// the byte offset of every code-unit boundary. U+0000 is `C0 80`, and
     /// each surrogate is its own three-byte sequence; the matcher combines a
     /// valid pair only when `u`/`v` is active.
-    fn regexp_subject_bytes(units: &[u16]) -> (Vec<u8>, Vec<usize>) {
-        let mut bytes = Vec::with_capacity(units.len() * 3);
-        let mut offsets = Vec::with_capacity(units.len() + 1);
+    fn regexp_subject_bytes(&mut self, units: &[u16]) -> Result<(Vec<u8>, Vec<usize>), Step> {
+        let mut bytes = self.reserve_scratch(units.len() * 3)?;
+        let mut offsets = self.reserve_scratch(units.len() + 1)?;
         for &unit in units {
             offsets.push(bytes.len());
             match unit {
@@ -26298,7 +26340,7 @@ impl Interp {
             }
         }
         offsets.push(bytes.len());
-        (bytes, offsets)
+        Ok((bytes, offsets))
     }
 
     /// The `exec` body, returning `(result, Some(match_start))` on a match so
@@ -26318,7 +26360,7 @@ impl Interp {
             Payload::String(off) => self.str_units(off),
             _ => Vec::new(),
         };
-        let (subject, offsets) = Self::regexp_subject_bytes(&subject_units);
+        let (subject, offsets) = self.regexp_subject_bytes(&subject_units)?;
         // The declared named groups, one entry per UNIQUE name in name-slot
         // order — the `groups` object's own-key order. Duplicate names share a
         // slot, so a name appears once; its live capture is resolved through
@@ -26341,10 +26383,10 @@ impl Interp {
         let match_start = captures[0].0;
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
-        let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
+        let mut items: Vec<(u32, Slot)> = self.reserve_scratch(captures.len())?;
         // The per-capture value slots, indexed by capture number, so the
         // `groups` object can point each name at its group's value.
-        let mut capture_slots: Vec<Slot> = Vec::with_capacity(captures.len());
+        let mut capture_slots: Vec<Slot> = self.reserve_scratch(captures.len())?;
         for (i, &(from, to)) in captures.iter().enumerate() {
             // `resultItem = fxNewSlot` per capture.
             self.meter.tick_slot_alloc();
@@ -26417,7 +26459,7 @@ impl Interp {
         // parallel `.indices.groups` object keyed like `.groups`. Mirrors the
         // `hasIndicesFlag` branch of XS's `fxExecuteRegExp`.
         if has_indices {
-            let indices = self.regexp_build_indices(&captures, &group_names, &names);
+            let indices = self.regexp_build_indices(&captures, &group_names, &names)?;
             if let Some(id) = self.regexp_result_ids.indices {
                 self.instance_put_raw(result, id, indices);
             }
@@ -26440,14 +26482,14 @@ impl Interp {
         captures: &[(i32, i32)],
         group_names: &[(String, i32)],
         names: &[i32],
-    ) -> Slot {
+    ) -> Result<Slot, Step> {
         // `fxNewArrayInstance` for the outer indices array.
         let arr = self.new_array_unmetered();
         self.meter.tick_slot_alloc();
         // The `[start, end]` pair slot per capture index (for `.indices.groups`
         // to alias), or `None` when the capture did not participate.
-        let mut pair_slots: Vec<Option<Slot>> = Vec::with_capacity(captures.len());
-        let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
+        let mut pair_slots: Vec<Option<Slot>> = self.reserve_scratch(captures.len())?;
+        let mut items: Vec<(u32, Slot)> = self.reserve_scratch(captures.len())?;
         for (i, &(from, to)) in captures.iter().enumerate() {
             // `indicesItem = fxNewSlot` per capture.
             self.meter.tick_slot_alloc();
@@ -26507,7 +26549,7 @@ impl Interp {
             };
             self.instance_put_raw(arr, gid, groups);
         }
-        Slot::of(Kind::Reference, Payload::Reference(arr))
+        Ok(Slot::of(Kind::Reference, Payload::Reference(arr)))
     }
 
     /// `RegExp.prototype.test(string)` (`fx_RegExp_prototype_test` →
@@ -26534,34 +26576,35 @@ impl Interp {
     /// captures). Operates directly on UTF-16 code units so lone surrogates are
     /// preserved across `$&`, prefix, and suffix insertion.
     fn string_plain_substitution(
+        &mut self,
         subject: &[u16],
         search: &[u16],
         pos: usize,
         replacement: &[u16],
-    ) -> Vec<u16> {
+    ) -> Result<Vec<u16>, Step> {
         let tail = pos + search.len();
-        let mut out = Vec::with_capacity(replacement.len());
+        let mut out = self.reserve_scratch(replacement.len())?;
         let mut i = 0;
         while i < replacement.len() {
             if replacement[i] != b'$' as u16 || i + 1 >= replacement.len() {
-                out.push(replacement[i]);
+                self.extend_work_scratch(&mut out, &[replacement[i]])?;
                 i += 1;
                 continue;
             }
             match replacement[i + 1] {
-                v if v == b'$' as u16 => out.push(b'$' as u16),
-                v if v == b'&' as u16 => out.extend_from_slice(search),
-                v if v == b'`' as u16 => out.extend_from_slice(&subject[..pos]),
-                v if v == b'\'' as u16 => out.extend_from_slice(&subject[tail..]),
+                v if v == b'$' as u16 => self.extend_work_scratch(&mut out, &[b'$' as u16])?,
+                v if v == b'&' as u16 => self.extend_work_scratch(&mut out, search)?,
+                v if v == b'`' as u16 => self.extend_work_scratch(&mut out, &subject[..pos])?,
+                v if v == b'\'' as u16 => self.extend_work_scratch(&mut out, &subject[tail..])?,
                 _ => {
-                    out.push(b'$' as u16);
+                    self.extend_work_scratch(&mut out, &[b'$' as u16])?;
                     i += 1;
                     continue;
                 }
             }
             i += 2;
         }
-        out
+        Ok(out)
     }
 
     /// The ordinary-string branch of `String.prototype.replace`. Coercions
@@ -26608,19 +26651,19 @@ impl Interp {
             )?;
             self.to_string_units(code, value)?
         } else {
-            Self::string_plain_substitution(
+            self.string_plain_substitution(
                 &subject_units,
                 &search_units,
                 pos,
                 replacement_units.as_deref().unwrap(),
-            )
+            )?
         };
         let tail = pos + search_units.len();
-        let mut out =
-            Vec::with_capacity(subject_units.len() - search_units.len() + replacement_units.len());
-        out.extend_from_slice(&subject_units[..pos]);
-        out.extend_from_slice(&replacement_units);
-        out.extend_from_slice(&subject_units[tail..]);
+        let mut out = self
+            .reserve_scratch(subject_units.len() - search_units.len() + replacement_units.len())?;
+        self.extend_work_scratch(&mut out, &subject_units[..pos])?;
+        self.extend_work_scratch(&mut out, &replacement_units)?;
+        self.extend_work_scratch(&mut out, &subject_units[tail..])?;
         Ok(self.new_string_units(&out))
     }
 
@@ -26649,9 +26692,8 @@ impl Interp {
         };
 
         let mut positions = Vec::new();
-        if search_units.is_empty() {
-            positions.extend(0..=subject_units.len());
-        } else {
+        let empty_search = search_units.is_empty();
+        if !empty_search {
             let mut next = 0usize;
             while next + search_units.len() <= subject_units.len() {
                 let Some(relative) = subject_units[next..]
@@ -26661,18 +26703,25 @@ impl Interp {
                     break;
                 };
                 let position = next + relative;
-                positions.push(position);
+                self.extend_work_scratch(&mut positions, &[position])?;
                 next = position + search_units.len();
             }
         }
-        if positions.is_empty() {
+        if !empty_search && positions.is_empty() {
             return Ok(subject);
         }
 
         let mut out = Vec::new();
         let mut next_source_position = 0usize;
-        for position in positions {
-            out.extend_from_slice(&subject_units[next_source_position..position]);
+        // An empty search visits every boundary without materializing an
+        // usize per code unit. The immutable subject fixes these positions.
+        let boundaries = if empty_search {
+            0..subject_units.len() + 1
+        } else {
+            0..0
+        };
+        for position in positions.into_iter().chain(boundaries) {
+            self.extend_work_scratch(&mut out, &subject_units[next_source_position..position])?;
             let substitution = if functional {
                 let matched = self.new_string_units(&search_units);
                 let value = self.invoke_value(
@@ -26683,17 +26732,17 @@ impl Interp {
                 )?;
                 self.to_string_units(code, value)?
             } else {
-                Self::string_plain_substitution(
+                self.string_plain_substitution(
                     &subject_units,
                     &search_units,
                     position,
                     replacement_units.as_deref().unwrap(),
-                )
+                )?
             };
-            out.extend_from_slice(&substitution);
+            self.extend_work_scratch(&mut out, &substitution)?;
             next_source_position = position + search_units.len();
         }
-        out.extend_from_slice(&subject_units[next_source_position..]);
+        self.extend_work_scratch(&mut out, &subject_units[next_source_position..])?;
         Ok(self.new_string_units(&out))
     }
 
@@ -26751,7 +26800,7 @@ impl Interp {
                 break;
             };
             let match_len = self.regexp_whole_match_len(result);
-            results.push((result, pos as usize, match_len));
+            self.extend_work_scratch(&mut results, &[(result, pos as usize, match_len)])?;
             if !global {
                 break;
             }
@@ -26770,11 +26819,12 @@ impl Interp {
                 let capture_count = self.regexp_capture_count(result);
                 self.meter
                     .tick_raw(STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64);
-                assembled.extend_from_slice(
+                self.extend_work_scratch(
+                    &mut assembled,
                     &subject_units[next_source_position..pos.min(subject_units.len())],
-                );
+                )?;
                 let mut args =
-                    Vec::with_capacity(capture_count + if has_named_captures { 3 } else { 2 });
+                    self.reserve_scratch(capture_count + if has_named_captures { 3 } else { 2 })?;
                 for i in 0..capture_count {
                     args.push(self.array_index_slot(result, i as u32));
                 }
@@ -26791,10 +26841,10 @@ impl Interp {
                 let units = self.to_string_units(code, value)?;
                 self.meter.tick_slot_alloc();
                 self.meter.tick_string(units.len() as u64);
-                assembled.extend_from_slice(&units);
+                self.extend_work_scratch(&mut assembled, &units)?;
                 next_source_position = pos.saturating_add(match_len);
             }
-            assembled.extend_from_slice(&subject_units[next_source_position..]);
+            self.extend_work_scratch(&mut assembled, &subject_units[next_source_position..])?;
             self.meter.tick_string(assembled.len() as u64);
             let off = self.chunks.alloc(&units_to_be16(&assembled));
             return Ok(Slot::of(Kind::String, Payload::String(off)));
@@ -26806,19 +26856,19 @@ impl Interp {
             let capture_count = self.regexp_capture_count(result);
             self.meter
                 .tick_raw(STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64);
-            assembled.extend_from_slice(&subject_units[next_source_position..pos]);
+            self.extend_work_scratch(&mut assembled, &subject_units[next_source_position..pos])?;
             let repl = repl_units.as_deref().unwrap();
             let subst_units = if repl.contains(&(b'$' as u16)) {
-                self.regexp_get_substitution(inst, result, &subject_units, pos, match_len, repl)
+                self.regexp_get_substitution(inst, result, &subject_units, pos, match_len, repl)?
             } else {
                 repl.to_vec()
             };
             self.meter.tick_slot_alloc();
             self.meter.tick_string(subst_units.len() as u64);
-            assembled.extend_from_slice(&subst_units);
+            self.extend_work_scratch(&mut assembled, &subst_units)?;
             next_source_position = pos + match_len;
         }
-        assembled.extend_from_slice(&subject_units[next_source_position..]);
+        self.extend_work_scratch(&mut assembled, &subject_units[next_source_position..])?;
         // The final assembly `fxNewChunk(total + 1)`.
         self.meter.tick_string(assembled.len() as u64);
         let off = self.chunks.alloc(&units_to_be16(&assembled));
@@ -26882,7 +26932,7 @@ impl Interp {
             let Payload::Reference(result_inst) = result.value else {
                 unreachable!("RegExpExec validates object-or-null results")
             };
-            results.push(result);
+            self.extend_work_scratch(&mut results, &[result])?;
             if !global {
                 break;
             }
@@ -26947,9 +26997,9 @@ impl Interp {
             }
             let named_captures = self.mop_get(code, result_inst, groups_id, result)?;
             let replacement_units = if functional {
-                let mut args = Vec::with_capacity(
+                let mut args = self.reserve_scratch(
                     captures.len() + 3 + usize::from(named_captures.kind != Kind::Undefined),
-                );
+                )?;
                 args.push(matched);
                 args.extend(captures.iter().copied());
                 args.push(Self::array_index_number(position as u64));
@@ -26984,13 +27034,16 @@ impl Interp {
             // reads, coercions, and replacer call above still occur, but the
             // corresponding source segment and replacement are ignored.
             if position >= next_source_position {
-                assembled.extend_from_slice(&subject_units[next_source_position..position]);
-                assembled.extend_from_slice(&replacement_units);
+                self.extend_work_scratch(
+                    &mut assembled,
+                    &subject_units[next_source_position..position],
+                )?;
+                self.extend_work_scratch(&mut assembled, &replacement_units)?;
                 next_source_position = position.saturating_add(matched_units.len());
             }
         }
         if next_source_position < subject_units.len() {
-            assembled.extend_from_slice(&subject_units[next_source_position..]);
+            self.extend_work_scratch(&mut assembled, &subject_units[next_source_position..])?;
         }
         Ok(self.new_string_units(&assembled))
     }
@@ -27008,29 +27061,29 @@ impl Interp {
         replacement: &[u16],
     ) -> Result<Vec<u16>, Step> {
         let tail = position.saturating_add(matched.len()).min(subject.len());
-        let mut out = Vec::with_capacity(replacement.len());
+        let mut out = self.reserve_scratch(replacement.len())?;
         let mut i = 0;
         while i < replacement.len() {
             if replacement[i] != b'$' as u16 || i + 1 >= replacement.len() {
-                out.push(replacement[i]);
+                self.extend_work_scratch(&mut out, &[replacement[i]])?;
                 i += 1;
                 continue;
             }
             match replacement[i + 1] {
                 c if c == b'$' as u16 => {
-                    out.push(b'$' as u16);
+                    self.extend_work_scratch(&mut out, &[b'$' as u16])?;
                     i += 2;
                 }
                 c if c == b'&' as u16 => {
-                    out.extend_from_slice(matched);
+                    self.extend_work_scratch(&mut out, matched)?;
                     i += 2;
                 }
                 c if c == b'`' as u16 => {
-                    out.extend_from_slice(&subject[..position]);
+                    self.extend_work_scratch(&mut out, &subject[..position])?;
                     i += 2;
                 }
                 c if c == b'\'' as u16 => {
-                    out.extend_from_slice(&subject[tail..]);
+                    self.extend_work_scratch(&mut out, &subject[tail..])?;
                     i += 2;
                 }
                 c if (b'0' as u16..=b'9' as u16).contains(&c) => {
@@ -27051,12 +27104,12 @@ impl Interp {
                         consumed = 2;
                     }
                     if consumed == 0 {
-                        out.push(b'$' as u16);
+                        self.extend_work_scratch(&mut out, &[b'$' as u16])?;
                         i += 1;
                     } else {
                         let capture = captures[capture - 1];
                         if let Payload::String(off) = capture.value {
-                            out.extend_from_slice(&self.str_units(off));
+                            self.extend_work_scratch(&mut out, &self.str_units(off))?;
                         }
                         i += consumed;
                     }
@@ -27072,16 +27125,17 @@ impl Interp {
                         let (object_inst, object) = named_captures.unwrap();
                         let capture = self.mop_get(code, object_inst, id, object)?;
                         if capture.kind != Kind::Undefined {
-                            out.extend_from_slice(&self.to_string_units(code, capture)?);
+                            let units = self.to_string_units(code, capture)?;
+                            self.extend_work_scratch(&mut out, &units)?;
                         }
                         i = end + 1;
                     } else {
-                        out.extend_from_slice(&[b'$' as u16, b'<' as u16]);
+                        self.extend_work_scratch(&mut out, &[b'$' as u16, b'<' as u16])?;
                         i += 2;
                     }
                 }
                 _ => {
-                    out.push(b'$' as u16);
+                    self.extend_work_scratch(&mut out, &[b'$' as u16])?;
                     i += 1;
                 }
             }
@@ -27159,40 +27213,43 @@ impl Interp {
     /// groups; empty when the name is absent or unset). Any other `$X` is
     /// literal.
     fn regexp_get_substitution(
-        &self,
+        &mut self,
         inst: crate::value::SlotIndex,
         result: Slot,
         subject: &[u16],
         pos: usize,
         match_len: usize,
         repl: &[u16],
-    ) -> Vec<u16> {
+    ) -> Result<Vec<u16>, Step> {
         let count = self.regexp_capture_count(result); // includes whole match at 0
         let names: Vec<(String, i32)> = self.regexps[&inst].program.capture_group_names.clone();
         let matched = &subject[pos..(pos + match_len).min(subject.len())];
-        let mut out = Vec::with_capacity(repl.len());
+        let mut out = self.reserve_scratch(repl.len())?;
         let mut i = 0;
         while i < repl.len() {
             if repl[i] != b'$' as u16 || i + 1 >= repl.len() {
-                out.push(repl[i]);
+                self.extend_work_scratch(&mut out, &[repl[i]])?;
                 i += 1;
                 continue;
             }
             match repl[i + 1] {
                 c if c == b'$' as u16 => {
-                    out.push(b'$' as u16);
+                    self.extend_work_scratch(&mut out, &[b'$' as u16])?;
                     i += 2;
                 }
                 c if c == b'&' as u16 => {
-                    out.extend_from_slice(matched);
+                    self.extend_work_scratch(&mut out, matched)?;
                     i += 2;
                 }
                 c if c == b'`' as u16 => {
-                    out.extend_from_slice(&subject[..pos]);
+                    self.extend_work_scratch(&mut out, &subject[..pos])?;
                     i += 2;
                 }
                 c if c == b'\'' as u16 => {
-                    out.extend_from_slice(&subject[(pos + match_len).min(subject.len())..]);
+                    self.extend_work_scratch(
+                        &mut out,
+                        &subject[(pos + match_len).min(subject.len())..],
+                    )?;
                     i += 2;
                 }
                 c if (b'0' as u16..=b'9' as u16).contains(&c) => {
@@ -27214,11 +27271,11 @@ impl Interp {
                     }
                     if consumed == 0 {
                         // Out of range: `$` and the digits stay literal.
-                        out.push(b'$' as u16);
+                        self.extend_work_scratch(&mut out, &[b'$' as u16])?;
                         i += 1;
                     } else {
                         if let Some(units) = self.regexp_capture_units(result, group) {
-                            out.extend_from_slice(&units);
+                            self.extend_work_scratch(&mut out, &units)?;
                         }
                         i += consumed;
                     }
@@ -27237,24 +27294,24 @@ impl Interp {
                             .find(|(nm, _)| nm.encode_utf16().eq(name.iter().copied()))
                         {
                             if let Some(units) = self.regexp_named_capture_units(result, name) {
-                                out.extend_from_slice(&units);
+                                self.extend_work_scratch(&mut out, &units)?;
                             }
                             // An unset or absent name expands to the empty string.
                         }
                         i += 2 + rel + 1;
                     } else {
-                        out.extend_from_slice(&[b'$' as u16, b'<' as u16]);
+                        self.extend_work_scratch(&mut out, &[b'$' as u16, b'<' as u16])?;
                         i += 2;
                     }
                 }
                 _ => {
                     // `$` followed by any other code unit is a literal `$`.
-                    out.push(b'$' as u16);
+                    self.extend_work_scratch(&mut out, &[b'$' as u16])?;
                     i += 1;
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// `GetMethod(value, @@name)` for String prototype protocols. The protocol
@@ -27488,7 +27545,7 @@ impl Interp {
         self.meter.tick_raw(REGEXP_TOSTRING_METERING);
         // `mxGetID(_source)` → the source getter: an escaped source allocates a
         // fresh chunk (charged here); an unescaped source is the interned key.
-        let (source_bytes, source_escaped) = self.regexp_source_bytes(inst);
+        let (source_bytes, source_escaped) = self.regexp_source_bytes_metered(inst)?;
         if source_escaped {
             self.meter.tick_string(
                 String::from_utf8_lossy(&source_bytes)
@@ -27512,7 +27569,7 @@ impl Interp {
         self.meter.tick_string((1 + units) as u64); // "/" + source
         self.meter.tick_string((2 + units) as u64); // + "/"
         self.meter.tick_string((2 + units + f) as u64); // + flags
-        let mut out = Vec::with_capacity(s + f + 2);
+        let mut out = self.reserve_scratch(s + f + 2)?;
         out.push(b'/');
         out.extend_from_slice(&source_bytes);
         out.push(b'/');
@@ -27539,7 +27596,7 @@ impl Interp {
             && self.regexp_getter_uses_default(inst, source_id)
         {
             self.meter.tick_raw(REGEXP_GETTER_METERING);
-            let (bytes, allocated) = self.regexp_source_bytes(inst);
+            let (bytes, allocated) = self.regexp_source_bytes_metered(inst)?;
             if allocated {
                 self.new_string_metered(&bytes)
             } else {
@@ -27569,7 +27626,7 @@ impl Interp {
         self.meter.tick_string((source.len() + 2) as u64);
         self.meter
             .tick_string((source.len() + flags.len() + 2) as u64);
-        let mut out = Vec::with_capacity(source.len() + flags.len() + 2);
+        let mut out = self.reserve_scratch(source.len() + flags.len() + 2)?;
         out.push(b'/' as u16);
         out.extend_from_slice(&source);
         out.push(b'/' as u16);
@@ -27583,6 +27640,26 @@ impl Interp {
     /// backslash-escaped. Returns `(bytes, allocated)` where `allocated` is
     /// true when XS builds a fresh escaped chunk (an unescaped source is
     /// returned as the interned key string, no allocation).
+    /// Guest source rendering admits its scan and worst-case escaped buffer
+    /// before either runs. Immutable host diagnostics use the writer below.
+    fn regexp_source_bytes_metered(
+        &mut self,
+        inst: crate::value::SlotIndex,
+    ) -> Result<(Vec<u8>, bool), Step> {
+        let length = self.regexps[&inst].source.len();
+        self.charge_and_check(
+            (length as u64)
+                .checked_mul(crate::meter::BUILTIN_METERING)
+                .ok_or(Step::Host(Halt::MeterAbort))?,
+        )?;
+        self.admit_scratch::<u8>(
+            length
+                .checked_mul(2)
+                .ok_or(Step::Host(Halt::HeapExhausted))?,
+        )?;
+        Ok(self.regexp_source_bytes(inst))
+    }
+
     fn regexp_source_bytes(&self, inst: crate::value::SlotIndex) -> (Vec<u8>, bool) {
         let src = self.regexps[&inst].source.as_bytes();
         if src.is_empty() {
@@ -27607,9 +27684,16 @@ impl Interp {
             i += 1;
         }
         if !needs {
-            return (src.to_vec(), false);
+            let mut copy = self.reserve_copy_scratch(src.len());
+            copy.extend_from_slice(src);
+            return (copy, false);
         }
-        let mut out = Vec::with_capacity(src.len() + 4);
+        // Every source byte produces at most two escaped bytes.
+        let capacity = src
+            .len()
+            .checked_mul(2)
+            .unwrap_or_else(|| crate::value::heap_exhausted());
+        let mut out = self.reserve_copy_scratch(capacity);
         prev = 0;
         i = 0;
         while i < src.len() {
@@ -31866,7 +31950,7 @@ impl Interp {
         } else if message.is_empty() {
             Ok(name)
         } else {
-            let mut result = Vec::with_capacity(name.len() + message.len() + 2);
+            let mut result = self.reserve_scratch(name.len() + message.len() + 2)?;
             result.extend_from_slice(&name);
             result.extend_from_slice(&[':' as u16, ' ' as u16]);
             result.extend_from_slice(&message);
@@ -33770,7 +33854,7 @@ impl Interp {
                     // Optional arguments are coerced only when present, in
                     // left-to-right order, before the Date value is changed.
                     let count = argc.max(1).min(arity);
-                    let mut inputs = Vec::with_capacity(count);
+                    let mut inputs = self.reserve_scratch(count)?;
                     for i in 0..count {
                         inputs.push(self.to_number_f64(code, arg(&self.stack, i))?);
                     }
@@ -35935,7 +36019,7 @@ impl Interp {
                     unreachable!("ToObject returns a reference")
                 };
                 let keys = self.mop_own_keys(code, inst)?;
-                let mut props: Vec<(u16, OrdinaryDescriptor)> = Vec::with_capacity(keys.len());
+                let mut props: Vec<(u16, OrdinaryDescriptor)> = self.reserve_scratch(keys.len())?;
                 for key in keys {
                     let id = self.to_property_id(code, key)?;
                     if let Some(descriptor) = self.mop_get_own_property(code, inst, id)? {
@@ -39691,7 +39775,7 @@ impl Interp {
             // `fx_Math_hypot`: no arg → 0; XS special-cases the 2-argument
             // `c_hypot`, else sums the squares and takes the sqrt.
             Hypot => {
-                let mut vals = Vec::with_capacity(argc);
+                let mut vals = self.reserve_scratch(argc)?;
                 for i in 0..argc {
                     let value = self.math_arg(base, argc, i).unwrap();
                     vals.push(self.to_number_f64(code, value)?);
@@ -40417,7 +40501,7 @@ impl Interp {
             } else {
                 n.trunc() as usize
             };
-            return Ok(vec![0x20; count]);
+            return Ok([0x20; 10][..count].to_vec());
         }
         if space.kind == Kind::String || wrapped_kind == Some(Kind::String) {
             let mut units = self.to_string_units(code, space)?;
@@ -41543,7 +41627,7 @@ impl Interp {
         {
             return Err(self.catchable_type_error_msg("new: not a constructor".into()));
         }
-        let mut out = Vec::with_capacity(argc.saturating_mul(2));
+        let mut out = self.reserve_scratch(argc.saturating_mul(2))?;
         for i in 0..argc {
             let value = self
                 .stack
@@ -42151,7 +42235,7 @@ impl Interp {
             }
             StringIsWellFormed | StringToWellFormed => {
                 let mut well_formed = true;
-                let mut out = Vec::with_capacity(content.len());
+                let mut out = self.reserve_scratch(content.len())?;
                 let mut i = 0usize;
                 while i < content.len() {
                     let u = content[i];
@@ -45886,7 +45970,7 @@ impl Interp {
         let result = self.array_generic_species_create(code, original, 0)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(result));
 
-        let mut operands = Vec::with_capacity(argc + 1);
+        let mut operands = self.reserve_scratch(argc + 1)?;
         operands.push(object);
         for argi in 0..argc {
             operands.push(
@@ -49036,12 +49120,13 @@ impl Interp {
         }
 
         // The current element (an integer view always decodes).
-        let mut old_bytes = vec![0u8; size];
+        let mut old_storage = [0u8; 8];
+        let old_bytes = &mut old_storage[..size];
         {
             let bytes = self.chunks.payload(data);
             old_bytes.copy_from_slice(&bytes[bpos..bpos + size]);
         }
-        let old_slot = decode_element_le(ta.kind, &old_bytes)
+        let old_slot = decode_element_le(ta.kind, old_bytes)
             .ok_or(Step::Host(Halt::NotImplemented("atomics:decode")))?;
 
         // `load(ta, idx)`: no write.
@@ -49755,7 +49840,10 @@ impl Interp {
         mut pc: usize,
         formal_count: usize,
     ) -> Vec<Option<crate::value::SlotIndex>> {
-        let mut cells = vec![None; formal_count];
+        // The formal count is decoded from the BEGIN bytecode's u8 operand,
+        // so this metadata has at most 255 entries, independent of argc.
+        let mut cells = self.reserve_copy_scratch(formal_count);
+        cells.resize(formal_count, None);
         let mut pending_argument = None;
         let mut initialized = 0usize;
         while pc < code.len() && initialized < formal_count {
@@ -55423,7 +55511,7 @@ impl Interp {
             return Ok(out);
         }
         let ids = self.ordered_own_key_ids(inst);
-        let mut out = Vec::with_capacity(ids.len());
+        let mut out = self.reserve_scratch(ids.len())?;
         // Index keys ascending, then the named chain — `fxOrdinaryOwnKeys`
         // queues the internal index chunk before `fxQueueIDKeys`. These keys
         // are spelled from the index, so listing them mints nothing.
@@ -56050,7 +56138,7 @@ impl Interp {
         // saturation guard that poisons the machine.
         //
         // No duplicate keys allowed in the trap result.
-        let mut seen: Vec<ReadKey> = Vec::with_capacity(trap_keys.len());
+        let mut seen: Vec<ReadKey> = self.reserve_scratch(trap_keys.len())?;
         for k in &trap_keys {
             let key = self.to_read_key(code, *k)?;
             self.meter.tick_builtin_some(seen.len() as u64);
@@ -56623,7 +56711,7 @@ impl Interp {
     ) -> Result<bool, Step> {
         let receiver = Slot::of(Kind::Reference, Payload::Reference(descriptors));
         let keys = self.mop_own_keys(code, descriptors)?;
-        let mut pending = Vec::with_capacity(keys.len());
+        let mut pending = self.reserve_scratch(keys.len())?;
         for key in keys {
             let id = self.to_property_id(code, key)?;
             let enumerable = self
