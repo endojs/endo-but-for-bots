@@ -14740,16 +14740,18 @@ impl Interp {
             // top so every recursive `dispatch_at` entry (callbacks, promise
             // jobs) shares the one cumulative ceiling.
             #[cfg(test)]
-            if tests::GC_AT_STEP.with(|step| {
-                if step.get() == Some(self.n_dispatched) {
-                    step.set(None);
-                    true
-                } else {
-                    false
+            {
+                if tests::GC_AT_STEP.with(|step| {
+                    if step.get() == Some(self.n_dispatched) {
+                        step.set(None);
+                        true
+                    } else {
+                        false
+                    }
+                }) {
+                    self.collect_garbage();
+                    tests::GC_HITS.with(|hits| hits.set(hits.get() + 1));
                 }
-            }) {
-                self.collect_garbage();
-                tests::GC_HITS.with(|hits| hits.set(hits.get() + 1));
             }
             if self.n_dispatched >= self.step_limit {
                 return Step::Host(Halt::StepLimit(self.n_dispatched));
