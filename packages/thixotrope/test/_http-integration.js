@@ -1,6 +1,7 @@
 // @ts-check
 import harden from '@endo/harden';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
@@ -62,14 +63,28 @@ export const registerHttpIntegration = (test, kind) => {
         // eslint-disable-next-line no-await-in-loop
         await setTimeout(30);
       }
-      const request = async (method, route) => {
-        const response = await fetch(`http://127.0.0.1:${port}${route}`, {
-          method,
-          headers: { connection: 'close' },
+      // Use a fresh Node HTTP request: Node 24's fetch client cleanup assigns
+      // an error message inherited as read-only under SES lockdown.
+      /** @param {string} method @param {string} route */
+      const request = (method, route) =>
+        new Promise((resolve, reject) => {
+          const outgoing = httpRequest(
+            { host: '127.0.0.1', port, path: route, method, agent: false },
+            response => {
+              t.is(response.statusCode, 200);
+              response.setEncoding('utf8');
+              let body = '';
+              response.on('data', chunk => {
+                body += chunk;
+              });
+              response.once('error', reject);
+              response.once('end', () => resolve(body));
+            },
+          );
+          t.teardown(() => outgoing.destroy());
+          outgoing.once('error', reject);
+          outgoing.end();
         });
-        t.is(response.status, 200);
-        return response.text();
-      };
       t.is(await request('POST', '/incr'), '1\n');
       host.client.close();
       await host.supervisor.close();
@@ -88,12 +103,16 @@ export const registerHttpIntegration = (test, kind) => {
       );
       await host.client.call('evaluate', "E(E(apps).get('site')).close()");
       t.is((await host.client.call('httpServices'))[0].desired, 'closed');
-      await t.throwsAsync(() => fetch(`http://127.0.0.1:${port}/read`));
+      await t.throwsAsync(() => request('GET', '/read'), {
+        code: 'ECONNREFUSED',
+      });
       host.client.close();
       await host.supervisor.close();
       host = await start();
       t.is((await host.client.call('httpServices'))[0].desired, 'closed');
-      await t.throwsAsync(() => fetch(`http://127.0.0.1:${port}/read`));
+      await t.throwsAsync(() => request('GET', '/read'), {
+        code: 'ECONNREFUSED',
+      });
       t.is(
         await host.client.call('evaluate', "E(E(apps).get('site')).read()"),
         '2n',
