@@ -25,40 +25,94 @@ const request = harden({
   body: '{"model":"allowed"}',
 });
 const credential = 'canary-secret';
+const accessToken = 'canary-access';
+const refreshToken = 'canary-refresh';
+
+/** @param {Partial<import('../src/provider-broker.js').BrokerOAuthState>} [overrides] */
+const oauthState = (overrides = {}) =>
+  harden({
+    version: /** @type {const} */ ('BrokerOAuthStateV1'),
+    accessToken,
+    refreshToken,
+    // Comfortably beyond the default 60s refresh skew at the test clock's zero.
+    expiresAt: 1_000_000,
+    accountId: 'account-1',
+    ...overrides,
+  });
+
 /**
  * @param {object} [options]
  * @param {Partial<BrokerPolicy>} [options.limits]
  * @param {(r: any) => Promise<any>} [options.respond]
  * @param {() => Promise<string>} [options.read]
+ * @param {boolean} [options.oauth] - Provision the refresh and rotate halves.
+ * @param {any} [options.state] - Initial OAuth state when `oauth` is set.
+ * @param {(request: any) => Promise<any>} [options.exchange] - Token endpoint.
  */
 const setup = ({
   limits = {},
   respond = async () => ({ status: 200, body: 'ok' }),
-  read = async () => globalThis.btoa(credential),
+  read,
+  oauth = false,
+  state,
+  exchange,
 } = {}) => {
   const calls = [];
   const audit = [];
+  const exchanges = [];
+  const rotations = [];
   let time = 0;
-  const lease = makeProviderBrokerLease(
-    { ...policy, ...limits },
-    {
-      secret: Far('secret', { readBase64: read }),
-      transport: Far('transport', {
-        async request(r) {
-          calls.push(r);
-          return respond(r);
+  // The rotate capability writes here and the read facet reads it back, so a
+  // test observes exactly what a later request would see.
+  let stored = oauth
+    ? globalThis.btoa(JSON.stringify(state ?? oauthState()))
+    : globalThis.btoa(credential);
+  const powers = {
+    secret: Far('secret', {
+      readBase64: read ?? (async () => stored),
+    }),
+    transport: Far('transport', {
+      async request(r) {
+        calls.push(r);
+        return respond(r);
+      },
+    }),
+    now: () => time,
+    audit: event => {
+      audit.push(event);
+    },
+  };
+  if (oauth) {
+    Object.assign(powers, {
+      refresh: Far('refresh', {
+        async refresh(exchangeRequest) {
+          exchanges.push(exchangeRequest);
+          if (exchange) return exchange(exchangeRequest);
+          return oauthState({
+            accessToken: `${accessToken}-${exchanges.length}`,
+            refreshToken: `${refreshToken}-${exchanges.length}`,
+          });
         },
       }),
-      now: () => time,
-      audit: event => {
-        audit.push(event);
-      },
-    },
-  );
+      rotate: Far('rotate', {
+        async replaceBase64(base64) {
+          rotations.push(base64);
+          stored = base64;
+        },
+      }),
+    });
+  }
+  const lease = makeProviderBrokerLease({ ...policy, ...limits }, powers);
   return {
     ...lease,
     calls,
     audit,
+    exchanges,
+    rotations,
+    stored: () => JSON.parse(globalThis.atob(stored)),
+    advance: ms => {
+      time += ms;
+    },
     expire: () => {
       time = 1000;
     },
@@ -307,9 +361,43 @@ test('operator configuration cannot enable administrative routes or subscription
       }),
     { message: /Invalid inference route/ },
   );
+  // Still refused, now for a recorded reason rather than for want of an
+  // implementation: neither vendor documents a configuration in which the
+  // broker holds an individual subscription credential and the slice holds
+  // none. See packages/codex-sandbox/SUBSCRIPTION-AUTH.md.
   t.throws(
     () => setup({ limits: /** @type {any} */ ({ authMode: 'subscription' }) }),
     { message: /Unsupported broker authentication mode/ },
+  );
+  // The mode that *is* implemented is refused until it is provisioned, so a
+  // policy naming `oauth` without the capabilities that make refresh and
+  // rotation possible fails at admission rather than on its first expiry.
+  t.throws(() => setup({ limits: { authMode: 'oauth' } }), {
+    message: /Unprovisioned broker OAuth mode/,
+  });
+  // Nor without an account to bind the credential to, nor in a credential
+  // header shape an OAuth bearer does not take.
+  t.throws(() => setup({ limits: { authMode: 'oauth' }, oauth: true }), {
+    message: /Unprovisioned broker OAuth mode/,
+  });
+  t.throws(
+    () =>
+      setup({
+        limits: {
+          authMode: 'oauth',
+          accountRef: 'account-1',
+          credentialHeader: 'x-api-key',
+        },
+        oauth: true,
+      }),
+    { message: /Unprovisioned broker OAuth mode/ },
+  );
+  // A properly provisioned one is admitted.
+  t.notThrows(() =>
+    setup({
+      limits: { authMode: 'oauth', accountRef: 'account-1' },
+      oauth: true,
+    }),
   );
 });
 
@@ -499,3 +587,257 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
     t.is(await E(upstream).getReturnCount(), termination === 'EOF' ? 0 : 1);
   });
 }
+
+const oauthLimits = harden({
+  authMode: /** @type {const} */ ('oauth'),
+  accountRef: 'account-1',
+});
+
+test('oauth mode presents the access token and never the refresh token', async t => {
+  const { endpoint, calls, exchanges } = setup({
+    limits: oauthLimits,
+    oauth: true,
+  });
+  await E(endpoint).request(request);
+  t.deepEqual(calls[0].headers, {
+    authorization: `Bearer ${accessToken}`,
+    'content-type': 'application/json',
+  });
+  // A credential that is still good is not exchanged, and the refresh token
+  // never leaves the broker.
+  t.is(exchanges.length, 0);
+  t.false(
+    `${JSON.stringify(calls[0].headers)}${calls[0].body}`.includes(
+      refreshToken,
+    ),
+  );
+});
+
+test('an expiring credential is refreshed and rotated before the turn is dispatched', async t => {
+  const lease = setup({
+    limits: oauthLimits,
+    oauth: true,
+    state: oauthState({ expiresAt: 10_000 }),
+  });
+  await E(lease.endpoint).request(request);
+  t.is(lease.exchanges.length, 1);
+  t.deepEqual(lease.exchanges[0], {
+    refreshToken,
+    accountId: 'account-1',
+  });
+  // The turn carries the refreshed token, and the rotated state is durable, so
+  // the next request and every other lease over the same record see it too.
+  t.is(lease.calls[0].headers.authorization, `Bearer ${accessToken}-1`);
+  t.is(lease.rotations.length, 1);
+  t.is(lease.stored().accessToken, `${accessToken}-1`);
+  // Refreshing is not an inference request and spends none of that quota.
+  t.is((await E(lease.admin).getStatus()).requests, 1n);
+  t.deepEqual(
+    lease.audit.map(entry => entry.event),
+    ['admitted', 'refreshed', 'completed'],
+  );
+});
+
+test('concurrent turns share one refresh rather than racing the rotation', async t => {
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = resolve;
+  });
+  const lease = setup({
+    limits: { ...oauthLimits, maxRequests: 4n, maxCostMicrounits: 100n },
+    oauth: true,
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      await held;
+      return oauthState({ accessToken: `${accessToken}-once` });
+    },
+  });
+  const first = E(lease.endpoint).request(request);
+  const second = E(lease.endpoint).request(request);
+  release(undefined);
+  await Promise.all([first, second]);
+  // One exchange, one write-back: a provider that invalidates the old refresh
+  // token on use would have revoked the session had both turns exchanged it.
+  t.is(lease.exchanges.length, 1);
+  t.is(lease.rotations.length, 1);
+  t.deepEqual(
+    lease.calls.map(call => call.headers.authorization),
+    [`Bearer ${accessToken}-once`, `Bearer ${accessToken}-once`],
+  );
+});
+
+test('a credential rejected mid-session is refreshed once and the turn survives', async t => {
+  let attempts = 0;
+  const lease = setup({
+    limits: oauthLimits,
+    oauth: true,
+    respond: async () => {
+      attempts += 1;
+      if (attempts === 1) throw Error('Provider credential rejected');
+      return { status: 200, body: 'ok' };
+    },
+  });
+  t.deepEqual(await E(lease.endpoint).request(request), {
+    status: 200,
+    body: 'ok',
+  });
+  t.is(lease.exchanges.length, 1);
+  t.is(lease.calls[0].headers.authorization, `Bearer ${accessToken}`);
+  t.is(lease.calls[1].headers.authorization, `Bearer ${accessToken}-1`);
+  // One turn, one reservation: the retry rides the admission already granted.
+  t.is((await E(lease.admin).getStatus()).requests, 1n);
+  t.deepEqual(
+    lease.audit.map(entry => entry.event),
+    ['admitted', 'credential-rejected', 'refreshed', 'completed'],
+  );
+});
+
+test('the refreshed retry is not itself retried', async t => {
+  const lease = setup({
+    limits: oauthLimits,
+    oauth: true,
+    respond: async () => {
+      throw Error('Provider credential rejected');
+    },
+  });
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(lease.exchanges.length, 1);
+  t.is(lease.calls.length, 2);
+});
+
+test('an api-key lease never refreshes on a rejected credential', async t => {
+  const lease = setup({
+    respond: async () => {
+      throw Error('Provider credential rejected');
+    },
+  });
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(lease.calls.length, 1);
+});
+
+test('a refresh that moves the account or cannot happen fails closed', async t => {
+  const moved = setup({
+    limits: oauthLimits,
+    oauth: true,
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => oauthState({ accountId: 'account-2' }),
+  });
+  await t.throwsAsync(() => E(moved.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  // Nothing was dispatched and nothing was written back under the other
+  // account's credential.
+  t.is(moved.calls.length, 0);
+  t.is(moved.rotations.length, 0);
+  t.deepEqual(
+    moved.audit.map(entry => entry.event),
+    ['admitted', 'refresh-failed', 'failed'],
+  );
+
+  // A stored credential that already names another account is refused before
+  // any exchange is attempted.
+  const foreign = setup({
+    limits: oauthLimits,
+    oauth: true,
+    state: oauthState({ accountId: 'account-2' }),
+  });
+  await t.throwsAsync(() => E(foreign.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(foreign.exchanges.length, 0);
+
+  // An expired credential with nothing to exchange cannot be recovered.
+  const stranded = setup({
+    limits: oauthLimits,
+    oauth: true,
+    state: harden({
+      version: 'BrokerOAuthStateV1',
+      accessToken,
+      expiresAt: 10_000,
+      accountId: 'account-1',
+    }),
+  });
+  await t.throwsAsync(() => E(stranded.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(stranded.calls.length, 0);
+});
+
+test('a malformed oauth state is refused rather than sent upstream', async t => {
+  for (const state of [
+    { version: 'BrokerOAuthStateV2' },
+    oauthState({ accessToken: 'has space' }),
+    oauthState({ accessToken: '' }),
+    oauthState({ refreshToken: 'has space' }),
+    oauthState({ expiresAt: 'soon' }),
+    oauthState({ accountId: '' }),
+  ]) {
+    const lease = setup({
+      limits: oauthLimits,
+      oauth: true,
+      state: harden(state),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(lease.endpoint).request(request), {
+      message: /Provider request failed/,
+    });
+    t.is(lease.calls.length, 0);
+  }
+  // A bare bearer where a state document belongs is not silently accepted.
+  const bare = setup({
+    limits: oauthLimits,
+    oauth: true,
+    read: async () => globalThis.btoa(credential),
+  });
+  await t.throwsAsync(() => E(bare.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+});
+
+test('neither oauth token escapes through a response that echoes it', async t => {
+  for (const echo of [
+    accessToken,
+    refreshToken,
+    globalThis.btoa(accessToken),
+  ]) {
+    const lease = setup({
+      limits: oauthLimits,
+      oauth: true,
+      respond: async () => ({ status: 200, body: `leak:${echo}` }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(lease.endpoint).request(request), {
+      message: /Provider request failed/,
+    });
+  }
+});
+
+test('operator supplies Anthropic beta capabilities without caller headers', async t => {
+  const { endpoint, calls } = setup({
+    limits: {
+      anthropicVersion: '2023-06-01',
+      anthropicBeta: 'oauth-2026-01-01,context-management-2025-06-27',
+    },
+  });
+  await E(endpoint).request(request);
+  t.deepEqual(calls[0].headers, {
+    authorization: `Bearer ${credential}`,
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'oauth-2026-01-01,context-management-2025-06-27',
+    'content-type': 'application/json',
+  });
+  for (const anthropicBeta of [
+    'oauth\r\nInjected: yes',
+    'oauth, spaced',
+    '',
+    ',leading',
+  ]) {
+    t.throws(() => setup({ limits: { anthropicBeta } }), {
+      message: /Invalid Anthropic beta capabilities/,
+    });
+  }
+});

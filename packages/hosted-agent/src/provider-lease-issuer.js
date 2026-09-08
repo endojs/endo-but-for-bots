@@ -12,9 +12,15 @@ import { makeProviderFetchTransport } from './provider-transport.js';
 /** @import { BrokerPolicy } from './provider-broker.js' */
 
 /**
- * Host-side API-key assembly. The worker receives only the bounded inference
+ * Host-side credential assembly. The worker receives only the bounded inference
  * facet over its private pipe. Secrets and outbound fetch stay in this process.
  * The runtime must be operator-owned, with an exclusively held lifecycle lock.
+ *
+ * `refresh` and `rotate` are the OAuth half, required together by
+ * `authMode: 'oauth'` and unused by an API key. `refresh` is deliberately not
+ * the inference transport: a token endpoint is neither the provider origin nor
+ * one of the three inference paths the lease admits, so a refresh that could
+ * travel through the lease would mean the lease admitted something else.
  *
  * @param {object} options
  * @param {any} options.runtime Concrete provider listener runtime.
@@ -26,6 +32,8 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {string} options.accountRef
  * @param {() => number} [options.now]
  * @param {(event: any) => void} [options.audit]
+ * @param {any} [options.refresh] Token exchange on its own outbound authority.
+ * @param {any} [options.rotate] Rotate-only secret capability.
  */
 export const makeProviderBrokerLeaseIssuer = ({
   runtime,
@@ -37,6 +45,8 @@ export const makeProviderBrokerLeaseIssuer = ({
   accountRef,
   now = Date.now,
   audit,
+  refresh,
+  rotate,
 }) => {
   (Number.isInteger(leaseDurationMs) &&
     leaseDurationMs > 0 &&
@@ -48,10 +58,18 @@ export const makeProviderBrokerLeaseIssuer = ({
     policy.maxRequests > 0n &&
     policy.maxRequests <= 0xffff_ffffn) ||
     Fail`Invalid provider lease issuer policy`;
+  // The issuer's selected account is the binding, so an operator policy may
+  // agree with it but never name a different one. The broker then refuses any
+  // credential — including a refreshed one — that belongs elsewhere.
+  policy.accountRef === undefined ||
+    policy.accountRef === accountRef ||
+    Fail`Invalid provider lease issuer policy`;
+  const authMode = policy.authMode ?? 'api-key';
   // BrokerLeaseV1 carries the bounded request count as a number; its profile
   // explicitly caps it at 32 bits. Byte and cost counters retain bigint.
   const configuredPolicy = harden({
     ...policy,
+    accountRef,
     routes: policy.routes.map(route => ({ ...route })),
     models: [...policy.models],
   });
@@ -95,6 +113,8 @@ export const makeProviderBrokerLeaseIssuer = ({
         transport: transport.transport,
         now,
         audit,
+        refresh,
+        rotate,
       },
     );
     let worker;
@@ -179,6 +199,10 @@ export const makeProviderBrokerLeaseIssuer = ({
               leaseId,
               imageDigest,
               accountRef,
+              // Proved by construction, not declared: the broker core refuses
+              // to exist in `oauth` mode without a refresh and a rotate
+              // capability, so a lease that reports one has both.
+              authMode,
               networkNamespaceId: current.networkNamespaceId,
               endpoint: current.endpoint,
               providerOrigin: configuredPolicy.origin,
