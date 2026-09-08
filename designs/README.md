@@ -844,7 +844,7 @@ flowchart TD
     %% defined in their own subgraphs, so it does not relocate
     %% endo-posix-sandbox (dsand, Capability System) into LLM Agents by
     %% first-mention. Dotted: endo-claude demotes the OS slice to an optional
-    %% hardening adapter, not a hard prerequisite (endo-claude.md DD6) — a
+    %% hardening adapter, not a hard prerequisite (endo-claude.md DD6). This is a
     %% proposed narrowing pending maintainer confirmation, not yet decided.
     dsand -.-> eclaude
 
@@ -983,7 +983,7 @@ halves and their directly-dependent companions as its first-to-land work:
   acting with normal tools directly on the daemon side, instead of an
   external agent marshaling everything across the bridge by value. This is
   [endo-claude](endo-claude.md) (**moved here from M6** by this groom; see
-  the M6 pointer) — an unconfined host caplet whose `claude -p --bare` child
+  the M6 pointer): an unconfined host caplet whose `claude -p --bare` child
   *is* an Endo guest's inference engine, its Claude tool surface replaced by
   only that one guest's facet (narrowing the acceptance boundary to tool-surface
   substitution, with OS confinement as optional hardening, is a *proposed*

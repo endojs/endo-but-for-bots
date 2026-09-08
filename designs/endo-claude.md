@@ -17,6 +17,11 @@ isolation **and** a substituted tool surface together. It leaves the
 implementation free to use either the `claude` command-line interface (**the CLI
 path**) or the Claude Agent SDK. Read against that ask, this section reports where
 the work stands; you do not need to jump ahead to § *Prompt* first.
+This section does lean on four load-bearing terms it names before they are built
+up: **facet**, **harness**, **guest formula**, and **the one-guest MCP surface**.
+A reader meeting them for the first time should read § *Architecture* (and its
+§ *Relationship to `@endo/claude-sandbox`*) for their definitions; this status
+report uses them as shorthand for the system those sections describe.
 
 The CLI path remains the default implementation path.
 `@endo/claude` is an **unconfined host caplet** that launches a fresh
@@ -24,8 +29,8 @@ The CLI path remains the default implementation path.
 Its acceptance boundary is deliberately narrower than an operating-system
 sandbox: the Claude process has no default Claude Code tool-call surface and can
 call only the local MCP tools projected for one guest.
-An `@endo/claude-sandbox` wrapper remains compatible defense in depth, but it is
-not a prerequisite for this caplet and this design does not claim that the CLI
+An `@endo/claude-sandbox` wrapper remains a compatible defense-in-depth layer, but
+it is not a prerequisite for this caplet and this design does not claim that the CLI
 flags confine filesystem or network access outside Claude's tool system.
 This tool-surface-first boundary is a **proposed narrowing** of the § *Prompt*'s
 "hermetically-sandboxed" ask, not a decided one: no dated maintainer decision in
@@ -144,10 +149,14 @@ The caplet is accepted only when one live, version-pinned test demonstrates
    refusal, so the test proves which flags are load-bearing rather than merely
    proving that the full invocation happened to work.
 6. Assert the isolation gate of *Design Decision 6* (the `options.isolation`
-   attestation: a caller-supplied claim — `separate-uid` / `sandbox-slice` /
-   `co-located-accepted` — that `make` requires at construction and that marks the
-   cross-guest-escalation residual on a co-located daemon; see DD6 for its full
-   contract). `make` with **no** `options.isolation` attestation **refuses to
+   attestation: a caller-supplied claim (`separate-uid` / `sandbox-slice` /
+   `co-located-accepted`) that `make` requires at construction and that marks the
+   cross-guest-escalation residual on a co-located daemon. That residual is the
+   escalation DD6 builds out in full: when the child shares a host with a
+   many-guest Endo daemon, a tool-surface bypass that reaches the daemon's
+   `captp0` socket holds the whole many-guest endpoint, so it can drive other
+   guests, not only this one. See DD6 for the full contract). `make` with
+   **no** `options.isolation` attestation **refuses to
    construct** (fails closed rather than launching an unwrapped child against a
    co-located many-guest daemon), and `make` with each recognized attestation
    (`separate-uid`, `sandbox-slice`, `co-located-accepted`) constructs and threads
@@ -157,23 +166,43 @@ The caplet is accepted only when one live, version-pinned test demonstrates
    refused-by-default caller-certification rather than a verified-closed property.
    The design's own acceptance test cannot pass while that certification is
    silently unenforced.
+7. Exercise the `prune` predicate against the *facet's own* catalog, not only the
+   external surfaces of steps 1-5. Plant a code-evaluation-shaped and a
+   dunder/reserved tool name inside the target guest facet's own `tools/list`
+   snapshot, then assert (a) neither name appears in the rendered
+   `--allowedTools`, and (b) a raw `mcp__endo__<pruned-name>` `tools/call` made
+   directly against the running server is refused, not dispatched. This proves the
+   "membership-validated, post-prune" guarantee DD2 assigns to the boundary
+   end-to-end against the real CLI/server pairing, rather than only against
+   synthetic input in `tool-permissions.test.js`.
 
 This exact test is intentionally named here rather than run by this design job.
 Its positive assertion is load-bearing: a zero-tool process is not a successful
 confinement result. Step 6 asserts the tool-surface substitution the caplet does
 enforce is not the whole boundary: the co-located-daemon residual DD6 flags must
 be an explicit, refused-by-default attestation, not an untested deployment
-convention.
+convention. Step 7 closes the symmetric gap on the *inbound* catalog: DD2's
+`prune` claim is proven against the facet's own names, not assumed.
+
+**Not covered by this test (named here, not only in § *Open questions*).** One
+load-bearing residual the document flags twice is **out of scope** for this
+acceptance condition and has no test step above: the **decision-level
+tool-result-steering** residual, where a `tools/call` **result** carrying
+externally authored bytes can steer the model into a later *in-allow-list* call
+(§ *Argv order is a confinement boundary*, DD6 body). Neither the OS slice nor
+DD2's `attenuateArgs` closes it, so it is carried as an accepted residual in
+§ *Open questions* rather than as a passing assertion here. A green run of steps
+1-7 must not be read as closing that boundary.
 
 ### Interface to the one-guest MCP surface (#1206)
 
-The stdio MCP implementation scoped to one guest — **the one-guest MCP surface**,
-landed on `llm` by PR #1206 and named that way throughout this design — owns
+The stdio MCP implementation scoped to one guest (**the one-guest MCP surface**,
+landed on `llm` by PR #1206 and named that way throughout this design) owns
 capability projection and server-side authorization.
 `@endo/claude` consumes, but does not duplicate, this interface.
-The design assigns two invariants to this boundary — the **per-call
+The design assigns two invariants to this boundary (the **per-call
 cancellation scope** of § *Pooling subscriptions across concurrent guests* and
-the **argument-side attenuation** of *Design Decision 2* — so the published
+the **argument-side attenuation** of *Design Decision 2*), so the published
 interface must expose a seam for each; otherwise both checks silently degrade to
 the client-side allow-list subtraction the § *Architecture* forbids:
 
@@ -191,7 +220,7 @@ const {
                 // unaffected (the per-call scope § Pooling requires)
   close,        // ends the guest-level listener and removes per-guest transport
                 // state (the per-spawn socket AND its directory); a call still
-                // in flight under some sessionTag is cancelled first, not raced
+                // in flight under some sessionTag is canceled first, not raced
 } = await makeGuestMcp(toolSet, {
   prune,        // predicate applied to the one tools/list snapshot BEFORE it is
                 // pinned, so code-eval and unsafe names (DD2) never enter the
@@ -218,13 +247,13 @@ entries from the returned names, renders the `--mcp-config` from
 Neither side independently re-reads or re-derives the catalog.
 
 Current `llm` contains the component pieces in
-`packages/claude-sandbox/src/mcp-bridge.js` — the lower-level
+`packages/claude-sandbox/src/mcp-bridge.js` (the lower-level
 `makeMcpBridge({tools, execute})` seam and the `makeMcpBridgeForToolSet`
-aggregate over it — and `packages/claude-sandbox/src/mcp-socket-server.js`
+aggregate over it) and `packages/claude-sandbox/src/mcp-socket-server.js`
 (`startMcpSocketServer`).
 As landed, `makeMcpBridge` filters tool-name *grammar* only (`pinToolCatalog`'s
 `TOOL_NAME_RE`) and threads no `sessionTag`, so `makeGuestMcp` is built over the
-**lower-level** `makeMcpBridge` seam — not the aggregate — **extended** with the
+**lower-level** `makeMcpBridge` seam (not the aggregate), **extended** with the
 `prune`/`attenuateArgs` policy and per-call `sessionTag` cancellation above,
 precisely so those invariants have somewhere to live rather than being subtracted
 client-side.
@@ -549,7 +578,7 @@ exactly as a swallowed prompt would. A `model` outside the pinned set fails clos
 (refuse to spawn); the pinned list is versioned with the CLI pin. (Neither
 caller-supplied argv value is the *only* attacker-controlled input to the running
 inference: every `tools/call` **result** the facet returns re-enters the model's
-context and can steer the model into a later **in-allow-list** call — the
+context and can steer the model into a later **in-allow-list** call. The
 influence a guest exerts is not only a guest-authored prompt but any `tools/call`
 **result** that returns externally authored bytes. This is a **distinct residual**
 from the co-located-daemon escalation *Design Decision 6* names, and the OS slice
@@ -559,7 +588,7 @@ namespace does nothing about the model's *decision* to make an allowed-but-harmf
 call on attacker-chosen input. *Design Decision 2*'s `attenuateArgs` narrows
 *which* petnames or paths such a call may name, but not the decision to call it;
 this decision-level residual has **no full mitigation named in this document** and
-is owned as an open gap — see § *Open questions*. The `@endo/claude-sandbox` OS
+is owned as an open gap (see § *Open questions*). The `@endo/claude-sandbox` OS
 slice stays an optional adapter rather than an acceptance-condition prerequisite;
 see *Design Decision 6*.) On 2.1.232 the prompt
 is a **bare positional**
@@ -1233,10 +1262,20 @@ is entitled.
 
 ## Build sequencing against the MCP bridge
 
-**Resolved 2026-09-08:** PR #1206 landed the local one-guest stdio MCP surface.
-Version 1 now consumes the one-guest MCP surface interface
-(§ *Interface to the one-guest MCP surface*), deletes #1015's
-duplicate stopgap shim, and does not wait for gateway HTTP termination.
+**Transport question resolved 2026-09-08; server extension still to build.** PR
+#1206 landed the **lower-level** stdio substrate on `llm`: `makeMcpBridge`
+(grammar-only `TOOL_NAME_RE` filtering, no `sessionTag`), `makeMcpBridgeForToolSet`,
+`startMcpSocketServer`, and `mcp-stdio-bridge.mjs`. That settles the transport
+question below (stdio-first, no wait on gateway HTTP termination) and lets version
+1 delete #1015's duplicate stopgap shim. It does **not** mean the one-guest MCP
+surface this design consumes (§ *Interface to the one-guest MCP surface*) exists as
+landed: `makeGuestMcp` is specified here as an **extension** built over that
+lower-level seam, adding the `prune` predicate, per-call `attenuateArgs`, and
+per-call `sessionTag` cancellation that DD2 and the pooling section make
+load-bearing. Those are new server-side implementation work with security
+consequences (an unpruned catalog or a missing `attenuateArgs` reopens the
+code-eval / cross-facet leak DD2 exists to close), not pure client wiring against
+existing infrastructure. So work-item 3 below is a server-side build, not a rebind.
 The option analysis below is retained as decision history; where it says the
 local adapter is unimplemented or recommends carrying a shim in
 `@endo/claude`, this resolution supersedes it.
@@ -1542,34 +1581,43 @@ remaining, independent axis of who triggers an inference.)
    across concurrent guests* and *Known Gaps and TODOs*; this decision keeps `--bare`
    primary and resolves the tension by verification, not assertion.
 6. **The required boundary is tool-surface substitution; OS confinement is an
-   optional adapter — a *proposed* narrowing of the § *Prompt*, not a decided
-   one.** The § *Prompt* asks for a **hermetically-sandboxed** `claude -p` whose
-   *only* capability surface is the Endo tool call surface — a conjunction of two
+   optional adapter (a *proposed* narrowing of the § *Prompt*, not a decided
+   one).** The § *Prompt* asks for a **hermetically-sandboxed** `claude -p` whose
+   *only* capability surface is the Endo tool call surface: a conjunction of two
    independent properties, tool-surface substitution **and** OS-level isolation.
    No dated maintainer decision in this document downgrades that conjunction to
    tool-surface substitution alone; this revision **proposes** delivering and
    testing tool-surface substitution first and sequencing OS confinement as an
    optional adapter, and records that as a scope proposal pending maintainer
    confirmation rather than as authority already granted. OS confinement remains
-   **required to fully satisfy the § *Prompt***.
+   **required to fully satisfy the § *Prompt***. The isolation gate this decision
+   adds is a **presence-and-recognition check on a caller attestation, not a
+   verified control**: read the "fails closed" language below as "refuses to
+   construct when the field is absent or unrecognized," never as "confirms the
+   asserted isolation actually holds."
+
    `@endo/claude` strips Claude's default tool surface and substitutes the
    one-guest MCP catalog. `@endo/claude-sandbox` can wrap the same launch to add a
    mount and network boundary, but that wrapper does not block this CLI-default
    package and is not part of the acceptance condition above.
+
    The escalation an unwrapped launch leaves open is **specific, not generic**:
    the daemon runs a **many-guest `captp0` endpoint**, and `whereEndoSock`
    re-derives that socket path from an entirely empty environment
    (`$XDG_RUNTIME_DIR` / `HOME` / `$TMPDIR`, ultimately `os.tmpdir()` /
    `os.userInfo()`; `packages/where/index.js`). So on a **co-located** daemon a
-   tool-surface bypass — arbitrary native code, a CLI defect, or a future
-   escape — that opens that socket does not merely "reach the host filesystem or
-   network": it holds the **full many-guest daemon endpoint**, i.e. cross-guest
-   escalation. What keeps that
-   out of reach is a **deployment constraint** the caller must supply: run the
-   child under a **separate uid** with no route to the daemon socket, **or** apply
-   the `@endo/claude-sandbox` OS slice that moves the socket outside the child's
-   mount namespace. The constructed environment remains worthwhile defense in
-   depth, not an OS sandbox, and does not by itself close this escalation.
+   tool-surface bypass (arbitrary native code, a CLI defect, or a future escape)
+   that opens that socket does not merely "reach the host filesystem or network":
+   it holds the **full many-guest daemon endpoint**, that is, cross-guest
+   escalation.
+
+   What keeps that out of reach is a **deployment constraint** the caller must
+   supply: run the child under a **separate uid** with no route to the daemon
+   socket, **or** apply the `@endo/claude-sandbox` OS slice that moves the socket
+   outside the child's mount namespace. The constructed environment remains a
+   worthwhile defense-in-depth layer, not an OS sandbox, and does not by itself
+   close this escalation.
+
    Because that constraint is safety-critical yet exogenous to the tool-surface
    flags, the harness must not model it as deployment *place* alone; instead it
    makes the precondition an **attestation the caller must supply at
@@ -1582,19 +1630,22 @@ remaining, independent axis of who triggers an inference.)
    absence**: with no recognized attestation it refuses to construct rather than
    launching an unwrapped child against a co-located many-guest daemon by default,
    and `makeGuestInference(guestFormulaId)` inherits the attestation the
-   surrounding `make` recorded. What the harness enforces is **narrow and must not
-   be overstated**: it checks that the field is *present and one of the recognized
-   values* and refuses otherwise. It does **not** verify the asserted fact —
-   nothing here confirms the child actually runs under a separate uid or actually
-   sits inside a `@endo/claude-sandbox` slice; a false `separate-uid` or a blanket
+   surrounding `make` recorded.
+
+   What the harness enforces is **narrow and must not be overstated**: it checks
+   that the field is *present and one of the recognized values* and refuses
+   otherwise. It does **not** verify the asserted fact. Nothing here confirms the
+   child actually runs under a separate uid or actually sits inside a
+   `@endo/claude-sandbox` slice; a false `separate-uid` or a blanket
    `co-located-accepted` passes the gate. The value therefore does not by itself
    impose OS isolation (only a truthful `sandbox-slice` or `separate-uid`
    deployment does); its guarantee is only that the co-located residual is made an
    **explicit, recorded caller-certification** at construction rather than a silent
-   default, not that the residual is verified closed. (Turning the string into a
-   checked capability — a `sandbox-slice` validated against a slice handle the
-   harness itself holds, say — is a possible future hardening, noted in § *Open
-   questions*.)
+   default, not that the residual is verified closed.
+
+   (Turning the string into a checked capability is a possible future hardening,
+   noted in § *Open questions*: a `sandbox-slice` validated against a slice handle
+   the harness itself holds, say.)
 7. **Credential and config files have a specified mode and lifetime.** The
    `--mcp-config` and `--settings` files are created per spawn with exclusive
    creation at mode `0600` inside a per-spawn directory at mode `0700`, then
@@ -1602,7 +1653,7 @@ remaining, independent axis of who triggers an inference.)
    MCP relay and contains no daemon bearer. The settings file names the fixed
    `apiKeyHelper`. These modes protect against other local users; they do not
    protect the reusable credential from the same unconfined Claude process that
-   invokes the helper. A harness-side egress proxy or per-guest credentials is a
+   invokes the helper. A harness-side egress proxy or per-guest credentials are a
    separable hardening option, not a prerequisite for demonstrating the requested
    tool-surface substitution. The package and documentation must state that
    boundary honestly.
@@ -1784,7 +1835,7 @@ remaining, independent axis of who triggers an inference.)
       live test below names no cross-guest leak or concurrent-isolation assertion). The
       metering-invisibility hazard is therefore a reason to close that residual at the
       source, not a claim that the current test already covers it.
-- [ ] Run a live negative-**and-positive** confinement test: spawn the real confined
+- [ ] Run a live positive-and-negative confinement test: spawn the real confined
       `claude -p`. **Negative:** no built-in tool (Bash, Read, Write, and the rest)
       executes; a prompt containing a `/skill-name` resolves **no** skill (asserting
       `--disable-slash-commands` closes the slash-command parse path `--tools ""`
@@ -1906,7 +1957,7 @@ is accepted, not written in this pass.
   adapter?** This is the single load-bearing premise change in the current
   revision (the title itself moved from "confined" to "unconfined"), and § *Status*
   and *Design Decision 6* both record it as a **proposed** narrowing pending
-  maintainer confirmation, not authority already granted — so it belongs on this
+  maintainer confirmation, not authority already granted, so it belongs on this
   canonical decision surface rather than only in the body. Until a dated maintainer
   decision lands here, OS confinement remains **required** to fully satisfy the
   § *Prompt*, and no derivative document (the `designs/README.md` roadmap table,
@@ -1931,8 +1982,8 @@ is accepted, not written in this pass.
   nor DD2's `attenuateArgs` (which narrows *which* petnames a call may name, not the
   *decision* to call) closes it, so this threat has no full mitigation named above.
   Candidate mitigations are confirmation gating or rate limiting on
-  facet-result-triggered calls; which (if any) is in scope for the first milestone
-  is open. Recommend: name it explicitly as an accepted residual for the
+  facet-result-triggered calls; whether either is in scope for the first milestone
+  remains open. Recommend: name it explicitly as an accepted residual for the
   tool-surface-substitution milestone and revisit gating when the acceptance test
   measures real facet-result-driven call patterns.
 
