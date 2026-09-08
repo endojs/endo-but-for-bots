@@ -2,7 +2,6 @@
   "finding": "F045",
   "increment": "collection index and shared iterator buffers; named-property construction remains quadratic and keeps the end-to-end for-in gate failing",
   "before_revision": "6a6d3eac40f17657b7498e6be89f06454b6e8b44",
-  "after": "source files in this commit",
   "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
   "cpu": "Apple M3 Max",
@@ -311,5 +310,8 @@
       },
       "speedup": 3.3848799692653104
     }
-  ]
+  ],
+  "after_revision": "4ec6fd1f71b23b96ce01f4a9b6d247bd7a3efc02",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }

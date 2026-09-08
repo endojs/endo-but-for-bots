@@ -3,7 +3,6 @@
   "increment": "Section identity and integrity foundation; active checkpoint path remains unchanged",
   "status": "Known failing before and after; F043 remains open",
   "before_revision": "e6c4b96b862275b76505a9b062bd07bf0b89a472",
-  "after": "source files in this commit",
   "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
   "cpu": "Apple M3 Max",
@@ -57,5 +56,8 @@
       },
       "speedup": 0.763080396162499
     }
-  ]
+  ],
+  "after_revision": "615b1c863a67c9745c9dcbc2b194d3d7c866084c",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }

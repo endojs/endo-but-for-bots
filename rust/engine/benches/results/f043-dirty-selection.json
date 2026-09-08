@@ -11,8 +11,7 @@
   "samples": "Same-host serial release runs, no simultaneous builds or tests. One warmup plus seven measured checkpoints per size; median. Construction, compilation, initial store creation, guest execution, and full restored-image comparison excluded from timer. Raw charge is for each 1 + 1 crank.",
   "baseline_setup": "Archived before_revision to a separate source and target directory. Identical fixture, toolchain, and lockfile. Built and ran serially on the same host without concurrent tests or builds during timing.",
   "increment": "Select dirty snapshot sections before extraction and encoding",
-  "before_revision": "fd0da9e23",
-  "after": "source files in this commit",
+  "before_revision": "fd0da9e23401a0ac644b01acd550e5b808707275",
   "status": "Array checkpoint scaling fails before and passes after",
   "command": "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test checkpoint_scaling_bench -- --ignored --nocapture --test-threads=1",
   "limitations": "MemoryStore retained-array timing on one host; medians are not statistical-significance claims. Mixed arrays, collections, and names have separate extraction/encoding counters and full-image parity tests. First checkpoint after restore conservatively considers restore-time normalization; subsequent unchanged checkpoints skip clean bulk sections. FileStore still rewrites its whole-file framing. All paired control charges are identical; controls report medians without significance claims.",
@@ -1256,5 +1255,8 @@
       "raw": 673048,
       "stored_small_bytes": 1200622
     }
-  ]
+  ],
+  "after_revision": "055e01a2ef81d0a8233e31fa4425b51a25279073",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }

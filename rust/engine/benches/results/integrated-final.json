@@ -1,0 +1,514 @@
+{
+  "kind": "fresh integrated before/after; historical increment artifacts are separate",
+  "before_revision": "51b99651b63d4e652f9af4eae603422783233182",
+  "after_revision": "151c494598e64fe416b1a5880db3a98081ac9f8d",
+  "fixture_sha256": {
+    "rust/engine/ironhorse-snapshot/tests/scaling_bench.rs": "1d4240ef1ffcb6ee2c808f6b46351cecc04c9b2669ac4e0e565b97ffb4ee065c",
+    "rust/engine/ironhorse-snapshot/tests/property_lookup_bench.rs": "d75165e1790f267d3e6e38475c43c28437c738b4b1d98050d6dea0e74ba73ab7",
+    "rust/engine/ironhorse-snapshot/tests/classification_bench.rs": "eb541b49ad4ec557a4d2c357668ca1f3c4cc77228a092eb7ef40e6c62656f788",
+    "rust/engine/ironhorse-snapshot/tests/lifecycle_bench.rs": "5c9485b043b466e20aaa9ce52471f27946ffe3d240369ad7099bb3abcace6a71",
+    "rust/engine/ironhorse-snapshot/tests/checkpoint_scaling_bench.rs": "a71564d318b83a80dd65f9b54597c15161bd39e3c116188d3782d1f19030a291",
+    "rust/engine/ironhorse-snapshot/tests/dispatch_bench.rs": "ca1a9e9f3eb05dd8cbc4725f6f22621fbda8f5d983a62edec4a2b9d6544eff80",
+    "rust/engine/ironhorse-snapshot/tests/attached_bench.rs": "e66cd61443e8ce0efc1e9e073533fd75113609672571b57478967bad0c97d563",
+    "rust/engine/ironhorse-snapshot/tests/gc_bench.rs": "da4b9eb6756c91d0e3f66628a14dec664c6106934da7ad0db3f0708962f792da",
+    "rust/engine/ironhorse-snapshot/tests/wake_latency_bench.rs": "f395bce09534d168887686f2d4408db967ddff3fc39b4a98969023c8201d9911",
+    "rust/engine/ironhorse-compile/tests/performance_bench.rs": "076319e5699f6509dd23700d766ad659b62ffb59091cf7a60d503d46837e41bf",
+    "rust/engine/ironhorse-compile/tests/integration_compile_bench.rs": "b452831f173675b3dba51d4564ba15062a5e0d5a9c64283dc5025b70bbea802c",
+    "rust/engine/ironhorse-262/tests/runtime_compile_bench.rs": "cca4e28b6c6d0d411a73f1b21a6ac1dacf947f080346519fb32bd0be6211b963",
+    "rust/endo/tests/ironhorse_lifecycle_bench.rs": "db85b0450e48f9ff4e2459d4351cca49718e1df970ed6f234a7449d83528d6c5"
+  },
+  "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "generated_prerequisites_sha256": {
+    "rust/endo/xsnap/src/ses_boot.js": "12fbb2dbf412e03fb15f5a73b8fef448392a51e0c2132f6b0b1de477e1b0725a",
+    "rust/endo/xsnap/src/worker_bootstrap.js": "f55cb0464b0e9bf7b06d8b1e46e95ad2c92e7429908e4fcf1ae395f02e30db2f",
+    "rust/endo/xsnap/src/daemon_bootstrap.js": "10684c247fe2f3686f6d81dbb76bb2214a4fc4f6d635a2ba1af64bf68863167c"
+  },
+  "method": "Both sides prebuilt; all before workloads then all after workloads, serially on the same host. Fixture assertions retained, nonzero exits recorded, no thresholds loosened. Measurements and raw test logs retained.",
+  "RUST_MIN_STACK": 33554432,
+  "runs": [
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "scaling_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/scaling_bench-6c275f8d3a522fd3",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:41:41.442073+00:00",
+      "elapsed_seconds": 183.92193484306335,
+      "exit_code": 101,
+      "binary_sha256": "e7400da1f53d33065e355fc7ce309ee007677f37450851da31de8c06daa17ffa",
+      "output": "\nrunning 4 tests\ntest for_in_traversal_scales_after_construction ... ITERATION_PHASE for_in n=2000 seconds=0.002199750 build_seconds=0.367777000 raw=4461128480 dispatched=66057\nITERATION_PHASE for_in n=4000 seconds=0.005381583 build_seconds=1.034442041 raw=8918088480 dispatched=132057\nITERATION_PHASE for_in n=8000 seconds=0.013431584 build_seconds=3.217349333 raw=17832008480 dispatched=264057\nITERATION_PHASE for_in n=16000 seconds=0.036740209 build_seconds=11.168549750 raw=35659848480 dispatched=528057\n\nthread 'for_in_traversal_scales_after_construction' (26052361) panicked at ironhorse-snapshot/tests/scaling_bench.rs:299:5:\nn=16000: time=2.735x meter=2.000x\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\ntest lazy_string_indexing_spans_many_extents ... \nLAZY_STRING_METRIC char_code_at_cold n=32768 seconds=0.010696750 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=32768 seconds=0.010693750 raw=2459878680\n\nLAZY_STRING_METRIC char_code_at_cold n=65536 seconds=0.020664500 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=65536 seconds=0.020638833 raw=2459878680\n\nLAZY_STRING_METRIC char_code_at_cold n=262144 seconds=0.080338625 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=262144 seconds=0.080340958 raw=2459878680\n\nLAZY_STRING_METRIC char_code_at_cold n=1048576 seconds=0.319206458 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=1048576 seconds=0.319030458 raw=2459878680\n\nLAZY_STRING_METRIC property_cold n=32768 seconds=0.000607208 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=32768 seconds=0.000605416 raw=2328854680\n\nLAZY_STRING_METRIC property_cold n=65536 seconds=0.000612417 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=65536 seconds=0.000607250 raw=2328854680\n\nLAZY_STRING_METRIC property_cold n=262144 seconds=0.000634667 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=262144 seconds=0.000616417 raw=2328854680\n\nLAZY_STRING_METRIC property_cold n=1048576 seconds=0.000864375 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=1048576 seconds=0.000627250 raw=2328854680\n\nthread 'lazy_string_indexing_spans_many_extents' (26052501) panicked at ironhorse-snapshot/tests/scaling_bench.rs:235:5:\nchar_code_at n=262144 arm=0: 7.511x\nchar_code_at n=262144 arm=1: 7.513x\nchar_code_at n=1048576 arm=0: 29.841x\nchar_code_at n=1048576 arm=1: 29.833x\nFAILED\ntest string_receiver_indexing_is_independent_of_receiver_length ... \nSTRING_INDEX_METRIC char_code_at n=16 seconds=0.062052500 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_code_at n=256 seconds=0.069979667 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_code_at n=1024 seconds=0.093681959 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_code_at n=4096 seconds=0.189794750 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=16 seconds=0.063238542 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=256 seconds=0.070227917 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=1024 seconds=0.093372375 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=4096 seconds=0.189924875 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=16 seconds=0.070277875 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=256 seconds=0.078181291 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=1024 seconds=0.101762167 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=4096 seconds=0.197924250 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=16 seconds=0.070271625 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=256 seconds=0.078662041 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=1024 seconds=0.101693292 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=4096 seconds=0.198158417 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC starts_with n=16 seconds=0.067317291 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC starts_with n=256 seconds=0.075437041 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC starts_with n=1024 seconds=0.098974625 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC starts_with n=4096 seconds=0.195196000 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=16 seconds=0.067278333 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=256 seconds=0.075474375 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=1024 seconds=0.099025333 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=4096 seconds=0.195258292 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=16 seconds=0.067204250 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=256 seconds=0.075303666 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=1024 seconds=0.098833458 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=4096 seconds=0.195209792 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC index_of n=16 seconds=0.067456500 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC index_of n=256 seconds=0.075855000 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC index_of n=1024 seconds=0.099464458 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC index_of n=4096 seconds=0.195152042 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC last_index_of n=16 seconds=0.069588875 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC last_index_of n=256 seconds=0.077571958 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC last_index_of n=1024 seconds=0.101069291 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC last_index_of n=4096 seconds=0.197530709 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC property n=16 seconds=0.056882000 raw=232659879472 dispatched=3500031\n\nSTRING_INDEX_METRIC property n=256 seconds=0.056866375 raw=232659879472 dispatched=3500031\n\nSTRING_INDEX_METRIC property n=1024 seconds=0.057482792 raw=232659879472 dispatched=3500031\n\nSTRING_INDEX_METRIC property n=4096 seconds=0.056844625 raw=232659879472 dispatched=3500031\n\nthread 'string_receiver_indexing_is_independent_of_receiver_length' (26052583) panicked at ironhorse-snapshot/tests/scaling_bench.rs:147:5:\nchar_code_at n=4096: 3.059x first length\ncode_point_at n=4096: 3.003x first length\nchar_at n=4096: 2.816x first length\nat n=4096: 2.820x first length\nstarts_with n=4096: 2.900x first length\nends_with n=4096: 2.902x first length\nincludes n=4096: 2.905x first length\nindex_of n=4096: 2.893x first length\nlast_index_of n=4096: 2.839x first length\nFAILED\ntest time_and_computrons_scale_together ... SCALING char_code_at n=4096 seconds=0.007900250 computrons=109616\nSCALING char_code_at n=8192 seconds=0.025963917 computrons=219184\nSCALING_RATIO char_code_at n=8192 time=3.286 meter=2.000\nSCALING char_code_at n=16384 seconds=0.092842666 computrons=438320\nSCALING_RATIO char_code_at n=16384 time=3.576 meter=2.000\nSCALING char_code_at n=32768 seconds=0.350859334 computrons=876593\nSCALING_RATIO char_code_at n=32768 time=3.779 meter=2.000\nSCALING map_set n=1000 seconds=0.001863500 computrons=24302\nSCALING map_set n=2000 seconds=0.006166917 computrons=48564\nSCALING_RATIO map_set n=2000 time=3.309 meter=1.998\nSCALING map_set n=4000 seconds=0.022449584 computrons=97089\nSCALING_RATIO map_set n=4000 time=3.640 meter=1.999\nSCALING map_set n=8000 seconds=0.085514417 computrons=194138\nSCALING_RATIO map_set n=8000 time=3.809 meter=2.000\nSCALING for_in n=2000 seconds=0.372089625 computrons=115124\nSCALING for_in n=4000 seconds=1.035456667 computrons=230158\nSCALING_RATIO for_in n=4000 time=2.783 meter=1.999\nSCALING for_in n=8000 seconds=3.235003542 computrons=460227\nSCALING_RATIO for_in n=8000 time=3.124 meter=2.000\nSCALING for_in n=16000 seconds=11.196293958 computrons=920363\nSCALING_RATIO for_in n=16000 time=3.461 meter=2.000\nSCALING string_for_of n=16384 seconds=0.018344708 computrons=553044\nSCALING string_for_of n=32768 seconds=0.048015458 computrons=1106010\nSCALING_RATIO string_for_of n=32768 time=2.617 meter=2.000\nSCALING string_for_of n=65536 seconds=0.138958375 computrons=2211942\nSCALING_RATIO string_for_of n=65536 time=2.894 meter=2.000\nSCALING string_for_of n=131072 seconds=0.521659667 computrons=4423807\nSCALING_RATIO string_for_of n=131072 time=3.754 meter=2.000\n\nthread 'time_and_computrons_scale_together' (26053239) panicked at ironhorse-snapshot/tests/scaling_bench.rs:68:5:\nchar_code_at n=8192: time=3.286x meter=2.000x; both must be <2.5x\nchar_code_at n=16384: time=3.576x meter=2.000x; both must be <2.5x\nchar_code_at n=32768: time=3.779x meter=2.000x; both must be <2.5x\nmap_set n=2000: time=3.309x meter=1.998x; both must be <2.5x\nmap_set n=4000: time=3.640x meter=1.999x; both must be <2.5x\nmap_set n=8000: time=3.809x meter=2.000x; both must be <2.5x\nfor_in n=4000: time=2.783x meter=1.999x; both must be <2.5x\nfor_in n=8000: time=3.124x meter=2.000x; both must be <2.5x\nfor_in n=16000: time=3.461x meter=2.000x; both must be <2.5x\nstring_for_of n=32768: time=2.617x meter=2.000x; both must be <2.5x\nstring_for_of n=65536: time=2.894x meter=2.000x; both must be <2.5x\nstring_for_of n=131072: time=3.754x meter=2.000x; both must be <2.5x\nFAILED\n\nfailures:\n\nfailures:\n    for_in_traversal_scales_after_construction\n    lazy_string_indexing_spans_many_extents\n    string_receiver_indexing_is_independent_of_receiver_length\n    time_and_computrons_scale_together\n\ntest result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 183.92s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "property_lookup_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/property_lookup_bench-1dd1d4f441aba59a",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:44:45.367336+00:00",
+      "elapsed_seconds": 38.966192960739136,
+      "exit_code": 101,
+      "binary_sha256": "2ace775ad80261fd1b09e407bc187f7f2219b8553aeff44de6877ef706d0ded9",
+      "output": "\nrunning 1 test\ntest existing_property_updates_are_independent_of_object_size ... PROPERTY_UPDATE n=256 seconds=0.056443208 setup_seconds=0.030410000 raw=11962123544 dispatched=180024\nPROPERTY_UPDATE n=1024 seconds=0.213572583 setup_seconds=0.149810167 raw=11962123544 dispatched=180024\nPROPERTY_UPDATE n=4096 seconds=0.832285792 setup_seconds=1.051840291 raw=11962123544 dispatched=180024\nPROPERTY_UPDATE n=16384 seconds=3.251660000 setup_seconds=11.550860000 raw=11962123544 dispatched=180024\n\nthread 'existing_property_updates_are_independent_of_object_size' (26054729) panicked at ironhorse-snapshot/tests/property_lookup_bench.rs:55:5:\nexisting-property updates scale with object size: [1024, 4096, 16384]\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    existing_property_updates_are_independent_of_object_size\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.96s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "classification_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/classification_bench-8aaf0e19431da307",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:45:24.337527+00:00",
+      "elapsed_seconds": 15.52474594116211,
+      "exit_code": 0,
+      "binary_sha256": "e87e2cf076cbba7995f3619f902121d0afd33d6b4d14766229b0d8461d203130",
+      "output": "\nrunning 1 test\ntest property_and_callee_classification ... CLASSIFICATION small_ordinary_get seconds=0.276403500 raw=704515247736 dispatched=10500045\nCLASSIFICATION small_plain_call seconds=0.332309083 raw=1097731332000 dispatched=16500045\nCLASSIFICATION small_array_length seconds=0.249489041 raw=704516329040 dispatched=10500061\nCLASSIFICATION small_native_call seconds=0.317272584 raw=868354279752 dispatched=13000031\nCLASSIFICATION populated_ordinary_get seconds=0.350881250 raw=704524260264 dispatched=10500161\nCLASSIFICATION populated_plain_call seconds=0.387585417 raw=1097740344528 dispatched=16500161\nCLASSIFICATION populated_array_length seconds=0.278332291 raw=704525341568 dispatched=10500177\nCLASSIFICATION populated_native_call seconds=0.395795833 raw=868363292280 dispatched=13000147\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.52s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "lifecycle_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/lifecycle_bench-18f73986bbd74e17",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:45:39.865659+00:00",
+      "elapsed_seconds": 4.306780099868774,
+      "exit_code": 101,
+      "binary_sha256": "2169d65a197a9f9670e7078bf0c979cbccd8600712910ed172df8f56a67bf2c9",
+      "output": "\nrunning 1 test\ntest repeated_shared_bytecode_and_fresh_realms ... LIFECYCLE shared_run n=7 seconds=0.000099708 raw=541976000\nLIFECYCLE shared_run n=4096 seconds=0.000139291 raw=541976000\nLIFECYCLE shared_run n=1048576 seconds=0.012935458 raw=541976000\nLIFECYCLE shared_run n=8388608 seconds=0.133519292 raw=541976000\nLIFECYCLE fresh_scalar n=1000 seconds=0.228669958 raw=541976\nLIFECYCLE fresh_intrinsics n=1000 seconds=0.340826208 raw=2182568\n\nthread 'repeated_shared_bytecode_and_fresh_realms' (26055217) panicked at ironhorse-snapshot/tests/lifecycle_bench.rs:104:5:\nshared n=1048576: 129.733x\nshared n=8388608: 1339.103x\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    repeated_shared_bytecode_and_fresh_realms\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.30s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "checkpoint_scaling_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/checkpoint_scaling_bench-6adf5f3645a55924",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:45:44.175829+00:00",
+      "elapsed_seconds": 0.19378900527954102,
+      "exit_code": 101,
+      "binary_sha256": "08074b8bb547f4acc78a155bfdb11177ca75c055ec4d0622b0d46d29a6063029",
+      "output": "\nrunning 1 test\ntest unchanged_live_arrays_do_not_make_checkpoints_linear ... CHECKPOINT n=1000 seconds=0.000317708 raw=673048 stored_small_bytes=24654\nCHECKPOINT n=10000 seconds=0.002169208 raw=673048 stored_small_bytes=240654\nCHECKPOINT n=50000 seconds=0.010398500 raw=673048 stored_small_bytes=1200654\n\nthread 'unchanged_live_arrays_do_not_make_checkpoints_linear' (26055246) panicked at ironhorse-snapshot/tests/checkpoint_scaling_bench.rs:69:5:\ncheckpoint time scales with unchanged live state at [10000, 50000]\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    unchanged_live_arrays_do_not_make_checkpoints_linear\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "dispatch_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/dispatch_bench-cb54f915b5c01991",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:45:44.373394+00:00",
+      "elapsed_seconds": 8.777178049087524,
+      "exit_code": 0,
+      "binary_sha256": "0e56914cea876ac8a9e52ac09a8be164266bd9935582bba64c4ff8a1c1e23c16",
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 985.770000000\n\nBENCH_METRIC slots_ms 447.705209000\n\nBENCH_METRIC chunks_ms 28.069833000\nBENCH dispatch_ms=985.77 slots_ms=447.71 chunks_ms=28.07\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.77s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "attached_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/attached_bench-a608969556901099",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:45:53.154420+00:00",
+      "elapsed_seconds": 0.7568919658660889,
+      "exit_code": 0,
+      "binary_sha256": "42870d81eb8ad27ac05f2d9d0b2866e530eeca4f3e65f8a879edadd3af3c43cf",
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 17.900875000\n\nBENCH_METRIC attached_resident_ms 26.692292000\n\nBENCH_METRIC attached_faulting_ms 26.894000000\ndetached hot crank median:          17.901 ms\nattached-resident hot crank median: 26.692 ms  (x1.491 of detached)\nattached-faulting hot crank median: 26.894 ms  (x1.502 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "gc_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/gc_bench-ab83718d7385c74d",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:45:53.915713+00:00",
+      "elapsed_seconds": 6.01253604888916,
+      "exit_code": 0,
+      "binary_sha256": "b315a8e97a182d142c50058e258594b7a8f431a2fdf9ad5ceefe3d7364e84037",
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.736 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.722 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.724 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.721 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.734 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.728 ms\n\nBENCH_METRIC slide_500_front_ms 0.724208000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.733 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.726 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.728 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.730 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.727 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.729 ms\n\nBENCH_METRIC slide_500_tail_ms 0.728375000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.022 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.041 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.039 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.034 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.940 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.984 ms\n\nBENCH_METRIC slide_2000_front_ms 2.033583000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.050 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.037 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.019 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.035 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.020 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.028 ms\n\nBENCH_METRIC slide_2000_tail_ms 2.028500000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.037 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.074 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.015 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.003 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.992 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.973 ms\n\nBENCH_METRIC slide_8000_front_ms 7.002916000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.010 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.986 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.995 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.077 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.970 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.986 ms\n\nBENCH_METRIC slide_8000_tail_ms 6.986500000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.603583000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.839083000\n\nBENCH_METRIC gc_5000_partial_ms 0.340999000\n\nBENCH_METRIC gc_5000_gate_ms 0.002500000\n\nBENCH_METRIC gc_5000_enum_ms 0.014125000\n\nBENCH_METRIC gc_5000_query_ms 0.003833000\n\nBENCH_METRIC gc_5000_free_ms 0.320541000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 26.104574740\nslots=  30887 pages=  121 | full-first    2.604 ms | full-steady    0.839 ms | partial   0.341 ms (freed 14247; gate 0.003, enum 0.014, query 0.004, free 0.321 ms) | free-list   15002 | collect/slot   26.1 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.149666000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.941792000\n\nBENCH_METRIC gc_20000_partial_ms 1.442875000\n\nBENCH_METRIC gc_20000_gate_ms 0.009917000\n\nBENCH_METRIC gc_20000_enum_ms 0.020541000\n\nBENCH_METRIC gc_20000_query_ms 0.015167000\n\nBENCH_METRIC gc_20000_free_ms 1.395500000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 24.119293224\nslots= 120887 pages=  473 | full-first   10.150 ms | full-steady    2.942 ms | partial   1.443 ms (freed 59703; gate 0.010, enum 0.021, query 0.015, free 1.395 ms) | free-list   60002 | collect/slot   24.1 ns\n\nBENCH_METRIC gc_80000_full_first_ms 40.500292000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.391875000\n\nBENCH_METRIC gc_80000_partial_ms 6.581251000\n\nBENCH_METRIC gc_80000_gate_ms 0.041208000\n\nBENCH_METRIC gc_80000_enum_ms 0.054083000\n\nBENCH_METRIC gc_80000_query_ms 0.067083000\n\nBENCH_METRIC gc_80000_free_ms 6.397792000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 23.736518143\nslots= 480887 pages= 1879 | full-first   40.500 ms | full-steady   11.392 ms | partial   6.581 ms (freed 239991; gate 0.041, enum 0.054, query 0.067, free 6.398 ms) | free-list  240002 | collect/slot   23.7 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.043208000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.049333000\nslots=  15886 | generational   0.043 ms (freed 768) | full partial   0.049 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.048542000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.081292000\nslots=  60886 | generational   0.049 ms (freed 768) | full partial   0.081 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.095792000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.185709000\nslots= 240886 | generational   0.096 ms (freed 768) | full partial   0.186 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-snapshot",
+      "target": "wake_latency_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/wake_latency_bench-a666972c9732cda1",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:45:59.932028+00:00",
+      "elapsed_seconds": 0.11872005462646484,
+      "exit_code": 0,
+      "binary_sha256": "d7a6d1c7a11ba5f39e1c198394081a03925bc978874b8cd4ad45fc89df8ef6ab",
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.018334000\nslots=  120320 | placeholder alloc median   0.018 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.045792000\nslots=  500000 | placeholder alloc median   0.046 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.029708000\nslots= 1000000 | placeholder alloc median   0.030 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.087958000\nslots= 4000000 | placeholder alloc median   0.088 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 10.050125000\n\nBENCH_METRIC wake_lazy_ms 1.264291000\neager wake median: 10.050 ms\nlazy  wake median: 1.264 ms\nlazy/eager ratio:  0.126\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-compile",
+      "target": "performance_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/performance_bench-2638509cadffffc7",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:46:00.054556+00:00",
+      "elapsed_seconds": 23.09315514564514,
+      "exit_code": 101,
+      "binary_sha256": "7644886a49a88b7cf4278058d06b8e767bd8951651ddf5e3f0e47e2e54fddc8f",
+      "output": "\nrunning 1 test\ntest compiler_growth ... \nCOMPILER_METRIC branches n=4000 bytes=128000 seconds=0.059182166 computrons=84001\n\nCOMPILER_METRIC branches n=8000 bytes=256000 seconds=0.213219042 computrons=168001\nCOMPILER_RATIO branches n=8000 time=3.603 meter=2.000\n\nCOMPILER_METRIC branches n=16000 bytes=512000 seconds=0.801787042 computrons=336001\nCOMPILER_RATIO branches n=16000 time=3.760 meter=2.000\n\nCOMPILER_METRIC branches n=32000 bytes=1024000 seconds=3.185025584 computrons=672001\nCOMPILER_RATIO branches n=32000 time=3.972 meter=2.000\n\nCOMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.017869209 computrons=18446\n\nCOMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.073229250 computrons=37446\nCOMPILER_RATIO eval_declarations n=4000 time=4.098 meter=2.030\n\nCOMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.303514041 computrons=75446\nCOMPILER_RATIO eval_declarations n=8000 time=4.145 meter=2.015\n\nCOMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.017829708 computrons=18446\n\nCOMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.073409375 computrons=37446\nCOMPILER_RATIO script_declarations n=4000 time=4.117 meter=2.030\n\nCOMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.304092208 computrons=75446\nCOMPILER_RATIO script_declarations n=8000 time=4.142 meter=2.015\n\nCOMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.019272209 computrons=18446\n\nCOMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.081680958 computrons=37446\nCOMPILER_RATIO strict_eval_declarations n=4000 time=4.238 meter=2.030\n\nCOMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.340727375 computrons=75446\nCOMPILER_RATIO strict_eval_declarations n=8000 time=4.171 meter=2.015\n\nCOMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.011079375 computrons=18457\n\nCOMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.044687333 computrons=37457\nCOMPILER_RATIO function_declarations n=4000 time=4.033 meter=2.029\n\nCOMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.184631958 computrons=75457\nCOMPILER_RATIO function_declarations n=8000 time=4.132 meter=2.014\n\nthread 'compiler_growth' (26055353) panicked at ironhorse-compile/tests/performance_bench.rs:97:5:\nbranches n=8000: time=3.603x meter=2.000x\nbranches n=16000: time=3.760x meter=2.000x\nbranches n=32000: time=3.972x meter=2.000x\neval_declarations n=4000: time=4.098x meter=2.030x\neval_declarations n=8000: time=4.145x meter=2.015x\nscript_declarations n=4000: time=4.117x meter=2.030x\nscript_declarations n=8000: time=4.142x meter=2.015x\nstrict_eval_declarations n=4000: time=4.238x meter=2.030x\nstrict_eval_declarations n=8000: time=4.171x meter=2.015x\nfunction_declarations n=4000: time=4.033x meter=2.029x\nfunction_declarations n=8000: time=4.132x meter=2.014x\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nFAILED\n\nfailures:\n\nfailures:\n    compiler_growth\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.09s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-compile",
+      "target": "integration_compile_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/integration_compile_bench-423c8d232b27511c",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:46:23.148994+00:00",
+      "elapsed_seconds": 32.770164012908936,
+      "exit_code": 0,
+      "binary_sha256": "5cabcde2d8f45ddbda22fabd8f9d1d7492d094f6f21b297b2dedf05acd7008af",
+      "output": "\nrunning 1 test\ntest integration_compiler_cost ... INTEGRATION_COMPILE shape=branches n=4000 mode=callback seconds=0.059644667 raw=1057867558912 completed=true\nINTEGRATION_COMPILE shape=branches n=8000 mode=callback seconds=0.215687708 raw=4212885286912 completed=true\nINTEGRATION_COMPILE shape=branches n=16000 mode=callback seconds=0.814760125 raw=16814376742912 completed=true\nINTEGRATION_COMPILE shape=branches n=32000 mode=callback seconds=3.143610583 raw=67183183654912 completed=true\nINTEGRATION_COMPILE shape=declarations n=2000 mode=callback seconds=0.022441209 raw=51087159296 completed=true\nINTEGRATION_COMPILE shape=declarations n=4000 mode=callback seconds=0.085036250 raw=200476471296 completed=true\nINTEGRATION_COMPILE shape=declarations n=8000 mode=callback seconds=0.330365458 raw=794167095296 completed=true\nINTEGRATION_COMPILE shape=refusal n=1000 mode=refusal seconds=0.000013125 raw=16465920 completed=false\nINTEGRATION_COMPILE shape=refusal n=10000 mode=refusal seconds=0.000013041 raw=163921920 completed=false\nINTEGRATION_COMPILE shape=refusal n=1000000 mode=refusal seconds=0.000013083 raw=16384081920 completed=false\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 32.76s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "ironhorse-262",
+      "target": "runtime_compile_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/rust/engine/target/release/deps/runtime_compile_bench-1ecaa6a9c1125292",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:46:55.920406+00:00",
+      "elapsed_seconds": 0.3315467834472656,
+      "exit_code": 0,
+      "binary_sha256": "8da13dfeb49d70c865c3db33c364c292b757bf8c8abeb04d07e49bcfeffa9aee",
+      "output": "\nrunning 1 test\ntest runtime_compilation_cost ... RUNTIME_COMPILE shape=eval n=100 seconds=0.000298625 raw=603127640 completed=true\nRUNTIME_COMPILE shape=eval n=1000 seconds=0.003558541 raw=46550428944 completed=true\nRUNTIME_COMPILE shape=eval n=4000 seconds=0.037220584 raw=726863299944 completed=true\nRUNTIME_COMPILE shape=function n=100 seconds=0.000276958 raw=120385320 completed=true\nRUNTIME_COMPILE shape=function n=1000 seconds=0.001480250 raw=1145222560 completed=true\nRUNTIME_COMPILE shape=function n=4000 seconds=0.005499417 raw=4561346560 completed=true\nRUNTIME_COMPILE shape=refusal n=1000 seconds=0.000017292 raw=17271064 completed=false\nRUNTIME_COMPILE shape=refusal n=10000 seconds=0.000039250 raw=164736064 completed=false\nRUNTIME_COMPILE shape=refusal n=1000000 seconds=0.002508083 raw=16385886064 completed=false\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s\n\n"
+    },
+    {
+      "side": "before",
+      "package": "endo",
+      "target": "ironhorse_lifecycle_bench",
+      "command": [
+        "/tmp/perf-final-base-51b99651b/target/release/deps/ironhorse_lifecycle_bench-6d59c6b928c0a453",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:46:56.255323+00:00",
+      "elapsed_seconds": 3.722036838531494,
+      "exit_code": 0,
+      "binary_sha256": "3fa21db25abc7eb3f2f94efcbf3c2f549a7c21792343ee52121610bccd24f4e3",
+      "output": "\nrunning 1 test\ntest repeated_stateless_evaluations ... LIFECYCLE daemon_scalar n=1000 seconds=0.250255333 raw=2516248\nLIFECYCLE daemon_intrinsics n=1000 seconds=0.368960167 raw=7327144\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.72s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "scaling_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/scaling_bench-6c275f8d3a522fd3",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:46:59.980815+00:00",
+      "elapsed_seconds": 49.161537647247314,
+      "exit_code": 0,
+      "binary_sha256": "471c24a7f99bfc40a2835980cd594ad0cddd983cd1c7de376508827703453bed",
+      "output": "\nrunning 4 tests\ntest for_in_traversal_scales_after_construction ... ITERATION_PHASE for_in n=2000 seconds=0.001708042 build_seconds=0.247283916 raw=4461128480 dispatched=66057\nITERATION_PHASE for_in n=4000 seconds=0.003414375 build_seconds=0.444799750 raw=8918088480 dispatched=132057\nITERATION_PHASE for_in n=8000 seconds=0.006779333 build_seconds=0.883558125 raw=17832008480 dispatched=264057\nITERATION_PHASE for_in n=16000 seconds=0.013657416 build_seconds=1.776431791 raw=35659848480 dispatched=528057\nok\ntest lazy_string_indexing_spans_many_extents ... \nLAZY_STRING_METRIC char_code_at_cold n=32768 seconds=0.000658375 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=32768 seconds=0.000661375 raw=2459878680\n\nLAZY_STRING_METRIC char_code_at_cold n=65536 seconds=0.000658542 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=65536 seconds=0.000654542 raw=2459878680\n\nLAZY_STRING_METRIC char_code_at_cold n=262144 seconds=0.000657416 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=262144 seconds=0.000659417 raw=2459878680\n\nLAZY_STRING_METRIC char_code_at_cold n=1048576 seconds=0.000660125 raw=2459879472\n\nLAZY_STRING_METRIC char_code_at_resident n=1048576 seconds=0.000656833 raw=2459878680\n\nLAZY_STRING_METRIC property_cold n=32768 seconds=0.000671541 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=32768 seconds=0.000660125 raw=2328854680\n\nLAZY_STRING_METRIC property_cold n=65536 seconds=0.000661625 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=65536 seconds=0.000661416 raw=2328854680\n\nLAZY_STRING_METRIC property_cold n=262144 seconds=0.000666958 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=262144 seconds=0.000659542 raw=2328854680\n\nLAZY_STRING_METRIC property_cold n=1048576 seconds=0.000674625 raw=2328855472\n\nLAZY_STRING_METRIC property_resident n=1048576 seconds=0.000664791 raw=2328854680\nok\ntest string_receiver_indexing_is_independent_of_receiver_length ... \nSTRING_INDEX_METRIC char_code_at n=16 seconds=0.063987584 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_code_at n=256 seconds=0.063869042 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_code_at n=1024 seconds=0.063904916 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_code_at n=4096 seconds=0.063846875 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=16 seconds=0.063983708 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=256 seconds=0.063927416 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=1024 seconds=0.062599333 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC code_point_at n=4096 seconds=0.063901250 raw=245762279472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=16 seconds=0.072716625 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=256 seconds=0.072462833 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=1024 seconds=0.072375959 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC char_at n=4096 seconds=0.072517041 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=16 seconds=0.072271167 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=256 seconds=0.072231500 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=1024 seconds=0.072205458 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC at n=4096 seconds=0.072181083 raw=245767079472 dispatched=3700031\n\nSTRING_INDEX_METRIC starts_with n=16 seconds=0.069103958 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC starts_with n=256 seconds=0.069114792 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC starts_with n=1024 seconds=0.069620833 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC starts_with n=4096 seconds=0.069071875 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=16 seconds=0.069141042 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=256 seconds=0.069076958 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=1024 seconds=0.069134958 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC ends_with n=4096 seconds=0.069113125 raw=237623879472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=16 seconds=0.068732791 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=256 seconds=0.068907583 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=1024 seconds=0.068750958 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC includes n=4096 seconds=0.068713667 raw=235985479472 dispatched=3500031\n\nSTRING_INDEX_METRIC index_of n=16 seconds=0.070142500 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC index_of n=256 seconds=0.070040167 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC index_of n=1024 seconds=0.070111958 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC index_of n=4096 seconds=0.070068750 raw=249092779472 dispatched=3700031\n\nSTRING_INDEX_METRIC last_index_of n=16 seconds=0.073233917 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC last_index_of n=256 seconds=0.073084833 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC last_index_of n=1024 seconds=0.073036708 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC last_index_of n=4096 seconds=0.073063166 raw=255646379472 dispatched=3800031\n\nSTRING_INDEX_METRIC property n=16 seconds=0.062501542 raw=232659879472 dispatched=3500031\n\nSTRING_INDEX_METRIC property n=256 seconds=0.062423709 raw=232659879472 dispatched=3500031\n\nSTRING_INDEX_METRIC property n=1024 seconds=0.062548875 raw=232659879472 dispatched=3500031\n\nSTRING_INDEX_METRIC property n=4096 seconds=0.062635583 raw=232659879472 dispatched=3500031\nok\ntest time_and_computrons_scale_together ... SCALING char_code_at n=4096 seconds=0.002618750 computrons=109616\nSCALING char_code_at n=8192 seconds=0.005239625 computrons=219184\nSCALING_RATIO char_code_at n=8192 time=2.001 meter=2.000\nSCALING char_code_at n=16384 seconds=0.010492500 computrons=438320\nSCALING_RATIO char_code_at n=16384 time=2.003 meter=2.000\nSCALING char_code_at n=32768 seconds=0.020979250 computrons=876593\nSCALING_RATIO char_code_at n=32768 time=1.999 meter=2.000\nSCALING map_set n=1000 seconds=0.000726458 computrons=24302\nSCALING map_set n=2000 seconds=0.001452667 computrons=48564\nSCALING_RATIO map_set n=2000 time=2.000 meter=1.998\nSCALING map_set n=4000 seconds=0.002915833 computrons=97089\nSCALING_RATIO map_set n=4000 time=2.007 meter=1.999\nSCALING map_set n=8000 seconds=0.005777375 computrons=194138\nSCALING_RATIO map_set n=8000 time=1.981 meter=2.000\nSCALING for_in n=2000 seconds=0.222658209 computrons=115124\nSCALING for_in n=4000 seconds=0.443648542 computrons=230158\nSCALING_RATIO for_in n=4000 time=1.993 meter=1.999\nSCALING for_in n=8000 seconds=0.887119125 computrons=460227\nSCALING_RATIO for_in n=8000 time=2.000 meter=2.000\nSCALING for_in n=16000 seconds=1.772036542 computrons=920363\nSCALING_RATIO for_in n=16000 time=1.998 meter=2.000\nSCALING string_for_of n=16384 seconds=0.012005333 computrons=553044\nSCALING string_for_of n=32768 seconds=0.024235416 computrons=1106010\nSCALING_RATIO string_for_of n=32768 time=2.019 meter=2.000\nSCALING string_for_of n=65536 seconds=0.049054458 computrons=2211942\nSCALING_RATIO string_for_of n=65536 time=2.024 meter=2.000\nSCALING string_for_of n=131072 seconds=0.096478625 computrons=4423807\nSCALING_RATIO string_for_of n=131072 time=1.967 meter=2.000\nok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 48.74s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "property_lookup_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/property_lookup_bench-1dd1d4f441aba59a",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:47:49.145924+00:00",
+      "elapsed_seconds": 3.029160976409912,
+      "exit_code": 0,
+      "binary_sha256": "a0ea295653241e74fd04086efca80af6f43132ac744dd742d15225d8f4734221",
+      "output": "\nrunning 1 test\ntest existing_property_updates_are_independent_of_object_size ... PROPERTY_UPDATE n=256 seconds=0.007735834 setup_seconds=0.045469208 raw=11962123544 dispatched=180024\nPROPERTY_UPDATE n=1024 seconds=0.007308000 setup_seconds=0.112076708 raw=11962123544 dispatched=180024\nPROPERTY_UPDATE n=4096 seconds=0.007333792 setup_seconds=0.452424416 raw=11962123544 dispatched=180024\nPROPERTY_UPDATE n=16384 seconds=0.007324083 setup_seconds=1.806121791 raw=11962123544 dispatched=180024\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.61s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "classification_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/classification_bench-8aaf0e19431da307",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:47:52.178498+00:00",
+      "elapsed_seconds": 16.36974287033081,
+      "exit_code": 0,
+      "binary_sha256": "9f5fefc356de8d70268014ce21965b1c6ceca986f26ab626c5a974a9ef9ff3ad",
+      "output": "\nrunning 1 test\ntest property_and_callee_classification ... CLASSIFICATION small_ordinary_get seconds=0.290275458 raw=704515247736 dispatched=10500045\nCLASSIFICATION small_plain_call seconds=0.355151250 raw=1097731332000 dispatched=16500045\nCLASSIFICATION small_array_length seconds=0.255966166 raw=704516329040 dispatched=10500061\nCLASSIFICATION small_native_call seconds=0.331952583 raw=868354279752 dispatched=13000031\nCLASSIFICATION populated_ordinary_get seconds=0.344870959 raw=704524260264 dispatched=10500161\nCLASSIFICATION populated_plain_call seconds=0.401495458 raw=1097740344528 dispatched=16500161\nCLASSIFICATION populated_array_length seconds=0.295497458 raw=704525341568 dispatched=10500177\nCLASSIFICATION populated_native_call seconds=0.383905208 raw=868363292280 dispatched=13000147\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.98s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "lifecycle_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/lifecycle_bench-18f73986bbd74e17",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:08.552150+00:00",
+      "elapsed_seconds": 1.192276954650879,
+      "exit_code": 0,
+      "binary_sha256": "9922ef7af98742cb1dead5d1a78915fcd6fd6ad508d403e6ac40fe56ad2a5e33",
+      "output": "\nrunning 1 test\ntest repeated_shared_bytecode_and_fresh_realms ... LIFECYCLE shared_run n=7 seconds=0.000166042 raw=541976000\nLIFECYCLE shared_run n=4096 seconds=0.000161625 raw=541976000\nLIFECYCLE shared_run n=1048576 seconds=0.000160917 raw=541976000\nLIFECYCLE shared_run n=8388608 seconds=0.000127125 raw=541976000\nLIFECYCLE fresh_scalar n=1000 seconds=0.011517792 raw=541976\nLIFECYCLE fresh_intrinsics n=1000 seconds=0.118743458 raw=2182568\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "checkpoint_scaling_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/checkpoint_scaling_bench-6adf5f3645a55924",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:09.747965+00:00",
+      "elapsed_seconds": 0.5282771587371826,
+      "exit_code": 0,
+      "binary_sha256": "9d68e01836508df32e2b994dd40f0ef34bb0549af9ebce5e75b1423e0c05a771",
+      "output": "\nrunning 1 test\ntest unchanged_live_arrays_do_not_make_checkpoints_linear ... CHECKPOINT n=1000 seconds=0.000866541 raw=673048 stored_small_bytes=24654\nCHECKPOINT n=10000 seconds=0.000624875 raw=673048 stored_small_bytes=240654\nCHECKPOINT n=50000 seconds=0.000494375 raw=673048 stored_small_bytes=1200654\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "dispatch_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/dispatch_bench-cb54f915b5c01991",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:10.280586+00:00",
+      "elapsed_seconds": 9.49057412147522,
+      "exit_code": 0,
+      "binary_sha256": "0b8f0c28163eb9d7dac3912b06a8f9178da1413e95a700a470e783b1aef8fba3",
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 1024.647750000\n\nBENCH_METRIC slots_ms 461.458334000\n\nBENCH_METRIC chunks_ms 29.334875000\nBENCH dispatch_ms=1024.65 slots_ms=461.46 chunks_ms=29.33\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.11s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "attached_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/attached_bench-a608969556901099",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:19.775379+00:00",
+      "elapsed_seconds": 1.158951997756958,
+      "exit_code": 0,
+      "binary_sha256": "5e4d99fb975ab8824c64eb4c0664b5ec8e57a38a96a27bf5effd6f15ce125803",
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 18.186750000\n\nBENCH_METRIC attached_resident_ms 25.938416000\n\nBENCH_METRIC attached_faulting_ms 25.882875000\ndetached hot crank median:          18.187 ms\nattached-resident hot crank median: 25.938 ms  (x1.426 of detached)\nattached-faulting hot crank median: 25.883 ms  (x1.423 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "gc_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/gc_bench-ab83718d7385c74d",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:20.938804+00:00",
+      "elapsed_seconds": 7.024451017379761,
+      "exit_code": 0,
+      "binary_sha256": "f37172d701746510e3fb7fd4986c6cda1b1c1e2b889c53937bcb12acd5dba2a3",
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   1.471 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   1.218 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   1.075 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   1.012 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.941 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.921 ms\n\nBENCH_METRIC slide_500_front_ms 1.012167000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.888 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.844 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.803 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.805 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.796 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.752 ms\n\nBENCH_METRIC slide_500_tail_ms 0.803042000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.004 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.916 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.903 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.886 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.846 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.910 ms\n\nBENCH_METRIC slide_2000_front_ms 1.903375000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.899 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.903 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.933 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.916 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.914 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.908 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.913958000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.746 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.634 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.592 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.589 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.610 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.693 ms\n\nBENCH_METRIC slide_8000_front_ms 6.609959000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.708 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.708 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.695 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.665 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.695 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.748 ms\n\nBENCH_METRIC slide_8000_tail_ms 6.695083000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.689666000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.859083000\n\nBENCH_METRIC gc_5000_partial_ms 0.381000000\n\nBENCH_METRIC gc_5000_gate_ms 0.002416000\n\nBENCH_METRIC gc_5000_enum_ms 0.015083000\n\nBENCH_METRIC gc_5000_query_ms 0.004000000\n\nBENCH_METRIC gc_5000_free_ms 0.358917000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 27.835335254\nslots=  30887 pages=  121 | full-first    2.690 ms | full-steady    0.859 ms | partial   0.381 ms (freed 14247; gate 0.002, enum 0.015, query 0.004, free 0.359 ms) | free-list   15002 | collect/slot   27.8 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.423292000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.954167000\n\nBENCH_METRIC gc_20000_partial_ms 1.553750000\n\nBENCH_METRIC gc_20000_gate_ms 0.009042000\n\nBENCH_METRIC gc_20000_enum_ms 0.021916000\n\nBENCH_METRIC gc_20000_query_ms 0.015750000\n\nBENCH_METRIC gc_20000_free_ms 1.506083000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 24.313342212\nslots= 120887 pages=  473 | full-first   10.423 ms | full-steady    2.954 ms | partial   1.554 ms (freed 59703; gate 0.009, enum 0.022, query 0.016, free 1.506 ms) | free-list   60002 | collect/slot   24.3 ns\n\nBENCH_METRIC gc_80000_full_first_ms 41.770417000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.365083000\n\nBENCH_METRIC gc_80000_partial_ms 6.516166000\n\nBENCH_METRIC gc_80000_gate_ms 0.038125000\n\nBENCH_METRIC gc_80000_enum_ms 0.053833000\n\nBENCH_METRIC gc_80000_query_ms 0.064542000\n\nBENCH_METRIC gc_80000_free_ms 6.360541000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 23.998274023\nslots= 480887 pages= 1879 | full-first   41.770 ms | full-steady   11.365 ms | partial   6.516 ms (freed 239991; gate 0.038, enum 0.054, query 0.065, free 6.361 ms) | free-list  240002 | collect/slot   24.0 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.037208000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.043292000\nslots=  15886 | generational   0.037 ms (freed 768) | full partial   0.043 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.050584000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.069542000\nslots=  60886 | generational   0.051 ms (freed 768) | full partial   0.070 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.098709000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.177417000\nslots= 240886 | generational   0.099 ms (freed 768) | full partial   0.177 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.63s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-snapshot",
+      "target": "wake_latency_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/wake_latency_bench-a666972c9732cda1",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:27.967343+00:00",
+      "elapsed_seconds": 0.5558769702911377,
+      "exit_code": 0,
+      "binary_sha256": "208423d80caf0732eab8db223a5599b7e5877f911f4d210b9e2fdee96c68d0cd",
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.021125000\nslots=  120320 | placeholder alloc median   0.021 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.038084000\nslots=  500000 | placeholder alloc median   0.038 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.060833000\nslots= 1000000 | placeholder alloc median   0.061 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.256875000\nslots= 4000000 | placeholder alloc median   0.257 ms (0.1 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 12.413166000\n\nBENCH_METRIC wake_lazy_ms 1.620541000\neager wake median: 12.413 ms\nlazy  wake median: 1.621 ms\nlazy/eager ratio:  0.131\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-compile",
+      "target": "performance_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/performance_bench-2638509cadffffc7",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:28.527277+00:00",
+      "elapsed_seconds": 1.8973400592803955,
+      "exit_code": 0,
+      "binary_sha256": "3c4e75a11112b13af09e5e1ea18f3f161d47305fcaf1d6a3f7196266ba37da05",
+      "output": "\nrunning 1 test\ntest compiler_growth ... \nCOMPILER_METRIC branches n=4000 bytes=128000 seconds=0.016664291 computrons=84001\n\nCOMPILER_METRIC branches n=8000 bytes=256000 seconds=0.030466667 computrons=168001\nCOMPILER_RATIO branches n=8000 time=1.828 meter=2.000\n\nCOMPILER_METRIC branches n=16000 bytes=512000 seconds=0.062020667 computrons=336001\nCOMPILER_RATIO branches n=16000 time=2.036 meter=2.000\n\nCOMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.129588958 computrons=672001\nCOMPILER_RATIO branches n=32000 time=2.089 meter=2.000\n\nCOMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.003319084 computrons=18446\n\nCOMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.006649542 computrons=37446\nCOMPILER_RATIO eval_declarations n=4000 time=2.003 meter=2.030\n\nCOMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.013365167 computrons=75446\nCOMPILER_RATIO eval_declarations n=8000 time=2.010 meter=2.015\n\nCOMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.003289417 computrons=18446\n\nCOMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.006626459 computrons=37446\nCOMPILER_RATIO script_declarations n=4000 time=2.014 meter=2.030\n\nCOMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.013321417 computrons=75446\nCOMPILER_RATIO script_declarations n=8000 time=2.010 meter=2.015\n\nCOMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.003165375 computrons=18446\n\nCOMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.006425792 computrons=37446\nCOMPILER_RATIO strict_eval_declarations n=4000 time=2.030 meter=2.030\n\nCOMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.012929708 computrons=75446\nCOMPILER_RATIO strict_eval_declarations n=8000 time=2.012 meter=2.015\n\nCOMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.003187542 computrons=18457\n\nCOMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.006367458 computrons=37457\nCOMPILER_RATIO function_declarations n=4000 time=1.998 meter=2.029\n\nCOMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.012858042 computrons=75457\nCOMPILER_RATIO function_declarations n=8000 time=2.019 meter=2.014\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-compile",
+      "target": "integration_compile_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/integration_compile_bench-423c8d232b27511c",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:30.425903+00:00",
+      "elapsed_seconds": 2.2357797622680664,
+      "exit_code": 0,
+      "binary_sha256": "6c82ced2b272cc8924a21ccafb485fb999e87351486097e1a0cd43d7bc8e092d",
+      "output": "\nrunning 1 test\ntest integration_compiler_cost ... INTEGRATION_COMPILE shape=branches n=4000 mode=callback seconds=0.015402709 raw=11437993984 completed=true\nINTEGRATION_COMPILE shape=branches n=8000 mode=callback seconds=0.030883375 raw=22874025984 completed=true\nINTEGRATION_COMPILE shape=branches n=16000 mode=callback seconds=0.062945375 raw=45746089984 completed=true\nINTEGRATION_COMPILE shape=branches n=32000 mode=callback seconds=0.131847250 raw=91490217984 completed=true\nINTEGRATION_COMPILE shape=declarations n=2000 mode=callback seconds=0.003361458 raw=2500575232 completed=true\nINTEGRATION_COMPILE shape=declarations n=4000 mode=callback seconds=0.006690375 raw=4999135232 completed=true\nINTEGRATION_COMPILE shape=declarations n=8000 mode=callback seconds=0.013361167 raw=9996255232 completed=true\nINTEGRATION_COMPILE shape=refusal n=1000 mode=refusal seconds=0.000014042 raw=16465920 completed=false\nINTEGRATION_COMPILE shape=refusal n=10000 mode=refusal seconds=0.000014000 raw=163921920 completed=false\nINTEGRATION_COMPILE shape=refusal n=1000000 mode=refusal seconds=0.000014000 raw=16384081920 completed=false\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.89s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "ironhorse-262",
+      "target": "runtime_compile_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/rust/engine/target/release/deps/runtime_compile_bench-1ecaa6a9c1125292",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:32.663029+00:00",
+      "elapsed_seconds": 0.5305449962615967,
+      "exit_code": 0,
+      "binary_sha256": "52301e6f3ba1452cb1fee67aba8b8091f4f077068de64fea5f1cd24b2b9df8b1",
+      "output": "\nrunning 1 test\ntest runtime_compilation_cost ... RUNTIME_COMPILE shape=eval n=100 seconds=0.000668000 raw=187174744 completed=true\nRUNTIME_COMPILE shape=eval n=1000 seconds=0.002659250 raw=1838693648 completed=true\nRUNTIME_COMPILE shape=eval n=4000 seconds=0.007235458 raw=7343756648 completed=true\nRUNTIME_COMPILE shape=function n=100 seconds=0.000296209 raw=137973544 completed=true\nRUNTIME_COMPILE shape=function n=1000 seconds=0.001576458 raw=1313953184 completed=true\nRUNTIME_COMPILE shape=function n=4000 seconds=0.005768834 raw=5233885184 completed=true\nRUNTIME_COMPILE shape=refusal n=1000 seconds=0.000017459 raw=17271064 completed=false\nRUNTIME_COMPILE shape=refusal n=10000 seconds=0.000039916 raw=164736064 completed=false\nRUNTIME_COMPILE shape=refusal n=1000000 seconds=0.002498166 raw=16385886064 completed=false\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s\n\n"
+    },
+    {
+      "side": "after",
+      "package": "endo",
+      "target": "ironhorse_lifecycle_bench",
+      "command": [
+        "/Users/xyz/Development/endo2/target/release/deps/ironhorse_lifecycle_bench-6d59c6b928c0a453",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_utc": "2026-09-08T16:48:33.197111+00:00",
+      "elapsed_seconds": 1.4701168537139893,
+      "exit_code": 0,
+      "binary_sha256": "f8c1b640d0c243fd4d652153900e89440d652085c7db99294249a57df69fad1a",
+      "output": "\nrunning 1 test\ntest repeated_stateless_evaluations ... LIFECYCLE daemon_scalar n=1000 seconds=0.031047875 raw=2716952\nLIFECYCLE daemon_intrinsics n=1000 seconds=0.145692666 raw=8322472\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s\n\n"
+    }
+  ],
+  "fixture_helper_sha256": {
+    "rust/engine/ironhorse-snapshot/tests/bench_support/mod.rs": "288d4617cd6def40d0e2efcac2eddb39c03a0b9632bed3a6d1ffe7344fddc4d5"
+  },
+  "baseline_prerequisites_match_candidate": true,
+  "moddable_revision": "23b4d6b0a65f35209d9118c4c13c6c9b3e68784d",
+  "baseline_moddable_setup": "Baseline archive gitlink populated by symlink to the same pinned c/moddable checkout.",
+  "control_comparison": {
+    "maximum_ratio": 1.25,
+    "ratios": {
+      "dispatch_ms": 1.0394389664931982,
+      "slots_ms": 1.0307191534150766,
+      "chunks_ms": 1.0450676710474196,
+      "attached_detached_ms": 1.0159698897400267,
+      "attached_resident_ms": 0.9717567903123494,
+      "attached_faulting_ms": 0.962403324161523,
+      "slide_500_front_ms": 1.3976191922762522,
+      "slide_500_tail_ms": 1.1025117556203878,
+      "slide_2000_front_ms": 0.935971140592737,
+      "slide_2000_tail_ms": 0.9435336455508996,
+      "slide_8000_front_ms": 0.9438866609281048,
+      "slide_8000_tail_ms": 0.958288556501825,
+      "gc_5000_full_first_ms": 1.0330632824073593,
+      "gc_5000_full_steady_ms": 1.0238355442786948,
+      "gc_5000_partial_ms": 1.1173053293411417,
+      "gc_5000_gate_ms": 0.9664,
+      "gc_5000_enum_ms": 1.0678230088495575,
+      "gc_5000_query_ms": 1.0435690060005218,
+      "gc_5000_free_ms": 1.1197225939895363,
+      "gc_5000_sweep_ns_per_slot": 1.066301042297692,
+      "gc_20000_full_first_ms": 1.0269591137284715,
+      "gc_20000_full_steady_ms": 1.004206619638642,
+      "gc_20000_partial_ms": 1.0768431083773715,
+      "gc_20000_gate_ms": 0.9117676716749016,
+      "gc_20000_enum_ms": 1.0669392921474126,
+      "gc_20000_query_ms": 1.0384387156326236,
+      "gc_20000_free_ms": 1.0792425653887496,
+      "gc_20000_sweep_ns_per_slot": 1.0080453845059982,
+      "gc_80000_full_first_ms": 1.031360885003002,
+      "gc_80000_full_steady_ms": 0.9976481483513469,
+      "gc_80000_partial_ms": 0.9901105428132129,
+      "gc_80000_gate_ms": 0.9251844302077266,
+      "gc_80000_enum_ms": 0.9953774753619437,
+      "gc_80000_query_ms": 0.9621215509145387,
+      "gc_80000_free_ms": 0.9941775224952608,
+      "gc_80000_sweep_ns_per_slot": 1.0110275600837098,
+      "gc_5000_generational_ms": 0.8611368265136085,
+      "gc_5000_full_partial_ms": 0.8775464699085803,
+      "gc_20000_generational_ms": 1.0420666639199043,
+      "gc_20000_full_partial_ms": 0.8554593317915663,
+      "gc_80000_generational_ms": 1.0304513946884917,
+      "gc_80000_full_partial_ms": 0.9553494984088008,
+      "placeholder_120320_ms": 1.152230827969892,
+      "placeholder_500000_ms": 0.8316736547868624,
+      "placeholder_1000000_ms": 2.0476975898747813,
+      "placeholder_4000000_ms": 2.920427931512768,
+      "wake_eager_ms": 1.2351255332645117,
+      "wake_lazy_ms": 1.2817784829600147
+    },
+    "failures": [
+      "slide_500_front_ms",
+      "placeholder_1000000_ms",
+      "placeholder_4000000_ms",
+      "wake_lazy_ms"
+    ]
+  },
+  "status": "Complete integrated pair, including all control failures; subsequent fixed three-trial control audit is separate."
+}

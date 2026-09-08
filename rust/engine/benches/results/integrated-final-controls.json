@@ -1,0 +1,1025 @@
+{
+  "before_revision": "51b99651b63d4e652f9af4eae603422783233182",
+  "after_revision": "151c494598e64fe416b1a5880db3a98081ac9f8d",
+  "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "RUST_MIN_STACK": 33554432,
+  "method": "Three fixed complete trials of all four general-control targets, alternating baseline/candidate order; each fixture keeps its internal median. Compare the median of three trial medians, retain every trial. This audit does not erase the earlier single-pair failures or change CI thresholds. No builds or concurrent benchmarks during timing.",
+  "maximum_ratio": 1.25,
+  "trial_medians": {
+    "dispatch_ms": {
+      "baseline": [
+        985.198875,
+        980.978791,
+        982.264625
+      ],
+      "candidate": [
+        1024.825584,
+        1029.904958,
+        1027.097875
+      ]
+    },
+    "slots_ms": {
+      "baseline": [
+        448.888834,
+        450.003959,
+        455.763583
+      ],
+      "candidate": [
+        467.465,
+        461.434167,
+        464.494
+      ]
+    },
+    "chunks_ms": {
+      "baseline": [
+        27.980709,
+        28.25875,
+        28.460625
+      ],
+      "candidate": [
+        29.439125,
+        29.627583,
+        29.378417
+      ]
+    },
+    "attached_detached_ms": {
+      "baseline": [
+        17.985375,
+        17.895333,
+        17.870917
+      ],
+      "candidate": [
+        18.064042,
+        18.308,
+        18.230416
+      ]
+    },
+    "attached_resident_ms": {
+      "baseline": [
+        26.940292,
+        26.859333,
+        26.691834
+      ],
+      "candidate": [
+        25.759125,
+        25.902167,
+        26.027458
+      ]
+    },
+    "attached_faulting_ms": {
+      "baseline": [
+        26.713875,
+        26.831167,
+        26.808917
+      ],
+      "candidate": [
+        25.770791,
+        25.992083,
+        25.898917
+      ]
+    },
+    "slide_500_front_ms": {
+      "baseline": [
+        0.679125,
+        0.557792,
+        0.705833
+      ],
+      "candidate": [
+        0.646875,
+        0.643125,
+        0.548125
+      ]
+    },
+    "slide_500_tail_ms": {
+      "baseline": [
+        0.679791,
+        0.554083,
+        0.723459
+      ],
+      "candidate": [
+        0.639708,
+        0.688,
+        0.542
+      ]
+    },
+    "slide_2000_front_ms": {
+      "baseline": [
+        1.9035,
+        1.539083,
+        1.894167
+      ],
+      "candidate": [
+        1.858667,
+        1.840667,
+        1.478958
+      ]
+    },
+    "slide_2000_tail_ms": {
+      "baseline": [
+        1.899375,
+        1.536208,
+        1.898458
+      ],
+      "candidate": [
+        1.85775,
+        1.860417,
+        1.471958
+      ]
+    },
+    "slide_8000_front_ms": {
+      "baseline": [
+        6.82275,
+        5.453083,
+        6.956458
+      ],
+      "candidate": [
+        6.354417,
+        6.365458,
+        5.161833
+      ]
+    },
+    "slide_8000_tail_ms": {
+      "baseline": [
+        6.8275,
+        5.463458,
+        6.954083
+      ],
+      "candidate": [
+        6.293625,
+        6.449875,
+        5.153584
+      ]
+    },
+    "gc_5000_full_first_ms": {
+      "baseline": [
+        2.560584,
+        2.564083,
+        2.548959
+      ],
+      "candidate": [
+        2.666,
+        2.682334,
+        2.684125
+      ]
+    },
+    "gc_5000_full_steady_ms": {
+      "baseline": [
+        0.823375,
+        0.845625,
+        0.835042
+      ],
+      "candidate": [
+        0.835834,
+        0.851917,
+        0.856667
+      ]
+    },
+    "gc_5000_partial_ms": {
+      "baseline": [
+        0.346541,
+        0.372874,
+        0.346667
+      ],
+      "candidate": [
+        0.353959,
+        0.356041,
+        0.379416
+      ]
+    },
+    "gc_5000_gate_ms": {
+      "baseline": [
+        0.00225,
+        0.002417,
+        0.00225
+      ],
+      "candidate": [
+        0.002333,
+        0.002458,
+        0.002625
+      ]
+    },
+    "gc_5000_enum_ms": {
+      "baseline": [
+        0.0135,
+        0.014458,
+        0.013375
+      ],
+      "candidate": [
+        0.013792,
+        0.014084,
+        0.014834
+      ]
+    },
+    "gc_5000_query_ms": {
+      "baseline": [
+        0.003708,
+        0.004042,
+        0.003625
+      ],
+      "candidate": [
+        0.003625,
+        0.003625,
+        0.004084
+      ]
+    },
+    "gc_5000_free_ms": {
+      "baseline": [
+        0.327083,
+        0.351792,
+        0.327333
+      ],
+      "candidate": [
+        0.333417,
+        0.336167,
+        0.358
+      ]
+    },
+    "gc_5000_sweep_ns_per_slot": {
+      "baseline": [
+        27.469744553,
+        26.242173083,
+        26.490368116
+      ],
+      "candidate": [
+        27.112280247,
+        27.268753845,
+        26.731828925
+      ]
+    },
+    "gc_20000_full_first_ms": {
+      "baseline": [
+        10.127458,
+        10.008916,
+        9.9295
+      ],
+      "candidate": [
+        10.359959,
+        10.425875,
+        10.421917
+      ]
+    },
+    "gc_20000_full_steady_ms": {
+      "baseline": [
+        2.939208,
+        2.942875,
+        2.959167
+      ],
+      "candidate": [
+        2.915166,
+        2.956833,
+        2.982917
+      ]
+    },
+    "gc_20000_partial_ms": {
+      "baseline": [
+        1.451666,
+        1.562209,
+        1.481375
+      ],
+      "candidate": [
+        1.493335,
+        1.587874,
+        1.601875
+      ]
+    },
+    "gc_20000_gate_ms": {
+      "baseline": [
+        0.008417,
+        0.009083,
+        0.009041
+      ],
+      "candidate": [
+        0.008834,
+        0.009667,
+        0.009458
+      ]
+    },
+    "gc_20000_enum_ms": {
+      "baseline": [
+        0.019417,
+        0.020375,
+        0.020417
+      ],
+      "candidate": [
+        0.020584,
+        0.0265,
+        0.021833
+      ]
+    },
+    "gc_20000_query_ms": {
+      "baseline": [
+        0.014125,
+        0.015292,
+        0.015125
+      ],
+      "candidate": [
+        0.015,
+        0.015708,
+        0.015625
+      ]
+    },
+    "gc_20000_free_ms": {
+      "baseline": [
+        1.409791,
+        1.5185,
+        1.436125
+      ],
+      "candidate": [
+        1.448917,
+        1.535917,
+        1.554667
+      ]
+    },
+    "gc_20000_sweep_ns_per_slot": {
+      "baseline": [
+        24.164095395,
+        23.879391498,
+        24.016577465
+      ],
+      "candidate": [
+        25.372521446,
+        24.835863244,
+        24.722120658
+      ]
+    },
+    "gc_80000_full_first_ms": {
+      "baseline": [
+        40.089375,
+        40.139375,
+        40.000792
+      ],
+      "candidate": [
+        41.684416,
+        41.753125,
+        42.0715
+      ]
+    },
+    "gc_80000_full_steady_ms": {
+      "baseline": [
+        11.354958,
+        11.349833,
+        11.307625
+      ],
+      "candidate": [
+        11.357542,
+        11.411,
+        11.505584
+      ]
+    },
+    "gc_80000_partial_ms": {
+      "baseline": [
+        6.258958,
+        6.383291,
+        6.309333
+      ],
+      "candidate": [
+        6.470333,
+        6.646334,
+        6.705625
+      ]
+    },
+    "gc_80000_gate_ms": {
+      "baseline": [
+        0.036083,
+        0.038084,
+        0.036708
+      ],
+      "candidate": [
+        0.036292,
+        0.038166,
+        0.0385
+      ]
+    },
+    "gc_80000_enum_ms": {
+      "baseline": [
+        0.05025,
+        0.054209,
+        0.049583
+      ],
+      "candidate": [
+        0.050292,
+        0.058166,
+        0.055667
+      ]
+    },
+    "gc_80000_query_ms": {
+      "baseline": [
+        0.059666,
+        0.066084,
+        0.061875
+      ],
+      "candidate": [
+        0.06025,
+        0.063625,
+        0.065
+      ]
+    },
+    "gc_80000_free_ms": {
+      "baseline": [
+        6.108834,
+        6.224916,
+        6.16275
+      ],
+      "candidate": [
+        6.325208,
+        6.485417,
+        6.541083
+      ]
+    },
+    "gc_80000_sweep_ns_per_slot": {
+      "baseline": [
+        23.541480639,
+        23.876538563,
+        23.797690518
+      ],
+      "candidate": [
+        23.937883536,
+        24.401175328,
+        23.988828976
+      ]
+    },
+    "gc_5000_generational_ms": {
+      "baseline": [
+        0.033875,
+        0.036,
+        0.044083
+      ],
+      "candidate": [
+        0.037417,
+        0.039083,
+        0.039625
+      ]
+    },
+    "gc_5000_full_partial_ms": {
+      "baseline": [
+        0.04675,
+        0.041792,
+        0.042625
+      ],
+      "candidate": [
+        0.042208,
+        0.0435,
+        0.0445
+      ]
+    },
+    "gc_20000_generational_ms": {
+      "baseline": [
+        0.049,
+        0.048,
+        0.048166
+      ],
+      "candidate": [
+        0.049041,
+        0.049083,
+        0.048958
+      ]
+    },
+    "gc_20000_full_partial_ms": {
+      "baseline": [
+        0.064542,
+        0.06775,
+        0.080291
+      ],
+      "candidate": [
+        0.068875,
+        0.069833,
+        0.071916
+      ]
+    },
+    "gc_80000_generational_ms": {
+      "baseline": [
+        0.087375,
+        0.093,
+        0.098208
+      ],
+      "candidate": [
+        0.088125,
+        0.096875,
+        0.096542
+      ]
+    },
+    "gc_80000_full_partial_ms": {
+      "baseline": [
+        0.161208,
+        0.182042,
+        0.1735
+      ],
+      "candidate": [
+        0.167541,
+        0.176167,
+        0.177542
+      ]
+    },
+    "placeholder_120320_ms": {
+      "baseline": [
+        0.020625,
+        0.019416,
+        0.019667
+      ],
+      "candidate": [
+        0.01975,
+        0.021333,
+        0.023333
+      ]
+    },
+    "placeholder_500000_ms": {
+      "baseline": [
+        0.046333,
+        0.0355,
+        0.043958
+      ],
+      "candidate": [
+        0.033917,
+        0.034125,
+        0.039916
+      ]
+    },
+    "placeholder_1000000_ms": {
+      "baseline": [
+        0.027583,
+        0.029375,
+        0.031834
+      ],
+      "candidate": [
+        0.027959,
+        0.02925,
+        0.027917
+      ]
+    },
+    "placeholder_4000000_ms": {
+      "baseline": [
+        0.089292,
+        0.0885,
+        0.089166
+      ],
+      "candidate": [
+        0.088583,
+        0.088583,
+        0.105084
+      ]
+    },
+    "wake_eager_ms": {
+      "baseline": [
+        11.884542,
+        10.013292,
+        10.011583
+      ],
+      "candidate": [
+        10.078042,
+        11.28725,
+        10.087417
+      ]
+    },
+    "wake_lazy_ms": {
+      "baseline": [
+        1.466208,
+        1.277708,
+        1.269667
+      ],
+      "candidate": [
+        1.333,
+        1.525417,
+        1.349084
+      ]
+    }
+  },
+  "aggregate_medians": {
+    "dispatch_ms": {
+      "baseline": 982.264625,
+      "candidate": 1027.097875
+    },
+    "slots_ms": {
+      "baseline": 450.003959,
+      "candidate": 464.494
+    },
+    "chunks_ms": {
+      "baseline": 28.25875,
+      "candidate": 29.439125
+    },
+    "attached_detached_ms": {
+      "baseline": 17.895333,
+      "candidate": 18.230416
+    },
+    "attached_resident_ms": {
+      "baseline": 26.859333,
+      "candidate": 25.902167
+    },
+    "attached_faulting_ms": {
+      "baseline": 26.808917,
+      "candidate": 25.898917
+    },
+    "slide_500_front_ms": {
+      "baseline": 0.679125,
+      "candidate": 0.643125
+    },
+    "slide_500_tail_ms": {
+      "baseline": 0.679791,
+      "candidate": 0.639708
+    },
+    "slide_2000_front_ms": {
+      "baseline": 1.894167,
+      "candidate": 1.840667
+    },
+    "slide_2000_tail_ms": {
+      "baseline": 1.898458,
+      "candidate": 1.85775
+    },
+    "slide_8000_front_ms": {
+      "baseline": 6.82275,
+      "candidate": 6.354417
+    },
+    "slide_8000_tail_ms": {
+      "baseline": 6.8275,
+      "candidate": 6.293625
+    },
+    "gc_5000_full_first_ms": {
+      "baseline": 2.560584,
+      "candidate": 2.682334
+    },
+    "gc_5000_full_steady_ms": {
+      "baseline": 0.835042,
+      "candidate": 0.851917
+    },
+    "gc_5000_partial_ms": {
+      "baseline": 0.346667,
+      "candidate": 0.356041
+    },
+    "gc_5000_gate_ms": {
+      "baseline": 0.00225,
+      "candidate": 0.002458
+    },
+    "gc_5000_enum_ms": {
+      "baseline": 0.0135,
+      "candidate": 0.014084
+    },
+    "gc_5000_query_ms": {
+      "baseline": 0.003708,
+      "candidate": 0.003625
+    },
+    "gc_5000_free_ms": {
+      "baseline": 0.327333,
+      "candidate": 0.336167
+    },
+    "gc_5000_sweep_ns_per_slot": {
+      "baseline": 26.490368116,
+      "candidate": 27.112280247
+    },
+    "gc_20000_full_first_ms": {
+      "baseline": 10.008916,
+      "candidate": 10.421917
+    },
+    "gc_20000_full_steady_ms": {
+      "baseline": 2.942875,
+      "candidate": 2.956833
+    },
+    "gc_20000_partial_ms": {
+      "baseline": 1.481375,
+      "candidate": 1.587874
+    },
+    "gc_20000_gate_ms": {
+      "baseline": 0.009041,
+      "candidate": 0.009458
+    },
+    "gc_20000_enum_ms": {
+      "baseline": 0.020375,
+      "candidate": 0.021833
+    },
+    "gc_20000_query_ms": {
+      "baseline": 0.015125,
+      "candidate": 0.015625
+    },
+    "gc_20000_free_ms": {
+      "baseline": 1.436125,
+      "candidate": 1.535917
+    },
+    "gc_20000_sweep_ns_per_slot": {
+      "baseline": 24.016577465,
+      "candidate": 24.835863244
+    },
+    "gc_80000_full_first_ms": {
+      "baseline": 40.089375,
+      "candidate": 41.753125
+    },
+    "gc_80000_full_steady_ms": {
+      "baseline": 11.349833,
+      "candidate": 11.411
+    },
+    "gc_80000_partial_ms": {
+      "baseline": 6.309333,
+      "candidate": 6.646334
+    },
+    "gc_80000_gate_ms": {
+      "baseline": 0.036708,
+      "candidate": 0.038166
+    },
+    "gc_80000_enum_ms": {
+      "baseline": 0.05025,
+      "candidate": 0.055667
+    },
+    "gc_80000_query_ms": {
+      "baseline": 0.061875,
+      "candidate": 0.063625
+    },
+    "gc_80000_free_ms": {
+      "baseline": 6.16275,
+      "candidate": 6.485417
+    },
+    "gc_80000_sweep_ns_per_slot": {
+      "baseline": 23.797690518,
+      "candidate": 23.988828976
+    },
+    "gc_5000_generational_ms": {
+      "baseline": 0.036,
+      "candidate": 0.039083
+    },
+    "gc_5000_full_partial_ms": {
+      "baseline": 0.042625,
+      "candidate": 0.0435
+    },
+    "gc_20000_generational_ms": {
+      "baseline": 0.048166,
+      "candidate": 0.049041
+    },
+    "gc_20000_full_partial_ms": {
+      "baseline": 0.06775,
+      "candidate": 0.069833
+    },
+    "gc_80000_generational_ms": {
+      "baseline": 0.093,
+      "candidate": 0.096542
+    },
+    "gc_80000_full_partial_ms": {
+      "baseline": 0.1735,
+      "candidate": 0.176167
+    },
+    "placeholder_120320_ms": {
+      "baseline": 0.019667,
+      "candidate": 0.021333
+    },
+    "placeholder_500000_ms": {
+      "baseline": 0.043958,
+      "candidate": 0.034125
+    },
+    "placeholder_1000000_ms": {
+      "baseline": 0.029375,
+      "candidate": 0.027959
+    },
+    "placeholder_4000000_ms": {
+      "baseline": 0.089166,
+      "candidate": 0.088583
+    },
+    "wake_eager_ms": {
+      "baseline": 10.013292,
+      "candidate": 10.087417
+    },
+    "wake_lazy_ms": {
+      "baseline": 1.277708,
+      "candidate": 1.349084
+    }
+  },
+  "ratios": {
+    "dispatch_ms": 1.0456427411299678,
+    "slots_ms": 1.0321998078243575,
+    "chunks_ms": 1.041770248153227,
+    "attached_detached_ms": 1.0187246026659578,
+    "attached_resident_ms": 0.9643637464861842,
+    "attached_faulting_ms": 0.9660560700754902,
+    "slide_500_front_ms": 0.946990612921038,
+    "slide_500_tail_ms": 0.9410362890947365,
+    "slide_2000_front_ms": 0.9717553943237318,
+    "slide_2000_tail_ms": 0.9785573344261501,
+    "slide_8000_front_ms": 0.9313571507090249,
+    "slide_8000_tail_ms": 0.9218051995606005,
+    "gc_5000_full_first_ms": 1.047547746920234,
+    "gc_5000_full_steady_ms": 1.020208564359637,
+    "gc_5000_partial_ms": 1.0270403586150398,
+    "gc_5000_gate_ms": 1.0924444444444446,
+    "gc_5000_enum_ms": 1.043259259259259,
+    "gc_5000_query_ms": 0.9776159654800433,
+    "gc_5000_free_ms": 1.0269878075232257,
+    "gc_5000_sweep_ns_per_slot": 1.0234769153934244,
+    "gc_20000_full_first_ms": 1.0412633096331312,
+    "gc_20000_full_steady_ms": 1.0047429809285138,
+    "gc_20000_partial_ms": 1.0718919922369419,
+    "gc_20000_gate_ms": 1.0461232164583563,
+    "gc_20000_enum_ms": 1.071558282208589,
+    "gc_20000_query_ms": 1.0330578512396695,
+    "gc_20000_free_ms": 1.0694869875533117,
+    "gc_20000_sweep_ns_per_slot": 1.0341133444261141,
+    "gc_80000_full_first_ms": 1.0415010211558549,
+    "gc_80000_full_steady_ms": 1.005389242291054,
+    "gc_80000_partial_ms": 1.0534130945378855,
+    "gc_80000_gate_ms": 1.0397188623733247,
+    "gc_80000_enum_ms": 1.1078009950248755,
+    "gc_80000_query_ms": 1.0282828282828282,
+    "gc_80000_free_ms": 1.0523576325504036,
+    "gc_80000_sweep_ns_per_slot": 1.00803180702999,
+    "gc_5000_generational_ms": 1.085638888888889,
+    "gc_5000_full_partial_ms": 1.0205278592375364,
+    "gc_20000_generational_ms": 1.0181663414026492,
+    "gc_20000_full_partial_ms": 1.0307453874538746,
+    "gc_80000_generational_ms": 1.0380860215053764,
+    "gc_80000_full_partial_ms": 1.015371757925072,
+    "placeholder_120320_ms": 1.0847104286368028,
+    "placeholder_500000_ms": 0.7763092042404114,
+    "placeholder_1000000_ms": 0.9517957446808512,
+    "placeholder_4000000_ms": 0.9934616333580064,
+    "wake_eager_ms": 1.007402660383818,
+    "wake_lazy_ms": 1.0558625288407053
+  },
+  "failures": [],
+  "runs": [
+    {
+      "trial": 0,
+      "side": "baseline",
+      "target": "dispatch_bench",
+      "binary_sha256": "0e56914cea876ac8a9e52ac09a8be164266bd9935582bba64c4ff8a1c1e23c16",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 985.198875000\n\nBENCH_METRIC slots_ms 448.888834000\n\nBENCH_METRIC chunks_ms 27.980709000\nBENCH dispatch_ms=985.20 slots_ms=448.89 chunks_ms=27.98\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.78s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "baseline",
+      "target": "attached_bench",
+      "binary_sha256": "42870d81eb8ad27ac05f2d9d0b2866e530eeca4f3e65f8a879edadd3af3c43cf",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 17.985375000\n\nBENCH_METRIC attached_resident_ms 26.940292000\n\nBENCH_METRIC attached_faulting_ms 26.713875000\ndetached hot crank median:          17.985 ms\nattached-resident hot crank median: 26.940 ms  (x1.498 of detached)\nattached-faulting hot crank median: 26.714 ms  (x1.485 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "baseline",
+      "target": "gc_bench",
+      "binary_sha256": "b315a8e97a182d142c50058e258594b7a8f431a2fdf9ad5ceefe3d7364e84037",
+      "exit_code": 0,
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.692 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.679 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.669 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.678 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.683 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.680 ms\n\nBENCH_METRIC slide_500_front_ms 0.679125000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.676 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.684 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.680 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.692 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.676 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.678 ms\n\nBENCH_METRIC slide_500_tail_ms 0.679791000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.907 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.904 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.901 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.906 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.900 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.903 ms\n\nBENCH_METRIC slide_2000_front_ms 1.903500000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.903 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.897 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.900 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.907 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.899 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.897 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.899375000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.798 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.951 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.841 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.764 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.772 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.823 ms\n\nBENCH_METRIC slide_8000_front_ms 6.822750000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.863 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.780 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.848 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.829 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.763 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.828 ms\n\nBENCH_METRIC slide_8000_tail_ms 6.827500000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.560584000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.823375000\n\nBENCH_METRIC gc_5000_partial_ms 0.346541000\n\nBENCH_METRIC gc_5000_gate_ms 0.002250000\n\nBENCH_METRIC gc_5000_enum_ms 0.013500000\n\nBENCH_METRIC gc_5000_query_ms 0.003708000\n\nBENCH_METRIC gc_5000_free_ms 0.327083000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 27.469744553\nslots=  30887 pages=  121 | full-first    2.561 ms | full-steady    0.823 ms | partial   0.347 ms (freed 14247; gate 0.002, enum 0.013, query 0.004, free 0.327 ms) | free-list   15002 | collect/slot   27.5 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.127458000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.939208000\n\nBENCH_METRIC gc_20000_partial_ms 1.451666000\n\nBENCH_METRIC gc_20000_gate_ms 0.008417000\n\nBENCH_METRIC gc_20000_enum_ms 0.019417000\n\nBENCH_METRIC gc_20000_query_ms 0.014125000\n\nBENCH_METRIC gc_20000_free_ms 1.409791000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 24.164095395\nslots= 120887 pages=  473 | full-first   10.127 ms | full-steady    2.939 ms | partial   1.452 ms (freed 59703; gate 0.008, enum 0.019, query 0.014, free 1.410 ms) | free-list   60002 | collect/slot   24.2 ns\n\nBENCH_METRIC gc_80000_full_first_ms 40.089375000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.354958000\n\nBENCH_METRIC gc_80000_partial_ms 6.258958000\n\nBENCH_METRIC gc_80000_gate_ms 0.036083000\n\nBENCH_METRIC gc_80000_enum_ms 0.050250000\n\nBENCH_METRIC gc_80000_query_ms 0.059666000\n\nBENCH_METRIC gc_80000_free_ms 6.108834000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 23.541480639\nslots= 480887 pages= 1879 | full-first   40.089 ms | full-steady   11.355 ms | partial   6.259 ms (freed 239991; gate 0.036, enum 0.050, query 0.060, free 6.109 ms) | free-list  240002 | collect/slot   23.5 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.033875000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.046750000\nslots=  15886 | generational   0.034 ms (freed 768) | full partial   0.047 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.049000000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.064542000\nslots=  60886 | generational   0.049 ms (freed 768) | full partial   0.065 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.087375000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.161208000\nslots= 240886 | generational   0.087 ms (freed 768) | full partial   0.161 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.32s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "baseline",
+      "target": "wake_latency_bench",
+      "binary_sha256": "d7a6d1c7a11ba5f39e1c198394081a03925bc978874b8cd4ad45fc89df8ef6ab",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.020625000\nslots=  120320 | placeholder alloc median   0.021 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.046333000\nslots=  500000 | placeholder alloc median   0.046 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.027583000\nslots= 1000000 | placeholder alloc median   0.028 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.089292000\nslots= 4000000 | placeholder alloc median   0.089 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 11.884542000\n\nBENCH_METRIC wake_lazy_ms 1.466208000\neager wake median: 11.885 ms\nlazy  wake median: 1.466 ms\nlazy/eager ratio:  0.123\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "candidate",
+      "target": "dispatch_bench",
+      "binary_sha256": "0b8f0c28163eb9d7dac3912b06a8f9178da1413e95a700a470e783b1aef8fba3",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 1024.825584000\n\nBENCH_METRIC slots_ms 467.465000000\n\nBENCH_METRIC chunks_ms 29.439125000\nBENCH dispatch_ms=1024.83 slots_ms=467.47 chunks_ms=29.44\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.13s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "candidate",
+      "target": "attached_bench",
+      "binary_sha256": "5e4d99fb975ab8824c64eb4c0664b5ec8e57a38a96a27bf5effd6f15ce125803",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 18.064042000\n\nBENCH_METRIC attached_resident_ms 25.759125000\n\nBENCH_METRIC attached_faulting_ms 25.770791000\ndetached hot crank median:          18.064 ms\nattached-resident hot crank median: 25.759 ms  (x1.426 of detached)\nattached-faulting hot crank median: 25.771 ms  (x1.427 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "candidate",
+      "target": "gc_bench",
+      "binary_sha256": "f37172d701746510e3fb7fd4986c6cda1b1c1e2b889c53937bcb12acd5dba2a3",
+      "exit_code": 0,
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.670 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.656 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.690 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.642 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.647 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.640 ms\n\nBENCH_METRIC slide_500_front_ms 0.646875000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.647 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.642 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.641 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.638 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.638 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.640 ms\n\nBENCH_METRIC slide_500_tail_ms 0.639708000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.864 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.859 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.874 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.854 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.860 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.841 ms\n\nBENCH_METRIC slide_2000_front_ms 1.858667000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.857 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.858 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.873 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.843 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.851 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.860 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.857750000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.374 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.284 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.269 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.354 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.376 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.389 ms\n\nBENCH_METRIC slide_8000_front_ms 6.354417000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.392 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.360 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.268 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.264 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.358 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.294 ms\n\nBENCH_METRIC slide_8000_tail_ms 6.293625000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.666000000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.835834000\n\nBENCH_METRIC gc_5000_partial_ms 0.353959000\n\nBENCH_METRIC gc_5000_gate_ms 0.002333000\n\nBENCH_METRIC gc_5000_enum_ms 0.013792000\n\nBENCH_METRIC gc_5000_query_ms 0.003625000\n\nBENCH_METRIC gc_5000_free_ms 0.333417000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 27.112280247\nslots=  30887 pages=  121 | full-first    2.666 ms | full-steady    0.836 ms | partial   0.354 ms (freed 14247; gate 0.002, enum 0.014, query 0.004, free 0.333 ms) | free-list   15002 | collect/slot   27.1 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.359959000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.915166000\n\nBENCH_METRIC gc_20000_partial_ms 1.493335000\n\nBENCH_METRIC gc_20000_gate_ms 0.008834000\n\nBENCH_METRIC gc_20000_enum_ms 0.020584000\n\nBENCH_METRIC gc_20000_query_ms 0.015000000\n\nBENCH_METRIC gc_20000_free_ms 1.448917000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 25.372521446\nslots= 120887 pages=  473 | full-first   10.360 ms | full-steady    2.915 ms | partial   1.493 ms (freed 59703; gate 0.009, enum 0.021, query 0.015, free 1.449 ms) | free-list   60002 | collect/slot   25.4 ns\n\nBENCH_METRIC gc_80000_full_first_ms 41.684416000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.357542000\n\nBENCH_METRIC gc_80000_partial_ms 6.470333000\n\nBENCH_METRIC gc_80000_gate_ms 0.036292000\n\nBENCH_METRIC gc_80000_enum_ms 0.050292000\n\nBENCH_METRIC gc_80000_query_ms 0.060250000\n\nBENCH_METRIC gc_80000_free_ms 6.325208000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 23.937883536\nslots= 480887 pages= 1879 | full-first   41.684 ms | full-steady   11.358 ms | partial   6.470 ms (freed 239991; gate 0.036, enum 0.050, query 0.060, free 6.325 ms) | free-list  240002 | collect/slot   23.9 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.037417000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.042208000\nslots=  15886 | generational   0.037 ms (freed 768) | full partial   0.042 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.049041000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.068875000\nslots=  60886 | generational   0.049 ms (freed 768) | full partial   0.069 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.088125000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.167541000\nslots= 240886 | generational   0.088 ms (freed 768) | full partial   0.168 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.46s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "candidate",
+      "target": "wake_latency_bench",
+      "binary_sha256": "208423d80caf0732eab8db223a5599b7e5877f911f4d210b9e2fdee96c68d0cd",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.019750000\nslots=  120320 | placeholder alloc median   0.020 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.033917000\nslots=  500000 | placeholder alloc median   0.034 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.027959000\nslots= 1000000 | placeholder alloc median   0.028 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.088583000\nslots= 4000000 | placeholder alloc median   0.089 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 10.078042000\n\nBENCH_METRIC wake_lazy_ms 1.333000000\neager wake median: 10.078 ms\nlazy  wake median: 1.333 ms\nlazy/eager ratio:  0.132\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "candidate",
+      "target": "dispatch_bench",
+      "binary_sha256": "0b8f0c28163eb9d7dac3912b06a8f9178da1413e95a700a470e783b1aef8fba3",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 1029.904958000\n\nBENCH_METRIC slots_ms 461.434167000\n\nBENCH_METRIC chunks_ms 29.627583000\nBENCH dispatch_ms=1029.90 slots_ms=461.43 chunks_ms=29.63\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.13s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "candidate",
+      "target": "attached_bench",
+      "binary_sha256": "5e4d99fb975ab8824c64eb4c0664b5ec8e57a38a96a27bf5effd6f15ce125803",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 18.308000000\n\nBENCH_METRIC attached_resident_ms 25.902167000\n\nBENCH_METRIC attached_faulting_ms 25.992083000\ndetached hot crank median:          18.308 ms\nattached-resident hot crank median: 25.902 ms  (x1.415 of detached)\nattached-faulting hot crank median: 25.992 ms  (x1.420 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "candidate",
+      "target": "gc_bench",
+      "binary_sha256": "f37172d701746510e3fb7fd4986c6cda1b1c1e2b889c53937bcb12acd5dba2a3",
+      "exit_code": 0,
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.746 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.660 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.642 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.642 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.643 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.690 ms\n\nBENCH_METRIC slide_500_front_ms 0.643125000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.652 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.672 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.696 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.688 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.641 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.688 ms\n\nBENCH_METRIC slide_500_tail_ms 0.688000000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.751 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.789 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.873 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.782 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.866 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.841 ms\n\nBENCH_METRIC slide_2000_front_ms 1.840667000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.860 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.845 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.860 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.867 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.857 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.871 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.860417000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.420 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.365 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.329 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.339 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.453 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.374 ms\n\nBENCH_METRIC slide_8000_front_ms 6.365458000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.377 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.462 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.506 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.450 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.398 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.416 ms\n\nBENCH_METRIC slide_8000_tail_ms 6.449875000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.682334000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.851917000\n\nBENCH_METRIC gc_5000_partial_ms 0.356041000\n\nBENCH_METRIC gc_5000_gate_ms 0.002458000\n\nBENCH_METRIC gc_5000_enum_ms 0.014084000\n\nBENCH_METRIC gc_5000_query_ms 0.003625000\n\nBENCH_METRIC gc_5000_free_ms 0.336167000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 27.268753845\nslots=  30887 pages=  121 | full-first    2.682 ms | full-steady    0.852 ms | partial   0.356 ms (freed 14247; gate 0.002, enum 0.014, query 0.004, free 0.336 ms) | free-list   15002 | collect/slot   27.3 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.425875000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.956833000\n\nBENCH_METRIC gc_20000_partial_ms 1.587874000\n\nBENCH_METRIC gc_20000_gate_ms 0.009667000\n\nBENCH_METRIC gc_20000_enum_ms 0.026500000\n\nBENCH_METRIC gc_20000_query_ms 0.015708000\n\nBENCH_METRIC gc_20000_free_ms 1.535917000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 24.835863244\nslots= 120887 pages=  473 | full-first   10.426 ms | full-steady    2.957 ms | partial   1.588 ms (freed 59703; gate 0.010, enum 0.026, query 0.016, free 1.536 ms) | free-list   60002 | collect/slot   24.8 ns\n\nBENCH_METRIC gc_80000_full_first_ms 41.753125000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.411000000\n\nBENCH_METRIC gc_80000_partial_ms 6.646334000\n\nBENCH_METRIC gc_80000_gate_ms 0.038166000\n\nBENCH_METRIC gc_80000_enum_ms 0.058166000\n\nBENCH_METRIC gc_80000_query_ms 0.063625000\n\nBENCH_METRIC gc_80000_free_ms 6.485417000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 24.401175328\nslots= 480887 pages= 1879 | full-first   41.753 ms | full-steady   11.411 ms | partial   6.646 ms (freed 239991; gate 0.038, enum 0.058, query 0.064, free 6.485 ms) | free-list  240002 | collect/slot   24.4 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.039083000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.043500000\nslots=  15886 | generational   0.039 ms (freed 768) | full partial   0.043 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.049083000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.069833000\nslots=  60886 | generational   0.049 ms (freed 768) | full partial   0.070 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.096875000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.176167000\nslots= 240886 | generational   0.097 ms (freed 768) | full partial   0.176 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.15s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "candidate",
+      "target": "wake_latency_bench",
+      "binary_sha256": "208423d80caf0732eab8db223a5599b7e5877f911f4d210b9e2fdee96c68d0cd",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.021333000\nslots=  120320 | placeholder alloc median   0.021 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.034125000\nslots=  500000 | placeholder alloc median   0.034 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.029250000\nslots= 1000000 | placeholder alloc median   0.029 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.088583000\nslots= 4000000 | placeholder alloc median   0.089 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 11.287250000\n\nBENCH_METRIC wake_lazy_ms 1.525417000\neager wake median: 11.287 ms\nlazy  wake median: 1.525 ms\nlazy/eager ratio:  0.135\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "baseline",
+      "target": "dispatch_bench",
+      "binary_sha256": "0e56914cea876ac8a9e52ac09a8be164266bd9935582bba64c4ff8a1c1e23c16",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 980.978791000\n\nBENCH_METRIC slots_ms 450.003959000\n\nBENCH_METRIC chunks_ms 28.258750000\nBENCH dispatch_ms=980.98 slots_ms=450.00 chunks_ms=28.26\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.77s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "baseline",
+      "target": "attached_bench",
+      "binary_sha256": "42870d81eb8ad27ac05f2d9d0b2866e530eeca4f3e65f8a879edadd3af3c43cf",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 17.895333000\n\nBENCH_METRIC attached_resident_ms 26.859333000\n\nBENCH_METRIC attached_faulting_ms 26.831167000\ndetached hot crank median:          17.895 ms\nattached-resident hot crank median: 26.859 ms  (x1.501 of detached)\nattached-faulting hot crank median: 26.831 ms  (x1.499 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "baseline",
+      "target": "gc_bench",
+      "binary_sha256": "b315a8e97a182d142c50058e258594b7a8f431a2fdf9ad5ceefe3d7364e84037",
+      "exit_code": 0,
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.531 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.573 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.558 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.553 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.553 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.558 ms\n\nBENCH_METRIC slide_500_front_ms 0.557792000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.555 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.554 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.551 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.579 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.554 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.554 ms\n\nBENCH_METRIC slide_500_tail_ms 0.554083000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.540 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.538 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.544 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.556 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.539 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.538 ms\n\nBENCH_METRIC slide_2000_front_ms 1.539083000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.539 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.547 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.536 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.535 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.535 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.541 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.536208000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.489 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.461 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.462 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.448 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.445 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.453 ms\n\nBENCH_METRIC slide_8000_front_ms 5.453083000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.451 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.470 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.453 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.450 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.565 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.463 ms\n\nBENCH_METRIC slide_8000_tail_ms 5.463458000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.564083000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.845625000\n\nBENCH_METRIC gc_5000_partial_ms 0.372874000\n\nBENCH_METRIC gc_5000_gate_ms 0.002417000\n\nBENCH_METRIC gc_5000_enum_ms 0.014458000\n\nBENCH_METRIC gc_5000_query_ms 0.004042000\n\nBENCH_METRIC gc_5000_free_ms 0.351792000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 26.242173083\nslots=  30887 pages=  121 | full-first    2.564 ms | full-steady    0.846 ms | partial   0.373 ms (freed 14247; gate 0.002, enum 0.014, query 0.004, free 0.352 ms) | free-list   15002 | collect/slot   26.2 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.008916000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.942875000\n\nBENCH_METRIC gc_20000_partial_ms 1.562209000\n\nBENCH_METRIC gc_20000_gate_ms 0.009083000\n\nBENCH_METRIC gc_20000_enum_ms 0.020375000\n\nBENCH_METRIC gc_20000_query_ms 0.015292000\n\nBENCH_METRIC gc_20000_free_ms 1.518500000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 23.879391498\nslots= 120887 pages=  473 | full-first   10.009 ms | full-steady    2.943 ms | partial   1.562 ms (freed 59703; gate 0.009, enum 0.020, query 0.015, free 1.519 ms) | free-list   60002 | collect/slot   23.9 ns\n\nBENCH_METRIC gc_80000_full_first_ms 40.139375000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.349833000\n\nBENCH_METRIC gc_80000_partial_ms 6.383291000\n\nBENCH_METRIC gc_80000_gate_ms 0.038084000\n\nBENCH_METRIC gc_80000_enum_ms 0.054209000\n\nBENCH_METRIC gc_80000_query_ms 0.066084000\n\nBENCH_METRIC gc_80000_free_ms 6.224916000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 23.876538563\nslots= 480887 pages= 1879 | full-first   40.139 ms | full-steady   11.350 ms | partial   6.383 ms (freed 239991; gate 0.038, enum 0.054, query 0.066, free 6.225 ms) | free-list  240002 | collect/slot   23.9 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.036000000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.041792000\nslots=  15886 | generational   0.036 ms (freed 768) | full partial   0.042 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.048000000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.067750000\nslots=  60886 | generational   0.048 ms (freed 768) | full partial   0.068 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.093000000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.182042000\nslots= 240886 | generational   0.093 ms (freed 768) | full partial   0.182 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.91s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "baseline",
+      "target": "wake_latency_bench",
+      "binary_sha256": "d7a6d1c7a11ba5f39e1c198394081a03925bc978874b8cd4ad45fc89df8ef6ab",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.019416000\nslots=  120320 | placeholder alloc median   0.019 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.035500000\nslots=  500000 | placeholder alloc median   0.036 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.029375000\nslots= 1000000 | placeholder alloc median   0.029 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.088500000\nslots= 4000000 | placeholder alloc median   0.088 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 10.013292000\n\nBENCH_METRIC wake_lazy_ms 1.277708000\neager wake median: 10.013 ms\nlazy  wake median: 1.278 ms\nlazy/eager ratio:  0.128\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "baseline",
+      "target": "dispatch_bench",
+      "binary_sha256": "0e56914cea876ac8a9e52ac09a8be164266bd9935582bba64c4ff8a1c1e23c16",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 982.264625000\n\nBENCH_METRIC slots_ms 455.763583000\n\nBENCH_METRIC chunks_ms 28.460625000\nBENCH dispatch_ms=982.26 slots_ms=455.76 chunks_ms=28.46\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.83s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "baseline",
+      "target": "attached_bench",
+      "binary_sha256": "42870d81eb8ad27ac05f2d9d0b2866e530eeca4f3e65f8a879edadd3af3c43cf",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 17.870917000\n\nBENCH_METRIC attached_resident_ms 26.691834000\n\nBENCH_METRIC attached_faulting_ms 26.808917000\ndetached hot crank median:          17.871 ms\nattached-resident hot crank median: 26.692 ms  (x1.494 of detached)\nattached-faulting hot crank median: 26.809 ms  (x1.500 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "baseline",
+      "target": "gc_bench",
+      "binary_sha256": "b315a8e97a182d142c50058e258594b7a8f431a2fdf9ad5ceefe3d7364e84037",
+      "exit_code": 0,
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.682 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.676 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.706 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.707 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.677 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.725 ms\n\nBENCH_METRIC slide_500_front_ms 0.705833000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.729 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.749 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.722 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.723 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.675 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.729 ms\n\nBENCH_METRIC slide_500_tail_ms 0.723459000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.041 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.881 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.876 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.894 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   2.030 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.900 ms\n\nBENCH_METRIC slide_2000_front_ms 1.894167000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.901 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.879 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.903 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.898 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.898 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.906 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.898458000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.994 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.953 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.963 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.955 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.956 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.012 ms\n\nBENCH_METRIC slide_8000_front_ms 6.956458000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.984 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.968 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.949 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.879 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   7.020 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   6.954 ms\n\nBENCH_METRIC slide_8000_tail_ms 6.954083000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.548959000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.835042000\n\nBENCH_METRIC gc_5000_partial_ms 0.346667000\n\nBENCH_METRIC gc_5000_gate_ms 0.002250000\n\nBENCH_METRIC gc_5000_enum_ms 0.013375000\n\nBENCH_METRIC gc_5000_query_ms 0.003625000\n\nBENCH_METRIC gc_5000_free_ms 0.327333000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 26.490368116\nslots=  30887 pages=  121 | full-first    2.549 ms | full-steady    0.835 ms | partial   0.347 ms (freed 14247; gate 0.002, enum 0.013, query 0.004, free 0.327 ms) | free-list   15002 | collect/slot   26.5 ns\n\nBENCH_METRIC gc_20000_full_first_ms 9.929500000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.959167000\n\nBENCH_METRIC gc_20000_partial_ms 1.481375000\n\nBENCH_METRIC gc_20000_gate_ms 0.009041000\n\nBENCH_METRIC gc_20000_enum_ms 0.020417000\n\nBENCH_METRIC gc_20000_query_ms 0.015125000\n\nBENCH_METRIC gc_20000_free_ms 1.436125000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 24.016577465\nslots= 120887 pages=  473 | full-first    9.930 ms | full-steady    2.959 ms | partial   1.481 ms (freed 59703; gate 0.009, enum 0.020, query 0.015, free 1.436 ms) | free-list   60002 | collect/slot   24.0 ns\n\nBENCH_METRIC gc_80000_full_first_ms 40.000792000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.307625000\n\nBENCH_METRIC gc_80000_partial_ms 6.309333000\n\nBENCH_METRIC gc_80000_gate_ms 0.036708000\n\nBENCH_METRIC gc_80000_enum_ms 0.049583000\n\nBENCH_METRIC gc_80000_query_ms 0.061875000\n\nBENCH_METRIC gc_80000_free_ms 6.162750000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 23.797690518\nslots= 480887 pages= 1879 | full-first   40.001 ms | full-steady   11.308 ms | partial   6.309 ms (freed 239991; gate 0.037, enum 0.050, query 0.062, free 6.163 ms) | free-list  240002 | collect/slot   23.8 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.044083000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.042625000\nslots=  15886 | generational   0.044 ms (freed 768) | full partial   0.043 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.048166000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.080291000\nslots=  60886 | generational   0.048 ms (freed 768) | full partial   0.080 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.098208000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.173500000\nslots= 240886 | generational   0.098 ms (freed 768) | full partial   0.173 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.38s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "baseline",
+      "target": "wake_latency_bench",
+      "binary_sha256": "d7a6d1c7a11ba5f39e1c198394081a03925bc978874b8cd4ad45fc89df8ef6ab",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.019667000\nslots=  120320 | placeholder alloc median   0.020 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.043958000\nslots=  500000 | placeholder alloc median   0.044 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.031834000\nslots= 1000000 | placeholder alloc median   0.032 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.089166000\nslots= 4000000 | placeholder alloc median   0.089 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 10.011583000\n\nBENCH_METRIC wake_lazy_ms 1.269667000\neager wake median: 10.012 ms\nlazy  wake median: 1.270 ms\nlazy/eager ratio:  0.127\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "candidate",
+      "target": "dispatch_bench",
+      "binary_sha256": "0b8f0c28163eb9d7dac3912b06a8f9178da1413e95a700a470e783b1aef8fba3",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest detached_hot_path_bench ... \nBENCH_METRIC dispatch_ms 1027.097875000\n\nBENCH_METRIC slots_ms 464.494000000\n\nBENCH_METRIC chunks_ms 29.378417000\nBENCH dispatch_ms=1027.10 slots_ms=464.49 chunks_ms=29.38\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.13s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "candidate",
+      "target": "attached_bench",
+      "binary_sha256": "5e4d99fb975ab8824c64eb4c0664b5ec8e57a38a96a27bf5effd6f15ce125803",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest attached_vs_detached_hot_crank ... heap: 60891 slots (238 pages), 11964 chunk bytes (1 extents)\n\nBENCH_METRIC attached_detached_ms 18.230416000\n\nBENCH_METRIC attached_resident_ms 26.027458000\n\nBENCH_METRIC attached_faulting_ms 25.898917000\ndetached hot crank median:          18.230 ms\nattached-resident hot crank median: 26.027 ms  (x1.428 of detached)\nattached-faulting hot crank median: 25.899 ms  (x1.421 of detached)\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "candidate",
+      "target": "gc_bench",
+      "binary_sha256": "f37172d701746510e3fb7fd4986c6cda1b1c1e2b889c53937bcb12acd5dba2a3",
+      "exit_code": 0,
+      "output": "\nrunning 3 tests\ntest compaction_slide_checkpoint_cost ... chunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.526 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.550 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.548 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.542 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.545 ms\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.572 ms\n\nBENCH_METRIC slide_500_front_ms 0.548125000\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.548 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.542 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.542 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.542 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.543 ms\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    2 | checkpoint   0.541 ms\n\nBENCH_METRIC slide_500_tail_ms 0.542000000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.477 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.473 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.483 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.479 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.478 ms\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.909 ms\n\nBENCH_METRIC slide_2000_front_ms 1.478958000\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.470 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.467 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.472 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.474 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.466 ms\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    2 | checkpoint   1.474 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.471958000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.214 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.162 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.155 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.161 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.183 ms\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.180 ms\n\nBENCH_METRIC slide_8000_front_ms 5.161833000\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.148 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.154 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.151 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.156 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.154 ms\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    2 | checkpoint   5.154 ms\n\nBENCH_METRIC slide_8000_tail_ms 5.153584000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\ntest gc_cost_across_heap_sizes ... \nBENCH_METRIC gc_5000_full_first_ms 2.684125000\n\nBENCH_METRIC gc_5000_full_steady_ms 0.856667000\n\nBENCH_METRIC gc_5000_partial_ms 0.379416000\n\nBENCH_METRIC gc_5000_gate_ms 0.002625000\n\nBENCH_METRIC gc_5000_enum_ms 0.014834000\n\nBENCH_METRIC gc_5000_query_ms 0.004084000\n\nBENCH_METRIC gc_5000_free_ms 0.358000000\n\nBENCH_METRIC gc_5000_sweep_ns_per_slot 26.731828925\nslots=  30887 pages=  121 | full-first    2.684 ms | full-steady    0.857 ms | partial   0.379 ms (freed 14247; gate 0.003, enum 0.015, query 0.004, free 0.358 ms) | free-list   15002 | collect/slot   26.7 ns\n\nBENCH_METRIC gc_20000_full_first_ms 10.421917000\n\nBENCH_METRIC gc_20000_full_steady_ms 2.982917000\n\nBENCH_METRIC gc_20000_partial_ms 1.601875000\n\nBENCH_METRIC gc_20000_gate_ms 0.009458000\n\nBENCH_METRIC gc_20000_enum_ms 0.021833000\n\nBENCH_METRIC gc_20000_query_ms 0.015625000\n\nBENCH_METRIC gc_20000_free_ms 1.554667000\n\nBENCH_METRIC gc_20000_sweep_ns_per_slot 24.722120658\nslots= 120887 pages=  473 | full-first   10.422 ms | full-steady    2.983 ms | partial   1.602 ms (freed 59703; gate 0.009, enum 0.022, query 0.016, free 1.555 ms) | free-list   60002 | collect/slot   24.7 ns\n\nBENCH_METRIC gc_80000_full_first_ms 42.071500000\n\nBENCH_METRIC gc_80000_full_steady_ms 11.505584000\n\nBENCH_METRIC gc_80000_partial_ms 6.705625000\n\nBENCH_METRIC gc_80000_gate_ms 0.038500000\n\nBENCH_METRIC gc_80000_enum_ms 0.055667000\n\nBENCH_METRIC gc_80000_query_ms 0.065000000\n\nBENCH_METRIC gc_80000_free_ms 6.541083000\n\nBENCH_METRIC gc_80000_sweep_ns_per_slot 23.988828976\nslots= 480887 pages= 1879 | full-first   42.072 ms | full-steady   11.506 ms | partial   6.706 ms (freed 239991; gate 0.038, enum 0.056, query 0.065, free 6.541 ms) | free-list  240002 | collect/slot   24.0 ns\nok\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.039625000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.044500000\nslots=  15886 | generational   0.040 ms (freed 768) | full partial   0.044 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.048958000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.071916000\nslots=  60886 | generational   0.049 ms (freed 768) | full partial   0.072 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.096542000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.177542000\nslots= 240886 | generational   0.097 ms (freed 768) | full partial   0.178 ms\nok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "candidate",
+      "target": "wake_latency_bench",
+      "binary_sha256": "208423d80caf0732eab8db223a5599b7e5877f911f4d210b9e2fdee96c68d0cd",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.023333000\nslots=  120320 | placeholder alloc median   0.023 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.039916000\nslots=  500000 | placeholder alloc median   0.040 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.027917000\nslots= 1000000 | placeholder alloc median   0.028 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.105084000\nslots= 4000000 | placeholder alloc median   0.105 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 10.087417000\n\nBENCH_METRIC wake_lazy_ms 1.349084000\neager wake median: 10.087 ms\nlazy  wake median: 1.349 ms\nlazy/eager ratio:  0.134\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s\n\n"
+    }
+  ]
+}

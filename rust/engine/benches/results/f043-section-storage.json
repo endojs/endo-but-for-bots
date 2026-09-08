@@ -3,7 +3,6 @@
   "increment": "Schema 26 section storage and sparse checkpoint batches; pre-extraction dirty tracking remains open",
   "status": "Known failing before and after; F043 remains open",
   "before_revision": "615b1c863a67c9745c9dcbc2b194d3d7c866084c",
-  "after": "source files in this commit",
   "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
   "cpu": "Apple M3 Max",
@@ -57,5 +56,8 @@
       },
       "speedup": 3.7610019646365425
     }
-  ]
+  ],
+  "after_revision": "fd0da9e23401a0ac644b01acd550e5b808707275",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }
