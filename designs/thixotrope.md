@@ -225,6 +225,20 @@ remotable capabilities.
 Interrupted host allocation or evaluator acquisition can require an explicit retry.
 Removing a registry entry releases its reference; it does not revoke references held elsewhere.
 
+## Contacts and capability offers
+
+Local supervisors communicate through private, same-user Unix sockets with durable session recovery.
+An invitation grants one reciprocal exchange of contact inbox capabilities.
+Contact labels are local names, not authenticated human identities.
+The mailbox owner can cancel an invitation and withdraw its publication without revoking an
+established contact.
+
+Each mailbox lives in a guest vat, separate from the workspace and shared application vats.
+Contacts, received offers, and delivery listeners persist as ordinary guest state.
+An offer carries one explicitly selected capability; accepting it may retain it in the user's inventory.
+The recipient's terminal receives descriptions only and disconnects when closed.
+The node outbox handles delivery retries after admission; mailbox code does not resend on reconnect.
+
 ## Retention and retirement
 
 Object lifetime follows heap and protocol references.
