@@ -33,6 +33,7 @@ pub mod meter;
 pub use ironhorse_meter as cost_table;
 pub mod module;
 pub mod opcode;
+mod property_index;
 pub mod sha256;
 #[doc(hidden)]
 pub mod source_scan;

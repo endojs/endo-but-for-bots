@@ -158,12 +158,16 @@ jobs:
         run: |
           set -euo pipefail
           python3 rust/engine/benches/run.py --reference-baseline --check-baseline --output benchmark-report.json 2>&1 | tee benchmark.log
-      # The for-in construction gate remains failing, without an exemption.
       - name: Check elapsed time and computron scaling
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee scaling.log
+      - name: Check existing-property update scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test property_lookup_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee property-lookup.log
       - name: Check compiler scaling
         if: ${{ !cancelled() }}
         run: |
@@ -191,4 +195,5 @@ jobs:
             compiler-scaling.log
             lifecycle.log
             classification.log
+            property-lookup.log
           if-no-files-found: error
