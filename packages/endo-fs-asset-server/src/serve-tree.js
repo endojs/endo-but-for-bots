@@ -254,7 +254,7 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
     }
 
     const etag = `"${hash}"`;
-    /** @type {Array<[string, string]>} */
+    /** @type {Array<readonly [string, string]>} */
     const headers = [
       ['Content-Type', contentTypeForName(fileName)],
       ['Content-Length', String(size)],
