@@ -145,8 +145,8 @@ behavior: today `provideHost` and `provideGuest` funnel their options through on
 shared `normalizeHostOrGuestOptions` helper (`host.js`) that destructures only
 `introducedNames` and `agentName` and silently drops every other key, so a stray
 `bot` on either method is currently ignored without error. The increment splits
-that shared helper — a guest-specific option type that recognizes and resolves
-`bot`, and a host path that rejects an unrecognized `bot` key — so the
+that shared helper (a guest-specific option type that recognizes and resolves
+`bot`, and a host path that rejects an unrecognized `bot` key), so the
 authority-boundary guarantee this paragraph states is actually enforced rather
 than assumed (see Affected Packages, `host.js`).
 
@@ -343,14 +343,14 @@ operator explicitly requests a retry or the guest is replaced with a different
 bot binding.
 
 A rolling window rather than a reset-on-any-success count is deliberate. A bot
-that runs just long enough to look healthy — say ~61 seconds — and then crashes
+that runs just long enough to look healthy (say ~61 seconds) and then crashes
 on every cycle would never accumulate eight *consecutive* failures under a hard
 reset, so the daemon would restart it forever: exactly the in-process hot loop
 this breaker exists to prevent, and one invisible to `getBotStatus` because such
 an entry only ever cycles `starting -> running -> backoff` and never reaches
 `blocked`. Bounding failures per unit time trips the breaker on that flapping bot
-while still letting a genuinely recovered bot — whose earlier failures age out of
-the window — resume without operator intervention. A clean `{ type: 'stopped' }`
+while still letting a genuinely recovered bot (whose earlier failures age out of
+the window) resume without operator intervention. A clean `{ type: 'stopped' }`
 idle exit adds no failure timestamp, so the ordinary idle-exit lifecycle never
 advances the breaker.
 
@@ -373,7 +373,11 @@ guest whose crash-loop breaker is open on restart stays `blocked` (reason
 `crash-loop`) and is not scanned for a fresh attempt; only `retryBot` or a bot
 rebinding clears it. The credential and `admission-denied` breakers deliberately
 do not persist, because a restart is exactly the moment to re-probe a possibly
-repaired credential or quota.
+repaired credential or quota: those two blockers gate on *external* state that may
+have changed on its own while the daemon was down, so an unconditional re-probe is
+the right default. The `operator` breaker is different in kind, and its
+non-persistence is a scope decision rather than a re-probe, argued separately
+under the host methods below.
 
 Expected blockers use the tagged result rather than rejection:
 
@@ -385,6 +389,25 @@ Expected blockers use the tagged result rather than rejection:
   `stopBot` or self-reported by a bot standing itself down. Like the other
   blockers it does not consume the crash count; its breaker is cleared only by
   `retryBot`.
+
+The `BotBlockedReason` union is deliberately closed to this daemon-only
+vocabulary, which has a consequence the companion `@endo/claude` design must work
+around: a *shared-upstream* outage (an Anthropic-side rate limit,
+`overloaded_error`, or 5xx) is not a fault of the individual bot, but none of the
+three typed reasons names it, so a bot that surfaces it as an ordinary rejection
+falls through to the transient-failure path and consumes the crash count. During a
+real provider outage that means every affected bot-bound guest independently races
+its own eight-in-fifteen-minutes count into an open `crash-loop` breaker, each
+then requiring a per-guest `retryBot` once the outage clears. This is the
+fleet-scale form of the very hot-loop-versus-recoverable-failure distinction this
+section draws on the single-guest axis. Rather than widen the union here, this
+increment places the burden on the consumer: a Claude-backed bot must map a recognized
+shared-upstream unavailability onto the `needs-auth`-shaped seam (a non-crash
+blocker with a `retryWhen` that fulfills when the provider recovers) rather than
+letting it reach the daemon as an untyped transient failure. Widening the union
+with a first-class `upstream-unavailable` reason, so the daemon itself can treat
+provider outages as non-crash-counting without relying on consumer discipline, is
+noted as deferred work (First Increment and Deferred Work).
 
 If a blocked result includes `retryWhen`, the supervisor observes that promise
 and performs one new attempt when it fulfills, provided the guest still exists.
@@ -438,9 +461,23 @@ holds against ordinary mail within a daemon incarnation but, because only the
 `crash-loop` bit is persisted, does not survive a routine restart. A deploy,
 reboot, or upgrade rollout gives an `operator`-blocked guest with retained mail
 the same one-immediate-attempt the restart scan gives a backoff-blocked one, so
-an explicit `stopBot` does not outlast a restart in this increment. Persisting
-operator pauses is deferred (First Increment and Deferred Work); until then an
-operator who needs a pause to survive a restart must rebind or collect the guest.
+an explicit `stopBot` does not outlast a restart in this increment. This is *not*
+the re-probe rationale that justifies dropping the credential and
+`admission-denied` breakers across a restart: `operator` is not external state
+that a restart might find repaired, but a deliberate administrative decision that
+nothing "repairs" by the daemon restarting, so re-probing it on restart is not a
+feature. Its non-persistence is instead a first-increment scope decision, and the
+increment accepts the resulting risk on a narrow ground: `stopBot` in this
+increment is an *operational* pause (quiet a noisy or misconfigured bot, hold it
+during maintenance), not a security boundary, so an un-pause bounded to the next
+routine restart is tolerable for the guest population this ships to. An operator
+who needs a pause with security or safety weight (one that must not lapse on the
+next deploy) has a durable lever today: rebinding or collecting the guest removes
+the `bot` binding outright, which no restart re-incarnates. Persisting the
+`operator` reason itself (a small enum alongside the existing `crash-loop` bit,
+the same mechanism) is a natural next increment and is deferred to it
+(First Increment and Deferred Work); until then the rebind/collect lever is the
+supported way to make a pause survive a restart.
 Both resolve once the supervisor has recorded the state change and scheduled
 (`retryBot`) or completed (`stopBot`) the cancellation, not once the resulting
 attempt reaches a terminal state; a caller learns that outcome from
@@ -529,6 +566,9 @@ It deliberately defers:
 - a durable unread/processed cursor and transactional exactly-once external
   effects;
 - persisted backoff schedules and operator pauses;
+- a first-class `upstream-unavailable` blocked reason that lets the daemon treat a
+  shared-provider outage as non-crash-counting on its own, rather than relying on
+  the consumer to map it onto the `needs-auth`/`retryWhen` seam;
 - idle suspension, snapshots, and resource-pressure scheduling (covered
   separately by [XS worker heap snapshots](daemon-xs-worker-snapshot.md));
 - the Claude launcher, credential storage, reauthentication capability, model
@@ -601,6 +641,10 @@ in the reauthentication message, and notification deduplication.
     and verify it is rejected with an error naming the conflicting guest rather
     than co-tenanting one incarnation across both. Also verify `provideHost(name,
     { bot })` is rejected rather than silently dropping the `bot` key.
+12. On a guest that exists but has no `bot` binding, verify the query/command
+    asymmetry directly: `getBotStatus` reports `{ type: 'unbound' }` non-fatally,
+    while `stopBot` and `retryBot` each reject with a `TypeError` naming the
+    target rather than silently no-opping.
 
 ## Affected Packages
 
