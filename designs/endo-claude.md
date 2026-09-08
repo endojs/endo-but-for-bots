@@ -37,6 +37,15 @@ This tool-surface-first boundary is a **proposed narrowing** of the § *Prompt*'
 this document downgrades the prompt's OS-isolation half, so OS confinement is
 sequenced as an optional adapter for the first milestone while remaining required
 to fully satisfy the prompt (*Design Decision 6*).
+**The narrowing's rationale is architectural, not a backfill of PR #1015's sunk
+scope.** It is reached independently: tool-surface substitution is the property
+this caplet can itself deliver and prove with a single live test, whereas OS
+isolation is a separable defense-in-depth adapter (`@endo/claude-sandbox`) that
+belongs to a different package and boundary. PR #1015 having shipped 13 commits
+with no OS-confinement wiring is a *consequence* of that same architectural view,
+not its cause; the doc is not revising the design to match already-written code.
+What remains open is only the maintainer's ratification of the narrowing itself
+(DD6's open question), not the reasoning behind it.
 **Vocabulary convention.** "**Unconfined**" describes the host **caplet**'s
 OS posture (it applies no OS sandbox); "**confined**", "the confined process",
 and "the confinement test" throughout refer to the spawned **child**'s
@@ -139,23 +148,32 @@ The caplet is accepted only when one live, version-pinned test demonstrates
 2. Spawn the real CLI with the exact candidate argv, prompt on stdin, a clean
    constructed environment, `--permission-prompts none`, and
    `--no-session-persistence`.
-3. In the emitted `stream-json` and server logs, observe exactly one successful
+3. Observe, in the emitted `stream-json` and server logs, exactly one successful
    `mcp__endo__sentinel` call and its nonce result.
 4. Observe no built-in call, slash-command resolution, hook marker, discovered
    settings effect, second-server connection, project-memory effect, or session
    transcript; separately record that the intended credential helper was the
-   credential source.
+   credential source. Because "a Claude **subscription** becoming the inference
+   engine" is the package's single load-bearing value proposition (§ *What is the
+   Problem Being Solved?*) and § *Evidence status* lists "a subscription token
+   works through `apiKeyHelper`" as still-assumed, this step must also **assert the
+   credential the helper presented was subscription-tier, not a silently
+   substituted metered API key**, and **fail the acceptance run** if a metered key
+   or a dropped `--bare` was the only way a green run was reached (the failure mode
+   *Work required* item 6 warns against). This check is part of the gate, not
+   deferred to the separate work list.
 5. Repeat after omitting each core flag in turn and record the expected leak or
    refusal, so the test proves which flags are load-bearing rather than merely
    proving that the full invocation happened to work.
-6. Assert the isolation gate of *Design Decision 6* (the `options.isolation`
-   attestation: a caller-supplied claim (`separate-uid` / `sandbox-slice` /
-   `co-located-accepted`) that `make` requires at construction and that marks the
-   cross-guest-escalation residual on a co-located daemon. That residual is the
-   escalation DD6 builds out in full: when the child shares a host with a
-   many-guest Endo daemon, a tool-surface bypass that reaches the daemon's
-   `captp0` socket holds the whole many-guest endpoint, so it can drive other
-   guests, not only this one. See DD6 for the full contract). `make` with
+6. Assert the isolation gate of *Design Decision 6*. That gate is the
+   `options.isolation` attestation: a caller-supplied claim
+   (`separate-uid` / `sandbox-slice` / `co-located-accepted`) that `make` requires
+   at construction and that marks the cross-guest-escalation residual on a
+   co-located daemon. That residual is the escalation DD6 builds out in full: when
+   the child shares a host with a many-guest Endo daemon, a tool-surface bypass
+   that reaches the daemon's `captp0` socket holds the whole many-guest endpoint,
+   so it can drive other guests, not only this one; see DD6 for the full contract.
+   To assert the gate: `make` with
    **no** `options.isolation` attestation **refuses to
    construct** (fails closed rather than launching an unwrapped child against a
    co-located many-guest daemon), and `make` with each recognized attestation
@@ -575,12 +593,13 @@ a harness-pinned model list** before it is rendered — a bare charset check is 
 enough, because a value like `opus --mcp-config '{...}'` would satisfy a charset
 check yet, swallowed by an adjacent variadic flag, inject a server definition
 exactly as a swallowed prompt would. A `model` outside the pinned set fails closed
-(refuse to spawn); the pinned list is versioned with the CLI pin. (Neither
-caller-supplied argv value is the *only* attacker-controlled input to the running
-inference: every `tools/call` **result** the facet returns re-enters the model's
-context and can steer the model into a later **in-allow-list** call. The
-influence a guest exerts is not only a guest-authored prompt but any `tools/call`
-**result** that returns externally authored bytes. This is a **distinct residual**
+(refuse to spawn); the pinned list is versioned with the CLI pin.
+
+Neither caller-supplied argv value is the *only* attacker-controlled input to the
+running inference: every `tools/call` **result** the facet returns re-enters the
+model's context and can steer the model into a later **in-allow-list** call. The
+influence a guest exerts comes not only from a guest-authored prompt but from any
+`tools/call` **result** that returns externally authored bytes. This is a **distinct residual**
 from the co-located-daemon escalation *Design Decision 6* names, and the OS slice
 does **not** close it: an in-allow-list call is inside the pinned MCP catalog
 regardless of OS confinement, so moving the daemon socket out of the child's mount
@@ -590,8 +609,9 @@ call on attacker-chosen input. *Design Decision 2*'s `attenuateArgs` narrows
 this decision-level residual has **no full mitigation named in this document** and
 is owned as an open gap (see § *Open questions*). The `@endo/claude-sandbox` OS
 slice stays an optional adapter rather than an acceptance-condition prerequisite;
-see *Design Decision 6*.) On 2.1.232 the prompt
-is a **bare positional**
+see *Design Decision 6*.
+
+On 2.1.232 the prompt is a **bare positional**
 (`claude [options] [prompt]`), and **four** of the flags above (`--mcp-config`,
 `--allowedTools`, `--disallowedTools`, and `--tools`) are **variadic**
 (`<configs...>` / `<tools...>`, comma-**or**-space separated), derived from the
@@ -888,10 +908,10 @@ onto the operator's login.
 
 ## The facet-to-MCP bridge (the local/remote question)
 
-`@endo/claude` is the MCP **client** side (the confined `claude -p` harness plus
-the allow-list generation). It needs an MCP **server** that projects one guest's
-facet.
-Since the first draft, PR #1206 landed a per-session implementation on `llm`.
+`@endo/claude` is the MCP **client** side (the unconfined host harness that
+spawns the tool-surface-confined `claude -p` child, plus the allow-list
+generation). It needs an MCP **server** that projects one guest's facet.
+Since the first draft, PR #1206 landed a one-guest implementation on `llm`.
 `@endo/claude` builds on it rather than inventing a second bridge:
 
 1. The projection logic (a facet's method set to an MCP `tools/list` catalog, and
@@ -1642,6 +1662,22 @@ remaining, independent axis of who triggers an inference.)
    deployment does); its guarantee is only that the co-located residual is made an
    **explicit, recorded caller-certification** at construction rather than a silent
    default, not that the residual is verified closed.
+
+   **This design's own default deployment triggers the residual, not closes it.**
+   The § *Architecture* topology this document treats as primary (one host,
+   loopback only, the daemon and the `claude -p` child co-located) is exactly the
+   co-located shape this residual names, and no default-deployment text here
+   requires `separate-uid` or the `@endo/claude-sandbox` slice. So a caller
+   following the recommended default has no *truthful* attestation available except
+   `co-located-accepted`: the two real-isolation values would be false assertions
+   for that topology. For the primary deployment, then, the gate is **record-keeping
+   (a required, refused-by-default risk acknowledgment), not mitigation**. It
+   forces the co-located residual to be named and accepted at construction, but
+   closes nothing until the deployment itself changes to a `separate-uid` or
+   `sandbox-slice` shape (or the future verified-handle hardening of § *Open
+   questions* lands). The narrowing is proposed with that limitation stated, not
+   left to be inferred by cross-reading the architecture diagram against § *Open
+   questions*.
 
    (Turning the string into a checked capability is a possible future hardening,
    noted in § *Open questions*: a `sandbox-slice` validated against a slice handle
