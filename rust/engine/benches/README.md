@@ -44,7 +44,7 @@ input doublings, with one warmup and seven measured runs per size.
 Every fixture checks its result and deterministic computron count.
 Both raw median elapsed time and computrons must grow by less than 2.5x per doubling.
 Construction is included in these end-to-end workload measurements.
-The known F044/F045 quadratic paths intentionally make this gate fail until repaired;
+The remaining F045 quadratic paths intentionally make this gate fail until repaired;
 there is no expected-failure or skip exception for them.
 The existing nightly full-test262 workflow runs both instruments in an independent
 job, and uploads their logs and JSON even when a gate fails.
@@ -84,4 +84,29 @@ through the F051 runtime/daemon bridge remain necessary to close F065 fully.
 ```sh
 cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-compile --test performance_bench -- --ignored --nocapture --test-threads=1
+```
+
+## Indexed string receivers (F044)
+
+The receiver-length gate times 100,000 calls to each of the nine indexed String
+methods and a property-index control, with construction and relinking excluded.
+Lengths range from 16 to 4096 UTF-16 code units with identical dispatch counts and
+raw charges for each method.
+A second gate measures cold and resident lazy arenas from 32,768 to 1,048,576 units,
+with 1000 calls per crank and separate metering checks for each arm.
+Both use one warmup and five samples, comparing medians against the smallest size
+with a `<2.5x` ceiling.
+The VM unit tests additionally assert zero whole-string decodes for 100,000
+`charCodeAt` calls and bounded extent faults for indexed reads across page boundaries.
+
+[results/f044-string-indexing.json](results/f044-string-indexing.json) records all
+56 before/after measurements, the baseline revision, and the identical fixture digest.
+Copy this commit's `scaling_bench.rs` into the baseline revision to reproduce it.
+Both timing gates fail before the fix and pass afterward; raw charges are unchanged.
+These gates run with the existing nightly scaling suite.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-snapshot --test scaling_bench string_ \
+  -- --ignored --nocapture --test-threads=1
 ```

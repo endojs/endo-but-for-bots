@@ -478,7 +478,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
                     // asking whether anything slot-bearing remains.
                     let after_key = match ty.find("SlotIndex") {
                         Some(p) => &ty[p + "SlotIndex".len()..],
-                        None => ty.as_ref(),
+                        None => ty,
                     };
                     !is_bearing(after_key)
                 }
