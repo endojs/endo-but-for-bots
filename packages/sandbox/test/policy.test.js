@@ -988,3 +988,227 @@ for (const option of ['uid=0', 'gid=0', 'mode=0777']) {
     );
   });
 }
+
+// ---------------------------------------------------------------------------
+// Runtime attaches: the one bind the table admits, and only once the kernel
+// says what it was bound from (designs/runtime-container-fs-mount.md).
+// ---------------------------------------------------------------------------
+
+const ATTACH = harden({
+  role: 'attach-a1',
+  kind: 'attach',
+  source: '/host/mounts/claude-attach-a1',
+  destination: '/mnt/project',
+  mode: 'rw',
+});
+
+/** A request that also declares one attach. */
+const makeAttachRequest = (overrides = {}) =>
+  makeRequest({
+    mounts: harden([
+      ...makeRequest().mounts,
+      harden({ ...ATTACH, ...overrides }),
+    ]),
+  });
+
+/**
+ * Inspect output for a container whose runtime bound the attach as asked,
+ * plus the kernel's view of it.
+ *
+ * @param {{ ro?: boolean, kernelFstype?: string, kernelOptions?: string[], omitKernel?: boolean }} [changes]
+ */
+const makeAttachState = ({
+  ro = false,
+  kernelFstype = '9p',
+  kernelOptions,
+  omitKernel = false,
+} = {}) =>
+  makeState({
+    inspect: makeInspect(record => {
+      record.Mounts.push({
+        Type: 'bind',
+        Source: '/host/mounts/claude-attach-a1',
+        Destination: '/mnt/project',
+        Options: ['nosuid', 'nodev', 'rprivate', ro ? 'ro' : 'rw', 'rbind'],
+        RW: !ro,
+      });
+    }),
+    ...(omitKernel
+      ? {}
+      : {
+          attachMounts: new Map([
+            [
+              '/mnt/project',
+              harden({
+                fstype: kernelFstype,
+                options: harden(
+                  kernelOptions ?? [
+                    ro ? 'ro' : 'rw',
+                    'nosuid',
+                    'nodev',
+                    'relatime',
+                  ],
+                ),
+              }),
+            ],
+          ]),
+        }),
+  });
+
+test('an attach is validated as a bounded /mnt/ bind with a declared mode', t => {
+  const policy = assertSlicePolicyRequest(makeAttachRequest());
+  t.deepEqual(policy.mounts.at(-1), ATTACH);
+  // An attach is not host storage, so it adds nothing to the writable
+  // ceiling the table bounds — the aggregate is unchanged.
+  t.is(policy.resources.writableBytes, makeRequest().resources.writableBytes);
+
+  /** @type {[string, Record<string, unknown>, RegExp][]} */
+  const rejected = [
+    [
+      'a destination outside /mnt/',
+      { destination: '/workspace' },
+      /under \/mnt\//,
+    ],
+    ['/mnt itself', { destination: '/mnt' }, /under \/mnt\//],
+    [
+      'a traversing destination',
+      { destination: '/mnt/../etc' },
+      /under \/mnt\//,
+    ],
+    ['a relative source', { source: 'claude-attach-a1' }, /host mountpoint/],
+    ['a source with a separator', { source: '/host/a,b' }, /host mountpoint/],
+    ['an unknown mode', { mode: 'rwx' }, /mode must be/],
+    ['a storage ceiling', { sizeBytes: 1n }, /unknown or missing fields/],
+  ];
+  for (const [label, overrides, message] of rejected) {
+    t.throws(
+      () => assertSlicePolicyRequest(makeAttachRequest(overrides)),
+      { message },
+      label,
+    );
+  }
+  // The same host mountpoint bound twice is a duplicate, like a volume.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          mounts: harden([
+            ...makeRequest().mounts,
+            ATTACH,
+            harden({ ...ATTACH, role: 'attach-a2', destination: '/mnt/other' }),
+          ]),
+        }),
+      ),
+    { message: /mounted twice/ },
+  );
+});
+
+test('an attach is assembled as a hardened private bind', t => {
+  const argv = assemblePolicyArgv(
+    assertSlicePolicyRequest(makeAttachRequest()),
+  );
+  t.true(
+    argv.includes(
+      'type=bind,source=/host/mounts/claude-attach-a1,destination=/mnt/project,rw,nosuid,nodev,bind-propagation=rprivate',
+    ),
+  );
+  const ro = assemblePolicyArgv(
+    assertSlicePolicyRequest(makeAttachRequest({ mode: 'ro' })),
+  );
+  t.true(ro.some(arg => arg.includes('destination=/mnt/project,ro,')));
+});
+
+test('an attach is attested from the runtime bind and the kernel filesystem type', t => {
+  const policy = assertSlicePolicyRequest(makeAttachRequest());
+  const attestation = attestSlicePolicy(policy, makeAttachState());
+  t.deepEqual(attestation.mounts.at(-1), {
+    role: 'attach-a1',
+    source: 'attach:/host/mounts/claude-attach-a1',
+    destination: '/mnt/project',
+    mode: 'rw',
+    options: ['nodev', 'nosuid'],
+  });
+  // A read-only attach attests read-only, at both layers.
+  const roPolicy = assertSlicePolicyRequest(makeAttachRequest({ mode: 'ro' }));
+  t.is(
+    attestSlicePolicy(roPolicy, makeAttachState({ ro: true })).mounts.at(-1)
+      ?.mode,
+    'ro',
+  );
+  // The host-bind exclusion still holds for every other bind: the same
+  // bind at a destination the table did not declare as an attach.
+  t.throws(
+    () =>
+      attestSlicePolicy(
+        makeRequest() && assertSlicePolicyRequest(makeRequest()),
+        makeAttachState(),
+      ),
+    { message: /undeclared mount at \/mnt\/project/ },
+  );
+});
+
+test('an attach the kernel does not vouch for is not proved', t => {
+  const policy = assertSlicePolicyRequest(makeAttachRequest());
+  /** @type {[string, any, RegExp][]} */
+  const unproved = [
+    // The runtime bound a plain host directory: the kernel sees the host
+    // filesystem at the destination, not a 9P projection.
+    [
+      'a host directory',
+      makeAttachState({ kernelFstype: 'ext4' }),
+      /ext4 rather than a 9p projection/,
+    ],
+    [
+      'no kernel evidence',
+      makeAttachState({ omitKernel: true }),
+      /absent from the anchor mount table/,
+    ],
+    // The runtime says rw but the kernel mounted it ro — or the reverse.
+    [
+      'a kernel mode the runtime did not report',
+      makeAttachState({ kernelOptions: ['ro', 'nosuid', 'nodev'] }),
+      /kernel mounted it read-only/,
+    ],
+    [
+      'a kernel mount without the hardening',
+      makeAttachState({ kernelOptions: ['rw', 'relatime'] }),
+      /kernel mount missing nodev,nosuid/,
+    ],
+    [
+      'the wrong mode at the runtime',
+      makeAttachState({ ro: true }),
+      /attached read-only/,
+    ],
+  ];
+  for (const [label, state, message] of unproved) {
+    t.throws(() => attestSlicePolicy(policy, state), { message }, label);
+  }
+  // The wrong host path at the runtime.
+  t.throws(
+    () =>
+      attestSlicePolicy(
+        policy,
+        makeState({
+          inspect: makeInspect(record => {
+            record.Mounts.push({
+              Type: 'bind',
+              Source: '/home/operator',
+              Destination: '/mnt/project',
+              Options: ['nosuid', 'nodev', 'rw'],
+              RW: true,
+            });
+          }),
+          attachMounts: new Map([
+            [
+              '/mnt/project',
+              harden({
+                fstype: '9p',
+                options: harden(['rw', 'nosuid', 'nodev']),
+              }),
+            ],
+          ]),
+        }),
+      ),
+    { message: /\/home\/operator/ },
+  );
+});

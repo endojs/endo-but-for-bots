@@ -133,6 +133,17 @@ const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
 
 /**
+ * Where a runtime attach may land: strictly under `/mnt/`, so it can
+ * never shadow a role the profile fixes elsewhere in the table. The
+ * segment shape is `INNER_PATH_PATTERN`'s, which is also what rejects
+ * `..`.
+ */
+const ATTACH_DESTINATION_PATTERN = /^\/mnt(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+
+/** The filesystem type a bind must carry to be an attach and not host data. */
+const ATTACH_FSTYPE = '9p';
+
+/**
  * Assert a value is a positive integer that fits the four-byte range the
  * kernel uses for the quantity, and return it.
  *
@@ -249,10 +260,43 @@ const assertPolicyMount = candidate => {
     typeof candidate === 'object' && candidate !== null ? candidate : {}
   );
   const kind = record.kind;
-  if (kind !== 'volume' && kind !== 'tmpfs') {
+  if (kind !== 'volume' && kind !== 'tmpfs' && kind !== 'attach') {
     throw makeError(
-      X`slice policy mount kind must be "volume" or "tmpfs"; got ${q(kind)}`,
+      X`slice policy mount kind must be "volume", "tmpfs", or "attach"; got ${q(kind)}`,
     );
+  }
+  if (kind === 'attach') {
+    assertExactKeys(
+      record,
+      ['role', 'kind', 'source', 'destination', 'mode'],
+      `mount ${record.role}`,
+    );
+    const role = assertPortableName(record.role, 'mount role');
+    const { destination, source, mode } = record;
+    if (
+      typeof destination !== 'string' ||
+      !ATTACH_DESTINATION_PATTERN.test(destination)
+    ) {
+      throw makeError(
+        X`slice policy attach ${q(role)} needs an absolute normal destination under /mnt/; got ${q(destination)}`,
+      );
+    }
+    // The host side of the bind. The same bounded shape as a destination:
+    // the bridge that mints these mountpoints composes them from an
+    // operator-configured base and a content-hash name, so nothing
+    // legitimate needs more, and a looser shape would admit the runtime's
+    // own option separators.
+    if (typeof source !== 'string' || !INNER_PATH_PATTERN.test(source)) {
+      throw makeError(
+        X`slice policy attach ${q(role)} needs an absolute normal host mountpoint; got ${q(source)}`,
+      );
+    }
+    if (mode !== 'ro' && mode !== 'rw') {
+      throw makeError(
+        X`slice policy attach ${q(role)} mode must be "ro" or "rw"; got ${q(mode)}`,
+      );
+    }
+    return harden({ role, kind, source, destination, mode });
   }
   const keys =
     kind === 'volume'
@@ -450,6 +494,16 @@ export const assertSlicePolicyRequest = request => {
       }
       sources.add(mount.source);
       sharedWritable += mount.sizeBytes;
+    } else if (mount.kind === 'attach') {
+      // Not host storage: an attach is served through a capability, and
+      // its bytes live wherever that capability keeps them. It adds
+      // nothing to the writable ceiling this table bounds.
+      if (sources.has(mount.source)) {
+        throw makeError(
+          X`slice policy attach ${q(mount.source)} is mounted twice`,
+        );
+      }
+      sources.add(mount.source);
     } else {
       perContainerWritable += mount.sizeBytes;
     }
@@ -571,6 +625,16 @@ export const assemblePolicyArgv = policy => {
       argv.push(
         '--mount',
         `type=tmpfs,destination=${mount.destination},rw,nosuid,nodev,tmpfs-size=${mount.sizeBytes},tmpfs-mode=0700,U=true,notmpcopyup`,
+      );
+    } else if (mount.kind === 'attach') {
+      // The one bind the table admits, and only because the attestation
+      // then proves what it was bound from. `rprivate` is the runtime's
+      // default, stated because a policy states everything: a shared
+      // propagation would let a mount event inside the slice reach the
+      // host's view of the same 9P tree.
+      argv.push(
+        '--mount',
+        `type=bind,source=${mount.source},destination=${mount.destination},${mount.mode === 'ro' ? 'ro' : 'rw'},nosuid,nodev,bind-propagation=rprivate`,
       );
     } else {
       argv.push(
@@ -706,7 +770,9 @@ const findEffectiveMount = (inspect, tmpfs, mount) => {
       // eslint-disable-next-line no-continue
       continue;
     }
-    if (candidate.Type !== mount.kind) return null;
+    if (candidate.Type !== (mount.kind === 'attach' ? 'bind' : mount.kind)) {
+      return null;
+    }
     const options = harden(effectiveMountOptions(candidate.Options));
     if (mount.kind === 'tmpfs') {
       const size = (
@@ -750,6 +816,11 @@ const attestMounts = (policy, state) => {
   const declaredDestinations = new Set(
     policy.mounts.map(mount => mount.destination),
   );
+  const attachDestinations = new Set(
+    policy.mounts
+      .filter(mount => mount.kind === 'attach')
+      .map(mount => mount.destination),
+  );
   // An undeclared mount is the failure this table exists to exclude, so
   // enumerate what the runtime actually attached before matching the
   // declared entries against it. An absent list is read as an empty one:
@@ -770,11 +841,16 @@ const attestMounts = (policy, state) => {
     if (!declaredDestinations.has(destination)) {
       return unproved('mount table', `undeclared mount at ${destination}`);
     }
-    if (/** @type {any} */ (candidate).Type === 'bind') {
+    if (
+      /** @type {any} */ (candidate).Type === 'bind' &&
+      !attachDestinations.has(destination)
+    ) {
       // A bind is the only mount shape that can reach host state — a
-      // home directory, a credential store, a runtime socket. The
-      // table has none, so `hostHome` and `hostSockets` follow from
-      // the absence rather than from a path blocklist.
+      // home directory, a credential store, a runtime socket. The only
+      // binds the table admits are its declared attaches, each of which
+      // is proved below to be a 9P projection rather than host data, so
+      // `hostHome` and `hostSockets` still follow from the absence of any
+      // other bind rather than from a path blocklist.
       return unproved('mount table', `host bind mount at ${destination}`);
     }
   }
@@ -793,6 +869,74 @@ const attestMounts = (policy, state) => {
       );
       if (effective === null) {
         return unproved(`mount ${mount.role}`, 'not attached');
+      }
+      if (mount.kind === 'attach') {
+        // The runtime's half: the bind is of the declared host mountpoint,
+        // in the declared mode, with the hardening options.
+        if (effective.source !== mount.source) {
+          return unproved(`mount ${mount.role}`, effective.source);
+        }
+        if (effective.readOnly !== (mount.mode === 'ro')) {
+          return unproved(
+            `mount ${mount.role}`,
+            effective.readOnly ? 'attached read-only' : 'attached read-write',
+          );
+        }
+        const missingRuntime = REQUIRED_MOUNT_OPTIONS.filter(
+          option => !effective.options.includes(option),
+        );
+        if (missingRuntime.length > 0) {
+          return unproved(
+            `mount ${mount.role}`,
+            `missing ${missingRuntime.join(',')}`,
+          );
+        }
+        // The kernel's half, which is the part the runtime cannot answer:
+        // what filesystem the slice actually sees at the destination. A
+        // bind inherits the type of what it was bound from, so a 9P type
+        // here says the source is a projection served by a userspace
+        // server — the bridge — and not host data. Anything else at that
+        // path, including nothing, is exactly the host bind the table
+        // excludes.
+        const kernel = state.attachMounts?.get(mount.destination);
+        if (kernel === undefined || kernel === null) {
+          return unproved(
+            `mount ${mount.role}`,
+            'absent from the anchor mount table',
+          );
+        }
+        if (kernel.fstype !== ATTACH_FSTYPE) {
+          return unproved(
+            `mount ${mount.role}`,
+            `${kernel.fstype} rather than a ${ATTACH_FSTYPE} projection`,
+          );
+        }
+        if (kernel.options.includes('ro') !== (mount.mode === 'ro')) {
+          return unproved(
+            `mount ${mount.role}`,
+            `kernel mounted it ${kernel.options.includes('ro') ? 'read-only' : 'read-write'}`,
+          );
+        }
+        const missingKernel = REQUIRED_MOUNT_OPTIONS.filter(
+          option => !kernel.options.includes(option),
+        );
+        if (missingKernel.length > 0) {
+          return unproved(
+            `mount ${mount.role}`,
+            `kernel mount missing ${missingKernel.join(',')}`,
+          );
+        }
+        return harden({
+          role: mount.role,
+          source: `attach:${mount.source}`,
+          destination: mount.destination,
+          mode: mount.mode,
+          options: harden(
+            ATTESTED_MOUNT_OPTIONS.filter(option =>
+              effective.options.includes(option),
+            ),
+          ),
+        });
       }
       if (effective.readOnly) {
         return unproved(`mount ${mount.role}`, 'attached read-only');

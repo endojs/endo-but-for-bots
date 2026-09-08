@@ -950,3 +950,104 @@ test('quota evidence for a different physical volume fails construction', async 
     message: /storage ceiling/,
   });
 });
+
+// ---------------------------------------------------------------------------
+// Runtime attaches (designs/runtime-container-fs-mount.md): the driver reads
+// the anchor's own mount table to prove a declared bind is a 9P projection.
+// ---------------------------------------------------------------------------
+
+const ATTACH_SOURCE = '/host/mounts/claude-attach-a1';
+const ATTACH_POLICY = harden({
+  ...POLICY,
+  mounts: harden([
+    ...POLICY.mounts,
+    harden({
+      role: 'attach-a1',
+      kind: 'attach',
+      source: ATTACH_SOURCE,
+      destination: '/mnt/project',
+      mode: 'rw',
+    }),
+  ]),
+});
+const ATTACH_INSPECT = harden({
+  ...ANCHOR_INSPECT,
+  Mounts: harden([
+    ...ANCHOR_INSPECT.Mounts,
+    harden({
+      Type: 'bind',
+      Source: ATTACH_SOURCE,
+      Destination: '/mnt/project',
+      Options: harden(['nosuid', 'nodev', 'rprivate', 'rw', 'rbind']),
+      RW: true,
+    }),
+  ]),
+});
+/** @param {string} fstype */
+const anchorMountInfo = fstype => `\
+28 1 0:24 / / rw,relatime - overlay overlay rw
+101 28 0:47 / /workspace rw,nosuid,nodev,relatime - xfs /dev/mapper/ws rw,prjquota
+102 28 0:48 / /codex-home rw,nosuid,nodev,relatime - xfs /dev/mapper/cs rw,prjquota
+103 28 0:52 / /mnt/project rw,nosuid,nodev,relatime - ${fstype} endo-fs rw,trans=unix
+`;
+
+test('a declared attach is attested when the kernel sees a 9P projection there', async t => {
+  const { driver, calls } = makeDriverUnderTest({
+    responses: {
+      'container-inspect': { stdout: `${JSON.stringify([ATTACH_INSPECT])}\n` },
+    },
+    procfs: makeProcfs({
+      [`/proc/${ANCHOR_PID}/mountinfo`]: anchorMountInfo('9p'),
+    }),
+  });
+  const slice = await driver.prepareSlice(
+    /** @type {any} */ (makeSpec({ policy: ATTACH_POLICY })),
+  );
+  const attestation = await /** @type {any} */ (driver).policy(slice);
+  t.deepEqual(attestation.mounts.at(-1), {
+    role: 'attach-a1',
+    source: `attach:${ATTACH_SOURCE}`,
+    destination: '/mnt/project',
+    mode: 'rw',
+    options: ['nodev', 'nosuid'],
+  });
+  // The anchor was created under the bind, as one of the policy's own flags.
+  const create = calls.find(call => call.args[0] === 'create');
+  t.truthy(create);
+  t.true(
+    /** @type {any} */ (create).args.some((/** @type {string} */ arg) =>
+      arg.startsWith(
+        `type=bind,source=${ATTACH_SOURCE},destination=/mnt/project,rw,`,
+      ),
+    ),
+  );
+});
+
+test('a declared attach that the kernel says is host data fails construction', async t => {
+  // The runtime reports the same bind either way; only the kernel can say
+  // the source was an ext4 directory rather than a 9P mount.
+  const { driver } = makeDriverUnderTest({
+    responses: {
+      'container-inspect': { stdout: `${JSON.stringify([ATTACH_INSPECT])}\n` },
+    },
+    procfs: makeProcfs({
+      [`/proc/${ANCHOR_PID}/mountinfo`]: anchorMountInfo('ext4'),
+    }),
+  });
+  await t.throwsAsync(
+    () =>
+      driver.prepareSlice(
+        /** @type {any} */ (makeSpec({ policy: ATTACH_POLICY })),
+      ),
+    { message: /ext4 rather than a 9p projection/ },
+  );
+});
+
+test('a policy that declares no attach never reads the mount table', async t => {
+  // Without an attach in the table, the proof needs nothing from
+  // mountinfo — and a fixture that lacks it must not fail construction.
+  const { driver } = makeDriverUnderTest();
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  const attestation = await /** @type {any} */ (driver).policy(slice);
+  t.is(attestation.mounts.length, 5);
+});
