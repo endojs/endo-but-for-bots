@@ -241,3 +241,18 @@ fn map_and_set_iterator_prototypes_are_distinct_and_branded() {
         agrees(source);
     }
 }
+
+#[test]
+fn indexed_keys_preserve_same_value_zero_and_order() {
+    for source in [
+        "var m = new Map(); m.set(1, 'a'); m.set(1.0, 'b'); m.set(-0, 'c'); m.set(0, 'd'); m.set(NaN, 'e'); m.set(0/0, 'f'); [m.size, m.get(1), m.get(0), m.get(NaN)].join(',')",
+        "var m = new Map(); var a = String.fromCharCode(0xD800); var b = String.fromCharCode(0xD800); m.set(a, 1); m.set(b, 2); [m.size, m.get(a), m.get(b)].join(',')",
+        "var m = new Map(); m.set(12345678901234567890n, 1); m.set(BigInt('12345678901234567890'), 2); m.set(-12345678901234567890n, 3); [m.size, m.get(12345678901234567890n)].join(',')",
+        "var a = Symbol('x'); var b = Symbol('x'); var o = {}; var m = new Map(); m.set(a, 1); m.set(b, 2); m.set(o, 3); m.set({}, 4); [m.size,m.get(a),m.get(b),m.get(o)].join(',')",
+        "var m = new Map([[1,'a'],[2,'b'],[3,'c']]); m.delete(2); m.set(2,'d'); Array.from(m.keys()).join(',')",
+        "var m = new Map([[1,'a'],[2,'b']]); var it = m.keys(); it.next(); m.clear(); m.set(3,'c'); [it.next().done,m.size,m.get(3)].join(',')",
+        "var s = new Set([undefined,null,false,true,0,-0,NaN,NaN,'0',0n]); [s.size,s.has(undefined),s.has(null),s.has('0'),s.has(0n)].join(',')",
+    ] {
+        agrees(source);
+    }
+}

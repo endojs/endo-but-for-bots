@@ -125,6 +125,10 @@ fn main() {
         .define("mxCESU8", Some("1"))
         .define("mxStringInfoCacheLength", Some("4"))
         .flag("-fno-common")
+        // XS reads Number storage through integer pointers (for example,
+        // fxSumEntry hashes a NaN immediately after canonicalizing it).
+        // Preserve those aliasing accesses under optimized GCC builds.
+        .flag("-fno-strict-aliasing")
         .flag("-Wno-misleading-indentation")
         .flag("-Wno-implicit-fallthrough")
         .flag("-Wno-unused-parameter")

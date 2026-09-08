@@ -110,3 +110,28 @@ cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-snapshot --test scaling_bench string_ \
   -- --ignored --nocapture --test-threads=1
 ```
+
+## Collections and iterator buffers (F045)
+
+[results/f045-collections-and-iteration.json](results/f045-collections-and-iteration.json)
+records the before/after data for the collection index, cached live count, and shared
+iterator buffers.
+Map insertion and string iteration now pass the existing doubling threshold with
+unchanged computrons.
+The end-to-end for-in fixture still fails: constructing its named-property object
+is quadratic, independent of iterator traversal.
+Its original assertion remains enabled with the same threshold.
+
+The additional `for_in_traversal_scales_after_construction` fixture measures traversal
+separately and reports the single setup time alongside its traversal median.
+It uses one warmup and seven measured cranks per size, checks raw charges and dispatch
+counts, and requires both traversal time and raw charges to grow by less than 2.5x.
+It fails before the iterator fix and passes afterward.
+This separates evidence for the repaired traversal from the remaining construction
+cost; it does not make the full scaling job green.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-snapshot --test scaling_bench for_in_traversal \
+  -- --ignored --nocapture --test-threads=1
+```

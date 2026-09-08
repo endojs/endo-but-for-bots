@@ -271,3 +271,32 @@ fn blob_snapshot_carries_the_iterator_rows_too() {
     let resumed = crank(&mut r, obs);
     assert_eq!(resumed, continuous, "blob twin agrees");
 }
+
+#[test]
+fn collection_content_indexes_survive_lazy_restore_and_chunk_compaction() {
+    let setup = "var m = new Map(); var key = String.fromCharCode(0xD800); m.set(key, 1); m.set(12345678901234567890n, 2); m.set('deleted', 3); m.get(key); m.delete('deleted'); var it = m.keys(); it.next(); 0";
+    let observations = [
+        "[m.get(String.fromCharCode(0xD800)),m.get(BigInt('12345678901234567890')),m.size].join(',')",
+        "m.delete(String.fromCharCode(0xD800)); m.set(String.fromCharCode(0xD800),4); [m.get(key),m.size,String(it.next().value)].join(',')",
+    ];
+    assert_twin(
+        "content-index",
+        setup,
+        &observations,
+        &["1,2,2", "4,2,12345678901234567890"],
+    );
+
+    let (code, names) = compile(setup);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&code).completed);
+    machine.collect_garbage();
+    for (source, expected) in observations
+        .iter()
+        .zip(["1,2,2", "4,2,12345678901234567890"])
+    {
+        let outcome = crank(&mut machine, source);
+        assert!(outcome.0, "{:?}", outcome.1);
+        assert_eq!(outcome.2, expected);
+    }
+}
