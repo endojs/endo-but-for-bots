@@ -309,7 +309,10 @@ test('a never-resolving driver admission cannot hold up disposal', async t => {
 });
 
 test('a never-resolving driver admission still honours the timeout', async t => {
-  t.timeout(2000);
+  // A hang guard, not a speed bound: the admission timeout under test is 25ms,
+  // but building the handle beside the rest of the affected set on a loaded
+  // macOS runner has exceeded a two-second budget.
+  t.timeout(10_000);
   const never = new Promise(() => undefined);
   const fixture = makeDriverFixture({ spawnGate: never });
   const handle = await makeHandle(fixture);
