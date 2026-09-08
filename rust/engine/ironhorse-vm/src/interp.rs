@@ -13793,6 +13793,12 @@ impl Interp {
     /// The format ceiling is independent of the configurable heap policy.
     /// Finish with `new_reserved_string_units`, so the charge is paid once.
     fn reserve_units(&mut self, units: u64) -> Result<usize, Step> {
+        self.reserve_units_growth(0, units)
+    }
+
+    /// Grow an already prepaid string result, charging only the additional
+    /// chunk cost. Every previous unit is still present in the result.
+    fn reserve_units_growth(&mut self, previous: u64, units: u64) -> Result<usize, Step> {
         if units > 0x7fff_ffff {
             return Err(self.catchable_range_error_msg("result too large".into()));
         }
@@ -13800,13 +13806,41 @@ impl Interp {
         if !self.chunks.can_allocate(units * 2) {
             return Err(Step::Host(Halt::HeapExhausted));
         }
-        let charge = if units == 0 {
-            0
-        } else {
-            (((units as u64 + 1) + 7) & !7) + 16
+        let charge = |length: u64| {
+            if length == 0 {
+                0
+            } else {
+                ((length + 8) & !7) + 16
+            }
         };
-        self.charge_and_check(charge)?;
+        self.charge_and_check(charge(units as u64) - charge(previous))?;
         Ok(units)
+    }
+
+    /// Extend a string output only after admitting its complete new size.
+    /// For UTF-8 scratch output the byte count conservatively bounds UTF-16
+    /// storage; those legacy paths also meter the byte count.
+    fn extend_reserved_units<T: Copy>(
+        &mut self,
+        output: &mut Vec<T>,
+        addition: &[T],
+    ) -> Result<(), Step> {
+        let length = output
+            .len()
+            .checked_add(addition.len())
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        let bytes = length
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        if !self.chunks.can_allocate(bytes) {
+            return Err(Step::Host(Halt::HeapExhausted));
+        }
+        self.reserve_units_growth(output.len() as u64, length as u64)?;
+        output
+            .try_reserve(addition.len())
+            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        output.extend_from_slice(addition);
+        Ok(())
     }
 
     /// Materialize a capacity already admitted by `reserve_units` or a chunk
@@ -37444,15 +37478,16 @@ impl Interp {
                     let mut out = Vec::new();
                     for i in 0..length {
                         if i > 0 {
-                            out.extend_from_slice(&sep);
+                            self.extend_reserved_units(&mut out, &sep)?;
                         }
                         let value = self.array_generic_get(code, inst, u64::from(i))?;
                         if !matches!(value.kind, Kind::Undefined | Kind::Null) {
-                            out.extend_from_slice(&self.to_string_units(code, value)?);
+                            let units = self.to_string_units(code, value)?;
+                            self.extend_reserved_units(&mut out, &units)?;
                         }
                     }
                     self.stack.truncate(base);
-                    let result = self.new_string_units(&out);
+                    let result = self.new_reserved_string_units(&out);
                     self.push(result);
                     return Ok(());
                 }
@@ -37467,19 +37502,16 @@ impl Interp {
                     unreachable!("non-string separators use the general path")
                 };
                 let length = self.arrays[&inst].length;
-                let items: Vec<Option<Slot>> = {
-                    let a = &self.arrays[&inst];
-                    (0..length).map(|i| a.items().get(&i).copied()).collect()
-                };
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc(); // `fxNewInstance` (the key list)
                 let mut out: Vec<u8> = Vec::new();
-                for (i, item) in items.into_iter().enumerate() {
+                for i in 0..length {
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     // Every index is read (`mxGetIndex`) regardless of type.
-                    self.meter.tick_raw(ARRAY_JOIN_PER_ELEMENT_METERING);
+                    self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
                     if i > 0 {
                         self.meter.tick_slot_alloc(); // the separator key slot
-                        out.extend_from_slice(&sep);
+                        self.extend_reserved_units(&mut out, &sep)?;
                     }
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
@@ -37490,12 +37522,15 @@ impl Interp {
                             }
                             self.meter.tick_slot_alloc(); // the element key slot
                             let bytes = self.to_string_bytes_metered(s);
-                            out.extend_from_slice(&bytes);
+                            self.extend_reserved_units(&mut out, &bytes)?;
                         }
                         _ => {}
                     }
                 }
-                let off = self.alloc_str_text_metered(&out);
+                if out.is_empty() {
+                    self.charge_and_check(24)?; // legacy empty join chunk
+                }
+                let off = self.alloc_str_text(&out);
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Array.prototype.toString()` delegates to `this.join()` with the
@@ -41385,7 +41420,8 @@ impl Interp {
         for index in 0..literal_segments {
             let id = self.array_generic_index_id(index);
             let segment = self.mop_get(code, raw_inst, id, raw)?;
-            out.extend_from_slice(&self.to_string_units(code, segment)?);
+            let units = self.to_string_units(code, segment)?;
+            self.extend_reserved_units(&mut out, &units)?;
             if index + 1 == literal_segments {
                 break;
             }
@@ -41395,10 +41431,11 @@ impl Interp {
                     .get(base + 5 + index as usize)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                out.extend_from_slice(&self.to_string_units(code, substitution)?);
+                let units = self.to_string_units(code, substitution)?;
+                self.extend_reserved_units(&mut out, &units)?;
             }
         }
-        Ok(self.new_string_units(&out))
+        Ok(self.new_reserved_string_units(&out))
     }
 
     /// `ToIntegerOrInfinity` followed by the relative-index adjustment used by
@@ -44614,7 +44651,7 @@ impl Interp {
             if index >= GENERIC_JOIN_CAP {
                 return Err(Step::Host(Halt::Refused("join:oversized-array-like")));
             }
-            self.meter.tick_builtin_some(1);
+            self.charge_and_check(crate::meter::BUILTIN_METERING)?;
             if index > 0 {
                 if result
                     .len()
@@ -44623,7 +44660,7 @@ impl Interp {
                 {
                     return Err(Step::Host(Halt::Refused("join:oversized-result")));
                 }
-                result.extend_from_slice(&separator);
+                self.extend_reserved_units(&mut result, &separator)?;
             }
             let element = self.array_generic_get(code, inst, index)?;
             if !matches!(element.kind, Kind::Undefined | Kind::Null) {
@@ -44635,10 +44672,10 @@ impl Interp {
                 {
                     return Err(Step::Host(Halt::Refused("join:oversized-result")));
                 }
-                result.extend_from_slice(&units);
+                self.extend_reserved_units(&mut result, &units)?;
             }
         }
-        Ok(self.new_string_units(&result))
+        Ok(self.new_reserved_string_units(&result))
     }
 
     /// Generic `Array.prototype.toString`: observe `Get(array, "join")`, call
@@ -46689,9 +46726,10 @@ impl Interp {
         }
 
         let copy_length = old_length.min(new_length);
-        let source_buffer = self.array_buffers[&source];
-        let bytes = self.chunks.payload(source_buffer.data)[..copy_length as usize].to_vec();
         let result = self.alloc_array_buffer(new_length)?;
+        let source_buffer = self.array_buffers[&source];
+        let mut bytes = Self::reserved_vec(copy_length as usize)?;
+        bytes.extend_from_slice(&self.chunks.payload(source_buffer.data)[..copy_length as usize]);
         if copy_length > 0 {
             let target_buffer = self.array_buffers[&result];
             let out = self
