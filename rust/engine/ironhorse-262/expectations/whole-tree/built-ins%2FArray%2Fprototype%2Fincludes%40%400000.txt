@@ -1,0 +1,61 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/includes tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/includes/call-with-boolean.js sloppy skip:unsupported-opcode:includes:non-dense-array
+built-ins/Array/prototype/includes/call-with-boolean.js strict skip:unsupported-opcode:includes:non-dense-array
+built-ins/Array/prototype/includes/coerced-searchelement-fromindex-resize.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/includes/coerced-searchelement-fromindex-resize.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/includes/fromIndex-equal-or-greater-length-returns-false.js sloppy pass
+built-ins/Array/prototype/includes/fromIndex-equal-or-greater-length-returns-false.js strict pass
+built-ins/Array/prototype/includes/fromIndex-infinity.js sloppy pass
+built-ins/Array/prototype/includes/fromIndex-infinity.js strict pass
+built-ins/Array/prototype/includes/fromIndex-minus-zero.js sloppy pass
+built-ins/Array/prototype/includes/fromIndex-minus-zero.js strict pass
+built-ins/Array/prototype/includes/get-prop.js sloppy pass
+built-ins/Array/prototype/includes/get-prop.js strict pass
+built-ins/Array/prototype/includes/length-boundaries.js sloppy pass
+built-ins/Array/prototype/includes/length-boundaries.js strict pass
+built-ins/Array/prototype/includes/length-zero-returns-false.js sloppy pass
+built-ins/Array/prototype/includes/length-zero-returns-false.js strict pass
+built-ins/Array/prototype/includes/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/includes/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/includes/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be includes; name value should be includes"
+built-ins/Array/prototype/includes/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be includes; name value should be includes"
+built-ins/Array/prototype/includes/no-arg.js sloppy pass
+built-ins/Array/prototype/includes/no-arg.js strict pass
+built-ins/Array/prototype/includes/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/includes/not-a-constructor.js strict pass
+built-ins/Array/prototype/includes/prop-desc.js sloppy pass
+built-ins/Array/prototype/includes/prop-desc.js strict pass
+built-ins/Array/prototype/includes/resizable-buffer-special-float-values.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/includes/resizable-buffer-special-float-values.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/includes/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/includes/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/includes/return-abrupt-get-length.js sloppy pass
+built-ins/Array/prototype/includes/return-abrupt-get-length.js strict pass
+built-ins/Array/prototype/includes/return-abrupt-get-prop.js sloppy pass
+built-ins/Array/prototype/includes/return-abrupt-get-prop.js strict pass
+built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex-symbol.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex-symbol.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/Array/prototype/includes/return-abrupt-tonumber-length-symbol.js sloppy pass
+built-ins/Array/prototype/includes/return-abrupt-tonumber-length-symbol.js strict pass
+built-ins/Array/prototype/includes/return-abrupt-tonumber-length.js sloppy pass
+built-ins/Array/prototype/includes/return-abrupt-tonumber-length.js strict pass
+built-ins/Array/prototype/includes/samevaluezero.js sloppy pass
+built-ins/Array/prototype/includes/samevaluezero.js strict pass
+built-ins/Array/prototype/includes/search-found-returns-true.js sloppy pass
+built-ins/Array/prototype/includes/search-found-returns-true.js strict pass
+built-ins/Array/prototype/includes/search-not-found-returns-false.js sloppy pass
+built-ins/Array/prototype/includes/search-not-found-returns-false.js strict pass
+built-ins/Array/prototype/includes/sparse.js sloppy pass
+built-ins/Array/prototype/includes/sparse.js strict pass
+built-ins/Array/prototype/includes/this-is-not-object.js sloppy pass
+built-ins/Array/prototype/includes/this-is-not-object.js strict pass
+built-ins/Array/prototype/includes/tointeger-fromindex.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleantrue», «booleanfalse») to be true"
+built-ins/Array/prototype/includes/tointeger-fromindex.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleantrue», «booleanfalse») to be true"
+built-ins/Array/prototype/includes/tolength-length.js sloppy pass
+built-ins/Array/prototype/includes/tolength-length.js strict pass
+built-ins/Array/prototype/includes/using-fromindex.js sloppy pass
+built-ins/Array/prototype/includes/using-fromindex.js strict pass
+built-ins/Array/prototype/includes/values-are-not-cached.js sloppy pass
+built-ins/Array/prototype/includes/values-are-not-cached.js strict pass

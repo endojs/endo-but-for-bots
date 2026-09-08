@@ -1,0 +1,183 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/from tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/from/argument-object.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-object.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-case-insensitive.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-case-insensitive.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-invalid-iso-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-invalid-iso-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-iso-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-iso-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-wrong-type.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-year-zero.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-calendar-year-zero.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-empty-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-empty-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-function-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-function-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-ignores-incorrect-properties.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-ignores-incorrect-properties.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-invalid-offset-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: \\\"00:00 is not a valid offset string (with offset option use) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: \\\"-000:00 is not a valid offset string (with offset option use) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-invalid-offset-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: \\\"00:00 is not a valid offset string (with offset option use) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: \\\"-000:00 is not a valid offset string (with offset option use) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-monthcode-month.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-monthcode-month.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-offset-not-agreeing-with-timezone.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: offset property not matching time zone is rejected Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-offset-not-agreeing-with-timezone.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: offset property not matching time zone is rejected Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-optional-properties.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-optional-properties.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-required-correctly-spelled-properties.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-required-correctly-spelled-properties.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-required-prop-undefined-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-required-prop-undefined-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-object.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-object.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-multiple-offsets.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-multiple-offsets.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-sub-minute-offset.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-sub-minute-offset.js strict fail:"abort-value-differs: oracle=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-year-zero.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-year-zero.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-wrong-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a RangeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-wrong-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a RangeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-basic-and-extended-format.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-basic-and-extended-format.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-annotation-invalid-key.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: annotation keys must be lowercase: 1970-01-01T00:00[UTC][U-CA=iso8601] - invalid capitalized key Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: annotation keys must be lowercase: 1970-01-01T00:00[UTC][U-CA=iso8601] - invalid capitalized key Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-annotation-invalid-key.js strict fail:"abort-value-differs: oracle=\"Test262Error: annotation keys must be lowercase: 1970-01-01T00:00[UTC][U-CA=iso8601] - invalid capitalized key Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: annotation keys must be lowercase: 1970-01-01T00:00[UTC][U-CA=iso8601] - invalid capitalized key Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-annotation.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-annotation.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-case-insensitive.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-case-insensitive.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-invalid-iso-string.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-calendar-invalid-iso-string.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-critical-unknown-annotation.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject unknown annotation with critical flag: 1970-01-01T00:00[UTC][!foo=bar] Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject unknown annotation with critical flag: 1970-01-01T00:00[UTC][!foo=bar] Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-critical-unknown-annotation.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject unknown annotation with critical flag: 1970-01-01T00:00[UTC][!foo=bar] Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject unknown annotation with critical flag: 1970-01-01T00:00[UTC][!foo=bar] Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-date-with-utc-offset.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-date-with-utc-offset.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-decimal-places.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-decimal-places.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: invalid date-time string (2025-01-01T00:00:00+00:0000[UTC]) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: invalid date-time string (2025-01-01T00:00:00+00:0000[UTC]) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: invalid date-time string (2025-01-01T00:00:00+00:0000[UTC]) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: invalid date-time string (2025-01-01T00:00:00+00:0000[UTC]) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-limits.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-limits.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-minus-sign.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: variant minus sign: 1976-11-18T15:23:30.12−02:00 Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-minus-sign.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: variant minus sign: 1976-11-18T15:23:30.12−02:00 Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-multiple-calendar.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject more than one calendar annotation if any critical: 1970-01-01T00:00[UTC][u-ca=iso8601][!u-ca=iso8601] Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one calendar annotation if any critical: 1970-01-01T00:00[UTC][u-ca=iso8601][!u-ca=iso8601] Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-multiple-calendar.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject more than one calendar annotation if any critical: 1970-01-01T00:00[UTC][u-ca=iso8601][!u-ca=iso8601] Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one calendar annotation if any critical: 1970-01-01T00:00[UTC][u-ca=iso8601][!u-ca=iso8601] Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-multiple-time-zone.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject more than one time zone annotation: 1970-01-01T00:00[UTC][UTC] Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one time zone annotation: 1970-01-01T00:00[UTC][UTC] Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-multiple-time-zone.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject more than one time zone annotation: 1970-01-01T00:00[UTC][UTC] Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one time zone annotation: 1970-01-01T00:00[UTC][UTC] Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-negative-extended-year.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-negative-extended-year.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-no-junk-at-end.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-no-junk-at-end.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-optional-parts.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-optional-parts.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-start-of-day-not-valid-epoch-nanoseconds.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: From '-271821-04-20[+01]' Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-start-of-day-not-valid-epoch-nanoseconds.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: From '-271821-04-20[+01]' Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-sub-minute-offset.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: 2021-08-19T17:30:45.123456789-12:12:59.9[-12:12:59.9] is not a valid ISO string Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: 2021-08-19T17:30:45.123456789-12:12:59.9[-12:12:59.9] is not a valid ISO string Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-sub-minute-offset.js strict fail:"abort-value-differs: oracle=\"Test262Error: 2021-08-19T17:30:45.123456789-12:12:59.9[-12:12:59.9] is not a valid ISO string Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: 2021-08-19T17:30:45.123456789-12:12:59.9[-12:12:59.9] is not a valid ISO string Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/argument-string-time-separators.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-time-separators.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-time-zone-annotation.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-time-zone-annotation.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-too-many-decimals.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: no more than 9 decimal places are allowed Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-too-many-decimals.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: no more than 9 decimal places are allowed Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/argument-string-unknown-annotation.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-unknown-annotation.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-variant-decimal-separator.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string-variant-decimal-separator.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/argument-wrong-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: no argument Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: no argument Expected a TypeError but got a RangeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-wrong-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: no argument Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: no argument Expected a TypeError but got a RangeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-zoneddatetime.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/argument-zoneddatetime.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/bad-disambiguation.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/bad-disambiguation.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/calendar-temporal-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/calendar-temporal-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/calendarresolvefields-error-ordering.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Missing year throws TypeError before invalid monthCode throws RangeError Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Invalid monthCode throws RangeError when all types are valid Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/calendarresolvefields-error-ordering.js strict fail:"abort-value-differs: oracle=\"Test262Error: Missing year throws TypeError before invalid monthCode throws RangeError Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Invalid monthCode throws RangeError when all types are valid Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/constrain-has-no-effect-on-invalid-iso-string.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/constrain-has-no-effect-on-invalid-iso-string.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/disambiguation-invalid-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/disambiguation-invalid-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/disambiguation-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/disambiguation-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/ZonedDateTime/from/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/ZonedDateTime/from/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/month-code-wrong-type.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: month code 5 should be rejected Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/month-code-wrong-type.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: month code 5 should be rejected Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/monthcode-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: monthCode 'm1' is not well-formed Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: monthCode 'm1' is not well-formed Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/monthcode-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: monthCode 'm1' is not well-formed Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: monthCode 'm1' is not well-formed Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/negative-month-or-day.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/negative-month-or-day.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/no-fractional-minutes-hours.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/no-fractional-minutes-hours.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/observable-get-overflow-argument-primitive.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/observable-get-overflow-argument-primitive.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/observable-get-overflow-argument-string-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/observable-get-overflow-argument-string-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/offset-does-not-match-iana-time-zone.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/offset-does-not-match-iana-time-zone.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/offset-invalid-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/offset-invalid-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/offset-overrides-critical-flag.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/offset-overrides-critical-flag.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/offset-string-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: UTC offset 'garbage' is not well-formed Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: UTC offset 'garbage' is not well-formed Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/offset-string-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: UTC offset 'garbage' is not well-formed Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: UTC offset 'garbage' is not well-formed Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/offset-undefined.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: default offset is reject Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/offset-undefined.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: default offset is reject Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/offset-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/offset-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/options-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/options-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/options-read-before-algorithmic-validation.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: exception thrown when month code is invalid for calendar Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: exception thrown when month code is invalid for calendar Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/options-read-before-algorithmic-validation.js strict fail:"abort-value-differs: oracle=\"Test262Error: exception thrown when month code is invalid for calendar Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: exception thrown when month code is invalid for calendar Expected a RangeError but got a TypeError\""
+built-ins/Temporal/ZonedDateTime/from/options-wrong-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: TypeError on wrong options type object Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: TypeError on wrong options type object Expected a TypeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/options-wrong-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: TypeError on wrong options type object Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: TypeError on wrong options type object Expected a TypeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/order-of-operations.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/order-of-operations.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-invalid-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-invalid-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-options.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-options.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/overflow-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/roundtrip-from-property-bag.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/roundtrip-from-property-bag.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/roundtrip-from-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/roundtrip-from-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/subclassing-ignored.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/subclassing-ignored.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/timezone-case-insensitive.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/timezone-case-insensitive.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/from/year-zero.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject minus zero as extended year Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/year-zero.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject minus zero as extended year Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string-multiple-offsets.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string-multiple-offsets.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a ZonedDateTime Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a ZonedDateTime Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""

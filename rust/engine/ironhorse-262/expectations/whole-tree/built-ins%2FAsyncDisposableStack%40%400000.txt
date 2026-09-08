@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncDisposableStack tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncDisposableStack/constructor.js sloppy pass
+built-ins/AsyncDisposableStack/constructor.js strict pass
+built-ins/AsyncDisposableStack/instance-extensible.js sloppy pass
+built-ins/AsyncDisposableStack/instance-extensible.js strict pass
+built-ins/AsyncDisposableStack/is-a-constructor.js sloppy skip:non-primitive-completion
+built-ins/AsyncDisposableStack/is-a-constructor.js strict skip:non-primitive-completion
+built-ins/AsyncDisposableStack/length.js sloppy pass
+built-ins/AsyncDisposableStack/length.js strict pass
+built-ins/AsyncDisposableStack/name.js sloppy pass
+built-ins/AsyncDisposableStack/name.js strict pass
+built-ins/AsyncDisposableStack/newtarget-prototype-is-not-object.js sloppy pass
+built-ins/AsyncDisposableStack/newtarget-prototype-is-not-object.js strict pass
+built-ins/AsyncDisposableStack/prop-desc.js sloppy pass
+built-ins/AsyncDisposableStack/prop-desc.js strict pass
+built-ins/AsyncDisposableStack/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/AsyncDisposableStack/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/AsyncDisposableStack/proto.js sloppy pass
+built-ins/AsyncDisposableStack/proto.js strict pass
+built-ins/AsyncDisposableStack/prototype-from-newtarget-abrupt.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/AsyncDisposableStack/prototype-from-newtarget-abrupt.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/AsyncDisposableStack/prototype-from-newtarget-custom.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget is built-in Object constructor Expected SameValue(«[object Object]», «[object Object]») to be true"
+built-ins/AsyncDisposableStack/prototype-from-newtarget-custom.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget is built-in Object constructor Expected SameValue(«[object Object]», «[object Object]») to be true"
+built-ins/AsyncDisposableStack/prototype-from-newtarget.js sloppy pass
+built-ins/AsyncDisposableStack/prototype-from-newtarget.js strict pass
+built-ins/AsyncDisposableStack/undefined-newtarget-throws.js sloppy pass
+built-ins/AsyncDisposableStack/undefined-newtarget-throws.js strict pass

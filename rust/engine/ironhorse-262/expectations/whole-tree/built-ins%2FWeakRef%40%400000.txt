@@ -1,0 +1,33 @@
+# engine=ironhorse features=default corpus=built-ins/WeakRef tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/WeakRef/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/WeakRef/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/WeakRef/instance-extensible.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/instance-extensible.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/is-a-constructor.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/is-a-constructor.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/length.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/length.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/name.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/name.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/newtarget-prototype-is-not-object.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/newtarget-prototype-is-not-object.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: WeakRef should be an own property"
+built-ins/WeakRef/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: WeakRef should be an own property"
+built-ins/WeakRef/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/WeakRef/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/WeakRef/proto.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/proto.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype-from-newtarget-abrupt.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a ReferenceError"
+built-ins/WeakRef/prototype-from-newtarget-abrupt.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a ReferenceError"
+built-ins/WeakRef/prototype-from-newtarget-custom.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype-from-newtarget-custom.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype-from-newtarget.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/prototype-from-newtarget.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/returns-new-object-from-constructor-with-object-target.js sloppy skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/returns-new-object-from-constructor-with-object-target.js strict skip:ironhorse-missing-global:WeakRef
+built-ins/WeakRef/returns-new-object-from-constructor-with-symbol-target.js sloppy fail:"abort-type divergence: oracle threw \"TypeError: target: not an object\" ironhorse threw \"ReferenceError: get WeakRef: undefined variable\""
+built-ins/WeakRef/returns-new-object-from-constructor-with-symbol-target.js strict fail:"abort-type divergence: oracle threw \"TypeError: target: not an object\" ironhorse threw \"ReferenceError: get WeakRef: undefined variable\""
+built-ins/WeakRef/throws-when-target-cannot-be-held-weakly.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/WeakRef/throws-when-target-cannot-be-held-weakly.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/WeakRef/undefined-newtarget-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/WeakRef/undefined-newtarget-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"

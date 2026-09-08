@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Object/prototype/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/prototype/constructor/S15.2.4.1_A1_T1.js sloppy pass
+built-ins/Object/prototype/constructor/S15.2.4.1_A1_T1.js strict pass
+built-ins/Object/prototype/constructor/S15.2.4.1_A1_T2.js sloppy pass
+built-ins/Object/prototype/constructor/S15.2.4.1_A1_T2.js strict pass

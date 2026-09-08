@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/offset tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/offset/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/offset/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/offset/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/offset/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/offset/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/offset/prop-desc.js strict skip:oracle-host-missing-global:Temporal

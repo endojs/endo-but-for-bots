@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/firstDayOfWeek tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/firstDayOfWeek/branding.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/firstDayOfWeek/branding.js strict skip:oracle-host-missing-intl
+intl402/Locale/prototype/firstDayOfWeek/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/firstDayOfWeek/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/firstDayOfWeek/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/firstDayOfWeek/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/firstDayOfWeek/valid-id.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/firstDayOfWeek/valid-id.js strict skip:oracle-host-missing-intl
+intl402/Locale/prototype/firstDayOfWeek/valid-options.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/firstDayOfWeek/valid-options.js strict skip:oracle-host-missing-global:Intl

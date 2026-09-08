@@ -1,0 +1,41 @@
+# engine=ironhorse features=default corpus=intl402/Segmenter/constructor/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Segmenter/constructor/constructor/locales-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a CustomError but got a RangeError\""
+intl402/Segmenter/constructor/constructor/locales-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a CustomError but got a RangeError\""
+intl402/Segmenter/constructor/constructor/locales-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Segmenter/constructor/constructor/locales-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/Segmenter/constructor/constructor/newtarget-undefined.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/newtarget-undefined.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-getoptionsobject.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-getoptionsobject.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-granularity-abrupt-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-granularity-abrupt-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-granularity-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-granularity-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-granularity-toString-abrupt-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: from toString Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-granularity-toString-abrupt-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: from toString Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-granularity-valid.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-granularity-valid.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-invalid.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-invalid.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-localeMatcher-abrupt-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-localeMatcher-abrupt-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-localeMatcher-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-localeMatcher-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-localeMatcher-toString-abrupt-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: from toString Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-localeMatcher-toString-abrupt-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: from toString Expected a Test262Error but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-localeMatcher-valid.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-localeMatcher-valid.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-null.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a TypeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-null.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a TypeError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-order.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-order.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-throwing-getters.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-throwing-getters.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError"
+intl402/Segmenter/constructor/constructor/options-undefined.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-undefined.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-valid-combinations.js sloppy skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/options-valid-combinations.js strict skip:oracle-host-missing-intl
+intl402/Segmenter/constructor/constructor/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+intl402/Segmenter/constructor/constructor/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+intl402/Segmenter/constructor/constructor/subclassing.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Segmenter/constructor/constructor/subclassing.js strict skip:oracle-host-missing-global:Intl

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/Symbol tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/Symbol/new-symbol-with-super-throws.js sloppy pass
+language/statements/class/subclass/builtin-objects/Symbol/new-symbol-with-super-throws.js strict pass
+language/statements/class/subclass/builtin-objects/Symbol/symbol-valid-as-extends-value.js sloppy pass
+language/statements/class/subclass/builtin-objects/Symbol/symbol-valid-as-extends-value.js strict pass

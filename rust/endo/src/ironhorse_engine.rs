@@ -12,7 +12,7 @@
 //! `ironhorse_compile` and executes the resulting bytecode on `ironhorse_vm`
 //! over a real `Compartment`, reporting the completion value and the
 //! engine's own computron count. Programs that reach an opcode the port
-//! has not landed yet halt with `Halt::Unsupported`, which this module
+//! has not landed yet halt with `Halt::NotImplemented`, which this module
 //! surfaces **by name** and with a non-zero exit — Ironhorse declines a
 //! program it cannot run rather than returning a wrong answer.
 //!
@@ -107,8 +107,11 @@ pub mod engine {
             Halt::Return => "completed".to_string(),
             Halt::MeterAbort => "metering aborted the run".to_string(),
             Halt::StepLimit(n) => format!("step ceiling reached after {n} dispatches"),
-            Halt::Unsupported(op) => {
+            Halt::NotImplemented(op) => {
                 format!("unsupported opcode `{op}` (a named, unlanded engine gap)")
+            }
+            Halt::Refused(label) => {
+                format!("execution refused: `{label}` (an engine profile limit)")
             }
             Halt::EngineInvariant(label) => {
                 format!("engine invariant violated: `{label}` (an Ironhorse defect, not an unlanded gap)")
@@ -170,7 +173,7 @@ pub mod engine {
         /// `ExecutionOutcome::Panicked` is deliberately a **strict
         /// superset** of `is_panic()`, not equal to it. Two non-panic halts
         /// also classify as `Panicked` because they likewise must
-        /// terminate-without-commit: `Halt::Unsupported` (a named, unlanded
+        /// terminate-without-commit: `Halt::NotImplemented` (a named, unlanded
         /// engine gap) and the fail-closed catch-all for any control-state
         /// or future `#[non_exhaustive]` variant that should never reach
         /// this seam. Those two arms below are the *only* places `Panicked`
@@ -188,24 +191,15 @@ pub mod engine {
             match halt {
                 Halt::Throw { rendered, .. } => ExecutionOutcome::Uncaught(rendered),
                 Halt::Return => ExecutionOutcome::Quiesced,
-                // A named, unlanded engine gap: the run demonstrably did
-                // **not** run the event loop to quiescence, so its crank
-                // must be discarded, never committed. `Unsupported` is a
-                // routine top-level halt at this seam (this file's header
-                // and `describe_halt` both name it as one), not a
-                // can't-happen — so it gets an explicit `Panicked` arm
-                // rather than falling to the catch-all below: it must never
-                // trip the `debug_assert!`, and a test can pin that it
-                // never classifies as `Quiesced`.
-                Halt::Unsupported(op) => {
-                    ExecutionOutcome::Panicked(Halt::Unsupported(op))
+                // A known implementation gap or profile refusal did not run
+                // the event loop to quiescence. Discard its crank without
+                // treating this ordinary host outcome as an impossible state.
+                halt @ (Halt::NotImplemented(_) | Halt::Refused(_)) => {
+                    ExecutionOutcome::Panicked(halt)
                 }
-                // Everything else is an internal suspension/control state
-                // (`Yield`/`Await`/`AsyncYield`/`Resume`) caught below the
-                // top-level run, or a future `#[non_exhaustive]` variant:
-                // none should surface here. Fail **closed** — discard the
-                // crank rather than commit it — while still shouting in a
-                // debug build.
+                // A future `#[non_exhaustive]` host outcome must be classified
+                // explicitly. Until then, fail closed and discard the crank.
+                // Private suspension/control transfers cannot enter this type.
                 other => {
                     debug_assert!(
                         false,
@@ -869,8 +863,8 @@ pub mod engine {
             // from the same absolute total a replica that never halted
             // would be at.
             self.pending_cranks = 0;
-            let mut fresh = resume_from_store_lazy(self.store.clone(), &self.signature)
-                .map_err(store_err)?;
+            let mut fresh =
+                resume_from_store_lazy(self.store.clone(), &self.signature).map_err(store_err)?;
             // The rewound machine is a resume like any other: its host
             // callback must be reattached or its next crank fails
             // closed.
@@ -1123,8 +1117,7 @@ pub mod engine {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
-                let freed =
-                    partial_collect(session, &*self.store.borrow()).map_err(store_err)?;
+                let freed = partial_collect(session, &*self.store.borrow()).map_err(store_err)?;
                 let r =
                     checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut());
                 (freed, r)
@@ -1378,7 +1371,7 @@ pub mod engine {
             // daemon, so `Quiesced` (= commit) would ship silently if this
             // regressed. `Unsupported` reaches this seam routinely, so it
             // has its own arm and must not trip the assert either.
-            let outcome = ExecutionOutcome::classify(Halt::Unsupported("STAGE8_GAP"));
+            let outcome = ExecutionOutcome::classify(Halt::NotImplemented("STAGE8_GAP"));
             assert_ne!(
                 outcome,
                 ExecutionOutcome::Quiesced,
@@ -1444,12 +1437,12 @@ pub mod engine {
         #[test]
         fn panicked_is_a_strict_superset_of_is_panic() {
             // `ExecutionOutcome::Panicked` is documented as a strict
-            // superset of `is_panic()`: `Halt::Unsupported` is NOT a panic,
+            // superset of `is_panic()`: `Halt::NotImplemented` is NOT a panic,
             // yet must classify as `Panicked` (discard the crank, never
             // commit). This pins the deliberate, doc-stated exception to
             // strict delegation so a future reader cannot mistake
             // `is_panic()` for the sole gate on `Panicked`.
-            let gap = Halt::Unsupported("STAGE8_GAP");
+            let gap = Halt::NotImplemented("STAGE8_GAP");
             assert!(!gap.is_panic(), "an engine gap is not a panic");
             assert!(
                 matches!(
@@ -1461,29 +1454,15 @@ pub mod engine {
         }
 
         #[test]
-        fn control_state_halt_fails_closed_at_the_seam() {
-            // Yield/Await/AsyncYield/Resume are caught below the top-level
-            // run and must never reach this seam. If one does, the
-            // classifier fails **closed**: a debug build trips the
-            // `debug_assert!`; a release build still returns `Panicked`
-            // (discard), never `Quiesced` (commit). Pins both halves of the
-            // catch-all's contract, which no other test exercises.
-            for halt in [
-                Halt::Resume(0),
-                Halt::Yield(Slot::undefined()),
-                Halt::Await(Slot::undefined()),
-                Halt::AsyncYield(Slot::undefined()),
-            ] {
-                let classify = || ExecutionOutcome::classify(halt.clone());
-                if cfg!(debug_assertions) {
-                    assert!(std::panic::catch_unwind(
-                        std::panic::AssertUnwindSafe(classify),
-                    ).is_err(), "{halt:?} must trip the debug assertion");
-                } else {
-                    assert!(matches!(classify(), ExecutionOutcome::Panicked(_)),
-                        "{halt:?} must fail closed in release builds");
-                }
-            }
+        fn escaped_private_transfer_fails_closed_at_the_seam() {
+            // Private transfer variants cannot be represented by Halt. The VM
+            // reports a transfer escaping its host boundary as an invariant
+            // failure, which must discard the crank in every build profile.
+            let halt = Halt::EngineInvariant("dispatch:control-transfer-escaped");
+            assert!(matches!(
+                ExecutionOutcome::classify(halt),
+                ExecutionOutcome::Panicked(_)
+            ));
         }
 
         #[test]

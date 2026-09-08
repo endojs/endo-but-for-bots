@@ -80,7 +80,7 @@ fn loader_dependent_module_shapes_stay_named() {
     machine.link_intrinsics(&symbols);
     assert_eq!(
         machine.run(&bytecode).halt,
-        Halt::Unsupported("module:static-linking")
+        Halt::NotImplemented("module:static-linking")
     );
 
     let (bytecode, symbols) = compile_module("await 1; globalThis.answer = 1;");
@@ -88,6 +88,6 @@ fn loader_dependent_module_shapes_stay_named() {
     machine.link_intrinsics(&symbols);
     assert_eq!(
         machine.run(&bytecode).halt,
-        Halt::Unsupported("module:top-level-await")
+        Halt::NotImplemented("module:top-level-await")
     );
 }

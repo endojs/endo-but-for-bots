@@ -20,7 +20,7 @@
 //! rebase superseded the floor: every engine throw routes through
 //! `raise_js` (so `self.exception` is populated at the raise), the
 //! unwind restores the establishing frame's activation (`leave_call`
-//! per crossed frame, stack/locals/env cuts), and `Halt::Resume`
+//! per crossed frame, stack/locals/env cuts), and `Step::Unwound`
 //! propagates the handler's resume point out through the Rust-level
 //! dispatch nesting to the loop that owns the handler's frame. These
 //! locks now pin full XS agreement: the driver's catch catches, and
@@ -28,12 +28,15 @@
 //!
 //! "Every engine throw routes through `raise_js`" was asserted here as
 //! fact while 29 native sites still built `Halt::Throw` inline (the
-//! architecture review's F004: recorded fixed, regressed). It is now a
-//! property of the type — `Halt::Throw` carries the thrown value, so an
-//! inline construction has no value to give — and of two source locks:
-//! `throw_construction_sites.rs` (where a `Throw` may be built) and
-//! `dispatch_loop_control_transfer.rs` (every raise in the loop takes
-//! the `return_depth` test that propagates `Resume` to the owning loop).
+//! architecture review's F004: recorded fixed, regressed). It is now
+//! enforced by the private `Step` type and two source locks:
+//! `throw_construction_sites.rs` pins where `Step::Threw` may be built;
+//! `dispatch_loop_control_transfer.rs` requires raises in the loop to take
+//! the depth test that propagates `Step::Unwound` to the owning activation.
+//! Only the host boundary converts `Step::Threw` to `Halt::Throw` and renders
+//! its value. The public `Halt` cannot carry a catch or suspension transfer.
+//! `Step::Returned` identifies this activation's return, eliminating the
+//! former `callback_return_depth` side channel.
 
 use ironhorse_vm::{run_program_with_symbols, RunOutcome};
 

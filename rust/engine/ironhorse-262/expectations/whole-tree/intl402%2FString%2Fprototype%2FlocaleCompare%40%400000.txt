@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=intl402/String/prototype/localeCompare tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/String/prototype/localeCompare/builtin.js sloppy pass
+intl402/String/prototype/localeCompare/builtin.js strict pass
+intl402/String/prototype/localeCompare/default-options-object-prototype.js sloppy skip:oracle-host-missing-global:Intl
+intl402/String/prototype/localeCompare/default-options-object-prototype.js strict skip:oracle-host-missing-global:Intl
+intl402/String/prototype/localeCompare/length.js sloppy pass
+intl402/String/prototype/localeCompare/length.js strict pass
+intl402/String/prototype/localeCompare/missing-arguments-coerced-to-undefined.js sloppy pass
+intl402/String/prototype/localeCompare/missing-arguments-coerced-to-undefined.js strict pass
+intl402/String/prototype/localeCompare/return-abrupt-this-value.js sloppy pass
+intl402/String/prototype/localeCompare/return-abrupt-this-value.js strict pass
+intl402/String/prototype/localeCompare/returns-same-results-as-Collator.js sloppy skip:oracle-host-missing-global:Intl
+intl402/String/prototype/localeCompare/returns-same-results-as-Collator.js strict skip:oracle-host-missing-global:Intl
+intl402/String/prototype/localeCompare/taint-Intl-Collator.js sloppy skip:oracle-host-missing-intl
+intl402/String/prototype/localeCompare/taint-Intl-Collator.js strict skip:oracle-host-missing-intl
+intl402/String/prototype/localeCompare/that-arg-coerced-to-string.js sloppy pass
+intl402/String/prototype/localeCompare/that-arg-coerced-to-string.js strict pass
+intl402/String/prototype/localeCompare/this-value-coerced-to-string.js sloppy pass
+intl402/String/prototype/localeCompare/this-value-coerced-to-string.js strict pass
+intl402/String/prototype/localeCompare/throws-same-exceptions-as-Collator.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: String.prototype.localeCompare didn't throw exception for locales null. Expected a ReferenceError to be thrown but no exception was thrown at all\" ironhorse=\"Test262Error: undefinedundefined», «undefinedundefined») to be false\""
+intl402/String/prototype/localeCompare/throws-same-exceptions-as-Collator.js strict fail:"abort-value-differs: oracle=\"Test262Error: String.prototype.localeCompare didn't throw exception for locales null. Expected a ReferenceError to be thrown but no exception was thrown at all\" ironhorse=\"Test262Error: undefinedundefined», «undefinedundefined») to be false\""

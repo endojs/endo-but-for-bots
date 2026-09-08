@@ -1,0 +1,129 @@
+# engine=ironhorse features=default corpus=intl402/NumberFormat tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/NumberFormat/builtin.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/builtin.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/casing-numbering-system-options.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/casing-numbering-system-options.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-compactDisplay-compact.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-compactDisplay-compact.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-compactDisplay-no-compact.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-compactDisplay-no-compact.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-default-value.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-default-value.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-locales-arraylike.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-locales-arraylike.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-locales-get-tostring.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-locales-get-tostring.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-locales-hasproperty.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-locales-hasproperty.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-locales-string.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-locales-string.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-locales-toobject.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-locales-toobject.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-no-instanceof.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-no-instanceof.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-notation.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-notation.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-option-read-order.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-option-read-order.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-options-numberingSystem-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: new Intl.NumberFormat(\"en\", {numberingSystem: \"\"}) throws RangeError Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/constructor-options-numberingSystem-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: new Intl.NumberFormat(\"en\", {numberingSystem: \"\"}) throws RangeError Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/constructor-options-roundingMode-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/constructor-options-roundingMode-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/constructor-options-throwing-getters.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from numberingSystem getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
+intl402/NumberFormat/constructor-options-throwing-getters.js strict fail:"abort-value-differs: oracle=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from numberingSystem getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
+intl402/NumberFormat/constructor-options-toobject.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-options-toobject.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/constructor-order.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/NumberFormat/constructor-order.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/NumberFormat/constructor-roundingIncrement-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: 0 Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: 2, roundingType is \\\"morePrecision\\\" Expected a TypeError to be thrown but no exception was thrown at all\""
+intl402/NumberFormat/constructor-roundingIncrement-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: 0 Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: 2, roundingType is \\\"morePrecision\\\" Expected a TypeError to be thrown but no exception was thrown at all\""
+intl402/NumberFormat/constructor-roundingIncrement.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-roundingIncrement.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-signDisplay-negative.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-signDisplay-negative.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-signDisplay.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-signDisplay.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-trailingZeroDisplay-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: empty string Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/constructor-trailingZeroDisplay-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: empty string Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/constructor-trailingZeroDisplay.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-trailingZeroDisplay.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-unit.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/NumberFormat/constructor-unit.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/NumberFormat/constructor-unitDisplay.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/constructor-unitDisplay.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/currency-code-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Invalid currency code '' was not rejected. Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/currency-code-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Invalid currency code '' was not rejected. Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/currency-code-well-formed.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/currency-code-well-formed.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/currency-digits-nonstandard-notation.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/currency-digits-nonstandard-notation.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/currency-digits.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/currency-digits.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/currencyDisplay-unit.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/currencyDisplay-unit.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/default-minimum-singificant-digits.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/default-minimum-singificant-digits.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+intl402/NumberFormat/default-options-object-prototype.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/default-options-object-prototype.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/dft-currency-mnfd-range-check-mxfd.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/dft-currency-mnfd-range-check-mxfd.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/fraction-digit-options-read-once.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/fraction-digit-options-read-once.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/ignore-invalid-unicode-ext-values.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/ignore-invalid-unicode-ext-values.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/instance-proto-and-extensible.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/instance-proto-and-extensible.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/intl-legacy-constructed-symbol-on-unwrap.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/intl-legacy-constructed-symbol-on-unwrap.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/intl-legacy-constructed-symbol-property.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/intl-legacy-constructed-symbol-property.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/intl-legacy-constructed-symbol.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/intl-legacy-constructed-symbol.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/legacy-regexp-statics-not-modified.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/legacy-regexp-statics-not-modified.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/length.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/length.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/name.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/name.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/numbering-system-options.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/numbering-system-options.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+intl402/NumberFormat/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+intl402/NumberFormat/significant-digits-options-get-sequence.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/significant-digits-options-get-sequence.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/style-unit.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/style-unit.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/subclassing.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/subclassing.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/taint-Object-prototype.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/taint-Object-prototype.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-currency.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/test-option-currency.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/test-option-currencyDisplay.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-currencyDisplay.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-localeMatcher.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-localeMatcher.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-roundingPriority-mixed-options.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/test-option-roundingPriority-mixed-options.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/test-option-roundingPriority.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-roundingPriority.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-style.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-style.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/test-option-useGrouping-extended.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/test-option-useGrouping-extended.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/test-option-useGrouping.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/test-option-useGrouping.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/this-value-ignored.js sloppy skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/this-value-ignored.js strict skip:oracle-host-missing-global:Intl
+intl402/NumberFormat/throws-for-currency-style-without-currency-option.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-currency-style-without-currency-option.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-maximumFractionDigits-over-limit.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-maximumFractionDigits-over-limit.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-maximumFractionDigits-under-limit.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-maximumFractionDigits-under-limit.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-minimumFractionDigits-over-limit.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-minimumFractionDigits-over-limit.js strict skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-minimumFractionDigits-under-limit.js sloppy skip:oracle-host-missing-intl
+intl402/NumberFormat/throws-for-minimumFractionDigits-under-limit.js strict skip:oracle-host-missing-intl

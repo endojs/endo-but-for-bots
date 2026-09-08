@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/toStringTag tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/toStringTag/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/toStringTag/prop-desc.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/toStringTag/string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/toStringTag/string.js strict skip:oracle-host-missing-global:Temporal

@@ -1,0 +1,6 @@
+# engine=ironhorse features=default corpus=built-ins/AbstractModuleSource tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AbstractModuleSource/length.js sloppy fail:"abort-type divergence: oracle threw \"ReferenceError: get $262: undefined variable\" ironhorse threw \"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/AbstractModuleSource/name.js sloppy fail:"abort-type divergence: oracle threw \"ReferenceError: get $262: undefined variable\" ironhorse threw \"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/AbstractModuleSource/proto.js sloppy fail:"abort-type divergence: oracle threw \"ReferenceError: get $262: undefined variable\" ironhorse threw \"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/AbstractModuleSource/prototype.js sloppy fail:"abort-type divergence: oracle threw \"ReferenceError: get $262: undefined variable\" ironhorse threw \"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/AbstractModuleSource/throw-from-constructor.js sloppy fail:"abort-type divergence: oracle threw \"ReferenceError: get $262: undefined variable\" ironhorse threw \"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""

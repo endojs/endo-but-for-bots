@@ -1,0 +1,29 @@
+# engine=ironhorse features=default corpus=built-ins/RegExp/match-indices tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExp/match-indices/indices-array-element.js sloppy pass
+built-ins/RegExp/match-indices/indices-array-element.js strict pass
+built-ins/RegExp/match-indices/indices-array-matched.js sloppy pass
+built-ins/RegExp/match-indices/indices-array-matched.js strict pass
+built-ins/RegExp/match-indices/indices-array-non-unicode-match.js sloppy pass
+built-ins/RegExp/match-indices/indices-array-non-unicode-match.js strict pass
+built-ins/RegExp/match-indices/indices-array-properties.js sloppy pass
+built-ins/RegExp/match-indices/indices-array-properties.js strict pass
+built-ins/RegExp/match-indices/indices-array-unicode-match.js sloppy pass
+built-ins/RegExp/match-indices/indices-array-unicode-match.js strict pass
+built-ins/RegExp/match-indices/indices-array-unicode-property-names.js sloppy pass
+built-ins/RegExp/match-indices/indices-array-unicode-property-names.js strict pass
+built-ins/RegExp/match-indices/indices-array-unmatched.js sloppy pass
+built-ins/RegExp/match-indices/indices-array-unmatched.js strict pass
+built-ins/RegExp/match-indices/indices-array.js sloppy pass
+built-ins/RegExp/match-indices/indices-array.js strict pass
+built-ins/RegExp/match-indices/indices-groups-object-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: groups should be an own property"
+built-ins/RegExp/match-indices/indices-groups-object-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: groups should be an own property"
+built-ins/RegExp/match-indices/indices-groups-object-unmatched.js sloppy pass
+built-ins/RegExp/match-indices/indices-groups-object-unmatched.js strict pass
+built-ins/RegExp/match-indices/indices-groups-object.js sloppy pass
+built-ins/RegExp/match-indices/indices-groups-object.js strict pass
+built-ins/RegExp/match-indices/indices-groups-properties.js sloppy pass
+built-ins/RegExp/match-indices/indices-groups-properties.js strict pass
+built-ins/RegExp/match-indices/indices-property.js sloppy pass
+built-ins/RegExp/match-indices/indices-property.js strict pass
+built-ins/RegExp/match-indices/no-indices-array.js sloppy pass
+built-ins/RegExp/match-indices/no-indices-array.js strict pass

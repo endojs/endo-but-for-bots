@@ -1,0 +1,16 @@
+# engine=ironhorse features=default corpus=language/types/undefined tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/types/undefined/S8.1_A1_T1.js sloppy pass
+language/types/undefined/S8.1_A1_T1.js strict pass
+language/types/undefined/S8.1_A1_T2.js sloppy pass
+language/types/undefined/S8.1_A1_T2.js strict pass
+language/types/undefined/S8.1_A2_T1.js sloppy pass
+language/types/undefined/S8.1_A2_T1.js strict pass
+language/types/undefined/S8.1_A2_T2.js sloppy pass
+language/types/undefined/S8.1_A2_T2.js strict pass
+language/types/undefined/S8.1_A3_T1.js sloppy pass
+language/types/undefined/S8.1_A3_T1.js strict pass
+language/types/undefined/S8.1_A3_T2.js sloppy pass
+language/types/undefined/S8.1_A4.js sloppy pass
+language/types/undefined/S8.1_A4.js strict pass
+language/types/undefined/S8.1_A5.js sloppy pass
+language/types/undefined/S8.1_A5.js strict pass

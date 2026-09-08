@@ -5741,10 +5741,10 @@ impl Coder<'_> {
             let a = self.create_target();
             self.targets[a].labels = self.targets[t].labels.clone();
             self.targets[a].original = Some(t);
-            if prev.is_none() {
-                result = Some(a);
+            if let Some(previous) = prev {
+                self.targets[previous].next_target = Some(a);
             } else {
-                self.targets[prev.unwrap()].next_target = Some(a);
+                result = Some(a);
             }
             prev = Some(a);
             cur = self.targets[t].next_target;

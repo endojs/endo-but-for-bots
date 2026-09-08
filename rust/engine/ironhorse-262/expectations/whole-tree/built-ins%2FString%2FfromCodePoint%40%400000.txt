@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/String/fromCodePoint tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/String/fromCodePoint/argument-is-Symbol.js sloppy pass
+built-ins/String/fromCodePoint/argument-is-Symbol.js strict pass
+built-ins/String/fromCodePoint/argument-is-not-integer.js sloppy pass
+built-ins/String/fromCodePoint/argument-is-not-integer.js strict pass
+built-ins/String/fromCodePoint/argument-not-coercible.js sloppy pass
+built-ins/String/fromCodePoint/argument-not-coercible.js strict pass
+built-ins/String/fromCodePoint/arguments-is-empty.js sloppy pass
+built-ins/String/fromCodePoint/arguments-is-empty.js strict pass
+built-ins/String/fromCodePoint/fromCodePoint.js sloppy pass
+built-ins/String/fromCodePoint/fromCodePoint.js strict pass
+built-ins/String/fromCodePoint/length.js sloppy pass
+built-ins/String/fromCodePoint/length.js strict pass
+built-ins/String/fromCodePoint/name.js sloppy pass
+built-ins/String/fromCodePoint/name.js strict pass
+built-ins/String/fromCodePoint/not-a-constructor.js sloppy pass
+built-ins/String/fromCodePoint/not-a-constructor.js strict pass
+built-ins/String/fromCodePoint/number-is-out-of-range.js sloppy pass
+built-ins/String/fromCodePoint/number-is-out-of-range.js strict pass
+built-ins/String/fromCodePoint/return-string-value.js sloppy pass
+built-ins/String/fromCodePoint/return-string-value.js strict pass
+built-ins/String/fromCodePoint/to-number-conversions.js sloppy pass
+built-ins/String/fromCodePoint/to-number-conversions.js strict pass

@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=intl402/ListFormat/constructor/supportedLocalesOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/ListFormat/constructor/supportedLocalesOf/basic.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/basic.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/branding.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/branding.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/length.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/length.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/locales-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/locales-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/name.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/name.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-localeMatcher-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-localeMatcher-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-null.js sloppy skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-null.js strict skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-toobject.js sloppy skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-toobject.js strict skip:oracle-host-missing-global:Intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-undefined.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/options-undefined.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/prop-desc.js strict skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/result-type.js sloppy skip:oracle-host-missing-intl
+intl402/ListFormat/constructor/supportedLocalesOf/result-type.js strict skip:oracle-host-missing-intl

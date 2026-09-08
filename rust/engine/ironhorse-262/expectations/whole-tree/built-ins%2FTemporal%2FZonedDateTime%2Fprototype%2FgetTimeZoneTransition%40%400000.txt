@@ -1,0 +1,29 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/direction-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/direction-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/direction-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/direction-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/offset-timezone-no-transitions.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/offset-timezone-no-transitions.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/options-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/options-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/order-of-operations.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/order-of-operations.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/utc-no-transitions.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/utc-no-transitions.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/wrong-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/wrong-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/getTimeZoneTransition/wrong-type.js strict skip:oracle-host-missing-global:Temporal

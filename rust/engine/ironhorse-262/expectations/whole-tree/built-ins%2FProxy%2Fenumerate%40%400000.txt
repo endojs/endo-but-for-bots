@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/enumerate tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/enumerate/removed-does-not-trigger.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [] and expected [0, 1, 2] should have the same contents. "
+built-ins/Proxy/enumerate/removed-does-not-trigger.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [] and expected [0, 1, 2] should have the same contents. "

@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Map/prototype/get tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot-set.js sloppy pass
+built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot-set.js strict pass
+built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot-weakmap.js sloppy pass
+built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot-weakmap.js strict pass
+built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot.js sloppy pass
+built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot.js strict pass
+built-ins/Map/prototype/get/get.js sloppy pass
+built-ins/Map/prototype/get/get.js strict pass
+built-ins/Map/prototype/get/length.js sloppy pass
+built-ins/Map/prototype/get/length.js strict pass
+built-ins/Map/prototype/get/name.js sloppy pass
+built-ins/Map/prototype/get/name.js strict pass
+built-ins/Map/prototype/get/not-a-constructor.js sloppy pass
+built-ins/Map/prototype/get/not-a-constructor.js strict pass
+built-ins/Map/prototype/get/returns-undefined.js sloppy pass
+built-ins/Map/prototype/get/returns-undefined.js strict pass
+built-ins/Map/prototype/get/returns-value-different-key-types.js sloppy pass
+built-ins/Map/prototype/get/returns-value-different-key-types.js strict pass
+built-ins/Map/prototype/get/returns-value-normalized-zero-key.js sloppy pass
+built-ins/Map/prototype/get/returns-value-normalized-zero-key.js strict pass
+built-ins/Map/prototype/get/this-not-object-throw.js sloppy pass
+built-ins/Map/prototype/get/this-not-object-throw.js strict pass

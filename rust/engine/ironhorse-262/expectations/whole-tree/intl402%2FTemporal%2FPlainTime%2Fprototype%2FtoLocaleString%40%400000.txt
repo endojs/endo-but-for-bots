@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainTime/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainTime/prototype/toLocaleString/basic.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/basic.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/datestyle-and-timestyle.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/datestyle-and-timestyle.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/default-does-not-include-date-and-time-zone-name.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/default-does-not-include-date-and-time-zone-name.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/era.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/era.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/hourcycle.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/hourcycle.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/ignore-timezone.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/ignore-timezone.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/locales-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/locales-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/lone-options-accepted.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/lone-options-accepted.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/options-conflict.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/options-conflict.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/options-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/options-undefined.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/resolved-time-zone.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/resolved-time-zone.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/timeStyle-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainTime/prototype/toLocaleString/timeStyle-undefined.js strict skip:oracle-host-missing-global:Temporal

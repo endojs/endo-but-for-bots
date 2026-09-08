@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/Function tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/Function/instance-length.js sloppy pass
+language/statements/class/subclass/builtin-objects/Function/instance-length.js strict pass
+language/statements/class/subclass/builtin-objects/Function/instance-name.js sloppy pass
+language/statements/class/subclass/builtin-objects/Function/instance-name.js strict pass
+language/statements/class/subclass/builtin-objects/Function/regular-subclassing.js sloppy pass
+language/statements/class/subclass/builtin-objects/Function/regular-subclassing.js strict pass
+language/statements/class/subclass/builtin-objects/Function/super-must-be-called.js sloppy pass
+language/statements/class/subclass/builtin-objects/Function/super-must-be-called.js strict pass

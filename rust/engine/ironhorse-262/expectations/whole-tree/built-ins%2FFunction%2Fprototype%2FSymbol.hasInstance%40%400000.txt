@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Function/prototype/Symbol.hasInstance tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Function/prototype/Symbol.hasInstance/length.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/length.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/name.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/name.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/prop-desc.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/prop-desc.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-bound-target.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-bound-target.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-not-callable.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-not-callable.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-poisoned-prototype.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-poisoned-prototype.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-prototype-non-obj.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/this-val-prototype-non-obj.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/value-get-prototype-of-err.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/value-get-prototype-of-err.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/value-negative.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/value-negative.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/value-non-obj.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/value-non-obj.js strict pass
+built-ins/Function/prototype/Symbol.hasInstance/value-positive.js sloppy pass
+built-ins/Function/prototype/Symbol.hasInstance/value-positive.js strict pass

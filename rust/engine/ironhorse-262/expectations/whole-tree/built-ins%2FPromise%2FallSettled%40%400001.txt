@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Promise/allSettled tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Promise/allSettled/resolves-empty-array.js sloppy pass
+built-ins/Promise/allSettled/resolves-empty-array.js strict pass
+built-ins/Promise/allSettled/resolves-to-array.js sloppy pass
+built-ins/Promise/allSettled/resolves-to-array.js strict pass
+built-ins/Promise/allSettled/returns-promise.js sloppy pass
+built-ins/Promise/allSettled/returns-promise.js strict pass
+built-ins/Promise/allSettled/species-get-error.js sloppy pass
+built-ins/Promise/allSettled/species-get-error.js strict pass

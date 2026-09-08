@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/Set/prototype/size tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Set/prototype/size/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Set/prototype/size/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Set/prototype/size/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Set/prototype/size/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Set/prototype/size/returns-count-of-present-values-before-after-add-delete.js sloppy pass
+built-ins/Set/prototype/size/returns-count-of-present-values-before-after-add-delete.js strict pass
+built-ins/Set/prototype/size/returns-count-of-present-values-by-insertion.js sloppy pass
+built-ins/Set/prototype/size/returns-count-of-present-values-by-insertion.js strict pass
+built-ins/Set/prototype/size/returns-count-of-present-values-by-iterable.js sloppy pass
+built-ins/Set/prototype/size/returns-count-of-present-values-by-iterable.js strict pass
+built-ins/Set/prototype/size/size.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Set/prototype/size/size.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"

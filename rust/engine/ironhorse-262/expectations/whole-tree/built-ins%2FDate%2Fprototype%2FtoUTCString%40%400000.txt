@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/toUTCString tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/toUTCString/day-names.js sloppy pass
+built-ins/Date/prototype/toUTCString/day-names.js strict pass
+built-ins/Date/prototype/toUTCString/format.js sloppy pass
+built-ins/Date/prototype/toUTCString/format.js strict pass
+built-ins/Date/prototype/toUTCString/invalid-date.js sloppy pass
+built-ins/Date/prototype/toUTCString/invalid-date.js strict pass
+built-ins/Date/prototype/toUTCString/length.js sloppy pass
+built-ins/Date/prototype/toUTCString/length.js strict pass
+built-ins/Date/prototype/toUTCString/month-names.js sloppy pass
+built-ins/Date/prototype/toUTCString/month-names.js strict pass
+built-ins/Date/prototype/toUTCString/name.js sloppy pass
+built-ins/Date/prototype/toUTCString/name.js strict pass
+built-ins/Date/prototype/toUTCString/negative-year.js sloppy pass
+built-ins/Date/prototype/toUTCString/negative-year.js strict pass
+built-ins/Date/prototype/toUTCString/not-a-constructor.js sloppy pass
+built-ins/Date/prototype/toUTCString/not-a-constructor.js strict pass
+built-ins/Date/prototype/toUTCString/prop-desc.js sloppy pass
+built-ins/Date/prototype/toUTCString/prop-desc.js strict pass

@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/ctors-bigint/length-arg tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/custom-proto-access-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/custom-proto-access-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/init-zeros.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/init-zeros.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/is-infinity-throws-rangeerror.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/is-infinity-throws-rangeerror.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/is-negative-integer-throws-rangeerror.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/is-negative-integer-throws-rangeerror.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/is-symbol-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/is-symbol-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/new-instance-extensibility.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/new-instance-extensibility.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/returns-object.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/returns-object.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/toindex-length.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/toindex-length.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/undefined-newtarget-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/undefined-newtarget-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/use-custom-proto-if-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/use-custom-proto-if-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/use-default-proto-if-custom-proto-is-not-object.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/length-arg/use-default-proto-if-custom-proto-is-not-object.js strict pass

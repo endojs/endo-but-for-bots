@@ -1,0 +1,59 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/construct tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/construct/arguments-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/arguments-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/call-parameters-new-target.js sloppy pass
+built-ins/Proxy/construct/call-parameters-new-target.js strict pass
+built-ins/Proxy/construct/call-parameters.js sloppy pass
+built-ins/Proxy/construct/call-parameters.js strict pass
+built-ins/Proxy/construct/call-result.js sloppy pass
+built-ins/Proxy/construct/call-result.js strict pass
+built-ins/Proxy/construct/null-handler-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/null-handler-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/null-handler.js sloppy pass
+built-ins/Proxy/construct/null-handler.js strict pass
+built-ins/Proxy/construct/return-is-abrupt.js sloppy pass
+built-ins/Proxy/construct/return-is-abrupt.js strict pass
+built-ins/Proxy/construct/return-not-object-throws-boolean-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-boolean-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-boolean.js sloppy pass
+built-ins/Proxy/construct/return-not-object-throws-boolean.js strict pass
+built-ins/Proxy/construct/return-not-object-throws-null-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-null-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-null.js sloppy pass
+built-ins/Proxy/construct/return-not-object-throws-null.js strict pass
+built-ins/Proxy/construct/return-not-object-throws-number-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-number-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-number.js sloppy pass
+built-ins/Proxy/construct/return-not-object-throws-number.js strict pass
+built-ins/Proxy/construct/return-not-object-throws-string-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-string-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-string.js sloppy pass
+built-ins/Proxy/construct/return-not-object-throws-string.js strict pass
+built-ins/Proxy/construct/return-not-object-throws-symbol-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-symbol-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-symbol.js sloppy pass
+built-ins/Proxy/construct/return-not-object-throws-symbol.js strict pass
+built-ins/Proxy/construct/return-not-object-throws-undefined-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-undefined-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/return-not-object-throws-undefined.js sloppy pass
+built-ins/Proxy/construct/return-not-object-throws-undefined.js strict pass
+built-ins/Proxy/construct/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/construct/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/construct/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/trap-is-not-callable.js sloppy pass
+built-ins/Proxy/construct/trap-is-not-callable.js strict pass
+built-ins/Proxy/construct/trap-is-null-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/construct/trap-is-null-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/construct/trap-is-null.js sloppy pass
+built-ins/Proxy/construct/trap-is-null.js strict pass
+built-ins/Proxy/construct/trap-is-undefined-no-property.js sloppy pass
+built-ins/Proxy/construct/trap-is-undefined-no-property.js strict pass
+built-ins/Proxy/construct/trap-is-undefined-proto-from-cross-realm-newtarget.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/trap-is-undefined-proto-from-cross-realm-newtarget.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/trap-is-undefined-proto-from-newtarget-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/construct/trap-is-undefined-proto-from-newtarget-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/construct/trap-is-undefined-target-is-proxy.js sloppy skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Proxy/construct/trap-is-undefined-target-is-proxy.js strict skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Proxy/construct/trap-is-undefined.js sloppy pass
+built-ins/Proxy/construct/trap-is-undefined.js strict pass

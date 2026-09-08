@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Number/isInteger tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Number/isInteger/arg-is-not-number.js sloppy pass
+built-ins/Number/isInteger/arg-is-not-number.js strict pass
+built-ins/Number/isInteger/infinity.js sloppy pass
+built-ins/Number/isInteger/infinity.js strict pass
+built-ins/Number/isInteger/integers.js sloppy pass
+built-ins/Number/isInteger/integers.js strict pass
+built-ins/Number/isInteger/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Number/isInteger/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Number/isInteger/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isInteger; name value should be isInteger"
+built-ins/Number/isInteger/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isInteger; name value should be isInteger"
+built-ins/Number/isInteger/nan.js sloppy pass
+built-ins/Number/isInteger/nan.js strict pass
+built-ins/Number/isInteger/non-integers.js sloppy pass
+built-ins/Number/isInteger/non-integers.js strict pass
+built-ins/Number/isInteger/not-a-constructor.js sloppy pass
+built-ins/Number/isInteger/not-a-constructor.js strict pass
+built-ins/Number/isInteger/prop-desc.js sloppy pass
+built-ins/Number/isInteger/prop-desc.js strict pass

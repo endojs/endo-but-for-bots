@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/species tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/species/basic.js sloppy pass
+built-ins/Symbol/species/basic.js strict pass
+built-ins/Symbol/species/builtin-getter-name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Symbol/species/builtin-getter-name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Symbol/species/cross-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Symbol/species/cross-realm.js strict skip:shared-positive-test-failure
+built-ins/Symbol/species/subclassing.js sloppy pass
+built-ins/Symbol/species/subclassing.js strict pass

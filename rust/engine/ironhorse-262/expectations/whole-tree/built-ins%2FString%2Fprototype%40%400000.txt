@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/String/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/String/prototype/S15.5.3.1_A1.js sloppy pass
+built-ins/String/prototype/S15.5.3.1_A1.js strict pass
+built-ins/String/prototype/S15.5.3.1_A2.js sloppy pass
+built-ins/String/prototype/S15.5.3.1_A2.js strict pass
+built-ins/String/prototype/S15.5.3.1_A3.js sloppy pass
+built-ins/String/prototype/S15.5.3.1_A3.js strict pass
+built-ins/String/prototype/S15.5.3.1_A4.js sloppy pass
+built-ins/String/prototype/S15.5.3.1_A4.js strict pass
+built-ins/String/prototype/S15.5.4_A1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: delete String.prototype.toString; String.prototype.toString() === \"[object \"+\"String\"+\"]\". Actual: String.prototype.toString() ===[object Object]"
+built-ins/String/prototype/S15.5.4_A1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: delete String.prototype.toString; String.prototype.toString() === \"[object \"+\"String\"+\"]\". Actual: String.prototype.toString() ===[object Object]"
+built-ins/String/prototype/S15.5.4_A2.js sloppy pass
+built-ins/String/prototype/S15.5.4_A2.js strict pass
+built-ins/String/prototype/S15.5.4_A3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #2: delete String.prototype.toString; String.prototype.toString() == \"[object \"+\"String\"+\"]\". Actual: String.prototype.toString() ==[object Object]"
+built-ins/String/prototype/S15.5.4_A3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #2: delete String.prototype.toString; String.prototype.toString() == \"[object \"+\"String\"+\"]\". Actual: String.prototype.toString() ==[object Object]"

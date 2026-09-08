@@ -1,0 +1,63 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/ctors-bigint/object-arg tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-array-returns.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-array-returns.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-generator-iterable-returns.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/as-generator-iterable-returns.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobigint64.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobigint64.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobiguint64.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobiguint64.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterating-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterating-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterator-not-callable-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterator-not-callable-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterator-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterator-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/length-excessive-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/length-excessive-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/length-is-symbol-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/length-is-symbol-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/length-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/length-throws.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/new-instance-extensibility.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/new-instance-extensibility.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/null-tobigint.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/null-tobigint.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/number-tobigint.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/number-tobigint.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-nan-tobigint.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-nan-tobigint.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/string-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/symbol-tobigint.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/symbol-tobigint.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-from-property.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-from-property.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-to-primitive-typeerror.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-to-primitive-typeerror.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-to-primitive.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-to-primitive.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-tostring.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-tostring.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-valueof-typeerror.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-valueof-typeerror.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-valueof.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-obj-valueof.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-property.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-property.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-symbol-property.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/throws-setting-symbol-property.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-tobigint.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-tobigint.js strict pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-custom-proto-if-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-custom-proto-if-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-default-proto-if-custom-proto-is-not-object.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-default-proto-if-custom-proto-is-not-object.js strict pass

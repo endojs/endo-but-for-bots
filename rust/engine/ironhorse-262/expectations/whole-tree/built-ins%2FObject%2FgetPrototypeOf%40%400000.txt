@@ -1,0 +1,79 @@
+# engine=ironhorse features=default corpus=built-ins/Object/getPrototypeOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/getPrototypeOf/15.2.3.2-0-1.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-0-1.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-0-3.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-0-3.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1-2.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1-2.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1-3.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1-3.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1-4.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1-4.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-1.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-1.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-1.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-10.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-10.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-11.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-11.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-12.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(EvalError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-12.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(EvalError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-13.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(RangeError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-13.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(RangeError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-14.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(ReferenceError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-14.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(ReferenceError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-15.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(SyntaxError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-15.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(SyntaxError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-16.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(TypeError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-16.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(TypeError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-17.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(URIError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-17.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.getPrototypeOf(URIError) Expected SameValue(«function [\"\"] (){[native code]}», «function [\"Error\"] (){[native code]}») to be true"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-18.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-18.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-19.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-19.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-2.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-2.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-20.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-20.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-21.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-21.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-22.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-22.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-23.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-23.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-24.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-24.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-25.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-25.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-26.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-26.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-27.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-27.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-28.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-28.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-3.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-3.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-30.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce null to object"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-30.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce null to object"
+built-ins/Object/getPrototypeOf/15.2.3.2-2-31.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-31.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-4.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-4.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-5.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-5.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-6.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-6.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-7.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-7.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-8.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-8.js strict pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-9.js sloppy pass
+built-ins/Object/getPrototypeOf/15.2.3.2-2-9.js strict pass
+built-ins/Object/getPrototypeOf/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getPrototypeOf; name value should be getPrototypeOf"
+built-ins/Object/getPrototypeOf/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be getPrototypeOf; name value should be getPrototypeOf"
+built-ins/Object/getPrototypeOf/not-a-constructor.js sloppy pass
+built-ins/Object/getPrototypeOf/not-a-constructor.js strict pass

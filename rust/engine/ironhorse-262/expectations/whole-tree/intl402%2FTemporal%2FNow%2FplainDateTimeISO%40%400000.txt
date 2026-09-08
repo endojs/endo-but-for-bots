@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/Now/plainDateTimeISO tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/Now/plainDateTimeISO/timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+intl402/Temporal/Now/plainDateTimeISO/timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""

@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.toStringTag) should be an own property"
+built-ins/Reflect/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.toStringTag) should be an own property"
+built-ins/Reflect/object-prototype.js sloppy pass
+built-ins/Reflect/object-prototype.js strict pass
+built-ins/Reflect/prop-desc.js sloppy pass
+built-ins/Reflect/prop-desc.js strict pass

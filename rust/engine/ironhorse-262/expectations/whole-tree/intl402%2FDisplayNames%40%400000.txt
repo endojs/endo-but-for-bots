@@ -1,0 +1,75 @@
+# engine=ironhorse features=default corpus=intl402/DisplayNames tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DisplayNames/ctor-custom-get-prototype-poison-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/ctor-custom-get-prototype-poison-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/ctor-custom-prototype.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/ctor-custom-prototype.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/ctor-default-prototype.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/ctor-default-prototype.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/instance-extensible.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/instance-extensible.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/length.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/length.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/locales-invalid-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a TypeError but got a ReferenceError"
+intl402/DisplayNames/locales-invalid-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a TypeError but got a ReferenceError"
+intl402/DisplayNames/locales-length-poison-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/locales-length-poison-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/locales-length-tolength-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: poisoned valueOf for ToNumber Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: poisoned valueOf for ToNumber Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/locales-length-tolength-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: poisoned valueOf for ToNumber Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: poisoned valueOf for ToNumber Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/locales-symbol-length.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/locales-symbol-length.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/name.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-fallback-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-fallback-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-fallback-invalid-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: err Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: err Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-fallback-invalid-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: err Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: err Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-fallback-toString-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-fallback-toString-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-fallback-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-fallback-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-getoptionsobject.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/DisplayNames/options-getoptionsobject.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/DisplayNames/options-languagedisplay-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-languagedisplay-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-languagedisplay-invalid-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: err Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: err Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-languagedisplay-invalid-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: err Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: err Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-languagedisplay-toString-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-languagedisplay-toString-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-languagedisplay-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-languagedisplay-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-localeMatcher-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-localeMatcher-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-localeMatcher-invalid-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bestfit Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: bestfit Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-localeMatcher-invalid-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: bestfit Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: bestfit Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-localeMatcher-toString-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-localeMatcher-toString-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-localeMatcher-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-localeMatcher-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-null-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a TypeError but got a ReferenceError"
+intl402/DisplayNames/options-null-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: null Expected a TypeError but got a ReferenceError"
+intl402/DisplayNames/options-random-properties-unchecked.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-random-properties-unchecked.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-style-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-style-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-style-invalid-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: small Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: small Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-style-invalid-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: small Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: small Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-style-toString-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-style-toString-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-style-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-style-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-type-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-type-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-type-invalid-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: undefined options Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: type = lang Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-type-invalid-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: undefined options Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: type = lang Expected a RangeError but got a TypeError\""
+intl402/DisplayNames/options-type-toString-abrupt-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-type-toString-abrupt-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: from toString Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: from toString Expected a Test262Error but got a TypeError\""
+intl402/DisplayNames/options-type-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/options-type-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+intl402/DisplayNames/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+intl402/DisplayNames/proto.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/proto.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/undefined-newtarget-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+intl402/DisplayNames/undefined-newtarget-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"

@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/unescape tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/unescape/argument_bigint.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/argument_bigint.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/argument_types.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/argument_types.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/empty-string.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/empty-string.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four-ignore-bad-u.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four-ignore-bad-u.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four-ignore-end-str.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four-ignore-end-str.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four-ignore-non-hex.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four-ignore-non-hex.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/four.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/length.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/length.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/name.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/name.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/not-a-constructor.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/not-a-constructor.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+annexB/built-ins/unescape/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+annexB/built-ins/unescape/to-primitive-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/unescape/to-primitive-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/unescape/to-primitive-observe.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/to-primitive-observe.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/to-string-err-symbol.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/unescape/to-string-err-symbol.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
+annexB/built-ins/unescape/to-string-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a ReferenceError"
+annexB/built-ins/unescape/to-string-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a ReferenceError"
+annexB/built-ins/unescape/to-string-observe.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/to-string-observe.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/two-ignore-end-str.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/two-ignore-end-str.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/two-ignore-non-hex.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/two-ignore-non-hex.js strict skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/two.js sloppy skip:ironhorse-missing-global:unescape
+annexB/built-ins/unescape/two.js strict skip:ironhorse-missing-global:unescape

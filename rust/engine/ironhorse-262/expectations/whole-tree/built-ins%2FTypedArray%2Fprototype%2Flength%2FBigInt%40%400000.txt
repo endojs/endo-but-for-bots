@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/length/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/length/BigInt/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/length/BigInt/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/length/BigInt/resizable-array-buffer-auto.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/length/BigInt/resizable-array-buffer-auto.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/length/BigInt/resizable-array-buffer-fixed.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/length/BigInt/resizable-array-buffer-fixed.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/length/BigInt/return-length.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/length/BigInt/return-length.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

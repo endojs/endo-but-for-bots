@@ -645,6 +645,35 @@ fn a_crafted_capability_executor_home_is_refused() {
         "promise cluster: malformed capability executor home",
     );
 
+    // Exactly one never-called sentinel cannot arise from a callback: both
+    // capture fields are initialized together, even for an empty call.
+    let home = image.promise_cluster.functions[executor].promise as usize;
+    let first = image.slots[home].next.0 as usize;
+    let second = image.slots[first].next.0 as usize;
+    for field in [first, second] {
+        let mut mixed = image.clone();
+        let sentinel = ironhorse_vm::value::Slot::uninitialized();
+        mixed.slots[field].kind = sentinel.kind;
+        mixed.slots[field].value = sentinel.value;
+        expect_container_refusal(&mixed, "promise cluster: mixed capability executor state");
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch(&mixed, 1, ""))
+            .expect("crafted store");
+        assert!(
+            ironhorse_snapshot::machine::resume_from_store(&store, &sig()).is_err(),
+            "mixed capability state must not resume"
+        );
+        assert!(
+            ironhorse_snapshot::machine::resume_from_store_lazy(
+                std::rc::Rc::new(std::cell::RefCell::new(store)),
+                &sig()
+            )
+            .is_err(),
+            "mixed capability state must not resume lazily"
+        );
+    }
+
     // A merely in-bounds object is not a capability record. Adoption must
     // verify both hidden capture fields rather than resurrecting a callable
     // executor that reads unrelated heap state.

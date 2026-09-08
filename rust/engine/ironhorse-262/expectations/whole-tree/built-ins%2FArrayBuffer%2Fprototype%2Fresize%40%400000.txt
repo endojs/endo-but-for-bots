@@ -1,0 +1,45 @@
+# engine=ironhorse features=default corpus=built-ins/ArrayBuffer/prototype/resize tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ArrayBuffer/prototype/resize/coerced-new-length-detach.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/coerced-new-length-detach.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/descriptor.js sloppy pass
+built-ins/ArrayBuffer/prototype/resize/descriptor.js strict pass
+built-ins/ArrayBuffer/prototype/resize/extensible.js sloppy pass
+built-ins/ArrayBuffer/prototype/resize/extensible.js strict pass
+built-ins/ArrayBuffer/prototype/resize/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/ArrayBuffer/prototype/resize/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/ArrayBuffer/prototype/resize/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be resize; name value should be resize"
+built-ins/ArrayBuffer/prototype/resize/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be resize; name value should be resize"
+built-ins/ArrayBuffer/prototype/resize/new-length-excessive.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/new-length-excessive.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/new-length-negative.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/new-length-negative.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/new-length-non-number.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/new-length-non-number.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/nonconstructor.js sloppy pass
+built-ins/ArrayBuffer/prototype/resize/nonconstructor.js strict pass
+built-ins/ArrayBuffer/prototype/resize/resize-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-same-size-zero-explicit.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-same-size-zero-explicit.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-same-size-zero-implicit.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-same-size-zero-implicit.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-same-size.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-same-size.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-shrink-zero-explicit.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-shrink-zero-explicit.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-shrink-zero-implicit.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-shrink-zero-implicit.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/resize-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/prototype/resize/this-is-detached.js sloppy skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-detached.js strict skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-immutable-arraybuffer-object.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/resize/this-is-immutable-arraybuffer-object.js strict skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/resize/this-is-not-arraybuffer-object.js sloppy skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-not-arraybuffer-object.js strict skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-not-object.js sloppy skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-not-object.js strict skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-not-resizable-arraybuffer-object.js sloppy skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-not-resizable-arraybuffer-object.js strict skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-sharedarraybuffer.js sloppy skip:unsupported-opcode:array-buffer-resize:unsupported
+built-ins/ArrayBuffer/prototype/resize/this-is-sharedarraybuffer.js strict skip:unsupported-opcode:array-buffer-resize:unsupported

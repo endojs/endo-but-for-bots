@@ -1,0 +1,4 @@
+# engine=ironhorse features=default corpus=language/export tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/export/escaped-as-export-specifier.js sloppy pass
+language/export/escaped-default.js sloppy pass
+language/export/escaped-from.js sloppy pass

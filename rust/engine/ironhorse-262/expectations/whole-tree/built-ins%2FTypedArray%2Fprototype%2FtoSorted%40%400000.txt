@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/toSorted tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/toSorted/comparefn-controls-sort.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/comparefn-controls-sort.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/comparefn-default.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/comparefn-default.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/comparefn-not-a-function.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toSorted/comparefn-not-a-function.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toSorted/comparefn-stop-after-error.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toSorted/comparefn-stop-after-error.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toSorted/ignores-species.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/ignores-species.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/immutable.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/immutable.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/length-property-ignored.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/length-property-ignored.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toSorted/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toSorted/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toSorted/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toSorted/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toSorted/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/TypedArray/prototype/toSorted/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/TypedArray/prototype/toSorted/property-descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/toSorted/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/toSorted/this-value-invalid.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toSorted/this-value-invalid.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

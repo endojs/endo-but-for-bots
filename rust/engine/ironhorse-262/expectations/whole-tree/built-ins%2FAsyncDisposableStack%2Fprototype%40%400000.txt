@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncDisposableStack/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncDisposableStack/prototype/Symbol.asyncDispose.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/Symbol.asyncDispose.js strict pass
+built-ins/AsyncDisposableStack/prototype/Symbol.toStringTag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.toStringTag) should be an own property"
+built-ins/AsyncDisposableStack/prototype/Symbol.toStringTag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.toStringTag) should be an own property"
+built-ins/AsyncDisposableStack/prototype/constructor.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/constructor.js strict pass
+built-ins/AsyncDisposableStack/prototype/prop-desc.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/prop-desc.js strict pass
+built-ins/AsyncDisposableStack/prototype/proto.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/proto.js strict pass

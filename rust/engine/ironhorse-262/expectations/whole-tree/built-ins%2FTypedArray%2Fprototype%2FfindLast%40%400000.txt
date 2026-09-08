@@ -1,0 +1,49 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/findLast tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/findLast/callbackfn-resize.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/callbackfn-resize.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/get-length-ignores-length-prop.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/get-length-ignores-length-prop.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/invoked-as-func.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/findLast/invoked-as-func.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/findLast/invoked-as-method.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/findLast/invoked-as-method.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/findLast/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/prototype/findLast/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/prototype/findLast/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/prototype/findLast/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/TypedArray/prototype/findLast/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/TypedArray/prototype/findLast/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/TypedArray/prototype/findLast/predicate-call-changes-value.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-call-changes-value.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-call-parameters.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-call-parameters.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-call-this-non-strict.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-call-this-strict.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-is-not-callable-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/predicate-is-not-callable-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/predicate-may-detach-buffer.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-may-detach-buffer.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-not-called-on-empty-array.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/predicate-not-called-on-empty-array.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: findLast should be an own property"
+built-ins/TypedArray/prototype/findLast/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: findLast should be an own property"
+built-ins/TypedArray/prototype/findLast/resizable-buffer-grow-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/resizable-buffer-grow-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/resizable-buffer-shrink-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/resizable-buffer-shrink-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findLast/return-abrupt-from-predicate-call.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a TypeError (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/return-abrupt-from-predicate-call.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error but got a TypeError (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/return-abrupt-from-this-out-of-bounds.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/findLast/return-abrupt-from-this-out-of-bounds.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/findLast/return-found-value-predicate-result-is-true.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/return-found-value-predicate-result-is-true.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/return-undefined-if-predicate-returns-false-value.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/return-undefined-if-predicate-returns-false-value.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/findLast/this-is-not-object.js sloppy pass
+built-ins/TypedArray/prototype/findLast/this-is-not-object.js strict pass
+built-ins/TypedArray/prototype/findLast/this-is-not-typedarray-instance.js sloppy pass
+built-ins/TypedArray/prototype/findLast/this-is-not-typedarray-instance.js strict pass

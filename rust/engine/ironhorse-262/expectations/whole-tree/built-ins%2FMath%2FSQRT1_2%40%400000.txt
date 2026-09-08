@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Math/SQRT1_2 tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/SQRT1_2/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[SQRT1_2] to have enumerable:false."
+built-ins/Math/SQRT1_2/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[SQRT1_2] to have enumerable:false."
+built-ins/Math/SQRT1_2/value.js sloppy pass
+built-ins/Math/SQRT1_2/value.js strict pass

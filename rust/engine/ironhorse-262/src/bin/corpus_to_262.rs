@@ -21,9 +21,8 @@
 //!   when the program throws a real `Error` subclass; a **parse negative**
 //!   (`phase: parse, type: SyntaxError`, checked in inactive until the
 //!   stage-5 compiler) when the oracle rejects it at compile time; and a
-//!   **`raw`** shared-abort case for a bare primitive `throw` (test262's
-//!   `negative.type` is constructor-name-shaped, so a primitive throw keeps a
-//!   verbatim body the dual-run covers as a matching shared abort).
+//!   positive assertion case for a bare primitive `throw`: catch it and check
+//!   its rendered value, since positive tests must complete successfully.
 //!
 //! Generation is strictly 1:1 — one corpus line in, one case file out,
 //! nothing dropped silently — and the run prints the count the conversion
@@ -100,7 +99,7 @@ const MANIFEST: &[Entry] = &[
 /// `type` can carry (plus `Test262Error`, the harness's own). A thrown value
 /// whose `String()` names one of these is a real Error subclass, mapped to a
 /// `negative: { phase: runtime, type: <Ctor> }` case; anything else is a
-/// primitive throw kept as a verbatim shared-abort body.
+/// primitive throw checked by a catching assertion wrapper.
 const ERROR_CTORS: &[&str] = &[
     "Error",
     "TypeError",
@@ -117,6 +116,8 @@ const ERROR_CTORS: &[&str] = &[
 enum Shape {
     /// `assert.sameValue((<expr>), <lit>)` under the harness — spec-anchored.
     Assert { lit: String },
+    /// Catch an intentional primitive throw and assert its observable rendering.
+    AssertThrow { rendered: String },
     /// The source verbatim, `flags: [raw]` — oracle-relative, bit-preserving.
     Raw,
     /// A runtime negative: verbatim throwing body + `negative: runtime/<ty>`.
@@ -231,8 +232,19 @@ fn main() {
                     shape = Shape::Raw;
                 }
             }
+            if let Shape::AssertThrow { rendered } = &shape {
+                let h = harness
+                    .as_ref()
+                    .expect("throw assertion needs the test262 harness");
+                assert!(
+                    h.assert_holds(&assert_throw_body(src, rendered), entry.meter_exact),
+                    "primitive-throw wrapper must preserve completion and meter parity: {}:{}",
+                    entry.stem,
+                    i + 1
+                );
+            }
             match &shape {
-                Shape::Assert { .. } => n_assert += 1,
+                Shape::Assert { .. } | Shape::AssertThrow { .. } => n_assert += 1,
                 Shape::Raw => n_raw += 1,
                 Shape::NegativeRuntime { .. } => n_neg_runtime += 1,
                 Shape::NegativeParse => n_neg_parse += 1,
@@ -293,10 +305,10 @@ fn classify(src: &str) -> Option<Shape> {
             ty: ctor.to_string(),
         });
     }
-    // A bare primitive throw (`throw 7`) has no constructor for `negative.type`
-    // to name — kept as a verbatim body the dual-run covers as a matching
-    // shared abort (design § frontmatter mapping).
-    Some(Shape::Raw)
+    // Primitive throws have no constructor for negative.type. Check their
+    // rendering explicitly so a positive case completes only after catching
+    // the intended value.
+    Some(Shape::AssertThrow { rendered: o.error })
 }
 
 /// Reconstruct a JS literal for the completion value, given the oracle's
@@ -380,13 +392,28 @@ fn js_string_literal(s: &str) -> String {
     out
 }
 
+/// Keep the prior observable throw contract: String(exception), with an
+/// explicit did-throw assertion so normal completion cannot pass.
+fn assert_throw_body(src: &str, rendered: &str) -> String {
+    // These generated bindings must not collide with the original program.
+    assert!(!src.contains("ironhorseDidThrow") && !src.contains("ironhorseThrown"));
+    format!(
+        "var ironhorseDidThrow = false;\ntry {{\n  {src}\n}} catch (ironhorseThrown) {{\n  ironhorseDidThrow = true;\n  assert.sameValue(String(ironhorseThrown), {});\n}}\nassert.sameValue(ironhorseDidThrow, true);\n",
+        js_string_literal(rendered)
+    )
+}
+
 /// Render one test262 case file: frontmatter + body.
 fn render_case(entry: &Entry, line_no: usize, src: &str, shape: &Shape) -> String {
     let mut features = vec!["ironhorse-dual-run".to_string()];
     // The bit-exact corpora carry the historical computron evidence; the
     // negatives do not claim it (their abort verdict is constructor-name
     // shaped, never meter-gated), matching the runner's `evaluate_negative`.
-    let claims_meter = entry.meter_exact && matches!(shape, Shape::Assert { .. } | Shape::Raw);
+    let claims_meter = entry.meter_exact
+        && matches!(
+            shape,
+            Shape::Assert { .. } | Shape::AssertThrow { .. } | Shape::Raw
+        );
     if claims_meter {
         features.push("ironhorse-meter-exact".to_string());
         features.push("ironhorse-meter-determinism".to_string());
@@ -400,6 +427,9 @@ fn render_case(entry: &Entry, line_no: usize, src: &str, shape: &Shape) -> Strin
             None,
             format!("assert.sameValue(({}), {});\n", src, lit),
         ),
+        Shape::AssertThrow { rendered } => {
+            (vec!["noStrict"], None, assert_throw_body(src, rendered))
+        }
         Shape::Raw => (vec!["raw"], None, format!("{}\n", src)),
         Shape::NegativeRuntime { ty } => (
             vec!["raw"],

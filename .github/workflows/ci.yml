@@ -828,6 +828,26 @@ jobs:
         env:
           RUST_MIN_STACK: '33554432'
         run: cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity
+      - name: Gate the committed try/catch expectation slice
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+          GARDEN_TEST262_TIP: 'be13516fb6441b950ba8a3df97eb34062c186972'
+        run: >-
+          cargo run --locked -p ironhorse-262 --bin endot-ih --
+          --direct-only --strict-skip-reasons
+          --expectations ironhorse-262/expectations/try.txt
+          language/statements/try
+      - name: Gate the complete Ironhorse corpus expectations
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+          GARDEN_TEST262_TIP: 'be13516fb6441b950ba8a3df97eb34062c186972'
+        run: >-
+          cargo run --locked -p ironhorse-262 --bin endot-ih --
+          --strict-skip-reasons
+          --expectations ironhorse-262/expectations/ironhorse.txt
+          ../../packages/test262-runner/test262/test/ironhorse
   test-ocapn-python:
     name: test-ocapn-python
 

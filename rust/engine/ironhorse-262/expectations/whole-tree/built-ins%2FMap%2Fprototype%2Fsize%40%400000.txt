@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Map/prototype/size tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Map/prototype/size/does-not-have-mapdata-internal-slot-set.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/does-not-have-mapdata-internal-slot-set.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/does-not-have-mapdata-internal-slot-weakmap.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/does-not-have-mapdata-internal-slot-weakmap.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/does-not-have-mapdata-internal-slot.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/does-not-have-mapdata-internal-slot.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/returns-count-of-present-values-before-after-set-clear.js sloppy pass
+built-ins/Map/prototype/size/returns-count-of-present-values-before-after-set-clear.js strict pass
+built-ins/Map/prototype/size/returns-count-of-present-values-before-after-set-delete.js sloppy pass
+built-ins/Map/prototype/size/returns-count-of-present-values-before-after-set-delete.js strict pass
+built-ins/Map/prototype/size/returns-count-of-present-values-by-insertion.js sloppy pass
+built-ins/Map/prototype/size/returns-count-of-present-values-by-insertion.js strict pass
+built-ins/Map/prototype/size/returns-count-of-present-values-by-iterable.js sloppy pass
+built-ins/Map/prototype/size/returns-count-of-present-values-by-iterable.js strict pass
+built-ins/Map/prototype/size/size.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/size.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Map/prototype/size/this-not-object-throw.js sloppy pass
+built-ins/Map/prototype/size/this-not-object-throw.js strict pass

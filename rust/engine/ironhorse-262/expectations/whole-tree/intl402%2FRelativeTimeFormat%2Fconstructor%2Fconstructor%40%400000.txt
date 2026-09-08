@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=intl402/RelativeTimeFormat/constructor/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/RelativeTimeFormat/constructor/constructor/locales-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/locales-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/locales-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/locales-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/newtarget-undefined.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/newtarget-undefined.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-localeMatcher-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a TypeError\""
+intl402/RelativeTimeFormat/constructor/constructor/options-localeMatcher-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid localeMatcher option value Expected a RangeError but got a TypeError\""
+intl402/RelativeTimeFormat/constructor/constructor/options-numberingSystem-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-numberingSystem-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-numberingSystem-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-numberingSystem-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-numeric-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-numeric-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-numeric-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-numeric-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-order.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-order.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-proto.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-proto.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-style-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid style option value Expected a RangeError but got a TypeError\""
+intl402/RelativeTimeFormat/constructor/constructor/options-style-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: null is an invalid style option value Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: null is an invalid style option value Expected a RangeError but got a TypeError\""
+intl402/RelativeTimeFormat/constructor/constructor/options-style-valid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-style-valid.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-throwing-getters.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a TypeError\""
+intl402/RelativeTimeFormat/constructor/constructor/options-throwing-getters.js strict fail:"abort-value-differs: oracle=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError but got a TypeError\""
+intl402/RelativeTimeFormat/constructor/constructor/options-toobject-prototype.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-toobject-prototype.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-toobject.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-toobject.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-undefined.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/options-undefined.js strict skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+intl402/RelativeTimeFormat/constructor/constructor/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+intl402/RelativeTimeFormat/constructor/constructor/subclassing.js sloppy skip:oracle-host-missing-global:Intl
+intl402/RelativeTimeFormat/constructor/constructor/subclassing.js strict skip:oracle-host-missing-global:Intl

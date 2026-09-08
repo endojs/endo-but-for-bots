@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainTime tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainTime/argument-convert.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/argument-convert.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/get-prototype-from-constructor-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/get-prototype-from-constructor-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainTime/hour-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/hour-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/PlainTime/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainTime/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/microsecond-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/microsecond-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/millisecond-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/millisecond-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/minute-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/minute-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/nanosecond-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/nanosecond-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/negative-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/PlainTime/negative-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainTime/negative-zero.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/negative-zero.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/second-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/second-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainTime/subclass.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/subclass.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainTime/throws-if-time-is-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: args = [-1] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/throws-if-time-is-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: args = [-1] Expected a RangeError but got a ReferenceError"

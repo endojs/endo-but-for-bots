@@ -1,0 +1,201 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/lastIndexOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-1.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-1.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-10.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-10.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-11.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-11.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-12.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-12.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-13.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-13.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-14.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-14.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-15.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-15.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-2.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-2.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-3.js sloppy skip:unsupported-opcode:lastIndexOf:non-dense-array
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-3.js strict skip:unsupported-opcode:lastIndexOf:non-dense-array
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-4.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-4.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-5.js sloppy skip:unsupported-opcode:lastIndexOf:non-dense-array
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-5.js strict skip:unsupported-opcode:lastIndexOf:non-dense-array
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-6.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-6.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-7.js sloppy skip:unsupported-opcode:lastIndexOf:non-dense-array
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-7.js strict skip:unsupported-opcode:lastIndexOf:non-dense-array
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-8.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-8.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-9.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-9.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-1.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-1.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-10.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-10.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-11.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-11.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-12.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-12.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-13.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-13.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-14.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-14.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-17.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-17.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-18.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-18.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-19.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-19.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-2.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-2.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-3.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-3.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-4.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-4.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-5.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-5.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-6.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-6.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-7.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-7.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-8.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-8.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-9.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-9.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-1.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-1.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-10.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-10.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-11.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-11.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-12.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-12.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-13.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-13.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-14.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-14.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-15.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-15.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-16.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-16.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-17.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-17.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-18.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-18.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-19.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-19.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-2.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-2.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-20.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-20.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-21.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-21.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-22.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-22.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-23.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-23.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-24.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-24.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-25.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-25.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-28.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-28.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-3.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-3.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-4.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-4.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-5.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-5.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-6.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-6.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-7.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-7.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-9.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-9.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-1.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-1.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-10.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-10.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-11.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-11.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-2.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-2.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-3.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-3.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-4.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-4.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-5.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-5.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-6.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-6.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-7.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-7.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-8.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-8.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-9.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-9.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-10.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-10.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-11.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-11.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-12.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-12.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-13.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-13.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-14.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-14.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-15.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-15.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-16.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-16.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-17.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-17.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-18.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-18.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-19.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-19.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-20.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-20.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-21.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-21.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-22.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-22.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-23.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: toStringAccessed !== true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-23.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: toStringAccessed !== true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-24.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-24.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-25.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: valueOfAccessed !== true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-25.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: valueOfAccessed !== true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-26.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-26.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-27.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-27.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-28.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-28.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-29.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-29.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-30.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-30.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-31.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-31.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-32.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-32.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number2», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-33.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-33.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-4.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-4.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-5.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-5.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-6.js sloppy pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-6.js strict pass
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-7.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-7.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-8.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"
+built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-8.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number-1») to be true"

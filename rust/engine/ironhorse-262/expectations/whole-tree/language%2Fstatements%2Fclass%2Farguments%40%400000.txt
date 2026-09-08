@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/class/arguments tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/arguments/access.js sloppy pass
+language/statements/class/arguments/access.js strict pass
+language/statements/class/arguments/default-constructor.js sloppy pass
+language/statements/class/arguments/default-constructor.js strict pass

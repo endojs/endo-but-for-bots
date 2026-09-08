@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/Duration/prototype/round tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/Duration/prototype/round/adjust-rounded-duration-days.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/adjust-rounded-duration-days.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/dst-balancing-result.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/dst-balancing-result.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/dst-rounding-result.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/dst-rounding-result.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-dst-back-transition.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-dst-back-transition.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-infinity-throws-rangeerror.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-string-datetime.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-string-datetime.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-sub-minute-offset.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/relativeto-sub-minute-offset.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/rounding-increment-relativeto.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/rounding-increment-relativeto.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/round/rounding-with-largestunit.js sloppy skip:oracle-host-missing-temporal
+intl402/Temporal/Duration/prototype/round/rounding-with-largestunit.js strict skip:oracle-host-missing-temporal

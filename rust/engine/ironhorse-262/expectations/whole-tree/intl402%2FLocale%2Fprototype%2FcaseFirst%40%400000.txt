@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/caseFirst tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/caseFirst/branding.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/caseFirst/branding.js strict skip:oracle-host-missing-intl
+intl402/Locale/prototype/caseFirst/name.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/caseFirst/name.js strict skip:oracle-host-missing-intl
+intl402/Locale/prototype/caseFirst/prop-desc.js sloppy skip:oracle-host-missing-intl
+intl402/Locale/prototype/caseFirst/prop-desc.js strict skip:oracle-host-missing-intl

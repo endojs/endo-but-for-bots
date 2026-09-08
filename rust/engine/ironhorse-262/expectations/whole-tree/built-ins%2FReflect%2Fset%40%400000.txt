@@ -1,0 +1,37 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect/set tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/set/call-prototype-property-set.js sloppy pass
+built-ins/Reflect/set/call-prototype-property-set.js strict pass
+built-ins/Reflect/set/creates-a-data-descriptor.js sloppy pass
+built-ins/Reflect/set/creates-a-data-descriptor.js strict pass
+built-ins/Reflect/set/different-property-descriptors.js sloppy pass
+built-ins/Reflect/set/different-property-descriptors.js strict pass
+built-ins/Reflect/set/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
+built-ins/Reflect/set/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 3; length value should be 3"
+built-ins/Reflect/set/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set; name value should be set"
+built-ins/Reflect/set/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be set; name value should be set"
+built-ins/Reflect/set/not-a-constructor.js sloppy pass
+built-ins/Reflect/set/not-a-constructor.js strict pass
+built-ins/Reflect/set/receiver-is-not-object.js sloppy pass
+built-ins/Reflect/set/receiver-is-not-object.js strict pass
+built-ins/Reflect/set/return-abrupt-from-property-key.js sloppy pass
+built-ins/Reflect/set/return-abrupt-from-property-key.js strict pass
+built-ins/Reflect/set/return-abrupt-from-result.js sloppy pass
+built-ins/Reflect/set/return-abrupt-from-result.js strict pass
+built-ins/Reflect/set/return-false-if-receiver-is-not-writable.js sloppy pass
+built-ins/Reflect/set/return-false-if-receiver-is-not-writable.js strict pass
+built-ins/Reflect/set/return-false-if-target-is-not-writable.js sloppy pass
+built-ins/Reflect/set/return-false-if-target-is-not-writable.js strict pass
+built-ins/Reflect/set/set-value-on-accessor-descriptor-with-receiver.js sloppy pass
+built-ins/Reflect/set/set-value-on-accessor-descriptor-with-receiver.js strict pass
+built-ins/Reflect/set/set-value-on-accessor-descriptor.js sloppy pass
+built-ins/Reflect/set/set-value-on-accessor-descriptor.js strict pass
+built-ins/Reflect/set/set-value-on-data-descriptor.js sloppy pass
+built-ins/Reflect/set/set-value-on-data-descriptor.js strict pass
+built-ins/Reflect/set/set.js sloppy pass
+built-ins/Reflect/set/set.js strict pass
+built-ins/Reflect/set/symbol-property.js sloppy pass
+built-ins/Reflect/set/symbol-property.js strict pass
+built-ins/Reflect/set/target-is-not-object-throws.js sloppy pass
+built-ins/Reflect/set/target-is-not-object-throws.js strict pass
+built-ins/Reflect/set/target-is-symbol-throws.js sloppy pass
+built-ins/Reflect/set/target-is-symbol-throws.js strict pass

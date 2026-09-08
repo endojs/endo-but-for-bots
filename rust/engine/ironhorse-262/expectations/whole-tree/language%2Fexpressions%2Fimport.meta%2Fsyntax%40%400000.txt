@@ -1,0 +1,24 @@
+# engine=ironhorse features=default corpus=language/expressions/import.meta/syntax tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/import.meta/syntax/escape-sequence-import.js sloppy pass
+language/expressions/import.meta/syntax/escape-sequence-meta.js sloppy pass
+language/expressions/import.meta/syntax/goal-async-function-params-or-body.js sloppy pass
+language/expressions/import.meta/syntax/goal-async-function-params-or-body.js strict pass
+language/expressions/import.meta/syntax/goal-async-generator-params-or-body.js sloppy pass
+language/expressions/import.meta/syntax/goal-async-generator-params-or-body.js strict pass
+language/expressions/import.meta/syntax/goal-function-params-or-body.js sloppy pass
+language/expressions/import.meta/syntax/goal-function-params-or-body.js strict pass
+language/expressions/import.meta/syntax/goal-generator-params-or-body.js sloppy pass
+language/expressions/import.meta/syntax/goal-generator-params-or-body.js strict pass
+language/expressions/import.meta/syntax/goal-module-nested-function.js sloppy skip:unsupported-opcode:module:import-meta
+language/expressions/import.meta/syntax/goal-module.js sloppy skip:unsupported-opcode:module:import-meta
+language/expressions/import.meta/syntax/goal-script.js sloppy pass
+language/expressions/import.meta/syntax/goal-script.js strict pass
+language/expressions/import.meta/syntax/invalid-assignment-target-array-destructuring-expr.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-array-rest-destructuring-expr.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-assignment-expr.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-for-await-of-loop.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-for-in-loop.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-for-of-loop.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-object-destructuring-expr.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-object-rest-destructuring-expr.js sloppy pass
+language/expressions/import.meta/syntax/invalid-assignment-target-update-expr.js sloppy pass

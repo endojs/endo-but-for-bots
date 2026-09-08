@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=language/expressions/dynamic-import/import-defer/import-defer-async-module tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/dynamic-import/import-defer/import-defer-async-module/main.js sloppy skip:module:compiler-rejected

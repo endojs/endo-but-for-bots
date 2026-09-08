@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/integer-indexes-and-string-and-symbol-keys-.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/integer-indexes-and-string-and-symbol-keys-.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/integer-indexes-and-string-keys.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/integer-indexes-and-string-keys.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/integer-indexes.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/integer-indexes.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/not-enumerable-keys.js sloppy pass
+built-ins/TypedArrayConstructors/internals/OwnPropertyKeys/BigInt/not-enumerable-keys.js strict pass

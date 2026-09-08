@@ -1,5 +1,3 @@
-test/TextDecoder/immutable-arraybuffer-intersection.js
-test/TextEncoder/immutable-arraybuffer-intersection.js
 test/intrinsics/ArrayBuffer/prototype-slice.js
 test/intrinsics/AsyncGeneratorFunction/intrinsic-metadata.js
 test/intrinsics/AsyncGeneratorPrototype/intrinsic-metadata.js

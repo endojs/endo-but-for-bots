@@ -1,0 +1,101 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Duration/compare tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Duration/compare/argument-cast.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/argument-cast.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/argument-duration-max.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/argument-duration-max.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/argument-duration-out-of-range.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: string with years > max is out of range (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: string with days > max is out of range (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/argument-duration-out-of-range.js strict fail:"abort-value-differs: oracle=\"Test262Error: string with years > max is out of range (first argument) Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: string with days > max is out of range (first argument) Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/argument-duration-precision-exact-numerical-values.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/argument-duration-precision-exact-numerical-values.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/argument-propertybag-optional-properties.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/argument-propertybag-optional-properties.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/argument-string-fractional-units-rounding-mode.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/argument-string-fractional-units-rounding-mode.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/argument-string-negative-fractional-units.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/argument-string-negative-fractional-units.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/blank-duration.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/blank-duration.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/calendar-possibly-required.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/calendar-possibly-required.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/calendar-temporal-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/calendar-temporal-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/compare-no-precision-loss.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/compare-no-precision-loss.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/duration-out-of-range-added-to-relativeto.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/duration-out-of-range-added-to-relativeto.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/exhaustive.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/exhaustive.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/instances-identical.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/instances-identical.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/length.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/name.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/compare/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/compare/options-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/options-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/options-read-before-algorithmic-validation.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/options-read-before-algorithmic-validation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/options-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/options-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/options-wrong-type.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: TypeError on wrong options type object Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/compare/options-wrong-type.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: TypeError on wrong options type object Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/compare/order-of-operations.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/order-of-operations.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-argument-propertybag-calendar-invalid-iso-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-argument-propertybag-calendar-invalid-iso-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-argument-string-calendar-invalid-iso-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-argument-string-calendar-invalid-iso-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-hour.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-hour.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-month.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-month.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-no-fractional-minutes-hours.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-no-fractional-minutes-hours.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-plaindate-add24hourdaystonormalizedtimeduration-out-of-range.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-plaindate-add24hourdaystonormalizedtimeduration-out-of-range.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/Duration/compare/relativeto-propertybag-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/compare/relativeto-propertybag-invalid-offset-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-invalid-offset-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-invalid.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-invalid.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-optional-properties.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-optional-properties.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: bare date-time string is not a time zone Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: bare date-time string is not a time zone Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string-year-zero.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject minus zero as extended year Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string-year-zero.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject minus zero as extended year Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-string.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-wrong-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/relativeto-propertybag-timezone-wrong-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/compare/relativeto-string-invalid.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-string-invalid.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-string-limits.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-string-limits.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-string-wrong-offset.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-string-wrong-offset.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-string.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-sub-minute-offset.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-sub-minute-offset.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/relativeto-undefined-throw-on-calendar-units.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-undefined-throw-on-calendar-units.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-year.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-year.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-zoneddatetime-negative-epochnanoseconds.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-zoneddatetime-negative-epochnanoseconds.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/throws-when-target-zoned-date-time-outside-valid-limits.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/throws-when-target-zoned-date-time-outside-valid-limits.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/year-zero.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/year-zero.js strict skip:oracle-host-missing-global:Temporal

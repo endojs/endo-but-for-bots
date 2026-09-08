@@ -1,0 +1,53 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/internals/Set tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/internals/Set/bigint-tonumber.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/bigint-tonumber.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/conversion-operation-consistent-nan.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/conversion-operation-consistent-nan.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/conversion-operation.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/conversion-operation.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer-key-is-not-numeric-index.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer-key-is-not-numeric-index.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer-key-is-symbol.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer-key-is-symbol.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer-realm.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer-realm.js strict skip:shared-positive-test-failure
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/detached-buffer.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/indexed-value.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/indexed-value.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-canonical-invalid-index-prototype-chain-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: receiver[1] should not be created (receiver: regular array) (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/key-is-canonical-invalid-index-prototype-chain-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: receiver[1] should not be created (receiver: regular array) (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/key-is-canonical-invalid-index-reflect-set.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-canonical-invalid-index-reflect-set.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-in-bounds-receiver-is-not-typed-array.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-in-bounds-receiver-is-not-typed-array.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-minus-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/key-is-minus-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-canonical-index.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-canonical-index.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-integer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-integer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-numeric-index-set-throws.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-numeric-index-set-throws.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-numeric-index.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-not-numeric-index.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds-receiver-is-not-object.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds-receiver-is-not-object.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds-receiver-is-not-typed-array.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds-receiver-is-not-typed-array.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds-receiver-is-proto.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds-receiver-is-proto.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/key-is-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/key-is-symbol.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-symbol.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-valid-index-prototype-chain-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setting receiver[0] should throw in strict mode (receiver: non-extensible empty object) Expected a TypeError to be thrown but no exception was thrown at all (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/key-is-valid-index-prototype-chain-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setting receiver[0] should throw in strict mode (receiver: non-extensible empty object) Expected a TypeError to be thrown but no exception was thrown at all (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/key-is-valid-index-reflect-set.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/key-is-valid-index-reflect-set.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/resized-out-of-bounds-to-in-bounds-index.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/resized-out-of-bounds-to-in-bounds-index.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/tonumber-value-detached-buffer.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/tonumber-value-detached-buffer.js strict pass
+built-ins/TypedArrayConstructors/internals/Set/tonumber-value-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArrayConstructors/internals/Set/tonumber-value-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

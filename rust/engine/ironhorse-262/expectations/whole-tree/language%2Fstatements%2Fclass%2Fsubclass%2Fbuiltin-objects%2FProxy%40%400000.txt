@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/Proxy tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/Proxy/no-prototype-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/subclass/builtin-objects/Proxy/no-prototype-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"

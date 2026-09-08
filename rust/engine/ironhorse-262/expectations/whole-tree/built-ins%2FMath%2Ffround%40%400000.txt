@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Math/fround tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/fround/Math.fround_Infinity.js sloppy pass
+built-ins/Math/fround/Math.fround_Infinity.js strict pass
+built-ins/Math/fround/Math.fround_NaN.js sloppy pass
+built-ins/Math/fround/Math.fround_NaN.js strict pass
+built-ins/Math/fround/Math.fround_Zero.js sloppy pass
+built-ins/Math/fround/Math.fround_Zero.js strict pass
+built-ins/Math/fround/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/fround/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/fround/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be fround; name value should be fround"
+built-ins/Math/fround/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be fround; name value should be fround"
+built-ins/Math/fround/not-a-constructor.js sloppy pass
+built-ins/Math/fround/not-a-constructor.js strict pass
+built-ins/Math/fround/prop-desc.js sloppy pass
+built-ins/Math/fround/prop-desc.js strict pass
+built-ins/Math/fround/ties.js sloppy pass
+built-ins/Math/fround/ties.js strict pass
+built-ins/Math/fround/value-convertion.js sloppy pass
+built-ins/Math/fround/value-convertion.js strict pass

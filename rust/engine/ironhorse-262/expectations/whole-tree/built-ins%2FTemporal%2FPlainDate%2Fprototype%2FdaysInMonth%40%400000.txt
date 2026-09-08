@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainDate/prototype/daysInMonth tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainDate/prototype/daysInMonth/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDate/prototype/daysInMonth/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDate/prototype/daysInMonth/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDate/prototype/daysInMonth/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDate/prototype/daysInMonth/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDate/prototype/daysInMonth/prop-desc.js strict skip:oracle-host-missing-global:Temporal

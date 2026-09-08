@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/String/prototype/fontcolor tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/String/prototype/fontcolor/B.2.3.7.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/fontcolor/B.2.3.7.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/fontcolor/attr-tostring-err.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/fontcolor/attr-tostring-err.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/fontcolor/length.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/fontcolor/length.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/fontcolor/name.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/fontcolor/name.js strict skip:shared-positive-test-failure
+annexB/built-ins/String/prototype/fontcolor/not-a-constructor.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/fontcolor/not-a-constructor.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/fontcolor/prop-desc.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/fontcolor/prop-desc.js strict skip:shared-test262-failure
+annexB/built-ins/String/prototype/fontcolor/this-val-tostring-err.js sloppy skip:shared-test262-failure
+annexB/built-ins/String/prototype/fontcolor/this-val-tostring-err.js strict skip:shared-test262-failure

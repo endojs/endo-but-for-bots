@@ -400,12 +400,16 @@ impl Compartment {
             meter_raw: 0,
             // Spelled out per skip rather than through `skip.name()`: the
             // halt-label registry (`src/halt_labels.rs`, mirrored by
-            // `tests/halt_label_registry.rs`) pins every `Halt::Unsupported`
+            // `tests/halt_label_registry.rs`) pins every `Halt::NotImplemented`
             // label as a literal at its construction site, so a new refusal
             // is a visible edit to that allowlist.
             halt: match skip {
-                CompartmentSkip::DynamicImport => Halt::Unsupported("compartment:dynamic-import"),
-                CompartmentSkip::HeapEndowment => Halt::Unsupported("compartment:heap-endowment"),
+                CompartmentSkip::DynamicImport => {
+                    Halt::NotImplemented("compartment:dynamic-import")
+                }
+                CompartmentSkip::HeapEndowment => {
+                    Halt::NotImplemented("compartment:heap-endowment")
+                }
             },
         }
     }
@@ -609,7 +613,7 @@ mod tests {
                 assert!(!outcome.completed, "{endowment:?}");
                 assert_eq!(
                     outcome.halt,
-                    Halt::Unsupported("compartment:heap-endowment"),
+                    Halt::NotImplemented("compartment:heap-endowment"),
                     "{endowment:?}"
                 );
                 assert_eq!(outcome.dispatched, 0, "refused before dispatch");

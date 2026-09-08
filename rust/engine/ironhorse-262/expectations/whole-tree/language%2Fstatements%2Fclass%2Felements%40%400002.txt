@@ -1,0 +1,200 @@
+# engine=ironhorse features=default corpus=language/statements/class/elements tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/elements/after-same-line-static-gen-string-literal-names.js sloppy pass
+language/statements/class/elements/after-same-line-static-gen-string-literal-names.js strict pass
+language/statements/class/elements/after-same-line-static-method-computed-names.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-computed-names.js strict pass
+language/statements/class/elements/after-same-line-static-method-computed-symbol-names.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-computed-symbol-names.js strict pass
+language/statements/class/elements/after-same-line-static-method-grammar-privatename-identifier-semantics-stringvalue.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-grammar-privatename-identifier-semantics-stringvalue.js strict pass
+language/statements/class/elements/after-same-line-static-method-literal-names-asi.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-literal-names-asi.js strict pass
+language/statements/class/elements/after-same-line-static-method-literal-names.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-literal-names.js strict pass
+language/statements/class/elements/after-same-line-static-method-private-field-usage.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-private-field-usage.js strict pass
+language/statements/class/elements/after-same-line-static-method-private-method-getter-usage.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-private-method-getter-usage.js strict pass
+language/statements/class/elements/after-same-line-static-method-private-method-usage.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-private-method-usage.js strict pass
+language/statements/class/elements/after-same-line-static-method-private-names.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-private-names.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-field-identifier-initializer.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-field-identifier-initializer.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-field-identifier.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-field-identifier.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-private-getter-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-private-getter-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-private-getter.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-private-getter.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-private-method-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-private-method-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-private-method.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-private-method.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-private-setter-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-private-setter-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-private-setter.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-private-setter.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-initializer-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-initializer-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-initializer.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier-initializer.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-privatename-identifier.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-generator-method-privatename-identifier-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-generator-method-privatename-identifier-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-generator-method-privatename-identifier.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-generator-method-privatename-identifier.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-method-privatename-identifier-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-method-privatename-identifier-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-method-privatename-identifier.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-async-method-privatename-identifier.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-generator-method-privatename-identifier-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-generator-method-privatename-identifier-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-generator-method-privatename-identifier.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-generator-method-privatename-identifier.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-method-privatename-identifier-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-method-privatename-identifier-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-method-privatename-identifier.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-method-privatename-identifier.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt-by-classname.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt-by-classname.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-by-classname.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-by-classname.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt-by-classname.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt-by-classname.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer-alt.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier-initializer.js strict pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-rs-static-privatename-identifier.js strict pass
+language/statements/class/elements/after-same-line-static-method-static-private-fields.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-static-private-fields.js strict pass
+language/statements/class/elements/after-same-line-static-method-static-private-methods-with-fields.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-static-private-methods-with-fields.js strict pass
+language/statements/class/elements/after-same-line-static-method-static-private-methods.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-static-private-methods.js strict pass
+language/statements/class/elements/after-same-line-static-method-string-literal-names.js sloppy pass
+language/statements/class/elements/after-same-line-static-method-string-literal-names.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-contains-superproperty-1.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-contains-superproperty-1.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-contains-superproperty-2.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-contains-superproperty-2.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-err-contains-supercall-1.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-err-contains-supercall-1.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-err-contains-supercall-2.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-err-contains-supercall-2.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-err-contains-supercall.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-direct-eval-err-contains-supercall.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-contains-superproperty-1.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-contains-superproperty-1.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-contains-superproperty-2.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-contains-superproperty-2.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-err-contains-supercall-1.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-err-contains-supercall-1.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-err-contains-supercall-2.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-err-contains-supercall-2.js strict pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-err-contains-supercall.js sloppy pass
+language/statements/class/elements/arrow-body-derived-cls-indirect-eval-err-contains-supercall.js strict pass
+language/statements/class/elements/arrow-body-direct-eval-err-contains-arguments.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
+language/statements/class/elements/arrow-body-direct-eval-err-contains-arguments.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
+language/statements/class/elements/arrow-body-direct-eval-err-contains-newtarget.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/statements/class/elements/arrow-body-direct-eval-err-contains-newtarget.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/statements/class/elements/arrow-body-indirect-eval-err-contains-newtarget.js sloppy pass
+language/statements/class/elements/arrow-body-indirect-eval-err-contains-newtarget.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-contains-superproperty-1.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-contains-superproperty-1.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-contains-superproperty-2.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-contains-superproperty-2.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-err-contains-supercall-1.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-err-contains-supercall-1.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-err-contains-supercall-2.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-err-contains-supercall-2.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-err-contains-supercall.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-direct-eval-err-contains-supercall.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-contains-superproperty-1.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-contains-superproperty-1.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-contains-superproperty-2.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-contains-superproperty-2.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-err-contains-supercall-1.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-err-contains-supercall-1.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-err-contains-supercall-2.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-err-contains-supercall-2.js strict pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-err-contains-supercall.js sloppy pass
+language/statements/class/elements/arrow-body-private-derived-cls-indirect-eval-err-contains-supercall.js strict pass
+language/statements/class/elements/arrow-body-private-direct-eval-err-contains-arguments.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
+language/statements/class/elements/arrow-body-private-direct-eval-err-contains-arguments.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
+language/statements/class/elements/arrow-body-private-direct-eval-err-contains-newtarget.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/statements/class/elements/arrow-body-private-direct-eval-err-contains-newtarget.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/statements/class/elements/arrow-body-private-indirect-eval-err-contains-newtarget.js sloppy pass
+language/statements/class/elements/arrow-body-private-indirect-eval-err-contains-newtarget.js strict pass
+language/statements/class/elements/arrow-fnc-init-err-contains-arguments.js sloppy pass
+language/statements/class/elements/arrow-fnc-init-err-contains-arguments.js strict pass
+language/statements/class/elements/arrow-fnc-init-err-contains-super.js sloppy pass
+language/statements/class/elements/arrow-fnc-init-err-contains-super.js strict pass
+language/statements/class/elements/class-field-is-observable-by-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number3») to be true"
+language/statements/class/elements/class-field-is-observable-by-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number3») to be true"
+language/statements/class/elements/class-field-on-frozen-objects.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Frozen objects can't be changed Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/elements/comp-name-init-err-contains-arguments.js sloppy pass
+language/statements/class/elements/comp-name-init-err-contains-arguments.js strict pass
+language/statements/class/elements/comp-name-init-err-contains-super.js sloppy pass
+language/statements/class/elements/comp-name-init-err-contains-super.js strict pass
+language/statements/class/elements/computed-name-toprimitive-symbol.js sloppy pass
+language/statements/class/elements/computed-name-toprimitive-symbol.js strict pass
+language/statements/class/elements/computed-name-toprimitive.js sloppy pass
+language/statements/class/elements/computed-name-toprimitive.js strict pass
+language/statements/class/elements/computed-property-abrupt-completition.js sloppy pass
+language/statements/class/elements/computed-property-abrupt-completition.js strict pass
+language/statements/class/elements/ctor-called-after-fields-init.js sloppy pass
+language/statements/class/elements/ctor-called-after-fields-init.js strict pass
+language/statements/class/elements/derived-cls-direct-eval-contains-superproperty-1.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/derived-cls-direct-eval-contains-superproperty-1.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/derived-cls-direct-eval-contains-superproperty-2.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/derived-cls-direct-eval-contains-superproperty-2.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/statements/class/elements/derived-cls-direct-eval-err-contains-supercall-1.js sloppy pass
+language/statements/class/elements/derived-cls-direct-eval-err-contains-supercall-1.js strict pass
+language/statements/class/elements/derived-cls-direct-eval-err-contains-supercall-2.js sloppy pass
+language/statements/class/elements/derived-cls-direct-eval-err-contains-supercall-2.js strict pass
+language/statements/class/elements/derived-cls-direct-eval-err-contains-supercall.js sloppy pass
+language/statements/class/elements/derived-cls-direct-eval-err-contains-supercall.js strict pass
+language/statements/class/elements/derived-cls-indirect-eval-contains-superproperty-1.js sloppy pass
+language/statements/class/elements/derived-cls-indirect-eval-contains-superproperty-1.js strict pass
+language/statements/class/elements/derived-cls-indirect-eval-contains-superproperty-2.js sloppy pass
+language/statements/class/elements/derived-cls-indirect-eval-contains-superproperty-2.js strict pass
+language/statements/class/elements/derived-cls-indirect-eval-err-contains-supercall-1.js sloppy pass
+language/statements/class/elements/derived-cls-indirect-eval-err-contains-supercall-1.js strict pass
+language/statements/class/elements/derived-cls-indirect-eval-err-contains-supercall-2.js sloppy pass
+language/statements/class/elements/derived-cls-indirect-eval-err-contains-supercall-2.js strict pass
+language/statements/class/elements/derived-cls-indirect-eval-err-contains-supercall.js sloppy pass
+language/statements/class/elements/derived-cls-indirect-eval-err-contains-supercall.js strict pass
+language/statements/class/elements/direct-eval-err-contains-arguments.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
+language/statements/class/elements/direct-eval-err-contains-arguments.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
+language/statements/class/elements/direct-eval-err-contains-newtarget.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/statements/class/elements/direct-eval-err-contains-newtarget.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/statements/class/elements/equality-init-err-contains-arguments.js sloppy pass
+language/statements/class/elements/equality-init-err-contains-arguments.js strict pass
+language/statements/class/elements/equality-init-err-contains-super.js sloppy pass
+language/statements/class/elements/equality-init-err-contains-super.js strict pass
+language/statements/class/elements/field-declaration.js sloppy pass
+language/statements/class/elements/field-declaration.js strict pass
+language/statements/class/elements/field-definition-accessor-no-line-terminator.js sloppy pass
+language/statements/class/elements/field-definition-accessor-no-line-terminator.js strict pass
+language/statements/class/elements/fielddefinition-initializer-abrupt-completion.js sloppy pass
+language/statements/class/elements/fielddefinition-initializer-abrupt-completion.js strict pass
+language/statements/class/elements/fields-anonymous-function-length.js sloppy pass
+language/statements/class/elements/fields-anonymous-function-length.js strict pass
+language/statements/class/elements/fields-asi-1.js sloppy pass
+language/statements/class/elements/fields-asi-1.js strict pass
+language/statements/class/elements/fields-asi-2.js sloppy pass
+language/statements/class/elements/fields-asi-2.js strict pass
+language/statements/class/elements/fields-asi-3.js sloppy pass
+language/statements/class/elements/fields-asi-3.js strict pass
+language/statements/class/elements/fields-asi-4.js sloppy pass
+language/statements/class/elements/fields-asi-4.js strict pass
+language/statements/class/elements/fields-asi-5.js sloppy pass
+language/statements/class/elements/fields-asi-5.js strict pass

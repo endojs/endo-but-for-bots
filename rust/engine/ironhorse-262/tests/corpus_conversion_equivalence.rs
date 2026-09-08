@@ -134,3 +134,44 @@ fn shared_tree_cases_are_classified_for_host_selection() {
         );
     }
 }
+
+#[test]
+fn primitive_throw_cases_preserve_abort_evidence_and_require_the_expected_throw() {
+    let (_, harness) = locate_test262().expect("test262 harness");
+    let cfg = Config {
+        gate_meter_exact: true,
+        ..Config::default()
+    };
+    for index in 19..=25 {
+        let path = cases_dir().join(format!("language/stage2b-exceptions/{index:03}.js"));
+        let source = std::fs::read_to_string(&path).unwrap();
+        let original = source
+            .lines()
+            .find_map(|line| line.strip_prefix("  Source: "))
+            .unwrap();
+        let run = ironhorse_262::dual_run(original).unwrap();
+        assert_eq!(run.agreement, ironhorse_262::Agreement::BothAbort);
+        assert!(
+            run.is_bit_exact(),
+            "original corpus evidence: {}",
+            path.display()
+        );
+        assert_eq!(
+            ironhorse_262::xst::run_case(&cfg, &harness, &source).verdict,
+            ironhorse_262::xst::Verdict::Covered,
+            "{}",
+            path.display()
+        );
+    }
+    let source =
+        std::fs::read_to_string(cases_dir().join("language/stage2b-exceptions/019.js")).unwrap();
+    for replacement in ["7;", "throw 8"] {
+        let changed = source.replace("\n  throw 7\n", &format!("\n  {replacement}\n"));
+        assert_ne!(changed, source);
+        assert_ne!(
+            ironhorse_262::xst::run_case(&Config::default(), &harness, &changed).verdict,
+            ironhorse_262::xst::Verdict::Covered,
+            "mutation must not pass: {replacement}"
+        );
+    }
+}

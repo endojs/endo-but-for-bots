@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainMonthDay/prototype/with tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainMonthDay/prototype/with/fields-missing-properties.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/with/fields-missing-properties.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/with/non-iso-calendar-fields.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainMonthDay/prototype/with/non-iso-calendar-fields.js strict skip:oracle-host-missing-global:Temporal

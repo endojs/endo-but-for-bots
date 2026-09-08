@@ -126,7 +126,7 @@ impl Default for Meter {
 /// than by an astronomically large interval.
 #[inline]
 pub(crate) fn scale_interval(interval: u64) -> u64 {
-    interval.checked_mul(1 << 16).unwrap_or(u64::MAX)
+    interval.saturating_mul(1 << 16)
 }
 
 impl Meter {

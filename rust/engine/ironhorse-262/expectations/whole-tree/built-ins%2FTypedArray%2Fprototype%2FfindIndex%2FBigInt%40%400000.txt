@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/findIndex/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/findIndex/BigInt/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/get-length-ignores-length-prop.js sloppy pass
+built-ins/TypedArray/prototype/findIndex/BigInt/get-length-ignores-length-prop.js strict pass
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-call-changes-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-call-changes-value.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-call-parameters.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-call-parameters.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-call-this-non-strict.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-call-this-strict.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-is-not-callable-throws.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-is-not-callable-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-may-detach-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-may-detach-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-not-called-on-empty-array.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/predicate-not-called-on-empty-array.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-abrupt-from-predicate-call.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-abrupt-from-predicate-call.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-abrupt-from-this-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-abrupt-from-this-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-index-predicate-result-is-true.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-index-predicate-result-is-true.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-negative-one-if-predicate-returns-false-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/findIndex/BigInt/return-negative-one-if-predicate-returns-false-value.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

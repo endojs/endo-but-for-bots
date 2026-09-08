@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/RegExpStringIteratorPrototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/RegExpStringIteratorPrototype/Symbol.toStringTag.js sloppy pass
+built-ins/RegExpStringIteratorPrototype/Symbol.toStringTag.js strict pass
+built-ins/RegExpStringIteratorPrototype/ancestry.js sloppy pass
+built-ins/RegExpStringIteratorPrototype/ancestry.js strict pass

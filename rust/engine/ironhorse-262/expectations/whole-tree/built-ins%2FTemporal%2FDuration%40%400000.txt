@@ -1,0 +1,57 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Duration tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Duration/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/call-builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/call-builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/days-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/days-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/fractional-throws-rangeerror.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Duration constructor throws RangeError with fractional value in the years position Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/fractional-throws-rangeerror.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Duration constructor throws RangeError with fractional value in the years position Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/get-prototype-from-constructor-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/get-prototype-from-constructor-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/hours-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/hours-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/Duration/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/invalid-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Duration/invalid-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Duration/large-number.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/large-number.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/lower-limit.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/lower-limit.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/max.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/max.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/microseconds-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/microseconds-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/milliseconds-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/milliseconds-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/minutes-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/minutes-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/mixed.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/mixed.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Duration/months-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/months-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/nanoseconds-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/nanoseconds-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/negative-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/Duration/negative-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/out-of-range.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: years > max Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: years > max Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/out-of-range.js strict fail:"abort-value-differs: oracle=\"Test262Error: years > max Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: years > max Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Duration/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/seconds-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/seconds-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/subclass.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/subclass.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/weeks-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/weeks-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/years-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/years-undefined.js strict skip:oracle-host-missing-temporal

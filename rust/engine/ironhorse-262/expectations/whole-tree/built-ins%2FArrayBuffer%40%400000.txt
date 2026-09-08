@@ -1,0 +1,57 @@
+# engine=ironhorse features=default corpus=built-ins/ArrayBuffer tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ArrayBuffer/allocation-limit.js sloppy pass
+built-ins/ArrayBuffer/allocation-limit.js strict pass
+built-ins/ArrayBuffer/data-allocation-after-object-creation.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError but got a RangeError"
+built-ins/ArrayBuffer/data-allocation-after-object-creation.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError but got a RangeError"
+built-ins/ArrayBuffer/init-zero.js sloppy pass
+built-ins/ArrayBuffer/init-zero.js strict pass
+built-ins/ArrayBuffer/is-a-constructor.js sloppy pass
+built-ins/ArrayBuffer/is-a-constructor.js strict pass
+built-ins/ArrayBuffer/length-is-absent.js sloppy pass
+built-ins/ArrayBuffer/length-is-absent.js strict pass
+built-ins/ArrayBuffer/length-is-too-large-throws.js sloppy pass
+built-ins/ArrayBuffer/length-is-too-large-throws.js strict pass
+built-ins/ArrayBuffer/length.js sloppy pass
+built-ins/ArrayBuffer/length.js strict pass
+built-ins/ArrayBuffer/name.js sloppy pass
+built-ins/ArrayBuffer/name.js strict pass
+built-ins/ArrayBuffer/negative-length-throws.js sloppy pass
+built-ins/ArrayBuffer/negative-length-throws.js strict pass
+built-ins/ArrayBuffer/newtarget-prototype-is-not-object.js sloppy pass
+built-ins/ArrayBuffer/newtarget-prototype-is-not-object.js strict pass
+built-ins/ArrayBuffer/options-maxbytelength-allocation-limit.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-allocation-limit.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-compared-before-object-creation.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-compared-before-object-creation.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-data-allocation-after-object-creation.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError to be thrown but no exception was thrown at all"
+built-ins/ArrayBuffer/options-maxbytelength-data-allocation-after-object-creation.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a DummyError to be thrown but no exception was thrown at all"
+built-ins/ArrayBuffer/options-maxbytelength-diminuitive.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-diminuitive.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-excessive.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-excessive.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-negative.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-negative.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-object.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-object.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-poisoned.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-poisoned.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-undefined.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-maxbytelength-undefined.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/ArrayBuffer/options-non-object.js sloppy pass
+built-ins/ArrayBuffer/options-non-object.js strict pass
+built-ins/ArrayBuffer/prop-desc.js sloppy pass
+built-ins/ArrayBuffer/prop-desc.js strict pass
+built-ins/ArrayBuffer/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype-from-newtarget.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget is built-in Object constructor Expected SameValue(«[object ArrayBuffer]», «[object Object]») to be true"
+built-ins/ArrayBuffer/prototype-from-newtarget.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: NewTarget is built-in Object constructor Expected SameValue(«[object ArrayBuffer]», «[object Object]») to be true"
+built-ins/ArrayBuffer/return-abrupt-from-length-symbol.js sloppy pass
+built-ins/ArrayBuffer/return-abrupt-from-length-symbol.js strict pass
+built-ins/ArrayBuffer/return-abrupt-from-length.js sloppy pass
+built-ins/ArrayBuffer/return-abrupt-from-length.js strict pass
+built-ins/ArrayBuffer/toindex-length.js sloppy pass
+built-ins/ArrayBuffer/toindex-length.js strict pass
+built-ins/ArrayBuffer/undefined-newtarget-throws.js sloppy pass
+built-ins/ArrayBuffer/undefined-newtarget-throws.js strict pass
+built-ins/ArrayBuffer/zero-length.js sloppy pass
+built-ins/ArrayBuffer/zero-length.js strict pass

@@ -1,0 +1,65 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Instant/from tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Instant/from/argument-instant.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/argument-instant.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/argument-object-tostring.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: [object Object] is not a valid ISO string Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Instant/from/argument-object-tostring.js strict fail:"abort-value-differs: oracle=\"Test262Error: [object Object] is not a valid ISO string Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Instant/from/argument-string-calendar-annotation-invalid-key.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: annotation keys must be lowercase: 1970-01-01T00:00Z[U-CA=iso8601] - invalid capitalized key Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-calendar-annotation-invalid-key.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: annotation keys must be lowercase: 1970-01-01T00:00Z[U-CA=iso8601] - invalid capitalized key Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-calendar-annotation.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-calendar-annotation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-critical-unknown-annotation.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject unknown annotation with critical flag: 1970-01-01T00:00Z[!foo=bar] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-critical-unknown-annotation.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject unknown annotation with critical flag: 1970-01-01T00:00Z[!foo=bar] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-date-with-utc-offset.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-date-with-utc-offset.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-invalid.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: \\\"\\\" should not be a valid ISO string for an Instant Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: \\\"2020-01-01T01:01:001Z\\\" should not be a valid ISO string for an Instant Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Instant/from/argument-string-invalid.js strict fail:"abort-value-differs: oracle=\"Test262Error: \\\"\\\" should not be a valid ISO string for an Instant Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: \\\"2020-01-01T01:01:001Z\\\" should not be a valid ISO string for an Instant Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Instant/from/argument-string-limits.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-limits.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-minus-sign.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: variant minus sign: 1976-11-18T15:23:30.12−02:00 Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-minus-sign.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: variant minus sign: 1976-11-18T15:23:30.12−02:00 Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-multiple-calendar.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject more than one calendar annotation if any critical: 1970-01-01T00:00Z[u-ca=iso8601][!u-ca=iso8601] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-multiple-calendar.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject more than one calendar annotation if any critical: 1970-01-01T00:00Z[u-ca=iso8601][!u-ca=iso8601] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-multiple-time-zone.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject more than one time zone annotation: 1970-01-01T00:00Z[UTC][UTC] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-multiple-time-zone.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject more than one time zone annotation: 1970-01-01T00:00Z[UTC][UTC] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-time-separators.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-time-separators.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-time-zone-annotation.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-time-zone-annotation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-too-many-decimals.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: no more than 9 decimal places are allowed Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-too-many-decimals.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: no more than 9 decimal places are allowed Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/argument-string-unknown-annotation.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string-unknown-annotation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-string.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-wrong-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: no argument Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: no argument Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Instant/from/argument-wrong-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: no argument Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: no argument Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Instant/from/argument-zoneddatetime.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/argument-zoneddatetime.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/basic.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/basic.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/instant-string-multiple-offsets.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/instant-string-multiple-offsets.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/instant-string-sub-minute-offset.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/instant-string-sub-minute-offset.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/instant-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not an instant Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Instant/from/instant-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not an instant Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Instant/from/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/length.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/name.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/no-fractional-minutes-hours.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/no-fractional-minutes-hours.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Fractional minutes not allowed in time string Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/subclassing-ignored.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/subclassing-ignored.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/from/timezone-custom.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/timezone-custom.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/from/year-zero.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/from/year-zero.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError"

@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=intl402/Locale/prototype/getWeekInfo tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Locale/prototype/getWeekInfo/branding.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/branding.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/firstDay-by-id.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/firstDay-by-id.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/firstDay-by-option.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/firstDay-by-option.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/likely-subtags-region.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/likely-subtags-region.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/name.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/output-object-keys.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/output-object-keys.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/output-object.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/output-object.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/prop-desc.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/region-override.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/region-override.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/region-priority.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/region-priority.js strict skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/subdivision-region.js sloppy skip:oracle-host-missing-global:Intl
+intl402/Locale/prototype/getWeekInfo/subdivision-region.js strict skip:oracle-host-missing-global:Intl

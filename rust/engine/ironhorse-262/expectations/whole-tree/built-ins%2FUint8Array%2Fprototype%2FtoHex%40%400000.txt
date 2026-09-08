@@ -1,0 +1,15 @@
+# engine=ironhorse features=default corpus=built-ins/Uint8Array/prototype/toHex tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Uint8Array/prototype/toHex/descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: toHex should be an own property"
+built-ins/Uint8Array/prototype/toHex/descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: toHex should be an own property"
+built-ins/Uint8Array/prototype/toHex/detached-buffer.js sloppy pass
+built-ins/Uint8Array/prototype/toHex/detached-buffer.js strict pass
+built-ins/Uint8Array/prototype/toHex/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/toHex/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/toHex/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/toHex/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/prototype/toHex/nonconstructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Uint8Array/prototype/toHex/nonconstructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Uint8Array/prototype/toHex/receiver-not-uint8array.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Uint8Array/prototype/toHex/receiver-not-uint8array.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Uint8Array/prototype/toHex/results.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/prototype/toHex/results.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"

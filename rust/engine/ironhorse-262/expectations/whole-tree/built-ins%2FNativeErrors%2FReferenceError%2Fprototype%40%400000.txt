@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/NativeErrors/ReferenceError/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/NativeErrors/ReferenceError/prototype/constructor.js sloppy pass
+built-ins/NativeErrors/ReferenceError/prototype/constructor.js strict pass
+built-ins/NativeErrors/ReferenceError/prototype/message.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: message should be an own property"
+built-ins/NativeErrors/ReferenceError/prototype/message.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: message should be an own property"
+built-ins/NativeErrors/ReferenceError/prototype/name.js sloppy pass
+built-ins/NativeErrors/ReferenceError/prototype/name.js strict pass
+built-ins/NativeErrors/ReferenceError/prototype/not-error-object.js sloppy pass
+built-ins/NativeErrors/ReferenceError/prototype/not-error-object.js strict pass
+built-ins/NativeErrors/ReferenceError/prototype/proto.js sloppy pass
+built-ins/NativeErrors/ReferenceError/prototype/proto.js strict pass

@@ -1,0 +1,98 @@
+# engine=ironhorse features=default corpus=language/expressions/arrow-function tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/arrow-function/ArrowFunction_restricted-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/arrow-function/ArrowFunction_restricted-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/arrow-function/array-destructuring-param-strict-body.js sloppy pass
+language/expressions/arrow-function/array-destructuring-param-strict-body.js strict pass
+language/expressions/arrow-function/cannot-override-this-with-thisArg.js sloppy pass
+language/expressions/arrow-function/cannot-override-this-with-thisArg.js strict pass
+language/expressions/arrow-function/dflt-params-abrupt.js sloppy pass
+language/expressions/arrow-function/dflt-params-abrupt.js strict pass
+language/expressions/arrow-function/dflt-params-arg-val-not-undefined.js sloppy pass
+language/expressions/arrow-function/dflt-params-arg-val-not-undefined.js strict pass
+language/expressions/arrow-function/dflt-params-arg-val-undefined.js sloppy pass
+language/expressions/arrow-function/dflt-params-arg-val-undefined.js strict pass
+language/expressions/arrow-function/dflt-params-duplicates.js sloppy pass
+language/expressions/arrow-function/dflt-params-duplicates.js strict pass
+language/expressions/arrow-function/dflt-params-ref-later.js sloppy pass
+language/expressions/arrow-function/dflt-params-ref-later.js strict pass
+language/expressions/arrow-function/dflt-params-ref-prior.js sloppy pass
+language/expressions/arrow-function/dflt-params-ref-prior.js strict pass
+language/expressions/arrow-function/dflt-params-ref-self.js sloppy pass
+language/expressions/arrow-function/dflt-params-ref-self.js strict pass
+language/expressions/arrow-function/dflt-params-rest.js sloppy pass
+language/expressions/arrow-function/dflt-params-rest.js strict pass
+language/expressions/arrow-function/dflt-params-trailing-comma.js sloppy pass
+language/expressions/arrow-function/dflt-params-trailing-comma.js strict pass
+language/expressions/arrow-function/empty-function-body-returns-undefined.js sloppy pass
+language/expressions/arrow-function/empty-function-body-returns-undefined.js strict pass
+language/expressions/arrow-function/eval-var-scope-syntax-err.js sloppy pass
+language/expressions/arrow-function/expression-body-implicit-return.js sloppy pass
+language/expressions/arrow-function/expression-body-implicit-return.js strict pass
+language/expressions/arrow-function/extensibility.js sloppy pass
+language/expressions/arrow-function/extensibility.js strict pass
+language/expressions/arrow-function/length-dflt.js sloppy pass
+language/expressions/arrow-function/length-dflt.js strict pass
+language/expressions/arrow-function/lexical-arguments.js sloppy pass
+language/expressions/arrow-function/lexical-arguments.js strict pass
+language/expressions/arrow-function/lexical-bindings-overriden-by-formal-parameters-non-strict.js sloppy pass
+language/expressions/arrow-function/lexical-new.target-closure-returned.js sloppy pass
+language/expressions/arrow-function/lexical-new.target-closure-returned.js strict pass
+language/expressions/arrow-function/lexical-new.target.js sloppy pass
+language/expressions/arrow-function/lexical-new.target.js strict pass
+language/expressions/arrow-function/lexical-super-call-from-within-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError but got a TypeError"
+language/expressions/arrow-function/lexical-super-call-from-within-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a ReferenceError but got a TypeError"
+language/expressions/arrow-function/lexical-super-property-from-within-constructor.js sloppy pass
+language/expressions/arrow-function/lexical-super-property-from-within-constructor.js strict pass
+language/expressions/arrow-function/lexical-super-property.js sloppy pass
+language/expressions/arrow-function/lexical-super-property.js strict pass
+language/expressions/arrow-function/lexical-supercall-from-immediately-invoked-arrow.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/expressions/arrow-function/lexical-supercall-from-immediately-invoked-arrow.js strict fail:"ironhorse threw where the oracle completed: TypeError: super: not a constructor"
+language/expressions/arrow-function/lexical-this.js sloppy pass
+language/expressions/arrow-function/lexical-this.js strict pass
+language/expressions/arrow-function/low-precedence-expression-body-no-parens.js sloppy pass
+language/expressions/arrow-function/low-precedence-expression-body-no-parens.js strict pass
+language/expressions/arrow-function/name.js sloppy pass
+language/expressions/arrow-function/name.js strict pass
+language/expressions/arrow-function/non-strict.js sloppy pass
+language/expressions/arrow-function/object-destructuring-param-strict-body.js sloppy pass
+language/expressions/arrow-function/object-destructuring-param-strict-body.js strict pass
+language/expressions/arrow-function/object-literal-return-requires-body-parens.js sloppy pass
+language/expressions/arrow-function/object-literal-return-requires-body-parens.js strict pass
+language/expressions/arrow-function/param-dflt-yield-expr.js sloppy pass
+language/expressions/arrow-function/param-dflt-yield-expr.js strict pass
+language/expressions/arrow-function/param-dflt-yield-id-non-strict.js sloppy pass
+language/expressions/arrow-function/param-dflt-yield-id-strict.js strict pass
+language/expressions/arrow-function/params-duplicate.js sloppy pass
+language/expressions/arrow-function/params-duplicate.js strict pass
+language/expressions/arrow-function/params-trailing-comma-multiple.js sloppy pass
+language/expressions/arrow-function/params-trailing-comma-multiple.js strict pass
+language/expressions/arrow-function/params-trailing-comma-single.js sloppy pass
+language/expressions/arrow-function/params-trailing-comma-single.js strict pass
+language/expressions/arrow-function/prototype-rules.js sloppy pass
+language/expressions/arrow-function/prototype-rules.js strict pass
+language/expressions/arrow-function/rest-param-strict-body.js sloppy pass
+language/expressions/arrow-function/rest-param-strict-body.js strict pass
+language/expressions/arrow-function/rest-params-trailing-comma-early-error.js sloppy pass
+language/expressions/arrow-function/rest-params-trailing-comma-early-error.js strict pass
+language/expressions/arrow-function/scope-body-lex-distinct.js sloppy pass
+language/expressions/arrow-function/scope-param-elem-var-close.js sloppy pass
+language/expressions/arrow-function/scope-param-elem-var-open.js sloppy pass
+language/expressions/arrow-function/scope-param-rest-elem-var-close.js sloppy pass
+language/expressions/arrow-function/scope-param-rest-elem-var-open.js sloppy pass
+language/expressions/arrow-function/scope-paramsbody-var-close.js sloppy pass
+language/expressions/arrow-function/scope-paramsbody-var-close.js strict pass
+language/expressions/arrow-function/scope-paramsbody-var-open.js sloppy pass
+language/expressions/arrow-function/scope-paramsbody-var-open.js strict pass
+language/expressions/arrow-function/statement-body-requires-braces-must-return-explicitly-missing.js sloppy pass
+language/expressions/arrow-function/statement-body-requires-braces-must-return-explicitly-missing.js strict pass
+language/expressions/arrow-function/statement-body-requires-braces-must-return-explicitly.js sloppy pass
+language/expressions/arrow-function/statement-body-requires-braces-must-return-explicitly.js strict pass
+language/expressions/arrow-function/static-init-await-binding.js sloppy pass
+language/expressions/arrow-function/static-init-await-binding.js strict pass
+language/expressions/arrow-function/static-init-await-reference.js sloppy pass
+language/expressions/arrow-function/static-init-await-reference.js strict pass
+language/expressions/arrow-function/strict.js strict pass
+language/expressions/arrow-function/throw-new.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/arrow-function/throw-new.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/arrow-function/unscopables-with-in-nested-fn.js sloppy pass
+language/expressions/arrow-function/unscopables-with.js sloppy pass

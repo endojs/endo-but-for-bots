@@ -1,0 +1,2 @@
+# engine=ironhorse features=default corpus=language/import/import-defer/errors/resolution-error tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/import/import-defer/errors/resolution-error/import-defer-of-missing-module-fails.js sloppy skip:unsupported-opcode:module:dynamic-import

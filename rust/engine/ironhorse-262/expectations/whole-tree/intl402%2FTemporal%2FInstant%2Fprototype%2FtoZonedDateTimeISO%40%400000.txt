@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/Instant/prototype/toZonedDateTimeISO tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-datetime.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Instant/prototype/toZonedDateTimeISO/timezone-string-datetime.js strict skip:oracle-host-missing-global:Temporal

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/DisplayNames/prototype tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DisplayNames/prototype/Symbol.toStringTag.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/Symbol.toStringTag.js strict skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DisplayNames/prototype/prop-desc.js strict skip:oracle-host-missing-global:Intl

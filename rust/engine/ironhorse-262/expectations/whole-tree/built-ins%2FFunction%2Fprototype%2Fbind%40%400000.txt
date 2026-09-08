@@ -1,0 +1,201 @@
+# engine=ironhorse features=default corpus=built-ins/Function/prototype/bind tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Function/prototype/bind/15.3.4.5-0-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-0-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-10-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-10-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-11-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-11-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-16-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-16-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-16-2.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-16-2.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-10.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-10.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-11.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-11.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-12.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-12.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-13.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-13.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-14.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-14.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-15.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-15.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-16.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-16.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-2.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-2.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-3.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-3.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-4.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-4.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-5.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-5.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-6.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-6.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-7.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-7.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-8.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-8.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-2-9.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-2-9.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-20-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-20-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-20-3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-20-3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-21-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-21-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-21-3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-21-3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/15.3.4.5-3-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-3-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-10.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-10.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-11.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-11.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-12.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-12.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-2.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-2.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-3.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-3.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-4.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-4.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-5.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-5.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-6.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-6.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-7.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-7.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-8.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-8.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-6-9.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-6-9.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-8-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-8-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-8-2.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-8-2.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-9-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-9-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5-9-2.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5-9-2.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-10.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-10.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-11.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-11.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-12.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-12.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-13.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-13.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-14.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-14.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-15.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-15.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-2.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-2.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-3.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-3.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-4.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-4.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-5.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-5.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-6.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-6.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-7.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-7.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-8.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-8.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-9.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.1-4-9.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-1.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-1.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-10.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-10.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-11.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-11.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-12.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-12.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-13.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-13.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-14.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-14.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-2.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-2.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-3.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-3.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-4.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-4.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-5.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-5.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-6.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-6.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-7.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-7.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-8.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-8.js strict pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-9.js sloppy pass
+built-ins/Function/prototype/bind/15.3.4.5.2-4-9.js strict pass
+built-ins/Function/prototype/bind/BoundFunction_restricted-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/BoundFunction_restricted-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/S15.3.4.5_A1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: baz() throws a TypeError exception Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/S15.3.4.5_A1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: baz() throws a TypeError exception Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/S15.3.4.5_A13.js sloppy pass
+built-ins/Function/prototype/bind/S15.3.4.5_A13.js strict pass
+built-ins/Function/prototype/bind/S15.3.4.5_A14.js sloppy pass
+built-ins/Function/prototype/bind/S15.3.4.5_A14.js strict pass
+built-ins/Function/prototype/bind/S15.3.4.5_A15.js sloppy pass
+built-ins/Function/prototype/bind/S15.3.4.5_A15.js strict pass
+built-ins/Function/prototype/bind/S15.3.4.5_A16.js sloppy pass
+built-ins/Function/prototype/bind/S15.3.4.5_A16.js strict pass
+built-ins/Function/prototype/bind/S15.3.4.5_A2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: baz() throws a TypeError exception Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/S15.3.4.5_A2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: baz() throws a TypeError exception Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/S15.3.4.5_A3.js sloppy pass
+built-ins/Function/prototype/bind/S15.3.4.5_A3.js strict pass
+built-ins/Function/prototype/bind/S15.3.4.5_A4.js sloppy pass
+built-ins/Function/prototype/bind/S15.3.4.5_A4.js strict pass
+built-ins/Function/prototype/bind/S15.3.4.5_A5.js sloppy skip:unsupported-opcode:bind:new-bound-target
+built-ins/Function/prototype/bind/S15.3.4.5_A5.js strict skip:unsupported-opcode:bind:new-bound-target
+built-ins/Function/prototype/bind/get-fn-realm-recursive.js sloppy skip:shared-positive-test-failure
+built-ins/Function/prototype/bind/get-fn-realm-recursive.js strict skip:shared-positive-test-failure
+built-ins/Function/prototype/bind/get-fn-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Function/prototype/bind/get-fn-realm.js strict skip:shared-positive-test-failure
+built-ins/Function/prototype/bind/instance-construct-newtarget-boundtarget-bound.js sloppy skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Function/prototype/bind/instance-construct-newtarget-boundtarget-bound.js strict skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Function/prototype/bind/instance-construct-newtarget-boundtarget.js sloppy skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Function/prototype/bind/instance-construct-newtarget-boundtarget.js strict skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Function/prototype/bind/instance-construct-newtarget-self-new.js sloppy pass
+built-ins/Function/prototype/bind/instance-construct-newtarget-self-new.js strict pass
+built-ins/Function/prototype/bind/instance-construct-newtarget-self-reflect.js sloppy skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Function/prototype/bind/instance-construct-newtarget-self-reflect.js strict skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Function/prototype/bind/instance-length-default-value.js sloppy pass
+built-ins/Function/prototype/bind/instance-length-default-value.js strict pass
+built-ins/Function/prototype/bind/instance-length-exceeds-int32.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2147483648») to be true"
+built-ins/Function/prototype/bind/instance-length-exceeds-int32.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2147483648») to be true"
+built-ins/Function/prototype/bind/instance-length-prop-desc.js sloppy pass
+built-ins/Function/prototype/bind/instance-length-prop-desc.js strict pass
+built-ins/Function/prototype/bind/instance-length-remaining-args.js sloppy pass
+built-ins/Function/prototype/bind/instance-length-remaining-args.js strict pass
+built-ins/Function/prototype/bind/instance-length-tointeger.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «numberInfinity») to be true"
+built-ins/Function/prototype/bind/instance-length-tointeger.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «numberInfinity») to be true"
+built-ins/Function/prototype/bind/instance-name-chained.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"bound bound \"», «string\"bound bound target\"») to be true"
+built-ins/Function/prototype/bind/instance-name-chained.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"bound bound \"», «string\"bound bound target\"») to be true"
+built-ins/Function/prototype/bind/instance-name-error.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/instance-name-error.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/Function/prototype/bind/instance-name-non-string.js sloppy pass
+built-ins/Function/prototype/bind/instance-name-non-string.js strict pass
+built-ins/Function/prototype/bind/instance-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"bound \"», «string\"bound target\"») to be true"
+built-ins/Function/prototype/bind/instance-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"bound \"», «string\"bound target\"») to be true"
+built-ins/Function/prototype/bind/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Function/prototype/bind/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Function/prototype/bind/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be bind; name value should be bind"
+built-ins/Function/prototype/bind/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be bind; name value should be bind"
+built-ins/Function/prototype/bind/not-a-constructor.js sloppy pass
+built-ins/Function/prototype/bind/not-a-constructor.js strict pass
+built-ins/Function/prototype/bind/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Function/prototype/bind/proto-from-ctor-realm.js strict skip:shared-positive-test-failure

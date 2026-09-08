@@ -1,0 +1,33 @@
+# engine=ironhorse features=default corpus=language/expressions/typeof tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/typeof/bigint.js sloppy pass
+language/expressions/typeof/bigint.js strict pass
+language/expressions/typeof/boolean.js sloppy pass
+language/expressions/typeof/boolean.js strict pass
+language/expressions/typeof/built-in-exotic-objects-no-call.js sloppy pass
+language/expressions/typeof/built-in-exotic-objects-no-call.js strict pass
+language/expressions/typeof/built-in-functions.js sloppy pass
+language/expressions/typeof/built-in-functions.js strict pass
+language/expressions/typeof/built-in-ordinary-objects-no-call.js sloppy pass
+language/expressions/typeof/built-in-ordinary-objects-no-call.js strict pass
+language/expressions/typeof/get-value-ref-err.js sloppy pass
+language/expressions/typeof/get-value-ref-err.js strict pass
+language/expressions/typeof/get-value.js sloppy pass
+language/expressions/typeof/get-value.js strict pass
+language/expressions/typeof/native-call.js sloppy pass
+language/expressions/typeof/native-call.js strict pass
+language/expressions/typeof/null.js sloppy pass
+language/expressions/typeof/null.js strict pass
+language/expressions/typeof/number.js sloppy pass
+language/expressions/typeof/number.js strict pass
+language/expressions/typeof/proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"object\"», «string\"function\"») to be true"
+language/expressions/typeof/proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"object\"», «string\"function\"») to be true"
+language/expressions/typeof/string.js sloppy pass
+language/expressions/typeof/string.js strict pass
+language/expressions/typeof/symbol.js sloppy pass
+language/expressions/typeof/symbol.js strict pass
+language/expressions/typeof/syntax.js sloppy pass
+language/expressions/typeof/syntax.js strict pass
+language/expressions/typeof/undefined.js sloppy pass
+language/expressions/typeof/undefined.js strict pass
+language/expressions/typeof/unresolvable-reference.js sloppy pass
+language/expressions/typeof/unresolvable-reference.js strict pass

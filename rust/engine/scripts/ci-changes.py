@@ -47,7 +47,7 @@ def classify(paths):
             }
         )
         engine |= common
-        oracle |= common or path in {
+        oracle |= common or path.startswith("packages/test262-runner/test262/") or path in {
             "c/moddable", ".gitmodules",
             "rust/endo/xsnap/xsnap-platform.c", "rust/endo/xsnap/xsnap-platform.h",
             ".github/workflows/ironhorse-sanitizers.yml",

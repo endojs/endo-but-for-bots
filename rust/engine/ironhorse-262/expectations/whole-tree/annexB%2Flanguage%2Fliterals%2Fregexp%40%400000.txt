@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=annexB/language/literals/regexp tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/literals/regexp/class-escape.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\c0 invalid escape\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/class-escape.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\c0 invalid escape\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/extended-pattern-char.js sloppy pass
+annexB/language/literals/regexp/extended-pattern-char.js strict pass
+annexB/language/literals/regexp/identity-escape.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: O\\\\PQ invalid escape\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/identity-escape.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: O\\\\PQ invalid escape\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/legacy-octal-escape.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/legacy-octal-escape.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: \\\\1 invalid reference number \\\\1\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/non-empty-class-ranges-no-dash.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [\\\\d-a] invalid range\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/non-empty-class-ranges-no-dash.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [\\\\d-a] invalid range\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/non-empty-class-ranges.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [--\\\\d] invalid range\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/non-empty-class-ranges.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [--\\\\d] invalid range\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/quantifiable-assertion-followed-by.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: .(?=Z)* invalid character\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/quantifiable-assertion-followed-by.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: .(?=Z)* invalid character\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/quantifiable-assertion-not-followed-by.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [a-e](?!Z)* invalid character\" ironhorse=\"SyntaxError\""
+annexB/language/literals/regexp/quantifiable-assertion-not-followed-by.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: [a-e](?!Z)* invalid character\" ironhorse=\"SyntaxError\""

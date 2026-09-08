@@ -1,7 +1,8 @@
 //! Build the XS oracle: compile the c/moddable XS engine (the pin
 //! the endor daemon builds today) with the same feature defines as
 //! the xsnap crate, plus the xs_shim.c bridge, into one static
-//! library. This is the only place the engine workspace touches C.
+//! library, with the checked parser-diagnostic overlay below. This is the
+//! only place the engine workspace touches C.
 //!
 //! We deliberately compile libxs here rather than depending on the
 //! xsnap crate as a Cargo path dependency: xsnap's lib.rs includes
@@ -14,6 +15,12 @@
 
 use std::env;
 use std::path::PathBuf;
+
+// Retain the upstream source suffix so the existing upstream-only UBSAN
+// ignorelist applies to this checked copy. ASAN remains enabled, and neither
+// xs_shim.c nor xsnap-platform.c moves under this path. The sanitizer scope
+// regression reads this constant to probe the actual generated source path.
+const LEXICAL_OVERLAY_PATH: &str = "c/moddable/xs/sources/xsLexical.c";
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -41,8 +48,8 @@ fn main() {
         );
     }
 
-    // Exactly the source set and flags xsnap uses, so the oracle's
-    // XS is bit-identical to the engine ironhorse replaces.
+    // The source set and feature flags match xsnap. One checked lexical
+    // diagnostic overlay below removes platform-dependent undefined behavior.
     let sources = [
         "xsAll.c",
         "xsAPI.c",
@@ -125,9 +132,35 @@ fn main() {
         .flag("-Wno-unused-variable")
         .opt_level(2);
 
+    // xsLexical.c passes parser->buffer as the `%s` argument to
+    // fxReportParserError, which formats back into that same buffer. Overlapping
+    // snprintf input/output is undefined: glibc loses the message while Darwin
+    // retains it. Copy into parser-owned storage before the formatter runs.
+    // Keep the pinned submodule untouched and fail closed if its call changes.
+    let lexical_path = xs_sources.join("xsLexical.c");
+    let lexical = std::fs::read_to_string(&lexical_path).expect("read pinned xsLexical.c");
+    let old = "fxReportParserError(parser, parser->states[0].line, \"%s\", parser->buffer);";
+    let new = "fxReportParserError(parser, parser->states[0].line, \"%s\", fxNewParserString(parser, parser->buffer, mxStringLength(parser->buffer)));";
+    assert_eq!(
+        lexical.matches(old).count(),
+        1,
+        "pinned XS RegExp diagnostic call changed; review the lexical overlay"
+    );
+    let lexical_overlay =
+        PathBuf::from(env::var_os("OUT_DIR").expect("Cargo OUT_DIR")).join(LEXICAL_OVERLAY_PATH);
+    std::fs::create_dir_all(lexical_overlay.parent().expect("lexical overlay parent"))
+        .expect("create checked upstream overlay directory");
+    std::fs::write(&lexical_overlay, lexical.replacen(old, new, 1))
+        .expect("write checked xsLexical.c overlay");
+    // Its only include is xsScript.h, resolved through xs_sources above.
     for source in &sources {
-        build.file(xs_sources.join(source));
+        if *source == "xsLexical.c" {
+            build.file(&lexical_overlay);
+        } else {
+            build.file(xs_sources.join(source));
+        }
     }
+    println!("cargo:rerun-if-changed={}", lexical_path.display());
     build.file(&platform_source);
     build.file(manifest_dir.join("csrc/xs_shim.c"));
     build.compile("xsoracle");

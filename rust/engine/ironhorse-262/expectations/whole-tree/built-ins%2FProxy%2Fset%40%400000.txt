@@ -1,0 +1,55 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/set tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/set/boolean-trap-result-is-false-boolean-return-false.js sloppy pass
+built-ins/Proxy/set/boolean-trap-result-is-false-boolean-return-false.js strict pass
+built-ins/Proxy/set/boolean-trap-result-is-false-null-return-false.js sloppy pass
+built-ins/Proxy/set/boolean-trap-result-is-false-null-return-false.js strict pass
+built-ins/Proxy/set/boolean-trap-result-is-false-number-return-false.js sloppy pass
+built-ins/Proxy/set/boolean-trap-result-is-false-number-return-false.js strict pass
+built-ins/Proxy/set/boolean-trap-result-is-false-string-return-false.js sloppy pass
+built-ins/Proxy/set/boolean-trap-result-is-false-string-return-false.js strict pass
+built-ins/Proxy/set/boolean-trap-result-is-false-undefined-return-false.js sloppy pass
+built-ins/Proxy/set/boolean-trap-result-is-false-undefined-return-false.js strict pass
+built-ins/Proxy/set/call-parameters-prototype-dunder-proto.js sloppy pass
+built-ins/Proxy/set/call-parameters-prototype-dunder-proto.js strict pass
+built-ins/Proxy/set/call-parameters-prototype-index.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«undefinedundefined», «[object Object]») to be true"
+built-ins/Proxy/set/call-parameters-prototype-index.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«undefinedundefined», «[object Object]») to be true"
+built-ins/Proxy/set/call-parameters-prototype.js sloppy pass
+built-ins/Proxy/set/call-parameters-prototype.js strict pass
+built-ins/Proxy/set/call-parameters.js sloppy pass
+built-ins/Proxy/set/call-parameters.js strict pass
+built-ins/Proxy/set/null-handler.js sloppy pass
+built-ins/Proxy/set/null-handler.js strict pass
+built-ins/Proxy/set/return-is-abrupt.js sloppy pass
+built-ins/Proxy/set/return-is-abrupt.js strict pass
+built-ins/Proxy/set/return-true-target-property-accessor-is-configurable-set-is-undefined.js sloppy pass
+built-ins/Proxy/set/return-true-target-property-accessor-is-configurable-set-is-undefined.js strict pass
+built-ins/Proxy/set/return-true-target-property-accessor-is-not-configurable.js sloppy pass
+built-ins/Proxy/set/return-true-target-property-accessor-is-not-configurable.js strict pass
+built-ins/Proxy/set/return-true-target-property-is-not-configurable.js sloppy pass
+built-ins/Proxy/set/return-true-target-property-is-not-configurable.js strict pass
+built-ins/Proxy/set/return-true-target-property-is-not-writable.js sloppy pass
+built-ins/Proxy/set/return-true-target-property-is-not-writable.js strict pass
+built-ins/Proxy/set/target-property-is-accessor-not-configurable-set-is-undefined.js sloppy pass
+built-ins/Proxy/set/target-property-is-accessor-not-configurable-set-is-undefined.js strict pass
+built-ins/Proxy/set/target-property-is-not-configurable-not-writable-not-equal-to-v.js sloppy pass
+built-ins/Proxy/set/target-property-is-not-configurable-not-writable-not-equal-to-v.js strict pass
+built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls-index.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [0] and expected [0, 0, 0] should have the same contents. getOwnPropertyDescriptor: key present on [[ProxyTarget]]"
+built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls-index.js strict fail:"ironhorse threw where the oracle completed: TypeError"
+built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [foo] and expected [foo, foo, foo] should have the same contents. getOwnPropertyDescriptor: key present on [[ProxyTarget]]"
+built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls.js strict fail:"ironhorse threw where the oracle completed: TypeError"
+built-ins/Proxy/set/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/set/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/set/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/set/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/set/trap-is-not-callable.js sloppy pass
+built-ins/Proxy/set/trap-is-not-callable.js strict pass
+built-ins/Proxy/set/trap-is-null-receiver.js sloppy pass
+built-ins/Proxy/set/trap-is-null-receiver.js strict pass
+built-ins/Proxy/set/trap-is-null-target-is-proxy.js sloppy pass
+built-ins/Proxy/set/trap-is-null-target-is-proxy.js strict pass
+built-ins/Proxy/set/trap-is-undefined-no-property.js sloppy pass
+built-ins/Proxy/set/trap-is-undefined-no-property.js strict pass
+built-ins/Proxy/set/trap-is-undefined-target-is-proxy.js sloppy pass
+built-ins/Proxy/set/trap-is-undefined-target-is-proxy.js strict pass
+built-ins/Proxy/set/trap-is-undefined.js sloppy pass
+built-ins/Proxy/set/trap-is-undefined.js strict pass

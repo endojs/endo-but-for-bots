@@ -52,7 +52,7 @@ fn a_null_prototype_completion_is_a_completion_the_harness_coerces_to_a_typeerro
     assert_eq!(out.result, "[object Object]", "the generic reference stub");
     assert_eq!(
         out.coercion_error.as_deref(),
-        Some("TypeError: cannot convert object to primitive value")
+        Some("TypeError: cannot coerce object to string")
     );
     assert!(quiescent, "and the machine is at a boundary");
 
@@ -62,7 +62,7 @@ fn a_null_prototype_completion_is_a_completion_the_harness_coerces_to_a_typeerro
     assert_eq!(coerced.result, "");
     assert_eq!(
         coerced.halt.thrown_rendering(),
-        Some("TypeError: cannot convert object to primitive value")
+        Some("TypeError: cannot coerce object to string")
     );
     assert_eq!(coerced.coercion_error, None, "folded, not duplicated");
     assert_eq!(coerced.computrons, computrons, "post-run, so unmetered");
@@ -132,7 +132,7 @@ fn the_object_arm_is_a_prototype_link_test() {
     assert!(out.completed);
     assert_eq!(
         out.coercion_error.as_deref(),
-        Some("TypeError: cannot convert object to primitive value"),
+        Some("TypeError: cannot coerce object to string"),
         "the harness's approximation flags the prototype link, not the own toString"
     );
 }

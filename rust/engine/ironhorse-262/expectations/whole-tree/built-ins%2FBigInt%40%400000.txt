@@ -1,0 +1,45 @@
+# engine=ironhorse features=default corpus=built-ins/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/BigInt/call-value-of-when-to-string-present.js sloppy pass
+built-ins/BigInt/call-value-of-when-to-string-present.js strict pass
+built-ins/BigInt/constructor-coercion.js sloppy pass
+built-ins/BigInt/constructor-coercion.js strict pass
+built-ins/BigInt/constructor-empty-string.js sloppy pass
+built-ins/BigInt/constructor-empty-string.js strict pass
+built-ins/BigInt/constructor-from-binary-string.js sloppy pass
+built-ins/BigInt/constructor-from-binary-string.js strict pass
+built-ins/BigInt/constructor-from-decimal-string.js sloppy pass
+built-ins/BigInt/constructor-from-decimal-string.js strict pass
+built-ins/BigInt/constructor-from-hex-string.js sloppy pass
+built-ins/BigInt/constructor-from-hex-string.js strict pass
+built-ins/BigInt/constructor-from-octal-string.js sloppy pass
+built-ins/BigInt/constructor-from-octal-string.js strict pass
+built-ins/BigInt/constructor-from-string-syntax-errors.js sloppy pass
+built-ins/BigInt/constructor-from-string-syntax-errors.js strict pass
+built-ins/BigInt/constructor-integer.js sloppy pass
+built-ins/BigInt/constructor-integer.js strict pass
+built-ins/BigInt/constructor-trailing-leading-spaces.js sloppy pass
+built-ins/BigInt/constructor-trailing-leading-spaces.js strict pass
+built-ins/BigInt/infinity-throws-rangeerror.js sloppy pass
+built-ins/BigInt/infinity-throws-rangeerror.js strict pass
+built-ins/BigInt/is-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
+built-ins/BigInt/is-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
+built-ins/BigInt/length.js sloppy pass
+built-ins/BigInt/length.js strict pass
+built-ins/BigInt/name.js sloppy pass
+built-ins/BigInt/name.js strict pass
+built-ins/BigInt/nan-throws-rangeerror.js sloppy pass
+built-ins/BigInt/nan-throws-rangeerror.js strict pass
+built-ins/BigInt/negative-infinity-throws.rangeerror.js sloppy pass
+built-ins/BigInt/negative-infinity-throws.rangeerror.js strict pass
+built-ins/BigInt/non-integer-rangeerror.js sloppy pass
+built-ins/BigInt/non-integer-rangeerror.js strict pass
+built-ins/BigInt/prop-desc.js sloppy pass
+built-ins/BigInt/prop-desc.js strict pass
+built-ins/BigInt/proto.js sloppy pass
+built-ins/BigInt/proto.js strict pass
+built-ins/BigInt/tostring-throws.js sloppy pass
+built-ins/BigInt/tostring-throws.js strict pass
+built-ins/BigInt/valueof-throws.js sloppy pass
+built-ins/BigInt/valueof-throws.js strict pass
+built-ins/BigInt/wrapper-object-ordinary-toprimitive.js sloppy pass
+built-ins/BigInt/wrapper-object-ordinary-toprimitive.js strict pass

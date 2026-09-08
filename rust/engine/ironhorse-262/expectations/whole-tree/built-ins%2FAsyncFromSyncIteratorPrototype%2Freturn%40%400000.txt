@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncFromSyncIteratorPrototype/return tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncFromSyncIteratorPrototype/return/absent-value-not-passed.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/absent-value-not-passed.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-done.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-done.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-value.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-poisoned-value.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-unwrap-promise.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result-unwrap-promise.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result.js sloppy pass
+built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result.js strict pass
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-get-return.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-get-return.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-return.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-return.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/return-null.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/return-null.js strict skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/return-undefined.js sloppy skip:async:reported-failure
+built-ins/AsyncFromSyncIteratorPrototype/return/return-undefined.js strict skip:async:reported-failure

@@ -1,14 +1,11 @@
-# The full-test262 Ironhorse conformance sweep described in
-# designs/ironhorse-test262-convergence.md. This is an explicitly invokable workflow.
-# An indicative run at 14f26d0a6 on a 32-vCPU host with jobs=16 and the XS oracle
-# enabled took 16m30s; later watchdog/quarantine changes and slower runners can
-# change that wall clock. It remains dispatch-only so ordinary
-# PR/push CI does not absorb that cost. Dispatch it from the Actions tab; a bounded
-# subtree (e.g. built-ins/Proxy) is the default so a manual run is quick, and
-# `full` runs the whole tree.
+# A bounded, resumable whole-tree sweep runs nightly with a committed
+# per-mode expectation ratchet. Manual bounded subtrees remain useful for
+# investigation; ordinary PR CI gates the complete checked-in Ironhorse corpus.
 name: Ironhorse full test262 sweep
 
 on:
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       subtree:
@@ -80,9 +77,11 @@ jobs:
         run: |
           set -euo pipefail
           arguments=(--output "$GITHUB_WORKSPACE/test262-report" --jobs "${JOBS:-4}" --oracle "${ORACLE:-on}")
-          SUBTREE="${SUBTREE:-built-ins/Proxy}"
+          SUBTREE="${SUBTREE:-full}"
           if [ "${SUBTREE}" != "full" ]; then
             arguments+=(--subtree "${SUBTREE}")
+          elif [ "${ORACLE:-on}" = "on" ]; then
+            arguments+=(--expectations-dir "$GITHUB_WORKSPACE/rust/engine/ironhorse-262/expectations/whole-tree")
           fi
           bash rust/engine/ironhorse-262/scripts/full-run.sh "${arguments[@]}"
 
@@ -131,6 +130,7 @@ jobs:
             test262-report/logs/**
             test262-report/attempts/**
             test262-report/quarantines/**
+            test262-report/ratchets/**
             test262-report/discovery.txt
             test262-report/pending.txt
           if-no-files-found: warn

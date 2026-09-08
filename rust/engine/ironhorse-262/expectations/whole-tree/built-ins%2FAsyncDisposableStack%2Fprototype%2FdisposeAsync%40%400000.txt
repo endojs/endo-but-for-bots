@@ -1,0 +1,39 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncDisposableStack/prototype/disposeAsync tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncDisposableStack/prototype/disposeAsync/Symbol.asyncDispose-method-not-async.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/Symbol.asyncDispose-method-not-async.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/disposes-resources-in-reverse-order.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/disposes-resources-in-reverse-order.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposers-if-already-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposers-if-already-disposed.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposers-if-dispose-already-started.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reinvoke-disposers-if-dispose-already-started.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reject-if-already-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/does-not-reject-if-already-disposed.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js sloppy skip:async:reported-failure
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-null.js strict skip:async:reported-failure
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js sloppy skip:async:reported-failure
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-for-undefined.js strict skip:async:reported-failure
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-skipped-when-empty.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/explicit-await-skipped-when-empty.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/length.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/length.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be disposeAsync; name value should be disposeAsync"
+built-ins/AsyncDisposableStack/prototype/disposeAsync/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be disposeAsync; name value should be disposeAsync"
+built-ins/AsyncDisposableStack/prototype/disposeAsync/not-a-constructor.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/not-a-constructor.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/prop-desc.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/prop-desc.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/rejects-with-error-as-is-if-only-one-error-during-disposal.js sloppy skip:async:unhandled-rejection
+built-ins/AsyncDisposableStack/prototype/disposeAsync/rejects-with-error-as-is-if-only-one-error-during-disposal.js strict skip:async:unhandled-rejection
+built-ins/AsyncDisposableStack/prototype/disposeAsync/rejects-with-suppressederror-if-multiple-errors-during-disposal.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/rejects-with-suppressederror-if-multiple-errors-during-disposal.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/resolves-to-undefined.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/resolves-to-undefined.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/returns-promise.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/returns-promise.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/sets-state-to-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/sets-state-to-disposed.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/this-does-not-have-internal-asyncdisposablestate-rejects.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/this-does-not-have-internal-asyncdisposablestate-rejects.js strict pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/this-not-object-rejects.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/disposeAsync/this-not-object-rejects.js strict pass

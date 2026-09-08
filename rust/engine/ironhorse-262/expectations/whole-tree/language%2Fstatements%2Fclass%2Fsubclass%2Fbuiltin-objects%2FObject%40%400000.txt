@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/Object tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/Object/constructor-return-undefined-throws.js sloppy pass
+language/statements/class/subclass/builtin-objects/Object/constructor-return-undefined-throws.js strict pass
+language/statements/class/subclass/builtin-objects/Object/constructor-returns-non-object.js sloppy pass
+language/statements/class/subclass/builtin-objects/Object/constructor-returns-non-object.js strict pass
+language/statements/class/subclass/builtin-objects/Object/regular-subclassing.js sloppy pass
+language/statements/class/subclass/builtin-objects/Object/regular-subclassing.js strict pass
+language/statements/class/subclass/builtin-objects/Object/replacing-prototype.js sloppy pass
+language/statements/class/subclass/builtin-objects/Object/replacing-prototype.js strict pass

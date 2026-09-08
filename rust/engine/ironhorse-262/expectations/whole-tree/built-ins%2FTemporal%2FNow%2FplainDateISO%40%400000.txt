@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Now/plainDateISO tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Now/plainDateISO/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/return-value.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/return-value.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Now/plainDateISO/timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Now/plainDateISO/timezone-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Now/plainDateISO/timezone-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Now/plainDateISO/timezone-string-sub-minute-offset.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Now/plainDateISO/timezone-string-sub-minute-offset.js strict fail:"abort-value-differs: oracle=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: -12:12:59.9 is not a valid time zone string Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/Now/plainDateISO/timezone-string-year-zero.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Now/plainDateISO/timezone-string-year-zero.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Now/plainDateISO/timezone-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/timezone-string.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Now/plainDateISO/timezone-wrong-type.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a RangeError\""
+built-ins/Temporal/Now/plainDateISO/timezone-wrong-type.js strict fail:"abort-value-differs: oracle=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a ReferenceError\" ironhorse=\"Test262Error: null does not convert to a valid ISO string Expected a TypeError but got a RangeError\""

@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=annexB/built-ins/Function tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/built-ins/Function/createdynfn-html-close-comment-body.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-html-close-comment-body.js strict skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-html-close-comment-params.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-html-close-comment-params.js strict skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-html-open-comment-body.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: missing identifier\" ironhorse=\"SyntaxError: missing expression\""
+annexB/built-ins/Function/createdynfn-html-open-comment-body.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: missing identifier\" ironhorse=\"SyntaxError: missing expression\""
+annexB/built-ins/Function/createdynfn-html-open-comment-params.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-html-open-comment-params.js strict skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-no-line-terminator-html-close-comment-body.js sloppy skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-no-line-terminator-html-close-comment-body.js strict skip:shared-positive-test-failure
+annexB/built-ins/Function/createdynfn-no-line-terminator-html-close-comment-params.js sloppy pass
+annexB/built-ins/Function/createdynfn-no-line-terminator-html-close-comment-params.js strict pass

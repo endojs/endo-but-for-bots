@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/prototype/findIndex tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/prototype/findIndex/bigint-inherited.js sloppy pass
+built-ins/TypedArrayConstructors/prototype/findIndex/bigint-inherited.js strict pass
+built-ins/TypedArrayConstructors/prototype/findIndex/inherited.js sloppy pass
+built-ins/TypedArrayConstructors/prototype/findIndex/inherited.js strict pass

@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/toString tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T1.js sloppy pass
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T1.js strict pass
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T2.js sloppy pass
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T2.js strict pass
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T3.js sloppy pass
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T3.js strict pass
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T4.js sloppy pass
+built-ins/Array/prototype/toString/S15.4.4.2_A1_T4.js strict pass
+built-ins/Array/prototype/toString/S15.4.4.2_A3_T1.js sloppy pass
+built-ins/Array/prototype/toString/S15.4.4.2_A3_T1.js strict pass
+built-ins/Array/prototype/toString/call-with-boolean.js sloppy pass
+built-ins/Array/prototype/toString/call-with-boolean.js strict pass
+built-ins/Array/prototype/toString/length.js sloppy pass
+built-ins/Array/prototype/toString/length.js strict pass
+built-ins/Array/prototype/toString/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toString; name value should be toString"
+built-ins/Array/prototype/toString/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be toString; name value should be toString"
+built-ins/Array/prototype/toString/non-callable-join-string-tag.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Object]\"», «string\"[object RegExp]\"») to be true"
+built-ins/Array/prototype/toString/non-callable-join-string-tag.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"[object Object]\"», «string\"[object RegExp]\"») to be true"
+built-ins/Array/prototype/toString/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/toString/not-a-constructor.js strict pass
+built-ins/Array/prototype/toString/prop-desc.js sloppy pass
+built-ins/Array/prototype/toString/prop-desc.js strict pass

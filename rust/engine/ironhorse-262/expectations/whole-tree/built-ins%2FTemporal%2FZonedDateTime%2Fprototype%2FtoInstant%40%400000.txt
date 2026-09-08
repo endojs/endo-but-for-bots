@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/ZonedDateTime/prototype/toInstant tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/recent-date.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/recent-date.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/year-less-than-1.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/year-less-than-1.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/year-less-than-99.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/year-less-than-99.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/year-zero-leap-day.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/toInstant/year-zero-leap-day.js strict skip:oracle-host-missing-temporal

@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=language/statements/class/name-binding tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/name-binding/basic.js sloppy pass
+language/statements/class/name-binding/basic.js strict pass
+language/statements/class/name-binding/const.js sloppy pass
+language/statements/class/name-binding/const.js strict pass
+language/statements/class/name-binding/expression.js sloppy pass
+language/statements/class/name-binding/expression.js strict pass
+language/statements/class/name-binding/in-extends-expression-assigned.js sloppy pass
+language/statements/class/name-binding/in-extends-expression-assigned.js strict pass
+language/statements/class/name-binding/in-extends-expression-grouped.js sloppy pass
+language/statements/class/name-binding/in-extends-expression-grouped.js strict pass
+language/statements/class/name-binding/in-extends-expression.js sloppy pass
+language/statements/class/name-binding/in-extends-expression.js strict pass

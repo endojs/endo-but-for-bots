@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/toReversed tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArray/prototype/toReversed/ignores-species.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/ignores-species.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/immutable.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/immutable.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/length-property-ignored.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/length-property-ignored.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toReversed/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toReversed/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toReversed/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/TypedArray/prototype/toReversed/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/TypedArray/prototype/toReversed/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/TypedArray/prototype/toReversed/property-descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/toReversed/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/toReversed/reverses.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/reverses.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/toReversed/this-value-invalid.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toReversed/this-value-invalid.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

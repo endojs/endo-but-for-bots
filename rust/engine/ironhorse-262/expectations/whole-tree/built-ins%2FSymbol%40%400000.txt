@@ -1,0 +1,23 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/auto-boxing-non-strict.js sloppy pass
+built-ins/Symbol/auto-boxing-strict.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/Symbol/constructor.js sloppy pass
+built-ins/Symbol/constructor.js strict pass
+built-ins/Symbol/desc-to-string-symbol.js sloppy pass
+built-ins/Symbol/desc-to-string-symbol.js strict pass
+built-ins/Symbol/desc-to-string.js sloppy pass
+built-ins/Symbol/desc-to-string.js strict pass
+built-ins/Symbol/invoked-with-new.js sloppy skip:unsupported-opcode:native-call:Symbol
+built-ins/Symbol/invoked-with-new.js strict skip:unsupported-opcode:native-call:Symbol
+built-ins/Symbol/is-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Symbol/is-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Symbol/length.js sloppy pass
+built-ins/Symbol/length.js strict pass
+built-ins/Symbol/name.js sloppy pass
+built-ins/Symbol/name.js strict pass
+built-ins/Symbol/not-callable.js sloppy pass
+built-ins/Symbol/not-callable.js strict pass
+built-ins/Symbol/symbol.js sloppy pass
+built-ins/Symbol/symbol.js strict pass
+built-ins/Symbol/uniqueness.js sloppy pass
+built-ins/Symbol/uniqueness.js strict pass

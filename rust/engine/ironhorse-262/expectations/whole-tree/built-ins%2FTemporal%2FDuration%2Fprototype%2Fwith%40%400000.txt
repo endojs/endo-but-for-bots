@@ -1,0 +1,45 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Duration/prototype/with tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Duration/prototype/with/all-negative.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/all-negative.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/all-positive.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/all-positive.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-invalid-property.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-invalid-property.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-mixed-sign.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-mixed-sign.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-not-object.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-not-object.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-singular-properties.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/argument-singular-properties.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/blank-duration.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/blank-duration.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/branding.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/branding.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/copy-properties-not-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/copy-properties-not-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/Duration/prototype/with/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/prototype/with/length.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/with/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/with/name.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/with/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/with/negative-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/Duration/prototype/with/negative-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/prototype/with/non-integer-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/non-integer-throws-rangeerror.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/prototype/with/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Duration/prototype/with/order-of-operations.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/with/order-of-operations.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/with/partial-positive.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/partial-positive.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/sign-conflict-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/sign-conflict-throws-rangeerror.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/sign-replace.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/sign-replace.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/subclassing-ignored.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/with/subclassing-ignored.js strict skip:oracle-host-missing-temporal

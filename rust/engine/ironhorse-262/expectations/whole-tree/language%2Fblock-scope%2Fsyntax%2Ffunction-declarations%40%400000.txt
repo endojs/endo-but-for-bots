@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=language/block-scope/syntax/function-declarations tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/block-scope/syntax/function-declarations/in-statement-position-case-expression-statement-list.js sloppy pass
+language/block-scope/syntax/function-declarations/in-statement-position-case-expression-statement-list.js strict pass
+language/block-scope/syntax/function-declarations/in-statement-position-default-statement-list.js sloppy pass
+language/block-scope/syntax/function-declarations/in-statement-position-default-statement-list.js strict pass
+language/block-scope/syntax/function-declarations/in-statement-position-do-statement-while-expression.js sloppy pass
+language/block-scope/syntax/function-declarations/in-statement-position-do-statement-while-expression.js strict pass
+language/block-scope/syntax/function-declarations/in-statement-position-for-statement.js sloppy pass
+language/block-scope/syntax/function-declarations/in-statement-position-for-statement.js strict pass
+language/block-scope/syntax/function-declarations/in-statement-position-if-expression-statement-else-statement.js strict pass
+language/block-scope/syntax/function-declarations/in-statement-position-if-expression-statement.js strict pass
+language/block-scope/syntax/function-declarations/in-statement-position-while-expression-statement.js sloppy pass
+language/block-scope/syntax/function-declarations/in-statement-position-while-expression-statement.js strict pass

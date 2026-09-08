@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Atomics/and/bigint tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Atomics/and/bigint/bad-range.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/and/bigint/bad-range.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/and/bigint/good-views.js sloppy skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/and/bigint/good-views.js strict skip:unsupported-opcode:atomics:access-index
+built-ins/Atomics/and/bigint/non-shared-bufferdata.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Atomics/and/bigint/non-shared-bufferdata.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

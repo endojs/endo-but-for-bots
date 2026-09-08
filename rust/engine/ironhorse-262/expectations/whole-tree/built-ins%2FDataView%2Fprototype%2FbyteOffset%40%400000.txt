@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/DataView/prototype/byteOffset tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/DataView/prototype/byteOffset/detached-buffer.js sloppy pass
+built-ins/DataView/prototype/byteOffset/detached-buffer.js strict pass
+built-ins/DataView/prototype/byteOffset/invoked-as-accessor.js sloppy pass
+built-ins/DataView/prototype/byteOffset/invoked-as-accessor.js strict pass
+built-ins/DataView/prototype/byteOffset/invoked-as-func.js sloppy pass
+built-ins/DataView/prototype/byteOffset/invoked-as-func.js strict pass
+built-ins/DataView/prototype/byteOffset/length.js sloppy pass
+built-ins/DataView/prototype/byteOffset/length.js strict pass
+built-ins/DataView/prototype/byteOffset/name.js sloppy pass
+built-ins/DataView/prototype/byteOffset/name.js strict pass
+built-ins/DataView/prototype/byteOffset/prop-desc.js sloppy pass
+built-ins/DataView/prototype/byteOffset/prop-desc.js strict pass
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-auto.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-auto.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-fixed.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/byteOffset/resizable-array-buffer-fixed.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/DataView/prototype/byteOffset/return-byteoffset-sab.js sloppy pass
+built-ins/DataView/prototype/byteOffset/return-byteoffset-sab.js strict pass
+built-ins/DataView/prototype/byteOffset/return-byteoffset.js sloppy pass
+built-ins/DataView/prototype/byteOffset/return-byteoffset.js strict pass
+built-ins/DataView/prototype/byteOffset/this-has-no-dataview-internal-sab.js sloppy pass
+built-ins/DataView/prototype/byteOffset/this-has-no-dataview-internal-sab.js strict pass
+built-ins/DataView/prototype/byteOffset/this-has-no-dataview-internal.js sloppy pass
+built-ins/DataView/prototype/byteOffset/this-has-no-dataview-internal.js strict pass
+built-ins/DataView/prototype/byteOffset/this-is-not-object.js sloppy pass
+built-ins/DataView/prototype/byteOffset/this-is-not-object.js strict pass

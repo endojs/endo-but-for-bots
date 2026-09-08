@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=language/block-scope/syntax/for-in tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/block-scope/syntax/for-in/acquire-properties-from-array.js sloppy pass
+language/block-scope/syntax/for-in/acquire-properties-from-array.js strict pass
+language/block-scope/syntax/for-in/acquire-properties-from-object.js sloppy pass
+language/block-scope/syntax/for-in/acquire-properties-from-object.js strict pass
+language/block-scope/syntax/for-in/disallow-initialization-assignment.js sloppy pass
+language/block-scope/syntax/for-in/disallow-initialization-assignment.js strict pass
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings-with-and-without-initializer.js sloppy skip:compiler-unimplemented:parse
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings-with-and-without-initializer.js strict skip:compiler-unimplemented:parse
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings-with-initializer.js sloppy pass
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings-with-initializer.js strict pass
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings-without-and-with-initializer.js sloppy pass
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings-without-and-with-initializer.js strict pass
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings.js sloppy skip:compiler-unimplemented:parse
+language/block-scope/syntax/for-in/disallow-multiple-lexical-bindings.js strict skip:compiler-unimplemented:parse
+language/block-scope/syntax/for-in/mixed-values-in-iteration.js sloppy pass
+language/block-scope/syntax/for-in/mixed-values-in-iteration.js strict pass

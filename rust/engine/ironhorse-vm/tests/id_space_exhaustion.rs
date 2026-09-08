@@ -47,7 +47,7 @@ fn id_space_exhaustion_halts_by_name_instead_of_aliasing() {
     );
     assert_eq!(
         o.halt,
-        ironhorse_vm::Halt::Unsupported("property-key:id-space-exhausted"),
+        ironhorse_vm::Halt::Refused("property-key:id-space-exhausted"),
         "the refusal is named, in release and debug alike"
     );
     // A later crank naming anything NOVEL cannot even relink: the name
@@ -69,7 +69,7 @@ fn id_space_exhaustion_halts_by_name_instead_of_aliasing() {
     let o2 = m.run(&b2);
     assert_eq!(
         o2.halt,
-        ironhorse_vm::Halt::Unsupported("property-key:id-space-exhausted"),
+        ironhorse_vm::Halt::Refused("property-key:id-space-exhausted"),
         "the poison latch holds for the machine's lifetime"
     );
     assert!(

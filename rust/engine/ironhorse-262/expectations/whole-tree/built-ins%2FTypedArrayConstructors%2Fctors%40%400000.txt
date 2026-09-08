@@ -1,0 +1,3 @@
+# engine=ironhorse features=default corpus=built-ins/TypedArrayConstructors/ctors tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/TypedArrayConstructors/ctors/no-species.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«undefinedundefined», «[object ArrayBuffer]») to be true"
+built-ins/TypedArrayConstructors/ctors/no-species.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«undefinedundefined», «[object ArrayBuffer]») to be true"

@@ -1,0 +1,31 @@
+# engine=ironhorse features=default corpus=built-ins/isNaN tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/isNaN/S15.1.2.4_A2.6.js sloppy pass
+built-ins/isNaN/S15.1.2.4_A2.6.js strict pass
+built-ins/isNaN/S15.1.2.4_A2.7.js sloppy pass
+built-ins/isNaN/S15.1.2.4_A2.7.js strict pass
+built-ins/isNaN/not-a-constructor.js sloppy pass
+built-ins/isNaN/not-a-constructor.js strict pass
+built-ins/isNaN/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isNaN name descriptor value should be isNaN; isNaN name value should be isNaN"
+built-ins/isNaN/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isNaN name descriptor value should be isNaN; isNaN name value should be isNaN"
+built-ins/isNaN/return-abrupt-from-tonumber-number-symbol.js sloppy pass
+built-ins/isNaN/return-abrupt-from-tonumber-number-symbol.js strict pass
+built-ins/isNaN/return-abrupt-from-tonumber-number.js sloppy pass
+built-ins/isNaN/return-abrupt-from-tonumber-number.js strict pass
+built-ins/isNaN/return-false-not-nan-numbers.js sloppy pass
+built-ins/isNaN/return-false-not-nan-numbers.js strict pass
+built-ins/isNaN/return-true-nan.js sloppy pass
+built-ins/isNaN/return-true-nan.js strict pass
+built-ins/isNaN/tonumber-operations.js sloppy pass
+built-ins/isNaN/tonumber-operations.js strict pass
+built-ins/isNaN/toprimitive-call-abrupt.js sloppy pass
+built-ins/isNaN/toprimitive-call-abrupt.js strict pass
+built-ins/isNaN/toprimitive-get-abrupt.js sloppy pass
+built-ins/isNaN/toprimitive-get-abrupt.js strict pass
+built-ins/isNaN/toprimitive-not-callable-throws.js sloppy pass
+built-ins/isNaN/toprimitive-not-callable-throws.js strict pass
+built-ins/isNaN/toprimitive-result-is-object-throws.js sloppy pass
+built-ins/isNaN/toprimitive-result-is-object-throws.js strict pass
+built-ins/isNaN/toprimitive-result-is-symbol-throws.js sloppy pass
+built-ins/isNaN/toprimitive-result-is-symbol-throws.js strict pass
+built-ins/isNaN/toprimitive-valid-result.js sloppy pass
+built-ins/isNaN/toprimitive-valid-result.js strict pass

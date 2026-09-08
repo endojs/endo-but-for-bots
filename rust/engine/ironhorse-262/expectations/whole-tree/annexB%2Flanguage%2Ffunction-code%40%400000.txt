@@ -1,0 +1,101 @@
+# engine=ironhorse features=default corpus=annexB/language/function-code tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/function-code/block-decl-func-block-scoping.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/block-decl-func-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/block-decl-func-existing-block-fn-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/block-decl-func-existing-fn-no-init.js sloppy pass
+annexB/language/function-code/block-decl-func-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/function-code/block-decl-func-existing-var-no-init.js sloppy pass
+annexB/language/function-code/block-decl-func-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/function-code/block-decl-func-init.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/block-decl-func-no-skip-try.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/block-decl-func-skip-arguments.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-dft-param.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-early-err-block.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-early-err-for-in.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-early-err-for-of.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-early-err-for.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-early-err-switch.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-early-err-try.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-early-err.js sloppy pass
+annexB/language/function-code/block-decl-func-skip-param.js sloppy pass
+annexB/language/function-code/block-decl-func-update.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/block-decl-nested-blocks-with-fun-decl.js sloppy skip:shared-positive-test-failure
+annexB/language/function-code/block-decl-nostrict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefined») to be true\" ironhorse=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefinedundefined») to be true\""
+annexB/language/function-code/function-redeclaration-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable a\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/function-redeclaration-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable a\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-existing-block-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-existing-block-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-existing-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-existing-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-existing-var-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-existing-var-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-no-skip-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-dft-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err-for-in.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err-for-of.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err-for.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-early-err.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-skip-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-a-func-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-existing-block-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-existing-block-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-existing-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-existing-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-existing-var-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-existing-var-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-no-skip-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-dft-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err-for-in.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err-for-of.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err-for.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-early-err.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-skip-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-decl-b-func-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-existing-block-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-existing-block-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-existing-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-existing-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-existing-var-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-existing-var-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-no-skip-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-dft-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-early-err-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-early-err-for-in.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-early-err-for-of.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-early-err-for.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-early-err-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-early-err-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-early-err.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-skip-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-else-stmt-func-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-existing-block-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-existing-block-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-existing-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-existing-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-existing-var-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-existing-var-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-no-skip-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-dft-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-early-err-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-early-err-for-in.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-early-err-for-of.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-early-err-for.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-early-err-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-early-err-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-early-err.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-skip-param.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/function-code/if-decl-no-else-func-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""

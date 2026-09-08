@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/Iterator/prototype/Symbol.dispose tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Iterator/prototype/Symbol.dispose/invokes-return.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Iterator/prototype/Symbol.dispose/invokes-return.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Iterator/prototype/Symbol.dispose/is-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/Iterator/prototype/Symbol.dispose/is-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/Iterator/prototype/Symbol.dispose/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Iterator/prototype/Symbol.dispose/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Iterator/prototype/Symbol.dispose/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Iterator/prototype/Symbol.dispose/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Iterator/prototype/Symbol.dispose/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.dispose) should be an own property"
+built-ins/Iterator/prototype/Symbol.dispose/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Symbol(Symbol.dispose) should be an own property"
+built-ins/Iterator/prototype/Symbol.dispose/return-val.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Iterator/prototype/Symbol.dispose/return-val.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"

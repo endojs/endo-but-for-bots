@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Iterator/prototype/constructor tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Iterator/prototype/constructor/prop-desc.js sloppy pass
+built-ins/Iterator/prototype/constructor/prop-desc.js strict pass
+built-ins/Iterator/prototype/constructor/weird-setter.js sloppy pass
+built-ins/Iterator/prototype/constructor/weird-setter.js strict pass

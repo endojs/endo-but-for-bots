@@ -113,15 +113,31 @@ pub fn classify(source: &str) -> Class {
         Some(r) => r,
         None => return Class::Skipped("oracle-machine-error".into()),
     };
+    classify_run(r)
+}
+
+pub(crate) fn classify_run(r: DualRun) -> Class {
+    if matches!(
+        &r.ironhorse_halt,
+        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { .. })
+    ) {
+        return Class::Divergent(Box::new(r));
+    }
     // An opcode outside the covered grammar stopped ironhorse: name it. This
     // is the honest skip — the vast bulk of `language/`, each attributed to
     // the exact built-in/feature opcode that is not yet modeled.
-    if let Halt::Unsupported(op) = r.ironhorse_halt {
+    if let Halt::NotImplemented(op) = r.ironhorse_halt {
         // Only a label the engine has registered as a declined surface (or
         // one of the runner's own) earns the skip; an unregistered label is
         // the engine granting itself an exemption, and fails.
         if crate::xst::is_skip_eligible_label(op) {
             return Class::Skipped(format!("unsupported-opcode:{}", op));
+        }
+        return Class::Divergent(Box::new(r));
+    }
+    if let Halt::Refused(op) = r.ironhorse_halt {
+        if ironhorse_vm::halt_labels::is_refused_label(op) {
+            return Class::Skipped(format!("refused:{op}"));
         }
         return Class::Divergent(Box::new(r));
     }
@@ -578,7 +594,7 @@ mod tests {
         // GUARD: a test tagged `lockdown` calls `lockdown()`, which the XS
         // ORACLE SHIM (the bare `fxCreateMachine` boot) crashes on — the same
         // `lockdown()` surface the stage-4b harden child folded as an honest
-        // `Halt::Unsupported` on the ironhorse side. Since dual-run runs the
+        // `Halt::NotImplemented` on the ironhorse side. Since dual-run runs the
         // program on the oracle FIRST, handing a `lockdown()` test to the
         // oracle SIGSEGVs the harness process. These are pre-partitioned into
         // a NAMED structural skip (`oracle-shim-unsafe:lockdown`) and never

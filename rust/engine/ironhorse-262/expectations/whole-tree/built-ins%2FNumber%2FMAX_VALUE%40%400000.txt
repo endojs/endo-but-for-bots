@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=built-ins/Number/MAX_VALUE tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Number/MAX_VALUE/S15.7.3.2_A2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[MAX_VALUE] to have writable:false."
+built-ins/Number/MAX_VALUE/S15.7.3.2_A2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[MAX_VALUE] to have writable:false."
+built-ins/Number/MAX_VALUE/S15.7.3.2_A3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[MAX_VALUE] to have configurable:false."
+built-ins/Number/MAX_VALUE/S15.7.3.2_A3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected obj[MAX_VALUE] to have configurable:false."
+built-ins/Number/MAX_VALUE/S15.7.3.2_A4.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of !Number.propertyIsEnumerable('MAX_VALUE') is expected to be true"
+built-ins/Number/MAX_VALUE/S15.7.3.2_A4.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of !Number.propertyIsEnumerable('MAX_VALUE') is expected to be true"
+built-ins/Number/MAX_VALUE/value.js sloppy pass
+built-ins/Number/MAX_VALUE/value.js strict pass

@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainMonthDay/prototype/monthCode tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainMonthDay/prototype/monthCode/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainMonthDay/prototype/monthCode/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainMonthDay/prototype/monthCode/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainMonthDay/prototype/monthCode/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainMonthDay/prototype/monthCode/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainMonthDay/prototype/monthCode/prop-desc.js strict skip:oracle-host-missing-global:Temporal

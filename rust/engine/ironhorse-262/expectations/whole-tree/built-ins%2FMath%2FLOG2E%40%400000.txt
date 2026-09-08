@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Math/LOG2E tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/LOG2E/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: LOG2E descriptor should not be enumerable; LOG2E descriptor should not be writable; LOG2E descriptor should not be configurable"
+built-ins/Math/LOG2E/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: LOG2E descriptor should not be enumerable; LOG2E descriptor should not be writable; LOG2E descriptor should not be configurable"
+built-ins/Math/LOG2E/value.js sloppy pass
+built-ins/Math/LOG2E/value.js strict pass

@@ -1,0 +1,10 @@
+# engine=ironhorse features=default corpus=language/destructuring/binding tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/destructuring/binding/initialization-requires-object-coercible-null.js sloppy pass
+language/destructuring/binding/initialization-requires-object-coercible-null.js strict pass
+language/destructuring/binding/initialization-requires-object-coercible-undefined.js sloppy pass
+language/destructuring/binding/initialization-requires-object-coercible-undefined.js strict pass
+language/destructuring/binding/initialization-returns-normal-completion-for-empty-objects.js sloppy pass
+language/destructuring/binding/initialization-returns-normal-completion-for-empty-objects.js strict pass
+language/destructuring/binding/keyed-destructuring-property-reference-target-evaluation-order-with-bindings.js sloppy pass
+language/destructuring/binding/typedarray-backed-by-resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+language/destructuring/binding/typedarray-backed-by-resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

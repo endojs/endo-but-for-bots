@@ -1,0 +1,25 @@
+# engine=ironhorse features=default corpus=built-ins/Proxy/isExtensible tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Proxy/isExtensible/call-parameters.js sloppy pass
+built-ins/Proxy/isExtensible/call-parameters.js strict pass
+built-ins/Proxy/isExtensible/null-handler.js sloppy pass
+built-ins/Proxy/isExtensible/null-handler.js strict pass
+built-ins/Proxy/isExtensible/return-is-abrupt.js sloppy pass
+built-ins/Proxy/isExtensible/return-is-abrupt.js strict pass
+built-ins/Proxy/isExtensible/return-is-boolean.js sloppy pass
+built-ins/Proxy/isExtensible/return-is-boolean.js strict pass
+built-ins/Proxy/isExtensible/return-is-different-from-target.js sloppy pass
+built-ins/Proxy/isExtensible/return-is-different-from-target.js strict pass
+built-ins/Proxy/isExtensible/return-same-result-from-target.js sloppy pass
+built-ins/Proxy/isExtensible/return-same-result-from-target.js strict pass
+built-ins/Proxy/isExtensible/trap-is-missing-target-is-proxy.js sloppy pass
+built-ins/Proxy/isExtensible/trap-is-missing-target-is-proxy.js strict pass
+built-ins/Proxy/isExtensible/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Proxy/isExtensible/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
+built-ins/Proxy/isExtensible/trap-is-not-callable.js sloppy pass
+built-ins/Proxy/isExtensible/trap-is-not-callable.js strict pass
+built-ins/Proxy/isExtensible/trap-is-null-target-is-proxy.js sloppy pass
+built-ins/Proxy/isExtensible/trap-is-null-target-is-proxy.js strict pass
+built-ins/Proxy/isExtensible/trap-is-undefined-target-is-proxy.js sloppy pass
+built-ins/Proxy/isExtensible/trap-is-undefined-target-is-proxy.js strict pass
+built-ins/Proxy/isExtensible/trap-is-undefined.js sloppy pass
+built-ins/Proxy/isExtensible/trap-is-undefined.js strict pass

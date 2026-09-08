@@ -1,0 +1,133 @@
+# engine=ironhorse features=default corpus=language/expressions/logical-assignment tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-and.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-and.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-nullish.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-nullish.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-or.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-or.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-short-circuit-and.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-short-circuit-and.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-short-circuit-nullish.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-short-circuit-nullish.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-short-circuit-or.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-accessor-property-short-circuit-or.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-and.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-and.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-nullish.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-nullish.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-or.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-or.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-and.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-and.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-nullish.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-nullish.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-or.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-data-property-short-circuit-or.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-method-and.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/logical-assignment/left-hand-side-private-reference-method-and.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: PutValue throws when storing the result in a method private reference Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/logical-assignment/left-hand-side-private-reference-method-short-circuit-nullish.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-method-short-circuit-nullish.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-method-short-circuit-or.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-method-short-circuit-or.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-and.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-and.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-nullish.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-nullish.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-or.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-or.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-and.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-and.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-nullish.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-nullish.js strict pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-or.js sloppy pass
+language/expressions/logical-assignment/left-hand-side-private-reference-readonly-accessor-property-short-circuit-or.js strict pass
+language/expressions/logical-assignment/lgcl-and-arguments-strict.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-bigint.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-bigint.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-lhs-before-rhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-lhs-before-rhs.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-class-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-class-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-and-assignment-operator-no-set-put.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-no-set.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-non-extensible.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-non-simple-lhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-non-simple-lhs.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-non-writeable-put.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-non-writeable.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-lhs.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-rhs-put.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-rhs-put.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-rhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-unresolved-rhs.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator.js strict pass
+language/expressions/logical-assignment/lgcl-and-eval-strict.js strict pass
+language/expressions/logical-assignment/lgcl-and-non-simple.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-non-simple.js strict pass
+language/expressions/logical-assignment/lgcl-and-whitespace.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-whitespace.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-arguments-strict.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-bigint.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-bigint.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-lhs-before-rhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-lhs-before-rhs.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-class-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-class-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-no-set-put.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-no-set.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-extensible.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-simple-lhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-simple-lhs.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-writeable-put.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-writeable.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-lhs.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-rhs-put.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-rhs-put.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-rhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-unresolved-rhs.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-eval-strict.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-non-simple.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-non-simple.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-whitespace.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-whitespace.js strict pass
+language/expressions/logical-assignment/lgcl-or-arguments-strict.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-bigint.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-bigint.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-lhs-before-rhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-lhs-before-rhs.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-class-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-class-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-or-assignment-operator-no-set-put.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-no-set.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-non-extensible.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-non-simple-lhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-non-simple-lhs.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-non-writeable-put.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-non-writeable.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-lhs.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-rhs-put.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-rhs-put.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-rhs.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-unresolved-rhs.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator.js strict pass
+language/expressions/logical-assignment/lgcl-or-eval-strict.js strict pass
+language/expressions/logical-assignment/lgcl-or-non-simple.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-non-simple.js strict pass
+language/expressions/logical-assignment/lgcl-or-whitespace.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-whitespace.js strict pass

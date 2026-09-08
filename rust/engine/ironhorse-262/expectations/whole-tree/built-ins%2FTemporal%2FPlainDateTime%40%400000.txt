@@ -1,0 +1,59 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainDateTime tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainDateTime/argument-convert.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/argument-convert.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/basic.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/basic.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/calendar-case-insensitive.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/calendar-case-insensitive.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/calendar-invalid-iso-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainDateTime/calendar-invalid-iso-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: empty string is not a valid calendar ID Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainDateTime/calendar-string.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/calendar-string.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/calendar-undefined.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/calendar-undefined.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/calendar-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/calendar-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/constructor-full.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/constructor-full.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainDateTime/constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/PlainDateTime/datetime-math.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/datetime-math.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/get-prototype-from-constructor-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainDateTime/get-prototype-from-constructor-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainDateTime/hour-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/hour-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/length.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/length.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/limits.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: negative year out of bounds Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: negative year out of bounds Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainDateTime/limits.js strict fail:"abort-value-differs: oracle=\"Test262Error: negative year out of bounds Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: negative year out of bounds Expected a RangeError to be thrown but no exception was thrown at all\""
+built-ins/Temporal/PlainDateTime/microsecond-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/microsecond-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/millisecond-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/millisecond-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/minute-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/minute-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/missing-arguments.js sloppy skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/missing-arguments.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/name.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/name.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/nanosecond-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/nanosecond-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/negative-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/negative-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/order-of-operations.js sloppy skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/order-of-operations.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/second-undefined.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/second-undefined.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/subclass.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/subclass.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/throws-if-date-is-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: args = [1970,0,1] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainDateTime/throws-if-date-is-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: args = [1970,0,1] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainDateTime/throws-if-time-is-invalid.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: args = [-1] Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainDateTime/throws-if-time-is-invalid.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: args = [-1] Expected a RangeError but got a ReferenceError"

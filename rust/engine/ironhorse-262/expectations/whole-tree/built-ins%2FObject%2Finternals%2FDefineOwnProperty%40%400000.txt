@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=built-ins/Object/internals/DefineOwnProperty tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Object/internals/DefineOwnProperty/consistent-value-function-arguments.js sloppy pass
+built-ins/Object/internals/DefineOwnProperty/consistent-value-function-arguments.js strict pass
+built-ins/Object/internals/DefineOwnProperty/consistent-value-function-caller.js sloppy pass
+built-ins/Object/internals/DefineOwnProperty/consistent-value-function-caller.js strict pass
+built-ins/Object/internals/DefineOwnProperty/consistent-value-regexp-dollar1.js sloppy pass
+built-ins/Object/internals/DefineOwnProperty/consistent-value-regexp-dollar1.js strict pass
+built-ins/Object/internals/DefineOwnProperty/consistent-writable-regexp-dollar1.js sloppy pass
+built-ins/Object/internals/DefineOwnProperty/consistent-writable-regexp-dollar1.js strict pass
+built-ins/Object/internals/DefineOwnProperty/nan-equivalence-define-own-property-reassign.js sloppy pass
+built-ins/Object/internals/DefineOwnProperty/nan-equivalence-define-own-property-reassign.js strict pass
+built-ins/Object/internals/DefineOwnProperty/nan-equivalence-define-own-property-reconfigure.js sloppy pass
+built-ins/Object/internals/DefineOwnProperty/nan-equivalence-define-own-property-reconfigure.js strict pass

@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=built-ins/Symbol/isConcatSpreadable tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Symbol/isConcatSpreadable/cross-realm.js sloppy skip:shared-positive-test-failure
+built-ins/Symbol/isConcatSpreadable/cross-realm.js strict skip:shared-positive-test-failure
+built-ins/Symbol/isConcatSpreadable/prop-desc.js sloppy pass
+built-ins/Symbol/isConcatSpreadable/prop-desc.js strict pass

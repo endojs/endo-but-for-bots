@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/Duration/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/Duration/prototype/toLocaleString/returns-same-results-as-DurationFormat.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/toLocaleString/returns-same-results-as-DurationFormat.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/toLocaleString/taint-duration-prototype.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/Duration/prototype/toLocaleString/taint-duration-prototype.js strict skip:oracle-host-missing-global:Temporal

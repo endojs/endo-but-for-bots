@@ -237,3 +237,145 @@ pub fn balanced_args<'a>(src: &'a str, at: usize, marker: &str) -> &'a str {
     }
     &src[open..k - 1]
 }
+
+/// One Rust token outside comments, with its byte offset in the lexed source.
+/// String and character literals remain single tokens; punctuation is split
+/// into individual characters so spacing around `::` cannot hide a path.
+#[derive(Clone, Copy, Debug)]
+pub struct Token<'a> {
+    pub text: &'a str,
+    pub start: usize,
+}
+
+/// Tokenize the output of [`code_only`]. This is a source-lock lexer, not a
+/// Rust parser: identifiers and literals are whole, while punctuation is
+/// individual tokens. Callers can match paths independently of whitespace.
+pub fn tokens(code: &str) -> Vec<Token<'_>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < code.len() {
+        let c = code[i..].chars().next().unwrap();
+        if c.is_whitespace() {
+            i += c.len_utf8();
+            continue;
+        }
+        let start = i;
+        let mut text_start = i;
+        if let Some(end) = literal_end(code, i) {
+            i = end;
+        } else if code[i..].starts_with("r#")
+            && code[i + 2..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
+        {
+            // Raw identifiers denote the same name; raw strings were already
+            // consumed above. Keep the original byte position for diagnostics.
+            i += 2;
+            text_start = i;
+            while i < code.len() {
+                let next = code[i..].chars().next().unwrap();
+                if !next.is_alphanumeric() && next != '_' {
+                    break;
+                }
+                i += next.len_utf8();
+            }
+        } else if c.is_alphanumeric() || c == '_' {
+            i += c.len_utf8();
+            while i < code.len() {
+                let next = code[i..].chars().next().unwrap();
+                if !next.is_alphanumeric() && next != '_' {
+                    break;
+                }
+                i += next.len_utf8();
+            }
+        } else {
+            i += c.len_utf8();
+        }
+        out.push(Token {
+            text: &code[text_start..i],
+            start,
+        });
+    }
+    out
+}
+
+/// Token indices matching `pattern`, ignoring its whitespace. A marker in a
+/// literal or inside a longer identifier is never a match.
+pub fn token_positions(code: &[Token<'_>], pattern: &str) -> Vec<usize> {
+    let pattern = tokens(pattern);
+    assert!(!pattern.is_empty(), "empty token marker");
+    code.windows(pattern.len())
+        .enumerate()
+        .filter_map(|(i, window)| {
+            window
+                .iter()
+                .zip(&pattern)
+                .all(|(a, b)| a.text == b.text)
+                .then_some(i)
+        })
+        .collect()
+}
+
+/// Index of the closing delimiter paired with the token at `open`. Nested
+/// delimiters and literal contents cannot prematurely close a source body.
+pub fn matching_delimiter(code: &[Token<'_>], open: usize) -> usize {
+    let close = match code[open].text {
+        "(" => ")",
+        "[" => "]",
+        "{" => "}",
+        other => panic!("not an opening delimiter: {other}"),
+    };
+    let mut i = open + 1;
+    while i < code.len() {
+        match code[i].text {
+            "(" | "[" | "{" => i = matching_delimiter(code, i) + 1,
+            token if token == close => return i,
+            ")" | "]" | "}" => panic!("mismatched delimiter at token {i}"),
+            _ => i += 1,
+        }
+    }
+    panic!("unclosed delimiter at token {open}")
+}
+
+/// Token range of the brace body following a unique declaration marker.
+/// Used for function, enum, and macro source locks. Braces in comments or
+/// literals cannot impersonate the declaration or terminate its body.
+pub fn token_body(code: &[Token<'_>], marker: &str) -> std::ops::Range<usize> {
+    let positions = token_positions(code, marker);
+    assert_eq!(positions.len(), 1, "declaration must be unique: {marker}");
+    let start = positions[0] + tokens(marker).len();
+    let open = start
+        + code[start..]
+            .iter()
+            .position(|token| token.text == "{")
+            .unwrap_or_else(|| panic!("missing body: {marker}"));
+    open..matching_delimiter(code, open) + 1
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::{code_only, token_positions, tokens};
+
+    #[test]
+    fn raw_identifiers_cannot_hide_protocol_constructions() {
+        for spelling in ["Halt::r#Throw", "r#Halt::r#Throw", "Halt::Throw"] {
+            let source = code_only(&format!("{spelling} {{ value, rendered }}"));
+            let code = tokens(&source);
+            assert_eq!(token_positions(&code, "Halt::Throw"), vec![0]);
+            assert_eq!(code[0].start, 0);
+        }
+        let source = code_only(r#"Step::r#Threw { value }; Halt::r#synthetic_throw("bad");"#);
+        let code = tokens(&source);
+        assert_eq!(token_positions(&code, "Step::Threw").len(), 1);
+        assert_eq!(token_positions(&code, "Halt::synthetic_throw").len(), 1);
+        let source = code_only("  r#Halt::r#Throw { value, rendered }");
+        let code = tokens(&source);
+        assert_eq!(code[0].text, "Halt");
+        assert_eq!(code[0].start, 2);
+        assert_eq!(code[3].text, "Throw");
+        assert_eq!(&source[code[3].start..code[3].start + 7], "r#Throw");
+        let source = code_only(r###"let text = r#"Halt::r#Throw"#;"###);
+        assert!(token_positions(&tokens(&source), "Halt::Throw").is_empty());
+    }
+}

@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Reflect/has tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Reflect/has/has.js sloppy pass
+built-ins/Reflect/has/has.js strict pass
+built-ins/Reflect/has/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/has/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
+built-ins/Reflect/has/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be has; name value should be has"
+built-ins/Reflect/has/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be has; name value should be has"
+built-ins/Reflect/has/not-a-constructor.js sloppy pass
+built-ins/Reflect/has/not-a-constructor.js strict pass
+built-ins/Reflect/has/return-abrupt-from-property-key.js sloppy pass
+built-ins/Reflect/has/return-abrupt-from-property-key.js strict pass
+built-ins/Reflect/has/return-abrupt-from-result.js sloppy pass
+built-ins/Reflect/has/return-abrupt-from-result.js strict pass
+built-ins/Reflect/has/return-boolean.js sloppy pass
+built-ins/Reflect/has/return-boolean.js strict pass
+built-ins/Reflect/has/symbol-property.js sloppy pass
+built-ins/Reflect/has/symbol-property.js strict pass
+built-ins/Reflect/has/target-is-not-object-throws.js sloppy pass
+built-ins/Reflect/has/target-is-not-object-throws.js strict pass
+built-ins/Reflect/has/target-is-symbol-throws.js sloppy pass
+built-ins/Reflect/has/target-is-symbol-throws.js strict pass

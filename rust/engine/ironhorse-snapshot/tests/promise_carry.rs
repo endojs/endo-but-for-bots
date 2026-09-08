@@ -161,6 +161,27 @@ fn a_custom_capability_executor_survives_resume() {
     );
 }
 
+/// A retained executor survives even when its constructor never called it.
+/// The never-called sentinel must remain distinct from a call with undefined.
+#[test]
+fn an_uncalled_capability_executor_survives_resume() {
+    assert_twin(
+        "ih-prms-uncalled-capability-executor",
+        "var ex=0;var t='';function C(e){ex=e;return {}} \
+         try{Promise.resolve.call(C,1)}catch(e){t=e.message}t",
+        &[
+            "var ex;var t;typeof ex+':'+ex.length+':'+t",
+            "var ex;var t;ex();ex(function(){},function(){});t='captured';t",
+            "var ex;var t;try{ex()}catch(e){t=e.message}t",
+        ],
+        &[
+            (true, "function:2:executor not called"),
+            (true, "captured"),
+            (true, "executor already called"),
+        ],
+    );
+}
+
 /// A custom receiver may retain either anonymous callable that `finally`
 /// passes to its `then`. The closure's handler/constructor capture and later
 /// value thunk must survive both snapshot backends without losing function

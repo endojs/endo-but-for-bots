@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainDateTime/prototype/year tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainDateTime/prototype/year/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/year/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/year/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/year/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/year/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDateTime/prototype/year/prop-desc.js strict skip:oracle-host-missing-global:Temporal

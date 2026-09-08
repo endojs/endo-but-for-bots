@@ -1,0 +1,45 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/findIndex tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/findIndex/array-altered-during-loop.js sloppy pass
+built-ins/Array/prototype/findIndex/array-altered-during-loop.js strict pass
+built-ins/Array/prototype/findIndex/call-with-boolean.js sloppy skip:unsupported-opcode:find:non-dense-array
+built-ins/Array/prototype/findIndex/call-with-boolean.js strict skip:unsupported-opcode:find:non-dense-array
+built-ins/Array/prototype/findIndex/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/findIndex/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/findIndex/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be findIndex; name value should be findIndex"
+built-ins/Array/prototype/findIndex/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be findIndex; name value should be findIndex"
+built-ins/Array/prototype/findIndex/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/findIndex/not-a-constructor.js strict pass
+built-ins/Array/prototype/findIndex/predicate-call-parameters.js sloppy pass
+built-ins/Array/prototype/findIndex/predicate-call-parameters.js strict pass
+built-ins/Array/prototype/findIndex/predicate-call-this-non-strict.js sloppy pass
+built-ins/Array/prototype/findIndex/predicate-call-this-strict.js strict pass
+built-ins/Array/prototype/findIndex/predicate-called-for-each-array-property.js sloppy pass
+built-ins/Array/prototype/findIndex/predicate-called-for-each-array-property.js strict pass
+built-ins/Array/prototype/findIndex/predicate-is-not-callable-throws.js sloppy pass
+built-ins/Array/prototype/findIndex/predicate-is-not-callable-throws.js strict pass
+built-ins/Array/prototype/findIndex/predicate-not-called-on-empty-array.js sloppy pass
+built-ins/Array/prototype/findIndex/predicate-not-called-on-empty-array.js strict pass
+built-ins/Array/prototype/findIndex/prop-desc.js sloppy pass
+built-ins/Array/prototype/findIndex/prop-desc.js strict pass
+built-ins/Array/prototype/findIndex/resizable-buffer-grow-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/resizable-buffer-grow-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/resizable-buffer-shrink-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/resizable-buffer-shrink-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/findIndex/return-abrupt-from-predicate-call.js sloppy pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-predicate-call.js strict pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-property.js sloppy pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-property.js strict pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-this-length-as-symbol.js sloppy pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-this-length-as-symbol.js strict pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-this-length.js sloppy pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-this-length.js strict pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-this.js sloppy pass
+built-ins/Array/prototype/findIndex/return-abrupt-from-this.js strict pass
+built-ins/Array/prototype/findIndex/return-index-predicate-result-is-true.js sloppy pass
+built-ins/Array/prototype/findIndex/return-index-predicate-result-is-true.js strict pass
+built-ins/Array/prototype/findIndex/return-negative-one-if-predicate-returns-false-value.js sloppy pass
+built-ins/Array/prototype/findIndex/return-negative-one-if-predicate-returns-false-value.js strict pass

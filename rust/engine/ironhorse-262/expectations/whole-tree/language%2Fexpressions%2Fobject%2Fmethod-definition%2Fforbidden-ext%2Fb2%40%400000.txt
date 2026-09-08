@@ -1,0 +1,13 @@
+# engine=ironhorse features=default corpus=language/expressions/object/method-definition/forbidden-ext/b2 tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/object/method-definition/forbidden-ext/b2/async-gen-meth-forbidden-ext-indirect-access-own-prop-caller-get.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/async-gen-meth-forbidden-ext-indirect-access-own-prop-caller-value.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/async-gen-meth-forbidden-ext-indirect-access-prop-caller.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/async-meth-forbidden-ext-indirect-access-own-prop-caller-get.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/async-meth-forbidden-ext-indirect-access-own-prop-caller-value.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/async-meth-forbidden-ext-indirect-access-prop-caller.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/gen-meth-forbidden-ext-indirect-access-own-prop-caller-get.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/gen-meth-forbidden-ext-indirect-access-own-prop-caller-value.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/gen-meth-forbidden-ext-indirect-access-prop-caller.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/meth-forbidden-ext-indirect-access-own-prop-caller-get.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/meth-forbidden-ext-indirect-access-own-prop-caller-value.js sloppy pass
+language/expressions/object/method-definition/forbidden-ext/b2/meth-forbidden-ext-indirect-access-prop-caller.js sloppy pass

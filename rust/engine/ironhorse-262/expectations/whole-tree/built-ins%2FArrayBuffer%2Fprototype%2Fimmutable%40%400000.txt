@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=built-ins/ArrayBuffer/prototype/immutable tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/ArrayBuffer/prototype/immutable/prop-desc.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: ArrayBuffer.prototype.immutable getter should be a function Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/immutable/prop-desc.js strict fail:"abort-value-differs: oracle=\"Test262Error: ArrayBuffer.prototype.immutable getter should be a function Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/ArrayBuffer/prototype/immutable/return-immutable.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«undefined», «false») to be true\" ironhorse=\"Test262Error: undefinedundefined», «booleanfalse») to be true\""
+built-ins/ArrayBuffer/prototype/immutable/return-immutable.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«undefined», «false») to be true\" ironhorse=\"Test262Error: undefinedundefined», «booleanfalse») to be true\""
+built-ins/ArrayBuffer/prototype/immutable/this-has-no-arraybufferdata-internal.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/immutable/this-has-no-arraybufferdata-internal.js strict skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/immutable/this-is-not-object.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/immutable/this-is-not-object.js strict skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/immutable/this-is-sharedarraybuffer.js sloppy skip:shared-positive-test-failure
+built-ins/ArrayBuffer/prototype/immutable/this-is-sharedarraybuffer.js strict skip:shared-positive-test-failure

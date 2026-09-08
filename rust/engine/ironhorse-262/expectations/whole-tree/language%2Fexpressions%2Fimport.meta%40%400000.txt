@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/expressions/import.meta tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/import.meta/distinct-for-each-module.js sloppy skip:unsupported-opcode:module:import-meta
+language/expressions/import.meta/import-meta-is-an-ordinary-object.js sloppy skip:unsupported-opcode:module:import-meta
+language/expressions/import.meta/not-accessible-from-direct-eval.js sloppy pass
+language/expressions/import.meta/same-object-returned.js sloppy skip:unsupported-opcode:module:import-meta

@@ -1,0 +1,9 @@
+# engine=ironhorse features=default corpus=intl402/String/prototype/toLocaleUpperCase tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/String/prototype/toLocaleUpperCase/special_casing_Azeri.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: LATIN SMALL LETTER I Expected SameValue(«\"I\"», «\"İ\"») to be true"
+intl402/String/prototype/toLocaleUpperCase/special_casing_Azeri.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: LATIN SMALL LETTER I Expected SameValue(«\"I\"», «\"İ\"») to be true"
+intl402/String/prototype/toLocaleUpperCase/special_casing_Lithuanian.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: COMBINING DOT ABOVE preceded by Soft_Dotted (U+0069) Expected SameValue(«\\\"I\\u{307}\\\"», «\\\"I\\\"») to be true\" ironhorse=\"Test262Error: string\\\"I\\u{307}\\\"», «string\\\"I\\\"») to be true\""
+intl402/String/prototype/toLocaleUpperCase/special_casing_Lithuanian.js strict fail:"abort-value-differs: oracle=\"Test262Error: COMBINING DOT ABOVE preceded by Soft_Dotted (U+0069) Expected SameValue(«\\\"I\\u{307}\\\"», «\\\"I\\\"») to be true\" ironhorse=\"Test262Error: string\\\"I\\u{307}\\\"», «string\\\"I\\\"») to be true\""
+intl402/String/prototype/toLocaleUpperCase/special_casing_Turkish.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: LATIN SMALL LETTER I Expected SameValue(«\"I\"», «\"İ\"») to be true"
+intl402/String/prototype/toLocaleUpperCase/special_casing_Turkish.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: LATIN SMALL LETTER I Expected SameValue(«\"I\"», «\"İ\"») to be true"
+intl402/String/prototype/toLocaleUpperCase/validates-all-locale-identifiers.js sloppy skip:shared-test262-failure
+intl402/String/prototype/toLocaleUpperCase/validates-all-locale-identifiers.js strict skip:shared-test262-failure

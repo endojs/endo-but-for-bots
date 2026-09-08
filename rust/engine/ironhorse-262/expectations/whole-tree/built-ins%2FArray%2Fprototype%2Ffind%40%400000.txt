@@ -1,0 +1,45 @@
+# engine=ironhorse features=default corpus=built-ins/Array/prototype/find tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Array/prototype/find/array-altered-during-loop.js sloppy pass
+built-ins/Array/prototype/find/array-altered-during-loop.js strict pass
+built-ins/Array/prototype/find/call-with-boolean.js sloppy skip:unsupported-opcode:find:non-dense-array
+built-ins/Array/prototype/find/call-with-boolean.js strict skip:unsupported-opcode:find:non-dense-array
+built-ins/Array/prototype/find/callbackfn-resize-arraybuffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/callbackfn-resize-arraybuffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/find/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Array/prototype/find/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be find; name value should be find"
+built-ins/Array/prototype/find/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be find; name value should be find"
+built-ins/Array/prototype/find/not-a-constructor.js sloppy pass
+built-ins/Array/prototype/find/not-a-constructor.js strict pass
+built-ins/Array/prototype/find/predicate-call-parameters.js sloppy pass
+built-ins/Array/prototype/find/predicate-call-parameters.js strict pass
+built-ins/Array/prototype/find/predicate-call-this-non-strict.js sloppy pass
+built-ins/Array/prototype/find/predicate-call-this-strict.js strict pass
+built-ins/Array/prototype/find/predicate-called-for-each-array-property.js sloppy pass
+built-ins/Array/prototype/find/predicate-called-for-each-array-property.js strict pass
+built-ins/Array/prototype/find/predicate-is-not-callable-throws.js sloppy pass
+built-ins/Array/prototype/find/predicate-is-not-callable-throws.js strict pass
+built-ins/Array/prototype/find/predicate-not-called-on-empty-array.js sloppy pass
+built-ins/Array/prototype/find/predicate-not-called-on-empty-array.js strict pass
+built-ins/Array/prototype/find/prop-desc.js sloppy pass
+built-ins/Array/prototype/find/prop-desc.js strict pass
+built-ins/Array/prototype/find/resizable-buffer-grow-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/resizable-buffer-grow-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/resizable-buffer-shrink-mid-iteration.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/resizable-buffer-shrink-mid-iteration.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/find/return-abrupt-from-predicate-call.js sloppy pass
+built-ins/Array/prototype/find/return-abrupt-from-predicate-call.js strict pass
+built-ins/Array/prototype/find/return-abrupt-from-property.js sloppy pass
+built-ins/Array/prototype/find/return-abrupt-from-property.js strict pass
+built-ins/Array/prototype/find/return-abrupt-from-this-length-as-symbol.js sloppy pass
+built-ins/Array/prototype/find/return-abrupt-from-this-length-as-symbol.js strict pass
+built-ins/Array/prototype/find/return-abrupt-from-this-length.js sloppy pass
+built-ins/Array/prototype/find/return-abrupt-from-this-length.js strict pass
+built-ins/Array/prototype/find/return-abrupt-from-this.js sloppy pass
+built-ins/Array/prototype/find/return-abrupt-from-this.js strict pass
+built-ins/Array/prototype/find/return-found-value-predicate-result-is-true.js sloppy pass
+built-ins/Array/prototype/find/return-found-value-predicate-result-is-true.js strict pass
+built-ins/Array/prototype/find/return-undefined-if-predicate-returns-false-value.js sloppy pass
+built-ins/Array/prototype/find/return-undefined-if-predicate-returns-false-value.js strict pass

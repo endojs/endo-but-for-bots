@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=intl402/Temporal/PlainDate/prototype/withCalendar tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/Temporal/PlainDate/prototype/withCalendar/calendar-time-string.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/calendar-time-string.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/canonicalize-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/canonicalize-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/extreme-dates.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/extreme-dates.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/future-calendar.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/future-calendar.js strict skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/roundtrip-from-iso8601.js sloppy skip:oracle-host-missing-global:Temporal
+intl402/Temporal/PlainDate/prototype/withCalendar/roundtrip-from-iso8601.js strict skip:oracle-host-missing-global:Temporal

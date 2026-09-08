@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Uint8Array/fromHex tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Uint8Array/fromHex/descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: fromHex should be an own property"
+built-ins/Uint8Array/fromHex/descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: fromHex should be an own property"
+built-ins/Uint8Array/fromHex/ignores-receiver.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/fromHex/ignores-receiver.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/fromHex/illegal-characters.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/fromHex/illegal-characters.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/fromHex/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/fromHex/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/fromHex/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/fromHex/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
+built-ins/Uint8Array/fromHex/nonconstructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Uint8Array/fromHex/nonconstructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
+built-ins/Uint8Array/fromHex/odd-length-input.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/fromHex/odd-length-input.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a TypeError"
+built-ins/Uint8Array/fromHex/results.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/fromHex/results.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Uint8Array/fromHex/string-coercion.js sloppy pass
+built-ins/Uint8Array/fromHex/string-coercion.js strict pass

@@ -1,0 +1,54 @@
+# engine=ironhorse features=default corpus=annexB/language/global-code tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/global-code/if-stmt-else-decl-global-existing-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/if-stmt-else-decl-global-existing-non-enumerable-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/if-stmt-else-decl-global-existing-var-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-existing-var-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-no-skip-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-for-in.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-for-of.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-for.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-skip-early-err-try.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-skip-early-err.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/if-stmt-else-decl-global-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
+annexB/language/global-code/script-decl-lex-collision.js sloppy skip:shared-test262-failure
+annexB/language/global-code/switch-case-global-block-scoping.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-case-global-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-case-global-existing-block-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/switch-case-global-existing-fn-no-init.js sloppy pass
+annexB/language/global-code/switch-case-global-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/global-code/switch-case-global-existing-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-case-global-existing-non-enumerable-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-case-global-existing-var-no-init.js sloppy pass
+annexB/language/global-code/switch-case-global-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/switch-case-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-case-global-no-skip-try.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-case-global-skip-early-err-block.js sloppy pass
+annexB/language/global-code/switch-case-global-skip-early-err-for-in.js sloppy pass
+annexB/language/global-code/switch-case-global-skip-early-err-for-of.js sloppy pass
+annexB/language/global-code/switch-case-global-skip-early-err-for.js sloppy pass
+annexB/language/global-code/switch-case-global-skip-early-err-switch.js sloppy pass
+annexB/language/global-code/switch-case-global-skip-early-err-try.js sloppy pass
+annexB/language/global-code/switch-case-global-skip-early-err.js sloppy pass
+annexB/language/global-code/switch-case-global-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/switch-dflt-global-block-scoping.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-dflt-global-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-dflt-global-existing-block-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/switch-dflt-global-existing-fn-no-init.js sloppy pass
+annexB/language/global-code/switch-dflt-global-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/global-code/switch-dflt-global-existing-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-dflt-global-existing-non-enumerable-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-dflt-global-existing-var-no-init.js sloppy pass
+annexB/language/global-code/switch-dflt-global-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/switch-dflt-global-init.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-dflt-global-no-skip-try.js sloppy skip:shared-positive-test-failure
+annexB/language/global-code/switch-dflt-global-skip-early-err-block.js sloppy pass
+annexB/language/global-code/switch-dflt-global-skip-early-err-for-in.js sloppy pass
+annexB/language/global-code/switch-dflt-global-skip-early-err-for-of.js sloppy pass
+annexB/language/global-code/switch-dflt-global-skip-early-err-for.js sloppy pass
+annexB/language/global-code/switch-dflt-global-skip-early-err-switch.js sloppy pass
+annexB/language/global-code/switch-dflt-global-skip-early-err-try.js sloppy pass
+annexB/language/global-code/switch-dflt-global-skip-early-err.js sloppy pass
+annexB/language/global-code/switch-dflt-global-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""

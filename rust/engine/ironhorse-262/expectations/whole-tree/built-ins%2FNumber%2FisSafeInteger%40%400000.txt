@@ -1,0 +1,21 @@
+# engine=ironhorse features=default corpus=built-ins/Number/isSafeInteger tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Number/isSafeInteger/arg-is-not-number.js sloppy pass
+built-ins/Number/isSafeInteger/arg-is-not-number.js strict pass
+built-ins/Number/isSafeInteger/infinity.js sloppy pass
+built-ins/Number/isSafeInteger/infinity.js strict pass
+built-ins/Number/isSafeInteger/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Number/isSafeInteger/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Number/isSafeInteger/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isSafeInteger; name value should be isSafeInteger"
+built-ins/Number/isSafeInteger/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be isSafeInteger; name value should be isSafeInteger"
+built-ins/Number/isSafeInteger/nan.js sloppy pass
+built-ins/Number/isSafeInteger/nan.js strict pass
+built-ins/Number/isSafeInteger/not-a-constructor.js sloppy pass
+built-ins/Number/isSafeInteger/not-a-constructor.js strict pass
+built-ins/Number/isSafeInteger/not-integer.js sloppy pass
+built-ins/Number/isSafeInteger/not-integer.js strict pass
+built-ins/Number/isSafeInteger/not-safe-integer.js sloppy pass
+built-ins/Number/isSafeInteger/not-safe-integer.js strict pass
+built-ins/Number/isSafeInteger/prop-desc.js sloppy pass
+built-ins/Number/isSafeInteger/prop-desc.js strict pass
+built-ins/Number/isSafeInteger/safe-integers.js sloppy pass
+built-ins/Number/isSafeInteger/safe-integers.js strict pass

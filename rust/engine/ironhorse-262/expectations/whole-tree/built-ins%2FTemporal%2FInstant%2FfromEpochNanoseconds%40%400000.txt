@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/Instant/fromEpochNanoseconds tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/Instant/fromEpochNanoseconds/argument.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: undefined Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Instant/fromEpochNanoseconds/argument.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: undefined Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Instant/fromEpochNanoseconds/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/builtin.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/builtin.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/length.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/length.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/limits.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/fromEpochNanoseconds/limits.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/Instant/fromEpochNanoseconds/name.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/name.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Instant/fromEpochNanoseconds/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
+built-ins/Temporal/Instant/fromEpochNanoseconds/prop-desc.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/prop-desc.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/subclassing-ignored.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/fromEpochNanoseconds/subclassing-ignored.js strict skip:oracle-host-missing-temporal

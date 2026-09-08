@@ -116,7 +116,7 @@ fn typed_array_from_array_with_overridden_iterator_is_an_honest_skip() {
     // `Get(k)` with `Set` — so a mutating `valueOf` changes later reads
     // (`new Uint8Array(a)[1]` is `99` on XS/V8/SM/JSC, `2` under a front-loaded
     // snapshot). Ironhorse does not model the array-like interleaving path, so
-    // it must SKIP honestly (`Halt::Unsupported`) rather than snapshot the
+    // it must SKIP honestly (`Halt::NotImplemented`) rather than snapshot the
     // wrong semantics and silently over-accept `2`.
     let source = "var a=[{valueOf:function(){a[1]=99;return 1;}},2]; \
                   a[Symbol.iterator]=undefined; new Uint8Array(a)[1];";
@@ -131,7 +131,7 @@ fn typed_array_from_array_with_overridden_iterator_is_an_honest_skip() {
         dr.ironhorse_result,
     );
     assert!(
-        matches!(&dr.ironhorse_halt, Halt::Unsupported(op) if op.contains("from-array-like")),
+        matches!(&dr.ironhorse_halt, Halt::NotImplemented(op) if op.contains("from-array-like")),
         "expected the from-array-like honest skip, got {:?}",
         dr.ironhorse_halt,
     );

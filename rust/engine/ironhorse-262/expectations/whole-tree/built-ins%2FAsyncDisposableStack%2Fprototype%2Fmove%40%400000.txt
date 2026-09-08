@@ -1,0 +1,27 @@
+# engine=ironhorse features=default corpus=built-ins/AsyncDisposableStack/prototype/move tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/AsyncDisposableStack/prototype/move/does-not-dispose-resources.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/does-not-dispose-resources.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/length.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/length.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be move; name value should be move"
+built-ins/AsyncDisposableStack/prototype/move/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be move; name value should be move"
+built-ins/AsyncDisposableStack/prototype/move/not-a-constructor.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/not-a-constructor.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/prop-desc.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/prop-desc.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/returns-new-asyncdisposablestack-that-contains-moved-resources.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/returns-new-asyncdisposablestack-that-contains-moved-resources.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/returns-new-asyncdisposablestack-that-is-still-pending.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/returns-new-asyncdisposablestack-that-is-still-pending.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/returns-new-asyncdisposablestack.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/returns-new-asyncdisposablestack.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/sets-state-to-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/sets-state-to-disposed.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/still-returns-new-asyncdisposablestack-when-subclassed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/still-returns-new-asyncdisposablestack-when-subclassed.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/this-does-not-have-internal-asyncdisposablestate-throws.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/this-does-not-have-internal-asyncdisposablestate-throws.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/this-not-object-throws.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/this-not-object-throws.js strict pass
+built-ins/AsyncDisposableStack/prototype/move/throws-if-disposed.js sloppy pass
+built-ins/AsyncDisposableStack/prototype/move/throws-if-disposed.js strict pass

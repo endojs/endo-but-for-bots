@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=intl402/DurationFormat/supportedLocalesOf tip=be13516fb6441b950ba8a3df97eb34062c186972
+intl402/DurationFormat/supportedLocalesOf/basic.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/basic.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/branding.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/branding.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/length.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/length.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/locales-empty.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/locales-empty.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/locales-invalid.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/locales-invalid.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/locales-specific.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/locales-specific.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/name.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/name.js strict skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/prop-desc.js sloppy skip:oracle-host-missing-global:Intl
+intl402/DurationFormat/supportedLocalesOf/prop-desc.js strict skip:oracle-host-missing-global:Intl

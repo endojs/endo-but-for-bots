@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=language/expressions/grouping tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/expressions/grouping/S11.1.6_A1.js sloppy pass
+language/expressions/grouping/S11.1.6_A1.js strict pass
+language/expressions/grouping/S11.1.6_A2_T1.js sloppy pass
+language/expressions/grouping/S11.1.6_A2_T1.js strict pass
+language/expressions/grouping/S11.1.6_A2_T2.js sloppy pass
+language/expressions/grouping/S11.1.6_A3_T1.js sloppy pass
+language/expressions/grouping/S11.1.6_A3_T1.js strict pass
+language/expressions/grouping/S11.1.6_A3_T2.js sloppy pass
+language/expressions/grouping/S11.1.6_A3_T2.js strict pass
+language/expressions/grouping/S11.1.6_A3_T3.js sloppy pass
+language/expressions/grouping/S11.1.6_A3_T3.js strict pass
+language/expressions/grouping/S11.1.6_A3_T4.js sloppy pass
+language/expressions/grouping/S11.1.6_A3_T4.js strict pass
+language/expressions/grouping/S11.1.6_A3_T6.js sloppy pass
+language/expressions/grouping/S11.1.6_A3_T7.js sloppy pass
+language/expressions/grouping/S11.1.6_A3_T7.js strict pass

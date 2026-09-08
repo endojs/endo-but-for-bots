@@ -1,0 +1,7 @@
+# engine=ironhorse features=default corpus=built-ins/Temporal/PlainDate/prototype/dayOfWeek tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Temporal/PlainDate/prototype/dayOfWeek/basic.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDate/prototype/dayOfWeek/basic.js strict skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDate/prototype/dayOfWeek/branding.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDate/prototype/dayOfWeek/branding.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDate/prototype/dayOfWeek/prop-desc.js sloppy skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/PlainDate/prototype/dayOfWeek/prop-desc.js strict skip:oracle-host-missing-global:Temporal

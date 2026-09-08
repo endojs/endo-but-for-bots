@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=language/types/boolean tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/types/boolean/S8.3_A1_T1.js sloppy pass
+language/types/boolean/S8.3_A1_T1.js strict pass
+language/types/boolean/S8.3_A1_T2.js sloppy pass
+language/types/boolean/S8.3_A1_T2.js strict pass
+language/types/boolean/S8.3_A2.1.js sloppy pass
+language/types/boolean/S8.3_A2.1.js strict pass
+language/types/boolean/S8.3_A2.2.js sloppy pass
+language/types/boolean/S8.3_A2.2.js strict pass
+language/types/boolean/S8.3_A3.js sloppy pass
+language/types/boolean/S8.3_A3.js strict pass

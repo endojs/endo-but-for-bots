@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/asi tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/asi/S7.9_A9_T9.js sloppy pass
+language/asi/S7.9_A9_T9.js strict pass
+language/asi/do-while-same-line.js sloppy pass
+language/asi/do-while-same-line.js strict pass

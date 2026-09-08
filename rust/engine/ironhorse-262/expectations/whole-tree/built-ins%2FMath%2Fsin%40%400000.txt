@@ -1,0 +1,17 @@
+# engine=ironhorse features=default corpus=built-ins/Math/sin tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Math/sin/S15.8.2.16_A1.js sloppy pass
+built-ins/Math/sin/S15.8.2.16_A1.js strict pass
+built-ins/Math/sin/S15.8.2.16_A4.js sloppy pass
+built-ins/Math/sin/S15.8.2.16_A4.js strict pass
+built-ins/Math/sin/S15.8.2.16_A5.js sloppy pass
+built-ins/Math/sin/S15.8.2.16_A5.js strict pass
+built-ins/Math/sin/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/sin/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 1; length value should be 1"
+built-ins/Math/sin/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be sin; name value should be sin"
+built-ins/Math/sin/name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be sin; name value should be sin"
+built-ins/Math/sin/not-a-constructor.js sloppy pass
+built-ins/Math/sin/not-a-constructor.js strict pass
+built-ins/Math/sin/prop-desc.js sloppy pass
+built-ins/Math/sin/prop-desc.js strict pass
+built-ins/Math/sin/zero.js sloppy pass
+built-ins/Math/sin/zero.js strict pass

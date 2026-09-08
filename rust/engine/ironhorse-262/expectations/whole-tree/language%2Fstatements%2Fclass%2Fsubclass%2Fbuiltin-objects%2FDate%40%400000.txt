@@ -1,0 +1,5 @@
+# engine=ironhorse features=default corpus=language/statements/class/subclass/builtin-objects/Date tip=be13516fb6441b950ba8a3df97eb34062c186972
+language/statements/class/subclass/builtin-objects/Date/regular-subclassing.js sloppy pass
+language/statements/class/subclass/builtin-objects/Date/regular-subclassing.js strict pass
+language/statements/class/subclass/builtin-objects/Date/super-must-be-called.js sloppy skip:non-primitive-completion
+language/statements/class/subclass/builtin-objects/Date/super-must-be-called.js strict skip:non-primitive-completion

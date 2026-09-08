@@ -23,10 +23,6 @@ use ironhorse_262::{dual_run, Agreement};
 /// subject, with that reason. Verified on the pinned oracle.
 const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
     (
-        "function f(){ var r=0; try { [1,2].map(function(){ return undefinedVar }) } catch(e){ r=String(e) } return r } f()",
-        "String(err) renders `Error: …` for a subclass error whose intrinsic the source never names (review F029 / lazy intrinsic link)",
-    ),
-    (
         "var r=0; function f(){ 'use strict'; var o=Object.freeze({x:1}); try{ with(o){ } }catch(e){ r='caught' } } r",
         "early SyntaxError text: the compile-time abort carries no XS message (review F151)",
     ),
@@ -41,10 +37,6 @@ const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
     (
         "function f(){ 'use strict'; var s=Symbol('a'); try { s['x']=1; return 'ok' } catch(e){ return e.name } } f()",
         "the symbol reach-through is closed (the write stores nothing), but a strict COMPUTED write to any primitive receiver is still a silent no-op where XS throws — the `property_at_set`-on-primitives entry above, of which this is the symbol shape",
-    ),
-    (
-        "var r=0; try { Symbol(Symbol('x')) } catch(e){ r=e.name+':'+e.message } r",
-        "`ToString(symbol)` throws the right catchable TypeError with no message; XS says `cannot coerce symbol to string` (the shared `to_string_slot` message gap, not specific to `Symbol()`)",
     ),
     (
         "var o={toString(){ throw 5 }}; throw o",
@@ -260,6 +252,9 @@ fn error_model_agrees_with_the_oracle() {
         "var r=0; try { class A extends null { constructor(){ super() } } new A() } catch(e){ r=e.name } r",
         "var r=0; try { new (class extends Object { constructor(){ } }) } catch(e){ r=e.name } r",
         "var r=0; try { ({}).x.y } catch(e){ r=e.stack !== undefined } r",
+        // Former named divergences now covered by native diagnostic parity.
+        "function f(){ var r=0; try { [1,2].map(function(){ return undefinedVar }) } catch(e){ r=String(e) } return r } f()",
+        "var r=0; try { Symbol(Symbol('x')) } catch(e){ r=e.name+':'+e.message } r",
     ];
     let mut bad = Vec::new();
     let mut stale_allowlist = Vec::new();

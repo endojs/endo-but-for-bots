@@ -1,0 +1,19 @@
+# engine=ironhorse features=default corpus=built-ins/Date/prototype/setUTCMonth tip=be13516fb6441b950ba8a3df97eb34062c186972
+built-ins/Date/prototype/setUTCMonth/arg-coercion-order.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/arg-coercion-order.js strict pass
+built-ins/Date/prototype/setUTCMonth/date-value-read-before-tonumber-when-date-is-invalid.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number0») to be true"
+built-ins/Date/prototype/setUTCMonth/date-value-read-before-tonumber-when-date-is-invalid.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number0») to be true"
+built-ins/Date/prototype/setUTCMonth/date-value-read-before-tonumber-when-date-is-valid.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/date-value-read-before-tonumber-when-date-is-valid.js strict pass
+built-ins/Date/prototype/setUTCMonth/length.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/length.js strict pass
+built-ins/Date/prototype/setUTCMonth/name.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/name.js strict pass
+built-ins/Date/prototype/setUTCMonth/not-a-constructor.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/not-a-constructor.js strict pass
+built-ins/Date/prototype/setUTCMonth/prop-desc.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/prop-desc.js strict pass
+built-ins/Date/prototype/setUTCMonth/this-value-valid-date-date.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/this-value-valid-date-date.js strict pass
+built-ins/Date/prototype/setUTCMonth/this-value-valid-date-month.js sloppy pass
+built-ins/Date/prototype/setUTCMonth/this-value-valid-date-month.js strict pass

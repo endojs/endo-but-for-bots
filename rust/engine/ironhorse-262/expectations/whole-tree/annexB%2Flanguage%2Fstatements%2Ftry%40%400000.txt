@@ -1,0 +1,11 @@
+# engine=ironhorse features=default corpus=annexB/language/statements/try tip=be13516fb6441b950ba8a3df97eb34062c186972
+annexB/language/statements/try/catch-redeclared-for-in-var.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable err\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-for-in-var.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable err\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-for-of-var.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable err\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-for-of-var.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable err\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-for-var.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable err\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-for-var.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable err\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-var-statement-captured.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable foo\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-var-statement-captured.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable foo\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-var-statement.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable foo\" ironhorse=\"SyntaxError\""
+annexB/language/statements/try/catch-redeclared-var-statement.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable foo\" ironhorse=\"SyntaxError\""

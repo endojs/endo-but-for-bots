@@ -1,220 +1,384 @@
-//! Source-level lock on where an uncaught throw may be manufactured
-//! (architecture review F004 / F005).
-//!
-//! `Halt::Throw` is the host's view of a JavaScript throw that escaped
-//! every guest handler. It is legitimate at exactly three kinds of site:
-//!
-//! 1. `raise_js`, the one engine raise path, after `unwind_to_jump` found
-//!    the jump chain empty;
-//! 2. the dispatch loop's own inline unwinds — the `THROW` and `RETHROW`
-//!    opcodes and a rejected `await` resume — which do the same unwind
-//!    with the value already in hand;
-//! 3. `run`, the host boundary, which re-renders a throw that nothing
-//!    native caught (the guest `toString` the oracle shim's
-//!    `String(exception)` runs), and whose two post-run harness shims model
-//!    the shim's `String(result)` failing on a `Symbol` or a null-prototype
-//!    object completion — no guest value exists there, so they are
-//!    `Halt::synthetic_throw`, the harness-only constructor.
-//!
-//! Every other `Halt::Throw(...)` an engine helper used to build inline
-//! ("TypeError: defineProperty target", twenty-nine of them at the peak)
-//! never consulted the jump chain, so guest `try`/`catch` could not catch
-//! it, and never set `self.exception`, so a promise executor that hit one
-//! rejected with `undefined`. Carrying the thrown `Slot` in the variant
-//! makes such a site a compile error; this test keeps the allowed set from
-//! growing back, in the shape `gc_visitation_registry.rs` uses.
+//! Source locks on the private thrown-value protocol and its host boundary.
+//! Match Rust tokens through the shared lexer so comments, literals, spacing,
+//! and aliases cannot hide an additional throw construction.
+
+use ironhorse_vm::source_scan::{
+    code_only, matching_delimiter, rs_files, token_body, token_positions, tokens, Token,
+};
 
 const SRC: &str = include_str!("../src/interp.rs");
 
-/// The body (including braces) of the function that starts at the first
-/// occurrence of `marker`.
-fn fn_body(marker: &str) -> &'static str {
-    let i = SRC
-        .find(marker)
-        .unwrap_or_else(|| panic!("marker not found: {marker}"));
-    let j = i + SRC[i..].find('{').expect("fn body opens");
-    let bytes = SRC.as_bytes();
-    let mut depth = 0usize;
-    let mut k = j;
-    loop {
-        match bytes[k] {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return &SRC[j..=k];
-                }
+/// Match both `Halt::member` and `<crate::Halt>::member`. Qualified
+/// inherent-method paths are stable Rust and must not bypass the allowlist.
+/// Keep the end separately: the closing `>` changes the path's token width.
+fn associated_paths(code: &[Token<'_>], path: &str) -> Vec<(usize, usize)> {
+    let (owner, member) = path.split_once("::").expect("associated path");
+    token_positions(code, member)
+        .into_iter()
+        .filter_map(|member_at| {
+            if member_at < 3 || code[member_at - 1].text != ":" || code[member_at - 2].text != ":" {
+                return None;
             }
-            _ => {}
-        }
-        k += 1;
-    }
-}
-
-fn strip_comments(s: &str) -> String {
-    s.lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn line_of(hay: &str, at: usize) -> usize {
-    hay[..at].matches('\n').count() + 1
-}
-
-/// Offsets of every `Halt::Throw {` (or `Self::Throw {` inside `impl Halt`)
-/// that is a CONSTRUCTION rather than a pattern. Every pattern in the
-/// engine binds a subset of the fields and ends with a `..` rest
-/// (`Halt::Throw { value, .. }`, `Halt::Throw { .. }`); a construction must
-/// supply both fields, so its brace body never ends with `..` (a `..` inside
-/// a field's expression, `text[..n]`, does not count).
-fn throw_constructions(hay: &str) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    while let Some(p) = ["Halt::Throw {", "Self::Throw {"]
-        .iter()
-        .filter_map(|n| hay[start..].find(n).map(|q| (q, n.len())))
-        .min()
-    {
-        let (p, name_len) = p;
-        let at = start + p;
-        let open = at + name_len - 1;
-        let bytes = hay.as_bytes();
-        let mut depth = 0usize;
-        let mut k = open;
-        let close = loop {
-            match bytes[k] {
-                b'{' => depth += 1,
-                b'}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        break k;
-                    }
-                }
-                _ => {}
+            let mut owner_at = member_at - 3;
+            if code[owner_at].text == ">" {
+                owner_at = owner_at.checked_sub(1)?;
             }
-            k += 1;
-        };
-        let inner = hay[open + 1..close].trim_end();
-        if !inner.ends_with("..") {
-            out.push(at);
-        }
-        start = close;
-    }
-    out
+            (code[owner_at].text == owner).then_some((owner_at, member_at + 1))
+        })
+        .collect()
 }
 
-fn count(hay: &str, needle: &str) -> usize {
-    hay.matches(needle).count()
+/// Patterns use a trailing `..`; constructions must supply every field.
+/// A rest-less pattern is deliberately rejected too: the source lock requires
+/// a spelling that keeps construction and matching distinguishable.
+fn throw_constructions(code: &[Token<'_>], variant: &str) -> Vec<usize> {
+    associated_paths(code, variant)
+        .into_iter()
+        .filter(|&(_, open)| {
+            assert_eq!(code[open].text, "{", "throw variants must use braces");
+            let close = matching_delimiter(code, open);
+            !(code[close - 1].text == "." && code[close - 2].text == ".")
+        })
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// Aliasing the protocol or importing its variants would hide constructions
+/// from a qualified-path scan. Keep all such spellings out of engine code.
+fn protocol_aliases(code: &[Token<'_>]) -> Vec<usize> {
+    let mut bad = Vec::new();
+    for keyword in ["use", "type"] {
+        for at in token_positions(code, keyword) {
+            let end = code[at..]
+                .iter()
+                .position(|t| t.text == ";")
+                .map_or(code.len(), |n| at + n);
+            if code[at + 1..end]
+                .iter()
+                .any(|t| matches!(t.text, "Halt" | "Step"))
+            {
+                bad.push(at);
+            }
+        }
+    }
+    bad
+}
+
+fn engine_tokens<'a, 's>(code: &'a [Token<'s>]) -> &'a [Token<'s>] {
+    let end = token_positions(code, "#[cfg(test)]")
+        .first()
+        .copied()
+        .unwrap_or(code.len());
+    &code[..end]
 }
 
 #[test]
 fn halt_throw_carries_the_thrown_value() {
-    let halt = fn_body("pub enum Halt {");
-    assert!(
-        halt.contains("Throw {")
-            && halt.contains("value: Slot")
-            && halt.contains("rendered: String"),
-        "Halt::Throw must carry the thrown Slot alongside its rendering; a bare \
-         `Throw(String)` is what let 29 inline sites bypass raise_js"
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let halt = &code[token_body(&code, "pub enum Halt")];
+    assert_eq!(
+        token_positions(halt, "Throw { value: Slot, rendered: String }").len(),
+        1
     );
+    let step = &code[token_body(&code, "enum Step")];
+    assert_eq!(token_positions(step, "Threw { value: Slot, }").len(), 1);
 }
 
 #[test]
 fn halt_throw_is_constructed_only_where_the_jump_chain_was_unwound() {
-    let src = strip_comments(SRC);
-    let engine = match src.find("#[cfg(test)]") {
-        Some(i) => &src[..i],
-        None => &src[..],
-    };
-    // The allowed sites, with exact counts so the set cannot grow silently.
-    let allowed: &[(&str, usize)] = &[
-        ("fn raise_js(", 1),
-        // THROW, RETHROW, rejected-await resume.
-        ("fn dispatch_at_inner(", 3),
-        // The host boundary re-renders the carried value (guest `toString`)
-        // once nothing native caught the throw.
-        ("    pub fn run(&mut self, code: &[u8]) -> RunOutcome {", 1),
-        // `Halt::synthetic_throw`'s own body.
-        ("pub fn synthetic_throw(", 1),
-    ];
-    let mut allowed_total = 0;
-    for (marker, expected) in allowed {
-        let body = strip_comments(fn_body(marker));
-        let n = throw_constructions(&body).len();
-        assert_eq!(
-            n, *expected,
-            "{marker} constructs Halt::Throw {n} times, expected {expected}"
-        );
-        allowed_total += n;
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let engine = engine_tokens(&code);
+    assert!(
+        protocol_aliases(engine).is_empty(),
+        "do not alias Halt/Step or import their variants"
+    );
+    // Separate the private throw path from public host construction: changing
+    // an allowed Step::Threw site into Step::Host(Halt::Throw) must also fail.
+    for (variant, allowed) in [
+        ("Step::Threw", vec![("fn raise_js(", 1)]),
+        (
+            "Halt::Throw",
+            vec![("fn finish_step(", 1), ("pub fn synthetic_throw(", 1)],
+        ),
+        ("Self::Throw", vec![]),
+        ("Self::Threw", vec![]),
+    ] {
+        let sites = throw_constructions(engine, variant);
+        let mut accepted = Vec::new();
+        for (marker, expected) in allowed {
+            let body = token_body(engine, marker);
+            let local: Vec<_> = sites
+                .iter()
+                .copied()
+                .filter(|at| body.contains(at))
+                .collect();
+            assert_eq!(
+                local.len(),
+                expected,
+                "{marker}: unexpected {variant} construction count"
+            );
+            accepted.extend(local);
+        }
+        for at in sites {
+            assert!(
+                accepted.contains(&at),
+                "{variant} constructed outside its boundary at line {}",
+                source[..engine[at].start].matches('\n').count() + 1
+            );
+        }
     }
-    let all = throw_constructions(engine);
-    let stray: Vec<String> = if all.len() > allowed_total {
-        all.iter()
-            .map(|&at| format!("  interp.rs:{}", line_of(engine, at)))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let synthetic = token_positions(engine, "Halt::synthetic_throw(");
+    let host_coerced = token_body(engine, "pub fn host_coerced(");
     assert_eq!(
-        all.len(),
-        allowed_total,
-        "Halt::Throw constructed outside raise_js / the loop's inline unwinds; \
-         an engine error must be a real error object routed through raise_js \
-         (catchable_type_error_msg or a sibling). All sites:\n{}",
-        stray.join("\n")
-    );
-    // The harness-only constructor lives in the harness's own verb.
-    // `run` used to apply the post-run `String(result)` conversions
-    // itself, which reported a legal Symbol/null-prototype completion to
-    // every host as an uncaught throw (architecture review F030); it now
-    // reports the raw completion with `RunOutcome::coercion_error` beside
-    // it, and only `RunOutcome::host_coerced` — the verb the differential
-    // runners call — folds that into the oracle's abort shape. So `run`
-    // must construct NO synthetic throw, and `host_coerced` exactly one.
-    let run_body = strip_comments(fn_body(
-        "    pub fn run(&mut self, code: &[u8]) -> RunOutcome {",
-    ));
-    assert_eq!(
-        count(&run_body, "Halt::synthetic_throw("),
-        0,
-        "run() reports the engine's raw completion; the harness conversion \
-         belongs to RunOutcome::host_coerced"
-    );
-    let coerced_body = strip_comments(fn_body("pub fn host_coerced(self) -> RunOutcome {"));
-    assert_eq!(
-        count(&coerced_body, "Halt::synthetic_throw("),
+        synthetic.len(),
         1,
-        "host_coerced models the post-run harness conversion exactly once"
+        "only the harness's host_coerced verb may synthesize a throw"
     );
-    let synthetic_body = strip_comments(fn_body("pub fn synthetic_throw("));
-    assert_eq!(
-        count(engine, "Halt::synthetic_throw(") - count(&synthetic_body, "Halt::synthetic_throw("),
-        1,
-        "Halt::synthetic_throw is for the harness and host_coerced's post-run \
-         shim only; a guest-reachable error needs a real error object"
-    );
-    // And no native-try boundary reads the thrown value back out of the
-    // register: it takes the value from the `Halt::Throw` it matched. The
-    // register's remaining readers are the opcodes XS's `mxException` serves
-    // (`EXCEPTION`, `RETHROW`, `USED`) and `render_uncaught`'s save/restore.
+    assert!(host_coerced.contains(&synthetic[0]));
+
+    // A native catch must use Step::Threw's carried value, not read the
+    // mutable exception register. Only opcode reads and renderer save remain.
     let allowed_reads = [
         "let saved_exception = self.exception;",
         "let ex = self.exception;",
         "let v = self.exception;",
         "let current = self.exception;",
     ];
-    let stray: Vec<String> = engine
-        .lines()
-        .enumerate()
-        .filter(|(_, l)| l.contains("= self.exception;"))
-        .filter(|(_, l)| !allowed_reads.iter().any(|a| l.contains(a)))
-        .map(|(i, l)| format!("  interp.rs:{}: {}", i + 1, l.trim()))
+    let accepted: Vec<_> = allowed_reads
+        .iter()
+        .flat_map(|pattern| {
+            token_positions(engine, pattern)
+                .into_iter()
+                .map(|at| at + 3)
+        })
         .collect();
-    assert!(
-        stray.is_empty(),
-        "a thrown value must travel in `Halt::Throw {{ value, .. }}`, not be \
-         recovered from `self.exception` (which an inline throw never set):\n{}",
-        stray.join("\n")
+    for at in token_positions(engine, "self.exception;") {
+        // Assignments TO the register are not reads.
+        assert!(
+            accepted.contains(&at),
+            "unexpected exception-register read at line {}",
+            source[..engine[at].start].matches('\n').count() + 1
+        );
+    }
+}
+
+#[test]
+fn construction_scan_sees_comments_whitespace_and_code_after_literals() {
+    for source in [
+        "Step::Threw { value }",
+        "Step :: Threw /* bypass */ { value }",
+        "Step\n::\nThrew\n{ value }",
+        "let url = \"https://example/\"; Step::Threw { value }",
+        "let message = \"} Step::Threw {\"; Step::Threw { value }",
+    ] {
+        let source = code_only(source);
+        assert_eq!(
+            throw_constructions(&tokens(&source), "Step::Threw").len(),
+            1,
+            "{source}"
+        );
+    }
+    let source =
+        code_only("impl Step { fn bypass(value: Slot) -> Self { Self::Threw { value } } }");
+    assert_eq!(
+        throw_constructions(&tokens(&source), "Self::Threw").len(),
+        1
     );
+    let source =
+        code_only("/* Step::Threw { value } */ match s { Step::Threw { value, .. } => value }");
+    assert!(throw_constructions(&tokens(&source), "Step::Threw").is_empty());
+}
+
+#[test]
+fn construction_scan_rejects_aliases_and_imported_variants() {
+    for source in [
+        "use Step::Threw;",
+        "use Step /* bypass */ :: { Threw };",
+        "use self::{Step as Control};",
+        "use Halt::*;",
+        "type Control = Step;",
+        "type Outcome = crate::Halt;",
+    ] {
+        let source = code_only(source);
+        assert_eq!(protocol_aliases(&tokens(&source)).len(), 1, "{source}");
+    }
+}
+
+/// Exclude only complete test modules/functions, never production after them.
+/// Any new shape of cfg(test) item needs an explicit scanner update.
+fn production_tokens<'s>(code: &[Token<'s>]) -> Vec<Token<'s>> {
+    let mut excluded = vec![false; code.len()];
+    for at in token_positions(code, "#[cfg(test)]") {
+        let mut item = at + tokens("#[cfg(test)]").len();
+        if code[item].text == "pub" {
+            item += 1;
+            if code[item].text == "(" {
+                item = matching_delimiter(code, item) + 1;
+            }
+        }
+        assert!(
+            matches!(code[item].text, "mod" | "fn"),
+            "unrecognized cfg(test) item"
+        );
+        let open = item
+            + code[item..]
+                .iter()
+                .position(|token| token.text == "{")
+                .unwrap();
+        let close = matching_delimiter(code, open);
+        excluded[at..=close].fill(true);
+    }
+    code.iter()
+        .zip(excluded)
+        .filter_map(|(token, excluded)| (!excluded).then_some(*token))
+        .collect()
+}
+
+fn consumer_protocol_aliases(code: &[Token<'_>]) -> Vec<usize> {
+    let mut bad = Vec::new();
+    for keyword in ["use", "type"] {
+        for at in token_positions(code, keyword) {
+            let end = code[at..]
+                .iter()
+                .position(|t| t.text == ";")
+                .map_or(code.len(), |n| at + n);
+            let statement = &code[at + 1..end];
+            // Plain imports/re-exports of Halt are necessary in consumers.
+            // Renaming it or importing variants/constructors would hide uses.
+            if statement.iter().enumerate().any(|(i, t)| {
+                matches!(t.text, "Throw" | "Threw" | "synthetic_throw")
+                    || (matches!(t.text, "Halt" | "Step")
+                        && (keyword == "type"
+                            || statement
+                                .get(i + 1)
+                                .is_some_and(|next| matches!(next.text, "as" | ":"))))
+            }) {
+                bad.push(at);
+            }
+        }
+    }
+    bad
+}
+
+/// A per-file/function/count allowlist: moving a permitted construction into
+/// another module or adding a second construction inside that function fails.
+fn cross_file_violations(path: &str, source: &str) -> Vec<String> {
+    let source = code_only(source);
+    let all = tokens(&source);
+    let code = production_tokens(&all);
+    let mut bad = Vec::new();
+    for at in consumer_protocol_aliases(&code) {
+        bad.push(format!("{path}: protocol alias at byte {}", code[at].start));
+    }
+    for variant in [
+        "Step::Threw",
+        "Halt::Throw",
+        "Self::Throw",
+        "Self::Threw",
+        "Halt::synthetic_throw",
+        "Self::synthetic_throw",
+    ] {
+        let sites = if variant.ends_with("synthetic_throw") {
+            associated_paths(&code, variant)
+                .into_iter()
+                .map(|(at, _)| at)
+                .collect()
+        } else {
+            throw_constructions(&code, variant)
+        };
+        let allowed: &[(&str, usize)] = match (path, variant) {
+            ("ironhorse-vm/src/interp.rs", "Step::Threw") => &[("fn raise_js(", 1)],
+            ("ironhorse-vm/src/interp.rs", "Halt::Throw") => {
+                &[("fn finish_step(", 1), ("pub fn synthetic_throw(", 1)]
+            }
+            ("ironhorse-vm/src/interp.rs", "Halt::synthetic_throw") => {
+                &[("pub fn host_coerced(", 1)]
+            }
+            ("ironhorse-262/src/lib.rs", "Halt::synthetic_throw") => {
+                &[("pub fn dual_run_with(", 1), ("pub fn dual_run_cranks(", 1)]
+            }
+            _ => &[],
+        };
+        let mut accepted = Vec::new();
+        for &(marker, count) in allowed {
+            let body = token_body(&code, marker);
+            let local: Vec<_> = sites
+                .iter()
+                .copied()
+                .filter(|at| body.contains(at))
+                .collect();
+            if local.len() != count {
+                bad.push(format!(
+                    "{path}: {marker}: expected {count} {variant} sites, found {}",
+                    local.len()
+                ));
+            }
+            accepted.extend(local);
+        }
+        for at in sites {
+            if !accepted.contains(&at) {
+                let line = source[..code[at].start].matches('\n').count() + 1;
+                bad.push(format!("{path}:{line}: unapproved {variant}"));
+            }
+        }
+    }
+    bad
+}
+
+#[test]
+fn throw_boundaries_are_locked_across_vm_and_production_consumers() {
+    let engine = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut bad = Vec::new();
+    // Discover recursively so a newly added module or binary cannot bypass
+    // the lock by being absent from a manually maintained file list.
+    for package in ["ironhorse-vm", "ironhorse-262", "ironhorse-fuzz"] {
+        for file in rs_files(&engine.join(package).join("src")) {
+            let path = file.strip_prefix(engine).unwrap().to_str().unwrap();
+            let source = std::fs::read_to_string(&file).unwrap();
+            bad.extend(cross_file_violations(path, &source));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+fn second_module_mutations_cannot_create_or_synthesize_throws() {
+    let path = "ironhorse-vm/src/compartment.rs";
+    let original = include_str!("../src/compartment.rs");
+    assert!(cross_file_violations(path, original).is_empty());
+    for injected in [
+        "fn bypass(value: Slot) { Halt::Throw { value, rendered: String::new() }; }",
+        "fn bypass(value: Slot) { Step::Threw { value }; }",
+        "fn bypass(value: Slot) { Halt::r#Throw { value, rendered: String::new() }; }",
+        "fn bypass() { Halt::r#synthetic_throw(\"bad\"); }",
+        "fn bypass() { <crate::Halt>::synthetic_throw(\"bad\"); }",
+        "fn bypass() { <Halt>::r#synthetic_throw(\"bad\"); }",
+        "impl Halt { fn bypass() { <Self>::synthetic_throw(\"bad\"); } }",
+        "fn bypass(value: Slot) { <Halt>::Throw { value, rendered: String::new() }; }",
+        "impl Step { fn bypass(value: Slot) { <Self>::Threw { value }; } }",
+        "fn bypass() { Halt::synthetic_throw(\"bad\"); }",
+        "fn bypass() { let synth = Halt::synthetic_throw; synth(\"bad\"); }",
+        "use crate::Halt as Outcome;",
+        "use crate::Halt::{Throw};",
+        "type Outcome = crate::Halt;",
+    ] {
+        // This sits AFTER compartment's cfg(test) module, exercising the old
+        // truncate-at-first-test shortcut as well as the second-file gap.
+        let mutated = format!("{original}\n{injected}");
+        assert!(
+            !cross_file_violations(path, &mutated).is_empty(),
+            "{injected}"
+        );
+    }
+    let tests_only = "#[cfg(test)] mod tests { fn example() { Halt::synthetic_throw(\"test\"); } }";
+    assert!(cross_file_violations("ironhorse-fuzz/src/new.rs", tests_only).is_empty());
+    assert!(!cross_file_violations(
+        "ironhorse-fuzz/src/new.rs",
+        &format!("{tests_only} fn bad() {{ Halt::synthetic_throw(\"bad\"); }}")
+    )
+    .is_empty());
 }
