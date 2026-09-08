@@ -13807,6 +13807,23 @@ impl Interp {
         }
     }
 
+    fn charge_builtin_work(&mut self, count: u64) -> Result<(), Step> {
+        let raw = count
+            .checked_mul(crate::meter::BUILTIN_METERING)
+            .ok_or(Step::Host(Halt::MeterAbort))?;
+        self.charge_and_check(raw)
+    }
+
+    fn charge_chunk_work(&mut self, bytes: u64) -> Result<(), Step> {
+        let aligned = bytes
+            .checked_add(7)
+            .map(|n| n & !7)
+            .and_then(|n| n.checked_add(16))
+            .and_then(|n| n.checked_mul(crate::meter::CHUNK_ALLOCATION_METERING))
+            .ok_or(Step::Host(Halt::MeterAbort))?;
+        self.charge_and_check(aligned)
+    }
+
     /// Bound and prepay a UTF-16 result before its scratch buffer is created.
     /// The format ceiling is independent of the configurable heap policy.
     /// Finish with `new_reserved_string_units`, so the charge is paid once.
@@ -13900,6 +13917,47 @@ impl Interp {
             .map_err(|_| Step::Host(Halt::HeapExhausted))?;
         output.extend_from_slice(addition);
         Ok(())
+    }
+
+    fn extend_prepaid_scratch<T: Copy>(
+        &mut self,
+        output: &mut Vec<T>,
+        addition: &[T],
+    ) -> Result<(), Step> {
+        let length = output
+            .len()
+            .checked_add(addition.len())
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.admit_scratch::<T>(length)?;
+        output
+            .try_reserve(addition.len())
+            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        output.extend_from_slice(addition);
+        Ok(())
+    }
+
+    fn push_prepaid_scratch<T>(&mut self, output: &mut Vec<T>, value: T) -> Result<(), Step> {
+        let length = output
+            .len()
+            .checked_add(1)
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.admit_scratch::<T>(length)?;
+        output
+            .try_reserve(1)
+            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        output.push(value);
+        Ok(())
+    }
+
+    /// Fill an already admitted buffer without permitting a hidden resize.
+    fn fill_scratch<T>(mut buffer: Vec<T>, values: impl IntoIterator<Item = T>) -> Vec<T> {
+        for value in values {
+            if buffer.len() == buffer.capacity() {
+                crate::value::heap_exhausted();
+            }
+            buffer.push(value);
+        }
+        buffer
     }
 
     fn admit_scratch<T>(&mut self, capacity: usize) -> Result<(), Step> {
@@ -14237,10 +14295,14 @@ impl Interp {
     }
 
     /// Allocate and price UTF-8 text using the same UTF-16 length as storage.
-    fn alloc_str_text_metered(&mut self, text: &[u8]) -> crate::value::ChunkOffset {
-        let units: Vec<u16> = String::from_utf8_lossy(text).encode_utf16().collect();
-        self.meter.tick_string(units.len() as u64);
-        self.chunks.alloc(&units_to_be16(&units))
+    fn alloc_str_text_metered(&mut self, text: &[u8]) -> Result<crate::value::ChunkOffset, Step> {
+        let text = String::from_utf8_lossy(text);
+        let count = text.encode_utf16().count();
+        self.charge_and_check(string_chunk_cost(count as u64))?;
+        self.admit_scratch::<u16>(count)?;
+        let mut units = Self::reserved_vec(count)?;
+        units.extend(text.encode_utf16());
+        Ok(self.chunks.alloc(&units_to_be16(&units)))
     }
 
     /// Render a completion/thrown value the way the oracle shim does:
@@ -17033,11 +17095,12 @@ impl Interp {
                             let g = self.regexp_getter_ids;
                             if Some(id) == g.source {
                                 self.meter.tick_raw(REGEXP_GETTER_METERING);
-                                let (bytes, allocated) =
-                                    match self.regexp_source_bytes_metered(inst) {
-                                        Ok(value) => value,
-                                        Err(step) => return step,
-                                    };
+                                let (bytes, allocated) = dispatch_result!(
+                                    self.regexp_source_bytes_metered(inst),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
                                 if allocated {
                                     self.new_string_metered(&bytes)
                                 } else {
@@ -23020,7 +23083,7 @@ impl Interp {
                             }
                         },
                         _ => {
-                            self.meter.tick_raw(self.array_chunk_size_metering(1));
+                            self.charge_and_check(self.array_chunk_size_metering(1))?;
                             let mut v = a;
                             v.id = 0;
                             v.next = crate::value::SlotIndex::NULL;
@@ -23029,10 +23092,13 @@ impl Interp {
                         }
                     }
                 } else if argc >= 2 {
-                    self.meter
-                        .tick_raw(self.array_chunk_size_metering(argc as u32));
+                    self.charge_and_check(self.array_chunk_size_metering(argc as u32))?;
                     for i in 0..argc {
-                        let mut v = arg(i);
+                        let mut v = self
+                            .stack
+                            .get(base + 4 + i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined);
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
                         data.insert_item(i as u32, v, &mut self.side_refs);
@@ -23063,7 +23129,7 @@ impl Interp {
                 self.meter.tick_slot_alloc(); // table
                 self.meter.tick_slot_alloc(); // list
                 self.meter.tick_slot_alloc(); // size
-                self.meter.tick_chunk_new(MAP_MIN_TABLE_LENGTH as u64 * 8);
+                self.charge_chunk_work(MAP_MIN_TABLE_LENGTH as u64 * 8)?;
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.collections
                     .insert(inst, CollectionData::new(kind, MAP_MIN_TABLE_LENGTH));
@@ -25571,7 +25637,7 @@ impl Interp {
         // @@matchAll, String.prototype.matchAll, RegExp.prototype.toString)
         // reaches this, so the discarded chunk was per-dispatch garbage.
         if !units.is_empty() {
-            self.meter.tick_string(units.len() as u64);
+            self.charge_and_check(string_chunk_cost(units.len() as u64))?;
         }
         Ok(units)
     }
@@ -25726,12 +25792,12 @@ impl Interp {
         // them explicitly keeps construction raw-exact across every pattern
         // shape (not just the calibration set).
         let code_bytes = program.code.len() as u64 * 4;
-        self.meter.tick_chunk_new(code_bytes);
+        self.charge_chunk_work(code_bytes)?;
         let data_bytes = (program.capture_count * 8
             + program.name_count * 4
             + program.assertion_count * 16
             + program.quantifier_count * 12) as u64;
-        self.meter.tick_chunk_new(data_bytes);
+        self.charge_chunk_work(data_bytes)?;
         // The `fx_RegExp` host frame + `fxGetPrototypeFromConstructor` + the
         // `mxRunCount(2)` `fxInitializeRegExp` call framing (the residual
         // beyond the explicit slot/chunk allocations and the compile meter).
@@ -26377,9 +26443,9 @@ impl Interp {
         // capture residual (the `fxCacheUTF8ToUnicodeOffset` remaps and
         // `fxCacheArray`), beyond the explicit per-capture slot/chunk allocs.
         let capture_count = captures.len() as u64;
-        self.meter.tick_raw(
+        self.charge_and_check(
             REGEXP_EXEC_MATCH_METERING + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
-        );
+        )?;
         let match_start = captures[0].0;
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
@@ -26817,8 +26883,9 @@ impl Interp {
             for (result, pos, match_len) in results {
                 self.meter.tick_raw(STRING_REPLACE_MATCH_METERING);
                 let capture_count = self.regexp_capture_count(result);
-                self.meter
-                    .tick_raw(STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64);
+                self.charge_and_check(
+                    STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
+                )?;
                 self.extend_work_scratch(
                     &mut assembled,
                     &subject_units[next_source_position..pos.min(subject_units.len())],
@@ -26840,12 +26907,12 @@ impl Interp {
                 let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
                 let units = self.to_string_units(code, value)?;
                 self.meter.tick_slot_alloc();
-                self.meter.tick_string(units.len() as u64);
+                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
                 self.extend_work_scratch(&mut assembled, &units)?;
                 next_source_position = pos.saturating_add(match_len);
             }
             self.extend_work_scratch(&mut assembled, &subject_units[next_source_position..])?;
-            self.meter.tick_string(assembled.len() as u64);
+            self.charge_and_check(string_chunk_cost(assembled.len() as u64))?;
             let off = self.chunks.alloc(&units_to_be16(&assembled));
             return Ok(Slot::of(Kind::String, Payload::String(off)));
         }
@@ -26854,8 +26921,9 @@ impl Interp {
         for (result, pos, match_len) in results {
             self.meter.tick_raw(STRING_REPLACE_MATCH_METERING);
             let capture_count = self.regexp_capture_count(result);
-            self.meter
-                .tick_raw(STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64);
+            self.charge_and_check(
+                STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
+            )?;
             self.extend_work_scratch(&mut assembled, &subject_units[next_source_position..pos])?;
             let repl = repl_units.as_deref().unwrap();
             let subst_units = if repl.contains(&(b'$' as u16)) {
@@ -26864,13 +26932,13 @@ impl Interp {
                 repl.to_vec()
             };
             self.meter.tick_slot_alloc();
-            self.meter.tick_string(subst_units.len() as u64);
+            self.charge_and_check(string_chunk_cost(subst_units.len() as u64))?;
             self.extend_work_scratch(&mut assembled, &subst_units)?;
             next_source_position = pos + match_len;
         }
         self.extend_work_scratch(&mut assembled, &subject_units[next_source_position..])?;
         // The final assembly `fxNewChunk(total + 1)`.
-        self.meter.tick_string(assembled.len() as u64);
+        self.charge_and_check(string_chunk_cost(assembled.len() as u64))?;
         let off = self.chunks.alloc(&units_to_be16(&assembled));
         Ok(Slot::of(Kind::String, Payload::String(off)))
     }
@@ -27547,17 +27615,17 @@ impl Interp {
         // fresh chunk (charged here); an unescaped source is the interned key.
         let (source_bytes, source_escaped) = self.regexp_source_bytes_metered(inst)?;
         if source_escaped {
-            self.meter.tick_string(
+            self.charge_and_check(string_chunk_cost(
                 String::from_utf8_lossy(&source_bytes)
                     .encode_utf16()
                     .count() as u64,
-            );
+            ))?;
         }
         // `mxGetID(_flags)` → the composite flags getter (the eight-property
         // cascade) + its result-string chunk.
         self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
         let flags = self.regexps[&inst].flags.clone();
-        self.meter.tick_string(flags.len() as u64);
+        self.charge_and_check(string_chunk_cost(flags.len() as u64))?;
         // The three growing concatenations XS performs
         // (`fxConcatString`/`fxConcatStringC`): `"/"` + source, + `"/"`, +
         // flags — each `fxNewChunk` of the running content length.
@@ -27566,9 +27634,9 @@ impl Interp {
             .encode_utf16()
             .count();
         let f = flags.len();
-        self.meter.tick_string((1 + units) as u64); // "/" + source
-        self.meter.tick_string((2 + units) as u64); // + "/"
-        self.meter.tick_string((2 + units + f) as u64); // + flags
+        self.charge_and_check(string_chunk_cost((1 + units) as u64))?; // "/" + source
+        self.charge_and_check(string_chunk_cost((2 + units) as u64))?; // + "/"
+        self.charge_and_check(string_chunk_cost((2 + units + f) as u64))?; // + flags
         let mut out = self.reserve_scratch(s + f + 2)?;
         out.push(b'/');
         out.extend_from_slice(&source_bytes);
@@ -27622,10 +27690,9 @@ impl Interp {
 
         // XS builds the result as three growing concatenations: `"/" +
         // source`, then `+ "/"`, then `+ flags`.
-        self.meter.tick_string((source.len() + 1) as u64);
-        self.meter.tick_string((source.len() + 2) as u64);
-        self.meter
-            .tick_string((source.len() + flags.len() + 2) as u64);
+        self.charge_and_check(string_chunk_cost((source.len() + 1) as u64))?;
+        self.charge_and_check(string_chunk_cost((source.len() + 2) as u64))?;
+        self.charge_and_check(string_chunk_cost((source.len() + flags.len() + 2) as u64))?;
         let mut out = self.reserve_scratch(source.len() + flags.len() + 2)?;
         out.push(b'/' as u16);
         out.extend_from_slice(&source);
@@ -28106,11 +28173,11 @@ impl Interp {
         // its `RUN` dispatch (the settle path allocates nothing when there are
         // no reactions and no thenable). `fxRejectPromise` charges slightly
         // more than `fxResolvePromise`.
-        self.meter.tick_raw(if reject {
+        self.charge_and_check(if reject {
             PROMISE_REJECT_FN_METERING
         } else {
             PROMISE_RESOLVE_FN_METERING
-        });
+        })?;
         Ok(())
     }
 
@@ -31130,8 +31197,7 @@ impl Interp {
         // The `errors` Array (`fxNewArrayInstance` + the copied elements +
         // `fxCacheArray`) plus the `fxGetIterator`/`fxIteratorNext` walk cost.
         let n = err_elems.len() as u64;
-        self.meter
-            .tick_raw(AGGREGATE_ERROR_EXTRA + n * AGGREGATE_ERROR_PER_ELEMENT);
+        self.charge_and_check(AGGREGATE_ERROR_EXTRA + n * AGGREGATE_ERROR_PER_ELEMENT)?;
         let arr_inst = self.slots.alloc(Slot::instance(self.array_proto));
         let mut arr_data = ArrayData::default();
         for (i, mut v) in err_elems.into_iter().enumerate() {
@@ -31178,13 +31244,16 @@ impl Interp {
                     .chain_has_descriptor(self.array_iterator_proto, return_id);
                 let dense = {
                     let data = &self.arrays[&array];
-                    (0..data.length).all(|index| data.items().contains_key(&index))
+                    data.items().len() == data.length as usize
                 };
                 if intrinsic_protocol && dense {
+                    let length = self.arrays[&array].length;
+                    let buffer = self.reserve_work_scratch(length as usize)?;
                     let data = &self.arrays[&array];
-                    return Ok((0..data.length)
-                        .map(|index| self.array_item_value(array, data.items()[&index]))
-                        .collect());
+                    return Ok(Self::fill_scratch(
+                        buffer,
+                        (0..length).map(|index| self.array_item_value(array, data.items()[&index])),
+                    ));
                 }
             }
         }
@@ -31228,29 +31297,7 @@ impl Interp {
             .get(base + 4)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        // Bound leading arguments: args 1..argc (arg 0 is `thisArg`).
-        let bound_args: Vec<Slot> = if argc >= 2 {
-            (1..argc)
-                .map(|i| {
-                    self.stack
-                        .get(base + 4 + i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let nbound = bound_args.len() as u32;
-        // Bound `.length` = max(0, target.length - boundArgs) and bound `.name`
-        // = "bound " + target.name (XS reads the target's own `length`/`name`).
-        let target_arity = self.functions.get(&target).map(|fi| fi.arity).unwrap_or(0);
-        let bound_len = target_arity.saturating_sub(nbound);
-        let mut bound_units: Vec<u16> = "bound ".encode_utf16().collect();
-        if let Some(info) = self.functions.get(&target) {
-            bound_units.extend(self.str_units(info.name_chunk));
-        }
-        let bound_name = SymbolName::from_units(&bound_units).to_string();
+        let nbound = argc.saturating_sub(1) as u32;
         // The bound-function creation cluster (instance + CODE/HOME + the three
         // internal property slots + the length/name properties). When there
         // are bound arguments, XS additionally builds an Array for them
@@ -31261,7 +31308,36 @@ impl Interp {
         } else {
             0
         };
-        self.meter.tick_raw(BIND_CREATE_METERING + args_meter);
+        self.charge_and_check(BIND_CREATE_METERING + args_meter)?;
+        // Bound leading arguments: args 1..argc (arg 0 is `thisArg`).
+        let bound_args: Vec<Slot> = if argc >= 2 {
+            Self::fill_scratch(
+                self.reserve_scratch(argc - 1)?,
+                (1..argc).map(|i| {
+                    self.stack
+                        .get(base + 4 + i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined)
+                }),
+            )
+        } else {
+            Vec::new()
+        };
+        // Bound `.length` = max(0, target.length - boundArgs) and bound `.name`
+        // = "bound " + target.name (XS reads the target's own `length`/`name`).
+        let target_arity = self.functions.get(&target).map(|fi| fi.arity).unwrap_or(0);
+        let bound_len = target_arity.saturating_sub(nbound);
+        let name_length = self
+            .functions
+            .get(&target)
+            .map(|info| self.str_content(info.name_chunk).len() / 2)
+            .unwrap_or(0);
+        let mut bound_units = self.reserve_work_scratch(name_length + 6)?;
+        bound_units.extend("bound ".encode_utf16());
+        if let Some(info) = self.functions.get(&target) {
+            bound_units.extend(self.str_units(info.name_chunk));
+        }
+        let bound_name = SymbolName::from_units(&bound_units).to_string();
         let inst = self.slots.alloc(Slot::instance(self.function_proto));
         let name_chunk = self.chunks.alloc(&units_to_be16(&bound_units));
         // Register in `functions` (native/method None) so `.length`/`.name`
@@ -31533,14 +31609,18 @@ impl Interp {
             .copied()
             .unwrap_or_else(Slot::undefined);
         let forwarded: Vec<Slot> = if argc >= 1 {
-            self.stack[base + 5..base + 4 + argc].to_vec()
+            Self::fill_scratch(
+                self.reserve_work_scratch(argc - 1)?,
+                self.stack[base + 5..base + 4 + argc].iter().copied(),
+            )
         } else {
             Vec::new()
         };
         let forwarded_len = forwarded.len();
         self.stack.truncate(base);
-        self.meter
-            .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
+        self.charge_and_check(
+            CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG,
+        )?;
         if is_proxy {
             self.meter.tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
@@ -31616,13 +31696,15 @@ impl Interp {
                 let len = data.length;
                 // Reads route through the counted-accessor view (the
                 // seam's bulk-table discipline); no counts move.
-                if (0..len).any(|i| !data.items().contains_key(&i)) {
+                if data.items().len() != len as usize {
                     let args = self.arraylike_to_vec(code, arg_array.unwrap())?;
                     let meter = APPLY_ARRAY_BASE_METERING
                         + args.len() as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                     (args, meter)
                 } else {
-                    let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
+                    let buffer = self.reserve_work_scratch(len as usize)?;
+                    let data = &self.arrays[&arr];
+                    let args = Self::fill_scratch(buffer, (0..len).map(|i| data.items()[&i]));
                     let meter =
                         APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                     (args, meter)
@@ -31638,8 +31720,7 @@ impl Interp {
         };
         let forwarded_len = forwarded.len();
         self.stack.truncate(base);
-        self.meter
-            .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
+        self.charge_and_check(CALL_TRAMPOLINE_METERING + array_read_meter)?;
         if is_proxy {
             self.meter.tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
@@ -31718,7 +31799,10 @@ impl Interp {
         // sloppy callee, `undefined`/`null` bind to the global, and strict
         // callees retain the original value.
         let real_args: Vec<Slot> = if argc >= 1 {
-            self.stack[base + 5..base + 4 + argc].to_vec()
+            Self::fill_scratch(
+                self.reserve_work_scratch(argc - 1)?,
+                self.stack[base + 5..base + 4 + argc].iter().copied(),
+            )
         } else {
             Vec::new()
         };
@@ -31732,8 +31816,7 @@ impl Interp {
         for a in real_args {
             self.stack.push(a);
         }
-        self.meter
-            .tick_raw(CALL_TRAMPOLINE_METERING + n as u64 * CALL_TRAMPOLINE_PER_ARG);
+        self.charge_and_check(CALL_TRAMPOLINE_METERING + n as u64 * CALL_TRAMPOLINE_PER_ARG)?;
         let body_start = self.enter_call(n, ret_pc, false)?;
         let callee_segment = self.callee_segment(callee);
         if callee_segment != self.active_segment {
@@ -31802,13 +31885,15 @@ impl Interp {
                 // Dense only: every index in `[0, length)` must be a present
                 // compact element. A hole or materialized accessor needs the
                 // observable property path.
-                if (0..len).any(|i| !data.items().contains_key(&i)) {
+                if data.items().len() != len as usize {
                     let args = self.arraylike_to_vec(code, arg_array.unwrap())?;
                     let meter = APPLY_ARRAY_BASE_METERING
                         + args.len() as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                     (args, meter)
                 } else {
-                    let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
+                    let buffer = self.reserve_work_scratch(len as usize)?;
+                    let data = &self.arrays[&arr];
+                    let args = Self::fill_scratch(buffer, (0..len).map(|i| data.items()[&i]));
                     // The array path's fixed setup plus the per-element read +
                     // forwarding (`mxGetID(_length)` + `mxGetIndex(i)` + copy).
                     let meter =
@@ -31845,8 +31930,7 @@ impl Interp {
         // The no-array base ([`CALL_TRAMPOLINE_METERING`]) plus the array
         // path's extra (`array_read_meter`); the per-element forwarding is
         // already folded into [`APPLY_ARRAY_PER_ELEMENT_METERING`].
-        self.meter
-            .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
+        self.charge_and_check(CALL_TRAMPOLINE_METERING + array_read_meter)?;
         let body_start = self.enter_call(n, ret_pc, false)?;
         let callee_segment = self.callee_segment(callee);
         if callee_segment != self.active_segment {
@@ -31882,19 +31966,27 @@ impl Interp {
         ret_pc: usize,
     ) -> Result<usize, Step> {
         let call_args: Vec<Slot> = if argc >= 1 {
-            self.stack[base + 4..base + 4 + argc].to_vec()
+            Self::fill_scratch(
+                self.reserve_work_scratch(argc)?,
+                self.stack[base + 4..base + 4 + argc].iter().copied(),
+            )
         } else {
             Vec::new()
         };
         let mut acc = call_args;
         let mut cur = bf;
         let target = loop {
-            let data = self.bound_functions[&cur].clone();
-            // Prepend this level's bound args ahead of the accumulated tail.
-            let mut prepended = data.args;
+            let data = &self.bound_functions[&cur];
+            let t = data.target;
+            let length = data
+                .args
+                .len()
+                .checked_add(acc.len())
+                .ok_or(Step::Host(Halt::HeapExhausted))?;
+            let mut prepended = self.reserve_work_scratch(length)?;
+            prepended.extend_from_slice(&self.bound_functions[&cur].args);
             prepended.extend_from_slice(&acc);
             acc = prepended;
-            let t = data.target;
             if self.bound_functions.contains_key(&t) {
                 cur = t;
                 continue;
@@ -31917,8 +32009,7 @@ impl Interp {
         }
         // `new.target` resolves to the ultimate target (see the doc comment).
         self.pending_new_target = Some(target);
-        self.meter
-            .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
+        self.charge_and_check(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG)?;
         self.enter_call(total, ret_pc, true)
     }
 
@@ -34954,7 +35045,7 @@ impl Interp {
                 } else {
                     b"[object Null]"
                 };
-                let off = self.alloc_str_text_metered(text);
+                let off = self.alloc_str_text_metered(text)?;
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Object.prototype.toString`: `[object Object]` for an ordinary
@@ -34988,8 +35079,16 @@ impl Interp {
                     _ => None,
                 };
                 if let Some(tag) = tag {
+                    let length = tag
+                        .len()
+                        .checked_add(9)
+                        .ok_or(Step::Host(Halt::HeapExhausted))?;
+                    self.charge_and_check(string_chunk_cost(
+                        (tag.encode_utf16().count() + 9) as u64,
+                    ))?;
+                    self.admit_scratch::<u8>(length)?;
                     let owned = format!("[object {}]", tag);
-                    let off = self.alloc_str_text_metered(owned.as_bytes());
+                    let off = self.alloc_str_text(owned.as_bytes());
                     Slot::of(Kind::String, Payload::String(off))
                 } else {
                     // `Object.prototype.toString` builtinTag (ECMA-262
@@ -35037,7 +35136,7 @@ impl Interp {
                         _ if this.kind == Kind::Symbol => b"[object Symbol]",
                         _ => b"[object Object]",
                     };
-                    let off = self.alloc_str_text_metered(text);
+                    let off = self.alloc_str_text_metered(text)?;
                     Slot::of(Kind::String, Payload::String(off))
                 }
             }
@@ -35064,7 +35163,7 @@ impl Interp {
                 let mut units: Vec<u16> = "function [\"".encode_utf16().collect();
                 units.extend(name);
                 units.extend("\"] (){[native code]}".encode_utf16());
-                self.meter.tick_string(units.len() as u64);
+                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
                 let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
@@ -35072,7 +35171,7 @@ impl Interp {
             NativeMethod::ErrorToString => {
                 let units = self.error_to_string(code, this)?;
                 self.meter.tick_raw(METHOD_ERROR_TOSTRING_METERING);
-                self.meter.tick_string(units.len() as u64);
+                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
                 let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
@@ -35180,9 +35279,9 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 };
                 let (negative, magnitude) = self.read_bigint(off);
-                let rendered = bi_to_radix(negative, &magnitude, radix);
+                let rendered = bi_to_radix(self, negative, &magnitude, radix)?;
                 self.meter.tick_builtin();
-                let off = self.alloc_str_text_metered(rendered.as_bytes());
+                let off = self.alloc_str_text_metered(rendered.as_bytes())?;
                 Slot::of(Kind::String, Payload::String(off))
             }
             NativeMethod::BigIntToLocaleString => {
@@ -35342,7 +35441,7 @@ impl Interp {
                     unreachable!("ToObject returns a reference")
                 };
                 let own_keys = self.mop_own_keys(code, inst)?;
-                let mut keys = Vec::new();
+                let mut keys = self.reserve_scratch(own_keys.len())?;
                 for key in own_keys {
                     if key.kind != Kind::String {
                         continue;
@@ -35365,7 +35464,7 @@ impl Interp {
                 // references the interned key string (XS_STRING_X_KIND), so it
                 // allocates no chunk — metering is key-name-length independent.
                 self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
-                self.meter.tick_raw(self.array_chunk_size_metering(n));
+                self.charge_and_check(self.array_chunk_size_metering(n))?;
                 for _ in 0..n {
                     self.meter.tick_slot_alloc();
                 }
@@ -35581,14 +35680,11 @@ impl Interp {
                 let Payload::Reference(inst) = object.value else {
                     unreachable!("ToObject returns a reference")
                 };
-                let keys: Vec<Slot> = self
-                    .mop_own_keys(code, inst)?
-                    .into_iter()
-                    .filter(|key| key.kind == Kind::String)
-                    .collect();
+                let mut keys = self.mop_own_keys(code, inst)?;
+                keys.retain(|key| key.kind == Kind::String);
                 let n = keys.len() as u32;
                 self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
-                self.meter.tick_raw(self.array_chunk_size_metering(n));
+                self.charge_and_check(self.array_chunk_size_metering(n))?;
                 for _ in 0..n {
                     self.meter.tick_slot_alloc();
                 }
@@ -35648,11 +35744,8 @@ impl Interp {
                 let Payload::Reference(object) = value.value else {
                     unreachable!("ToObject returns a reference")
                 };
-                let keys: Vec<Slot> = self
-                    .mop_own_keys(code, object)?
-                    .into_iter()
-                    .filter(|key| key.kind == Kind::Symbol)
-                    .collect();
+                let mut keys = self.mop_own_keys(code, object)?;
+                keys.retain(|key| key.kind == Kind::Symbol);
                 let result = self.new_array_unmetered();
                 let mut data = ArrayData::default();
                 for (index, key) in keys.into_iter().enumerate() {
@@ -35951,7 +36044,7 @@ impl Interp {
                     unreachable!("ToObject returns a reference")
                 };
                 let own_keys = self.mop_own_keys(code, inst)?;
-                let mut properties = Vec::new();
+                let mut properties = self.reserve_scratch(own_keys.len())?;
                 for key in own_keys {
                     if key.kind != Kind::String {
                         continue;
@@ -35971,12 +36064,12 @@ impl Interp {
                     properties.push((key, value));
                 }
                 let n = properties.len() as u32;
-                self.meter.tick_raw(if entries {
+                self.charge_and_check(if entries {
                     OBJECT_ENTRIES_FRAME_METERING
                 } else {
                     OBJECT_VALUES_FRAME_METERING
-                });
-                self.meter.tick_raw(self.array_chunk_size_metering(n));
+                })?;
+                self.charge_and_check(self.array_chunk_size_metering(n))?;
                 let result = self.slots.alloc(Slot::instance(self.array_proto));
                 let mut data = ArrayData::default();
                 data.length = n;
@@ -35984,7 +36077,7 @@ impl Interp {
                     if entries {
                         self.meter.tick_raw(OBJECT_ENTRIES_PER_KEY_METERING);
                         // A `[key, value]` two-element array per own key.
-                        self.meter.tick_raw(self.array_chunk_size_metering(2));
+                        self.charge_and_check(self.array_chunk_size_metering(2))?;
                         for _ in 0..2 {
                             self.meter.tick_slot_alloc();
                         }
@@ -36205,10 +36298,9 @@ impl Interp {
                 // appended item + a closing `mxMeterSome(2)`, plus the fixed
                 // native-method frame constant.
                 self.meter.tick_raw(ARRAY_PUSH_FRAME_METERING);
-                self.meter.tick_builtin_some(2);
+                self.charge_builtin_work(2)?;
                 if c > 0 {
-                    self.meter
-                        .tick_raw(self.array_chunk_size_metering(length + c));
+                    self.charge_and_check(self.array_chunk_size_metering(length + c))?;
                 }
                 for (i, a) in args.into_iter().enumerate() {
                     let idx = length + i as u32;
@@ -36219,11 +36311,11 @@ impl Interp {
                         .get_mut(&inst)
                         .unwrap()
                         .insert_item(idx, v, &mut self.side_refs);
-                    self.meter.tick_builtin_some(5);
+                    self.charge_builtin_work(5)?;
                 }
                 let a = self.arrays.get_mut(&inst).unwrap();
                 a.length = length + c;
-                self.meter.tick_builtin_some(2);
+                self.charge_builtin_work(2)?;
                 Self::array_index_number(u64::from(length + c))
             }
             // `Array.prototype.pop()` — likewise, a non-writable length or
@@ -36244,9 +36336,10 @@ impl Interp {
                 };
                 self.meter.tick_raw(ARRAY_POP_FRAME_METERING);
                 let length = self.arrays[&inst].length;
-                self.meter.tick_builtin_some(2);
+                self.charge_builtin_work(2)?;
                 let result = if length > 0 {
                     let new_len = length - 1;
+                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
                     let removed = self
                         .arrays
                         .get_mut(&inst)
@@ -36255,14 +36348,13 @@ impl Interp {
                         .unwrap_or_else(Slot::undefined);
                     // `fxSetIndexSize(length-1, XS_CHUNK)` reallocs the item
                     // chunk down; `mxMeterSome(8)`.
-                    self.meter.tick_raw(self.array_chunk_size_metering(new_len));
-                    self.meter.tick_builtin_some(8);
+                    self.charge_builtin_work(8)?;
                     self.arrays.get_mut(&inst).unwrap().length = new_len;
                     Slot::of(removed.kind, removed.value)
                 } else {
                     Slot::undefined()
                 };
-                self.meter.tick_builtin_some(4);
+                self.charge_builtin_work(4)?;
                 result
             }
             // `Array.prototype.indexOf(value[, from])` — dense fast path.
@@ -36277,24 +36369,18 @@ impl Interp {
                     }
                 };
                 let target = arg0;
-                let (found, steps) = {
-                    let a = &self.arrays[&inst];
-                    let mut found: i32 = -1;
-                    let mut steps: u64 = 0;
-                    for i in 0..a.length {
-                        steps += 1;
-                        if let Some(item) = a.items().get(&i) {
-                            if self.strict_equal(item, &target) {
-                                found = i as i32;
-                                break;
-                            }
+                self.charge_and_check(ARRAY_METHOD_INDEXOF_FRAME_METERING)?;
+                let length = self.arrays[&inst].length;
+                let mut found = -1i32;
+                for i in 0..length {
+                    self.charge_and_check(ARRAY_INDEXOF_PER_STEP)?;
+                    if let Some(item) = self.arrays[&inst].items().get(&i) {
+                        if self.strict_equal(item, &target) {
+                            found = i as i32;
+                            break;
                         }
                     }
-                    (found, steps)
-                };
-                self.meter.tick_raw(ARRAY_METHOD_INDEXOF_FRAME_METERING);
-                // `ARRAY_INDEXOF_PER_STEP` is already in raw 16.16 units.
-                self.meter.tick_raw(steps * ARRAY_INDEXOF_PER_STEP);
+                }
                 Slot::integer(found)
             }
             // `Array.prototype.includes(value[, from])` — dense fast path. Scan
@@ -36313,22 +36399,21 @@ impl Interp {
                 };
                 let target = arg0;
                 let from = self.arg_to_index(base, 1, 0, self.arrays[&inst].length);
-                let (found, steps) = {
-                    let a = &self.arrays[&inst];
-                    let mut found = false;
-                    let mut steps: u64 = 0;
-                    for i in from..a.length {
-                        steps += 1;
-                        let item = a.items().get(&i).copied().unwrap_or_else(Slot::undefined);
-                        if self.same_value_zero(&item, &target) {
-                            found = true;
-                            break;
-                        }
+                self.charge_and_check(ARRAY_INCLUDES_FRAME_METERING)?;
+                let length = self.arrays[&inst].length;
+                let mut found = false;
+                for i in from..length {
+                    self.charge_and_check(ARRAY_INCLUDES_PER_STEP)?;
+                    let item = self.arrays[&inst]
+                        .items()
+                        .get(&i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    if self.same_value_zero(&item, &target) {
+                        found = true;
+                        break;
                     }
-                    (found, steps)
-                };
-                self.meter.tick_raw(ARRAY_INCLUDES_FRAME_METERING);
-                self.meter.tick_raw(steps * ARRAY_INCLUDES_PER_STEP);
+                }
                 Slot::boolean(found)
             }
             // `Array.prototype.lastIndexOf(value[, from])` — dense fast path.
@@ -36345,26 +36430,18 @@ impl Interp {
                     }
                 };
                 let target = arg0;
+                self.charge_and_check(ARRAY_LASTINDEXOF_FRAME_METERING)?;
                 let length = self.arrays[&inst].length;
-                let (found, steps) = {
-                    let a = &self.arrays[&inst];
-                    let mut found: i32 = -1;
-                    let mut steps: u64 = 0;
-                    let mut i = length;
-                    while i > 0 {
-                        i -= 1;
-                        steps += 1;
-                        if let Some(item) = a.items().get(&i) {
-                            if self.strict_equal(item, &target) {
-                                found = i as i32;
-                                break;
-                            }
+                let mut found = -1i32;
+                for i in (0..length).rev() {
+                    self.charge_and_check(ARRAY_LASTINDEXOF_PER_STEP)?;
+                    if let Some(item) = self.arrays[&inst].items().get(&i) {
+                        if self.strict_equal(item, &target) {
+                            found = i as i32;
+                            break;
                         }
                     }
-                    (found, steps)
-                };
-                self.meter.tick_raw(ARRAY_LASTINDEXOF_FRAME_METERING);
-                self.meter.tick_raw(steps * ARRAY_LASTINDEXOF_PER_STEP);
+                }
                 Slot::integer(found)
             }
             // `Array.prototype.fill(value[, start[, end]])` — dense fast path.
@@ -36407,7 +36484,7 @@ impl Interp {
                         .get_mut(&inst)
                         .unwrap()
                         .insert_item(i, v, &mut self.side_refs);
-                    self.meter.tick_builtin_some(5);
+                    self.charge_builtin_work(5)?;
                 }
                 this
             }
@@ -36428,7 +36505,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_REVERSE_FRAME_METERING);
                 let swaps = (length / 2) as u64;
-                self.meter.tick_raw(swaps * ARRAY_REVERSE_PER_SWAP_METERING);
+                self.charge_and_check(swaps * ARRAY_REVERSE_PER_SWAP_METERING)?;
                 let a = self.arrays.get_mut(&inst).unwrap();
                 let mut lo = 0u32;
                 let mut hi = length.saturating_sub(1);
@@ -36484,21 +36561,25 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_SLICE_FRAME_METERING);
                 let result = self.new_array_unmetered();
                 if count > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(count));
-                    self.meter.tick_builtin_some((count as u64) * 10);
-                    let items: Vec<(u32, Slot)> = {
-                        let a = &self.arrays[&inst];
-                        (0..count)
-                            .filter_map(|i| a.items().get(&(start + i)).map(|s| (i, *s)))
-                            .collect()
-                    };
+                    self.charge_and_check(self.array_chunk_size_metering(count))?;
+                    self.charge_builtin_work((count as u64) * 10)?;
+                    let buffer = self.reserve_scratch(count as usize)?;
+                    let items = Self::fill_scratch(
+                        buffer,
+                        (0..count).filter_map(|i| {
+                            self.arrays[&inst]
+                                .items()
+                                .get(&(start + i))
+                                .map(|s| (i, *s))
+                        }),
+                    );
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items {
                         a.insert_item(i, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = count;
                 }
-                self.meter.tick_builtin_some(3);
+                self.charge_builtin_work(3)?;
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
             // `Array.prototype.concat(...args)` — dense fast path, with a
@@ -36546,7 +36627,8 @@ impl Interp {
                     }
                 };
                 // Collect the operands: the receiver, then each argument.
-                let mut operands: Vec<Slot> = vec![this];
+                let mut operands: Vec<Slot> = self.reserve_scratch(argc + 1)?;
+                operands.push(this);
                 for i in 0..argc {
                     operands.push(
                         self.stack
@@ -36589,21 +36671,21 @@ impl Interp {
                                 .copied()
                                 .unwrap_or_else(Slot::undefined);
                             self.meter.tick_slot_alloc();
-                            self.meter.tick_builtin_some(2);
+                            self.charge_builtin_work(2)?;
                             self.meter.tick_raw(ARRAY_CONCAT_SPREAD_EXTRA_METERING);
-                            out.push(Slot::of(s.kind, s.value));
+                            self.extend_prepaid_scratch(&mut out, &[Slot::of(s.kind, s.value)])?;
                         }
                     } else {
                         // A non-array value is appended as a single element.
                         self.meter.tick_slot_alloc();
-                        self.meter.tick_builtin_some(4);
+                        self.charge_builtin_work(4)?;
                         self.meter.tick_raw(ARRAY_CONCAT_PRIM_EXTRA_METERING);
-                        out.push(op);
+                        self.extend_prepaid_scratch(&mut out, &[op])?;
                     }
                 }
                 let total = out.len() as u32;
                 if total > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(total));
+                    self.charge_and_check(self.array_chunk_size_metering(total))?;
                 }
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
@@ -36612,7 +36694,7 @@ impl Interp {
                     }
                     a.length = total;
                 }
-                self.meter.tick_builtin_some(3);
+                self.charge_builtin_work(3)?;
                 let _ = recv;
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
@@ -36675,10 +36757,12 @@ impl Interp {
                     }
                 };
                 let length = self.arrays[&inst].length;
-                self.meter.tick_builtin_some(2);
+                self.charge_builtin_work(2)?;
                 let result = if length > 0 {
-                    self.meter.tick_builtin_some(3);
+                    self.charge_builtin_work(3)?;
                     let new_len = length - 1;
+                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
+                    self.charge_builtin_work((new_len as u64) * 10)?;
                     let removed = {
                         let a = self.arrays.get_mut(&inst).unwrap();
                         let first = a
@@ -36692,14 +36776,12 @@ impl Interp {
                         a.length = new_len;
                         first
                     };
-                    self.meter.tick_raw(self.array_chunk_size_metering(new_len));
-                    self.meter.tick_builtin_some((new_len as u64) * 10);
-                    self.meter.tick_builtin_some(3);
+                    self.charge_builtin_work(3)?;
                     Slot::of(removed.kind, removed.value)
                 } else {
                     Slot::undefined()
                 };
-                self.meter.tick_builtin_some(4);
+                self.charge_builtin_work(4)?;
                 result
             }
             // `Array.prototype.unshift(...items)` — dense fast path. Prepend the
@@ -36723,19 +36805,20 @@ impl Interp {
                 };
                 let length = self.arrays[&inst].length;
                 let c = argc as u32;
-                let args: Vec<Slot> = (0..argc)
-                    .map(|i| {
+                let args: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(argc as usize)?,
+                    (0..argc).map(|i| {
                         self.stack
                             .get(base + 4 + i)
                             .copied()
                             .unwrap_or_else(Slot::undefined)
-                    })
-                    .collect();
+                    }),
+                );
                 self.meter.tick_raw(ARRAY_UNSHIFT_FRAME_METERING);
                 if c > 0 {
-                    self.meter
-                        .tick_raw(self.array_chunk_size_metering(length + c));
-                    self.meter.tick_builtin_some((length as u64) * 10);
+                    self.charge_and_check(self.array_chunk_size_metering(length + c))?;
+                    self.charge_builtin_work((length as u64) * 10)?;
+                    self.charge_builtin_work(c as u64 * 4)?;
                     let a = self.arrays.get_mut(&inst).unwrap();
                     let mut shifted = std::collections::BTreeMap::new();
                     for (&k, &v) in a.items().iter() {
@@ -36745,12 +36828,11 @@ impl Interp {
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
                         shifted.insert(i as u32, v);
-                        self.meter.tick_builtin_some(4);
                     }
                     a.replace_items(shifted, &mut self.side_refs);
                     a.length = length + c;
                 }
-                self.meter.tick_builtin_some(2);
+                self.charge_builtin_work(2)?;
                 Self::array_index_number(u64::from(length + c))
             }
             // `Array.prototype.copyWithin(target[, start[, end]])` — dense fast
@@ -36785,13 +36867,14 @@ impl Interp {
                 }
                 self.meter.tick_raw(ARRAY_COPYWITHIN_FRAME_METERING);
                 if count > 0 {
-                    self.meter.tick_builtin_some((count as u64) * 10);
+                    self.charge_builtin_work((count as u64) * 10)?;
                     // Snapshot the source range, then write to the destination
                     // (memmove semantics — overlapping ranges are handled by the
                     // snapshot).
-                    let src: Vec<Option<Slot>> = (0..count)
-                        .map(|i| self.arrays[&inst].items().get(&(from + i)).copied())
-                        .collect();
+                    let src: Vec<Option<Slot>> = Self::fill_scratch(
+                        self.reserve_scratch(count as usize)?,
+                        (0..count).map(|i| self.arrays[&inst].items().get(&(from + i)).copied()),
+                    );
                     let a = self.arrays.get_mut(&inst).unwrap();
                     for (i, s) in src.into_iter().enumerate() {
                         let dst = to + i as u32;
@@ -36842,13 +36925,13 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 self.meter.tick_raw(ARRAY_WITH_FRAME_METERING);
-                self.meter
-                    .tick_raw((length as u64) * ARRAY_WITH_PER_ELEM_METERING);
+                self.charge_and_check((length as u64) * ARRAY_WITH_PER_ELEM_METERING)?;
                 let result = self.new_array_unmetered();
                 if length > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(length));
-                    let items: Vec<Slot> = (0..length)
-                        .map(|i| {
+                    self.charge_and_check(self.array_chunk_size_metering(length))?;
+                    let items: Vec<Slot> = Self::fill_scratch(
+                        self.reserve_scratch(length as usize)?,
+                        (0..length).map(|i| {
                             if i as i64 == index {
                                 value
                             } else {
@@ -36858,8 +36941,8 @@ impl Interp {
                                     .copied()
                                     .unwrap_or_else(Slot::undefined)
                             }
-                        })
-                        .collect();
+                        }),
+                    );
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items.into_iter().enumerate() {
                         a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
@@ -36926,7 +37009,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_MAP_FRAME_METERING);
                 let result = self.new_array_unmetered();
                 if length > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(length));
+                    self.charge_and_check(self.array_chunk_size_metering(length))?;
                 }
                 // The partial result otherwise exists only in this Rust local
                 // while guest callbacks run, so a mid-callback GC would sweep it.
@@ -36946,7 +37029,7 @@ impl Interp {
                                 Slot::undefined()
                             };
                             let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                            self.meter.tick_builtin_some(2);
+                            self.charge_builtin_work(2)?;
                             let mut v = r;
                             v.id = 0;
                             v.next = crate::value::SlotIndex::NULL;
@@ -37117,7 +37200,7 @@ impl Interp {
                 let result = self.new_array_unmetered();
                 let total = kept.len() as u32;
                 if total > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(total));
+                    self.charge_and_check(self.array_chunk_size_metering(total))?;
                 }
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
@@ -37151,18 +37234,13 @@ impl Interp {
                 if !self.is_callable_value(callback) {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
-                let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
                 // The present indices in fold order.
-                let order: Vec<u32> = if right {
-                    (0..length)
-                        .rev()
-                        .filter(|i| self.arrays[&inst].items().contains_key(i))
-                        .collect()
+                let buffer = self.reserve_work_scratch(self.arrays[&inst].items().len())?;
+                let order = if right {
+                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().rev().copied())
                 } else {
-                    (0..length)
-                        .filter(|i| self.arrays[&inst].items().contains_key(i))
-                        .collect()
+                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().copied())
                 };
                 let mut it = order.into_iter();
                 let mut acc = if argc >= 2 {
@@ -37289,21 +37367,21 @@ impl Interp {
                 };
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_TOREVERSED_FRAME_METERING);
-                self.meter
-                    .tick_raw((length as u64) * ARRAY_WITH_PER_ELEM_METERING);
+                self.charge_and_check((length as u64) * ARRAY_WITH_PER_ELEM_METERING)?;
                 let result = self.new_array_unmetered();
                 if length > 0 {
-                    self.meter.tick_raw(self.array_chunk_size_metering(length));
-                    let items: Vec<Slot> = (0..length)
-                        .map(|to| {
+                    self.charge_and_check(self.array_chunk_size_metering(length))?;
+                    let items: Vec<Slot> = Self::fill_scratch(
+                        self.reserve_scratch(length as usize)?,
+                        (0..length).map(|to| {
                             let from = length - 1 - to;
                             self.arrays[&inst]
                                 .items()
                                 .get(&from)
                                 .copied()
                                 .unwrap_or_else(Slot::undefined)
-                        })
-                        .collect();
+                        }),
+                    );
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (to, s) in items.into_iter().enumerate() {
                         a.insert_item(to as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
@@ -37369,49 +37447,58 @@ impl Interp {
                 // The removed-elements result array.
                 let result = self.new_array_unmetered();
                 if deletions > 0 {
-                    self.meter
-                        .tick_raw(self.array_chunk_size_metering(deletions));
+                    self.charge_and_check(self.array_chunk_size_metering(deletions))?;
                 }
-                self.meter.tick_builtin_some((deletions as u64) * 10);
-                self.meter.tick_builtin_some(4);
+                self.charge_builtin_work((deletions as u64) * 10)?;
+                self.charge_builtin_work(4)?;
                 let tail_len = length - (start + deletions);
                 if insertions < deletions {
-                    self.meter.tick_builtin_some((tail_len as u64) * 10);
-                    self.meter
-                        .tick_builtin_some(((deletions - insertions) as u64) * 4);
+                    self.charge_builtin_work((tail_len as u64) * 10)?;
+                    self.charge_builtin_work(((deletions - insertions) as u64) * 4)?;
                     let new_len = length - (deletions - insertions);
                     if new_len > 0 {
-                        self.meter.tick_raw(self.array_chunk_size_metering(new_len));
+                        self.charge_and_check(self.array_chunk_size_metering(new_len))?;
                     }
                 } else if insertions > deletions {
                     let new_len = length + (insertions - deletions);
-                    self.meter.tick_raw(self.array_chunk_size_metering(new_len));
-                    self.meter.tick_builtin_some((tail_len as u64) * 10);
+                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
+                    self.charge_builtin_work((tail_len as u64) * 10)?;
                 }
                 for _ in 0..insertions {
-                    self.meter.tick_builtin_some(5);
+                    self.charge_builtin_work(5)?;
                 }
-                self.meter.tick_builtin_some(4);
+                self.charge_builtin_work(4)?;
                 // Perform the splice on a dense element vector.
-                let cur: Vec<Slot> = (0..length)
-                    .map(|i| {
+                let cur: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(length as usize)?,
+                    (0..length).map(|i| {
                         self.arrays[&inst]
                             .items()
                             .get(&i)
                             .copied()
                             .unwrap_or_else(Slot::undefined)
-                    })
-                    .collect();
-                let removed: Vec<Slot> = cur[start as usize..(start + deletions) as usize].to_vec();
-                let inserted: Vec<Slot> = (0..insertions)
-                    .map(|k| {
+                    }),
+                );
+                let removed = Self::fill_scratch(
+                    self.reserve_scratch(deletions as usize)?,
+                    cur[start as usize..(start + deletions) as usize]
+                        .iter()
+                        .copied(),
+                );
+                let inserted: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(insertions as usize)?,
+                    (0..insertions).map(|k| {
                         self.stack
                             .get(base + 4 + 2 + k as usize)
                             .copied()
                             .unwrap_or_else(Slot::undefined)
-                    })
-                    .collect();
-                let mut rebuilt: Vec<Slot> = Vec::new();
+                    }),
+                );
+                let mut rebuilt: Vec<Slot> = self.reserve_scratch(
+                    (length as usize)
+                        .checked_add(insertions as usize)
+                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                )?;
                 rebuilt.extend_from_slice(&cur[..start as usize]);
                 rebuilt.extend(inserted);
                 rebuilt.extend_from_slice(&cur[(start + deletions) as usize..]);
@@ -37487,34 +37574,39 @@ impl Interp {
                 let rest = length - (start + skip);
                 self.meter.tick_raw(ARRAY_TOSPLICED_FRAME_METERING);
                 if result_len > 0 {
-                    self.meter
-                        .tick_raw(self.array_chunk_size_metering(result_len));
+                    self.charge_and_check(self.array_chunk_size_metering(result_len))?;
                 }
-                self.meter.tick_builtin_some((start as u64) * 10);
+                self.charge_builtin_work((start as u64) * 10)?;
                 for _ in 0..insertions {
-                    self.meter.tick_builtin_some(5);
+                    self.charge_builtin_work(5)?;
                 }
-                self.meter.tick_builtin_some((rest as u64) * 10);
-                self.meter.tick_builtin_some(4);
+                self.charge_builtin_work((rest as u64) * 10)?;
+                self.charge_builtin_work(4)?;
                 // Build the result densely; the receiver stays untouched.
-                let cur: Vec<Slot> = (0..length)
-                    .map(|i| {
+                let cur: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(length as usize)?,
+                    (0..length).map(|i| {
                         self.arrays[&inst]
                             .items()
                             .get(&i)
                             .copied()
                             .unwrap_or_else(Slot::undefined)
-                    })
-                    .collect();
-                let inserted: Vec<Slot> = (0..insertions)
-                    .map(|k| {
+                    }),
+                );
+                let inserted: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(insertions as usize)?,
+                    (0..insertions).map(|k| {
                         self.stack
                             .get(base + 4 + 2 + k as usize)
                             .copied()
                             .unwrap_or_else(Slot::undefined)
-                    })
-                    .collect();
-                let mut rebuilt: Vec<Slot> = Vec::new();
+                    }),
+                );
+                let mut rebuilt: Vec<Slot> = self.reserve_scratch(
+                    (length as usize)
+                        .checked_add(insertions as usize)
+                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                )?;
                 rebuilt.extend_from_slice(&cur[..start as usize]);
                 rebuilt.extend(inserted);
                 rebuilt.extend_from_slice(&cur[(start + skip) as usize..]);
@@ -37734,18 +37826,15 @@ impl Interp {
                 };
                 self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
                 let length = self.arrays[&inst].length;
-                let items: Vec<Option<Slot>> = {
-                    let a = &self.arrays[&inst];
-                    (0..length).map(|i| a.items().get(&i).copied()).collect()
-                };
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc();
                 let mut out: Vec<u8> = Vec::new();
-                for (i, item) in items.into_iter().enumerate() {
-                    self.meter.tick_raw(ARRAY_JOIN_PER_ELEMENT_METERING);
+                for i in 0..length {
+                    self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if i > 0 {
                         self.meter.tick_slot_alloc();
-                        out.push(b',');
+                        self.extend_reserved_units(&mut out, b",")?;
                     }
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
@@ -37756,12 +37845,15 @@ impl Interp {
                             }
                             self.meter.tick_slot_alloc();
                             let bytes = self.to_string_bytes_metered(s);
-                            out.extend_from_slice(&bytes);
+                            self.extend_reserved_units(&mut out, &bytes)?;
                         }
                         _ => {}
                     }
                 }
-                let off = self.alloc_str_text_metered(&out);
+                if out.is_empty() {
+                    self.charge_chunk_work(1)?;
+                }
+                let off = self.alloc_str_text(&out);
                 Slot::of(Kind::String, Payload::String(off))
             }
             NativeMethod::ArraySort => self.array_sort(this, base, argc, code, false)?,
@@ -37972,11 +38064,11 @@ impl Interp {
                 // collection side-table representation.
 
                 if self.collections[&inst].kind != expected {
-                    self.meter.tick_raw(if expected == CollKind::Map {
+                    self.charge_and_check(if expected == CollKind::Map {
                         MAP_METHOD_ON_SET_METERING
                     } else {
                         SET_METHOD_ON_MAP_METERING
-                    });
+                    })?;
                     return Err(self.collection_brand_error(expected, false));
                 }
                 let iter_kind = match m {
@@ -38000,11 +38092,11 @@ impl Interp {
                 };
 
                 if self.collections[&inst].kind != expected {
-                    self.meter.tick_raw(if expected == CollKind::Map {
+                    self.charge_and_check(if expected == CollKind::Map {
                         MAP_METHOD_ON_SET_METERING
                     } else {
                         SET_METHOD_ON_MAP_METERING
-                    });
+                    })?;
                     return Err(self.collection_brand_error(expected, false));
                 }
                 if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
@@ -38871,7 +38963,7 @@ impl Interp {
                 let keys = self.mop_own_keys(code, inst)?;
                 let n = keys.len() as u32;
                 self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
-                self.meter.tick_raw(self.array_chunk_size_metering(n));
+                self.charge_and_check(self.array_chunk_size_metering(n))?;
                 for _ in 0..n {
                     self.meter.tick_slot_alloc();
                 }
@@ -38983,7 +39075,8 @@ impl Interp {
         };
         let length = self.arraylike_length(code, inst, value)?;
         let len = self.to_length_value(code, length)?;
-        let mut out = Vec::new();
+        let capacity = usize::try_from(len).map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        let mut out = self.reserve_work_scratch(capacity)?;
         for i in 0..len {
             out.push(self.arraylike_index(code, inst, i, value)?);
         }
@@ -39133,7 +39226,8 @@ impl Interp {
                     Ok(value) => value,
                     Err(error) => return Ok(Err(error)),
                 };
-            values.push(value);
+            self.charge_builtin_work(1)?;
+            self.push_prepaid_scratch(&mut values, value)?;
         }
         Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
@@ -39393,7 +39487,7 @@ impl Interp {
         }
         let (dense, entries_are_dense_pairs) = {
             let data = &self.arrays[&array];
-            let dense = (0..data.length).all(|index| data.items().contains_key(&index));
+            let dense = data.items().len() == data.length as usize;
             let entries_are_dense_pairs = !matches!(kind, CollKind::Map | CollKind::WeakMap)
                 || data.items().values().all(|element| {
                     matches!(element, Slot {
@@ -40102,7 +40196,7 @@ impl Interp {
                         }
                     };
                     self.meter.tick_builtin();
-                    let off = self.alloc_str_text_metered(&bytes);
+                    let off = self.alloc_str_text_metered(&bytes)?;
                     Slot::of(Kind::String, Payload::String(off))
                 }
             }
@@ -40355,6 +40449,13 @@ impl Interp {
                 let has_reviver = self.is_callable_value(reviver);
                 // `JSON.parse` applies ToString before tokenization.
                 let units = self.to_string_units(code, arg0)?;
+                self.charge_builtin_work(units.len() as u64)?;
+                self.admit_scratch::<u8>(
+                    units
+                        .len()
+                        .checked_mul(3)
+                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                )?;
                 // The tokenizer below operates on scalar UTF-8 text. Preserve
                 // correctness at its remaining representation boundary: a
                 // valid surrogate pair round-trips through that text, while a
@@ -40366,19 +40467,16 @@ impl Interp {
                     )));
                 }
                 let input = String::from_utf16_lossy(&units).into_bytes();
-                self.meter.tick_raw(JSON_PARSE_SETUP_METERING);
+                self.charge_and_check(JSON_PARSE_SETUP_METERING)?;
                 let mut pos = 0usize;
-                let mut cost: u64 = 0;
                 self.json_parse_whitespace(&input, &mut pos);
-                let (value, source) =
-                    self.json_parse_value(&input, &mut pos, &mut cost, has_reviver)?;
+                let (value, source) = self.json_parse_value(&input, &mut pos, has_reviver)?;
                 self.json_parse_whitespace(&input, &mut pos);
                 if pos != input.len() {
                     // Trailing content after the value: XS's "missing EOF"
                     // SyntaxError.
                     return Err(self.catchable_syntax_error());
                 }
-                self.meter.tick_raw(cost);
                 if !has_reviver {
                     return Ok(value);
                 }
@@ -40881,11 +40979,10 @@ impl Interp {
         &mut self,
         input: &[u8],
         pos: &mut usize,
-        cost: &mut u64,
         track_source: bool,
     ) -> Result<(Slot, JsonSource), Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.json_parse_value_inner(input, pos, cost, track_source)
+            vm.json_parse_value_inner(input, pos, track_source)
         })
     }
 
@@ -40893,7 +40990,6 @@ impl Interp {
         &mut self,
         input: &[u8],
         pos: &mut usize,
-        cost: &mut u64,
         track_source: bool,
     ) -> Result<(Slot, JsonSource), Step> {
         if *pos >= input.len() {
@@ -40901,14 +40997,14 @@ impl Interp {
         }
         let start = *pos;
         match input[*pos] {
-            b'{' => self.json_parse_object(input, pos, cost, track_source),
-            b'[' => self.json_parse_array(input, pos, cost, track_source),
+            b'{' => self.json_parse_object(input, pos, track_source),
+            b'[' => self.json_parse_array(input, pos, track_source),
             b'"' => {
                 let units = self.json_parse_string_units(input, pos)?;
                 // The tokenizer's `s = fxNewChunk(the, size + 1)`: always a
                 // chunk, even for the empty string (unlike an interned literal).
                 // The frozen Ironhorse price uses UTF-16 units on every path.
-                *cost += string_chunk_cost(units.len() as u64);
+                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
                 let off = self.chunks.alloc(&units_to_be16(&units));
                 let value = Slot::of(Kind::String, Payload::String(off));
                 let source = if track_source {
@@ -41088,14 +41184,14 @@ impl Interp {
                     return Err(self.catchable_syntax_error());
                 }
                 match input[i] {
-                    b'"' => out.push(b'"' as u16),
-                    b'\\' => out.push(b'\\' as u16),
-                    b'/' => out.push(b'/' as u16),
-                    b'b' => out.push(8),
-                    b'f' => out.push(12),
-                    b'n' => out.push(b'\n' as u16),
-                    b'r' => out.push(b'\r' as u16),
-                    b't' => out.push(b'\t' as u16),
+                    b'"' => self.push_prepaid_scratch(&mut out, b'"' as u16)?,
+                    b'\\' => self.push_prepaid_scratch(&mut out, b'\\' as u16)?,
+                    b'/' => self.push_prepaid_scratch(&mut out, b'/' as u16)?,
+                    b'b' => self.push_prepaid_scratch(&mut out, 8)?,
+                    b'f' => self.push_prepaid_scratch(&mut out, 12)?,
+                    b'n' => self.push_prepaid_scratch(&mut out, b'\n' as u16)?,
+                    b'r' => self.push_prepaid_scratch(&mut out, b'\r' as u16)?,
+                    b't' => self.push_prepaid_scratch(&mut out, b'\t' as u16)?,
                     b'u' => {
                         if i + 4 >= n {
                             return Err(self.catchable_syntax_error());
@@ -41107,7 +41203,7 @@ impl Interp {
                             Some(v) => v,
                             None => return Err(self.catchable_syntax_error()),
                         };
-                        out.push(hex as u16);
+                        self.push_prepaid_scratch(&mut out, hex as u16)?;
                         i += 4;
                     }
                     _ => return Err(self.catchable_syntax_error()),
@@ -41117,14 +41213,23 @@ impl Interp {
                 // A raw control character is a JSON syntax error.
                 return Err(self.catchable_syntax_error());
             } else if c < 0x80 {
-                out.push(c as u16);
+                self.push_prepaid_scratch(&mut out, c as u16)?;
                 i += 1;
             } else {
                 // A raw multi-byte scalar is already valid UTF-8 (the parse
                 // entry gate rejected unpaired UTF-16). Decode its complete
                 // sequence into the exact one- or two-code-unit UTF-16
                 // representation.
-                let rest = &input[i..];
+                let width = if c < 0xe0 {
+                    2
+                } else if c < 0xf0 {
+                    3
+                } else {
+                    4
+                };
+                let rest = input
+                    .get(i..i + width)
+                    .ok_or_else(|| self.catchable_syntax_error())?;
                 match std::str::from_utf8(rest)
                     .ok()
                     .and_then(|s| s.chars().next())
@@ -41132,7 +41237,7 @@ impl Interp {
                     Some(ch) => {
                         let l = ch.len_utf8();
                         let mut encoded = [0u16; 2];
-                        out.extend_from_slice(ch.encode_utf16(&mut encoded));
+                        self.extend_prepaid_scratch(&mut out, ch.encode_utf16(&mut encoded))?;
                         i += l;
                     }
                     _ => return Err(self.catchable_syntax_error()),
@@ -41150,11 +41255,10 @@ impl Interp {
         &mut self,
         input: &[u8],
         pos: &mut usize,
-        cost: &mut u64,
         track_source: bool,
     ) -> Result<(Slot, JsonSource), Step> {
         *pos += 1; // past '['
-        *cost += JSON_PARSE_ARRAY_INSTANCE_METERING;
+        self.charge_and_check(JSON_PARSE_ARRAY_INSTANCE_METERING)?;
         let inst = self.new_array_unmetered();
         let mut length: u32 = 0;
         let mut sources = Vec::new();
@@ -41173,14 +41277,17 @@ impl Interp {
         }
         loop {
             self.json_parse_whitespace(input, pos);
-            *cost += JSON_PARSE_ARRAY_ELEMENT_METERING;
-            let (v, source) = self.json_parse_value(input, pos, cost, track_source)?;
+            self.charge_and_check(
+                JSON_PARSE_ARRAY_ELEMENT_METERING + 32 + if length == 0 { 16 } else { 0 },
+            )?;
+            let (v, source) = self.json_parse_value(input, pos, track_source)?;
+            self.admit_scratch::<Slot>(length as usize + 1)?;
             self.arrays
                 .get_mut(&inst)
                 .unwrap()
                 .insert_item(length, v, &mut self.side_refs);
             if track_source {
-                sources.push(source);
+                self.push_prepaid_scratch(&mut sources, source)?;
             }
             length += 1;
             self.json_parse_whitespace(input, pos);
@@ -41197,7 +41304,7 @@ impl Interp {
         }
         self.arrays.get_mut(&inst).unwrap().length = length;
         // `fxCacheArray`: one chunk of `length * sizeof(txSlot)` bytes.
-        *cost += length as u64 * 32 + 16;
+
         Ok((
             Slot::of(Kind::Reference, Payload::Reference(inst)),
             if track_source {
@@ -41215,13 +41322,13 @@ impl Interp {
         &mut self,
         input: &[u8],
         pos: &mut usize,
-        cost: &mut u64,
         track_source: bool,
     ) -> Result<(Slot, JsonSource), Step> {
         *pos += 1; // past '{'
-        *cost += JSON_PARSE_OBJECT_INSTANCE_METERING;
+        self.charge_and_check(JSON_PARSE_OBJECT_INSTANCE_METERING)?;
         let inst = self.slots.alloc(Slot::instance(self.object_proto));
         let mut sources = Vec::new();
+        let mut member_count = 0usize;
         // Key → its position in `sources`, so a repeated key replaces in O(1).
         let mut source_positions: std::collections::HashMap<ReadKey, usize> =
             std::collections::HashMap::new();
@@ -41244,9 +41351,9 @@ impl Interp {
             }
             let key_units = self.json_parse_string_units(input, pos)?;
             let key = SymbolName::from_units(&key_units);
-            *cost += JSON_PARSE_OBJECT_KEY_METERING;
+            self.charge_and_check(JSON_PARSE_OBJECT_KEY_METERING)?;
             // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
-            *cost += string_chunk_cost(key_units.len() as u64);
+            self.charge_and_check(string_chunk_cost(key_units.len() as u64))?;
             // A canonical INDEX key goes to the index store; only a real name
             // is interned. `fxNewName` is not reached for an index in XS
             // either, and parsing `{"0":…,"1":…}` with 70,000 index keys
@@ -41265,7 +41372,11 @@ impl Interp {
             }
             *pos += 1;
             self.json_parse_whitespace(input, pos);
-            let (v, source) = self.json_parse_value(input, pos, cost, track_source)?;
+            let (v, source) = self.json_parse_value(input, pos, track_source)?;
+            member_count = member_count
+                .checked_add(1)
+                .ok_or(Step::Host(Halt::HeapExhausted))?;
+            self.admit_scratch::<(ReadKey, Slot)>(member_count)?;
             match key_ref {
                 ReadKey::Id(id) => self.set_own_unmetered(inst, id, v),
                 ReadKey::Index(index) => self.index_prop_set(inst, index, v),
@@ -41280,8 +41391,12 @@ impl Interp {
                 match source_positions.get(&key_ref) {
                     Some(&at) => sources[at].1 = source,
                     None => {
+                        self.admit_scratch::<(ReadKey, usize)>(source_positions.len() + 1)?;
+                        source_positions
+                            .try_reserve(1)
+                            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
                         source_positions.insert(key_ref, sources.len());
-                        sources.push((key_ref, source));
+                        self.push_prepaid_scratch(&mut sources, (key_ref, source))?;
                     }
                 }
             }
@@ -41590,13 +41705,6 @@ impl Interp {
             return Ok(units);
         }
         self.to_string_units(code, this)
-    }
-
-    /// Number of CESU-8 leading bytes represented by a matching UTF-16 prefix.
-    /// The oracle is built with `mxCESU8`, so every UTF-16 code unit—including
-    /// each half of a surrogate pair—has exactly one leading byte.
-    fn string_search_match_meter(units: &[u16]) -> u64 {
-        units.len() as u64
     }
 
     /// Raise an XS RangeError diagnostic through the guest jump chain.
@@ -41920,14 +42028,16 @@ impl Interp {
             // `ToString` conversions run left-to-right and may re-enter guest
             // code or throw.
             StringConcat => {
-                let mut out = content.clone();
+                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
+                self.charge_builtin_work(argc as u64)?;
+                let mut out = Vec::new();
+                self.extend_reserved_units(&mut out, &content)?;
                 for i in 0..argc {
                     let a = argn(i).unwrap();
-                    out.extend_from_slice(&self.to_string_units(code, a)?);
+                    let units = self.to_string_units(code, a)?;
+                    self.extend_reserved_units(&mut out, &units)?;
                 }
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                self.meter.tick_builtin_some(argc as u64);
-                self.new_string_units(&out)
+                self.new_reserved_string_units(&out)
             }
             // repeat(count): the receiver repeated `count` times; a negative or
             // over-large count is a RangeError. mxMeterSome(count) + chunk.
@@ -41978,14 +42088,14 @@ impl Interp {
                 } else {
                     self.string_arg_to_position(code, argn(1), ulen, ulen)?
                 };
+                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
+                self.charge_builtin_work(sub_units)?;
                 let at = clamp(pos);
                 let matches = if is_start {
                     content.len() >= at + sub.len() && content[at..at + sub.len()] == sub[..]
                 } else {
                     at >= sub.len() && content[at - sub.len()..at] == sub[..]
                 };
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                self.meter.tick_builtin_some(sub_units);
                 Slot::boolean(matches)
             }
             // includes(search[,from]): whether `search` occurs. Charges the
@@ -42059,10 +42169,9 @@ impl Interp {
                         while matched < search.len()
                             && content[candidate + matched] == search[matched]
                         {
+                            self.charge_and_check(1)?;
                             matched += 1;
                         }
-                        self.meter
-                            .tick_raw(Self::string_search_match_meter(&search[..matched]));
                         if matched == search.len() {
                             break Self::array_index_number(candidate as u64);
                         }
@@ -42081,10 +42190,9 @@ impl Interp {
                         while matched < search.len()
                             && content[candidate + matched] == search[matched]
                         {
+                            self.charge_and_check(1)?;
                             matched += 1;
                         }
-                        self.meter
-                            .tick_raw(Self::string_search_match_meter(&search[..matched]));
                         if matched == search.len() {
                             break Self::array_index_number(candidate as u64);
                         }
@@ -42103,19 +42211,19 @@ impl Interp {
             // charge the actual result chunk through `new_string_units`.
             StringToLowerCase | StringToUpperCase => {
                 let up = m == StringToUpperCase;
-                let out = unicode_case_convert_utf16(&content, up);
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                self.meter.tick_builtin_some(ulen as u64);
-                self.new_string_units(&out)
+                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
+                self.charge_builtin_work(ulen as u64)?;
+                let out = unicode_case_convert_utf16(self, &content, up)?;
+                self.new_reserved_string_units(&out)
             }
             StringToLocaleLowerCase | StringToLocaleUpperCase => {
                 let locale =
                     self.intl_resolve_locale(code, argn(0).unwrap_or_else(Slot::undefined))?;
                 let up = m == StringToLocaleUpperCase;
-                let out = unicode_locale_case_convert_utf16(&content, up, &locale);
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                self.meter.tick_builtin_some(ulen as u64);
-                self.new_string_units(&out)
+                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
+                self.charge_builtin_work(ulen as u64)?;
+                let out = unicode_locale_case_convert_utf16(self, &content, up, &locale)?;
+                self.new_reserved_string_units(&out)
             }
             StringLocaleCompare => {
                 let right = self.to_string_units(code, argn(0).unwrap_or_else(Slot::undefined))?;
@@ -42159,10 +42267,10 @@ impl Interp {
                     [0x4E, 0x46, 0x4B, 0x44] => UnicodeNormalizationForm::Nfkd,
                     _ => return Err(self.catchable_range_error_msg("invalid form".into())),
                 };
-                let out = unicode_normalize_utf16(&content, form);
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                self.meter.tick_builtin_some(ulen as u64);
-                self.new_string_units(&out)
+                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
+                self.charge_builtin_work(ulen as u64)?;
+                let out = unicode_normalize_utf16(self, &content, form)?;
+                self.new_reserved_string_units(&out)
             }
             // trim / trimStart / trimEnd: strip the ECMAScript WhiteSpace and
             // LineTerminator code points. The pin
@@ -42175,16 +42283,17 @@ impl Interp {
                 let mut lo = 0usize;
                 if trim_start {
                     while lo < content.len() && is_ecma_whitespace(content[lo] as u32) {
+                        self.charge_builtin_work(1)?;
                         lo += 1;
                     }
-                    self.meter.tick_builtin_some(lo as u64);
                 }
                 let mut hi = content.len();
                 if trim_end {
                     while hi > lo && is_ecma_whitespace(content[hi - 1] as u32) {
+                        self.charge_builtin_work(1)?;
                         hi -= 1;
                     }
-                    self.meter.tick_builtin_some((hi - lo) as u64);
+                    self.charge_builtin_work((hi - lo) as u64)?;
                 }
                 self.new_string_units(&content[lo..hi])
             }
@@ -42684,7 +42793,7 @@ impl Interp {
                             data.insert_item(index as u32, *value, &mut self.side_refs);
                         }
                         if length != 0 {
-                            self.meter.tick_raw(self.array_chunk_size_metering(length));
+                            self.charge_and_check(self.array_chunk_size_metering(length))?;
                         }
                         Ok(Slot::of(Kind::Reference, Payload::Reference(array)))
                     }
@@ -42876,11 +42985,11 @@ impl Interp {
             None => return Err(self.collection_brand_error(expected, false)),
         };
         if self.collections[&inst].kind != expected {
-            self.meter.tick_raw(if expected == CollKind::Map {
+            self.charge_and_check(if expected == CollKind::Map {
                 MAP_METHOD_ON_SET_METERING
             } else {
                 SET_METHOD_ON_MAP_METERING
-            });
+            })?;
             return Err(self.collection_brand_error(expected, false));
         }
         let is_set = expected == CollKind::Set;
@@ -42897,11 +43006,11 @@ impl Interp {
             .get(base + 4 + 1)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        self.meter.tick_raw(if is_set {
+        self.charge_and_check(if is_set {
             SET_FOREACH_FRAME_METERING
         } else {
             MAP_FOREACH_FRAME_METERING
-        });
+        })?;
         // Index into the insertion list. Deletions leave tombstones and
         // additions append, matching XS's live linked-list walk. A
         // `clear()` from inside the callback bumps the collection's
@@ -43818,7 +43927,7 @@ impl Interp {
                 // stored form). Metered by yielded code-unit length (`+1`), the
                 // re-based O(n) weight; ASCII yields meter identically to before.
                 self.meter.tick_raw(STRING_ITERATOR_NEXT_METERING);
-                self.meter.tick_chunk_new((consumed / 2 + 1) as u64);
+                self.charge_chunk_work((consumed / 2 + 1) as u64)?;
                 let off = self.chunks.alloc(&st.str_bytes[i..i + consumed]);
                 (
                     Slot::of(Kind::String, Payload::String(off)),
@@ -44101,7 +44210,7 @@ impl Interp {
                         a.length = 2;
                         a.insert_item(0, Slot::integer(st.index as i32), &mut self.side_refs);
                         a.insert_item(1, elem, &mut self.side_refs);
-                        self.meter.tick_raw(self.array_chunk_size_metering(2));
+                        self.charge_and_check(self.array_chunk_size_metering(2))?;
                         Slot::of(Kind::Reference, Payload::Reference(pair))
                     }
                 };
@@ -45318,6 +45427,7 @@ impl Interp {
         let removed_receiver = Slot::of(Kind::Reference, Payload::Reference(removed));
         const GENERIC_SPLICE_CAP: u64 = 1 << 24;
         for offset in 0..actual_delete_count {
+            self.charge_builtin_work(1)?;
             if offset >= GENERIC_SPLICE_CAP {
                 return Err(Step::Host(Halt::Refused("splice:oversized-delete")));
             }
@@ -45342,6 +45452,7 @@ impl Interp {
             let mut index = actual_start;
             let move_end = length - actual_delete_count;
             while index < move_end {
+                self.charge_builtin_work(1)?;
                 if index - actual_start >= GENERIC_SPLICE_CAP {
                     return Err(Step::Host(Halt::Refused("splice:oversized-move")));
                 }
@@ -45359,6 +45470,7 @@ impl Interp {
             }
             let mut index = length;
             while index > new_length {
+                self.charge_builtin_work(1)?;
                 if length - index >= GENERIC_SPLICE_CAP {
                     return Err(Step::Host(Halt::Refused("splice:oversized-delete-tail")));
                 }
@@ -45371,6 +45483,7 @@ impl Interp {
         } else if insert_count > actual_delete_count {
             let mut index = length - actual_delete_count;
             while index > actual_start {
+                self.charge_builtin_work(1)?;
                 if length - actual_delete_count - index >= GENERIC_SPLICE_CAP {
                     return Err(Step::Host(Halt::Refused("splice:oversized-move")));
                 }
@@ -45458,6 +45571,7 @@ impl Interp {
         const GENERIC_COPY_WITHIN_CAP: u64 = 1 << 24;
         let mut steps = 0u64;
         while count > 0 {
+            self.charge_builtin_work(1)?;
             if steps >= GENERIC_COPY_WITHIN_CAP {
                 return Err(Step::Host(Halt::Refused("copyWithin:oversized-array-like")));
             }
@@ -45792,8 +45906,7 @@ impl Interp {
         } else {
             0
         };
-        self.meter
-            .tick_raw(ARRAY_FLAT_FRAME_METERING - ARRAY_CREATE_METERING - mapper_overlap);
+        self.charge_and_check(ARRAY_FLAT_FRAME_METERING - ARRAY_CREATE_METERING - mapper_overlap)?;
         self.array_generic_flatten_into(
             code, target, source, source_len, 0, depth, mapper, object,
         )?;
@@ -46353,7 +46466,7 @@ impl Interp {
                     self.array_generic_has(code, o, k)?
                 }
             };
-            self.meter.tick_builtin_some(1);
+            self.charge_builtin_work(1)?;
             if !present {
                 k += 1;
                 continue;
@@ -46418,7 +46531,7 @@ impl Interp {
         // `len = ToLength(? Get(O, "length"))` — observable (may run a getter /
         // proxy trap / throw) before any callback validation, per spec order.
         let len = self.array_generic_length(code, o)?;
-        self.meter.tick_builtin_some(2);
+        self.charge_builtin_work(2)?;
 
         // A generic array-like `length` may be up to 2^53−1. A real engine
         // iterates the whole range, but no test262 case *expects completion* of
@@ -46457,7 +46570,7 @@ impl Interp {
                             self.array_generic_has(code, o, k)?
                         }
                     };
-                    self.meter.tick_builtin_some(1);
+                    self.charge_builtin_work(1)?;
                     if present {
                         let kv = self.array_generic_get(code, o, k)?;
                         let cb_args = [kv, Self::array_index_number(k), recv];
@@ -46491,7 +46604,7 @@ impl Interp {
                             self.array_generic_has(code, o, k)?
                         }
                     };
-                    self.meter.tick_builtin_some(1);
+                    self.charge_builtin_work(1)?;
                     if present {
                         let kv = self.array_generic_get(code, o, k)?;
                         let cb_args = [kv, Self::array_index_number(k), recv];
@@ -46530,7 +46643,7 @@ impl Interp {
                 }
                 let mut iters: u64 = 0;
                 let step = |slf: &mut Self, k: u64| -> Result<Option<Slot>, Step> {
-                    slf.meter.tick_builtin_some(1);
+                    slf.charge_builtin_work(1)?;
                     let kv = slf.array_generic_get(code, o, k)?;
                     let cb_args = [kv, Self::array_index_number(k), recv];
                     let r = slf.run_callback(code, predicate, this_arg, &cb_args)?;
@@ -46615,7 +46728,7 @@ impl Interp {
                         }
                         let k = idx_at(cursor);
                         cursor += 1;
-                        self.meter.tick_builtin_some(1);
+                        self.charge_builtin_work(1)?;
                         if self.array_generic_has(code, o, k)? {
                             seed = Some(self.array_generic_get(code, o, k)?);
                             break;
@@ -46634,7 +46747,7 @@ impl Interp {
                     }
                     let k = idx_at(cursor);
                     cursor += 1;
-                    self.meter.tick_builtin_some(1);
+                    self.charge_builtin_work(1)?;
                     if self.array_generic_has(code, o, k)? {
                         let kv = self.array_generic_get(code, o, k)?;
                         let cb_args = [acc, kv, Self::array_index_number(k), recv];
@@ -46685,7 +46798,7 @@ impl Interp {
                             self.array_generic_has(code, o, k)?
                         }
                     };
-                    self.meter.tick_builtin_some(1);
+                    self.charge_builtin_work(1)?;
                     if present {
                         let ek = self.array_generic_get(code, o, k)?;
                         if self.strict_equal(&search, &ek) {
@@ -46733,7 +46846,7 @@ impl Interp {
                             self.array_generic_has(code, o, ku)?
                         }
                     };
-                    self.meter.tick_builtin_some(1);
+                    self.charge_builtin_work(1)?;
                     if present {
                         let ek = self.array_generic_get(code, o, ku)?;
                         if self.strict_equal(&search, &ek) {
@@ -46770,7 +46883,7 @@ impl Interp {
                     if k - start >= GENERIC_ITER_CAP {
                         return Err(over_cap);
                     }
-                    self.meter.tick_builtin_some(1);
+                    self.charge_builtin_work(1)?;
                     let ek = self.array_generic_get(code, o, k)?;
                     if self.same_value_zero(&search, &ek) {
                         return Ok(Slot::boolean(true));
@@ -47400,6 +47513,7 @@ impl Interp {
                 let replacement = args.get(1).copied().unwrap_or_else(Slot::undefined);
                 let replace = with_index.expect("with index");
                 for index in 0..length {
+                    self.charge_builtin_work(1)?;
                     let value = if index == replace {
                         replacement
                     } else {
@@ -47410,6 +47524,7 @@ impl Interp {
             }
             NativeMethod::ArrayToReversed => {
                 for index in 0..length {
+                    self.charge_builtin_work(1)?;
                     let value = self.array_generic_get(code, inst, length - index - 1)?;
                     self.array_generic_create_data_property(code, result, index, value)?;
                 }
@@ -47417,16 +47532,19 @@ impl Interp {
             NativeMethod::ArrayToSpliced => {
                 let mut target = 0u64;
                 for source in 0..splice_start {
+                    self.charge_builtin_work(1)?;
                     let value = self.array_generic_get(code, inst, source)?;
                     self.array_generic_create_data_property(code, result, target, value)?;
                     target += 1;
                 }
                 for insertion in 0..insertions {
+                    self.charge_builtin_work(1)?;
                     let value = args[2 + insertion as usize];
                     self.array_generic_create_data_property(code, result, target, value)?;
                     target += 1;
                 }
                 for source in splice_start + splice_skip..length {
+                    self.charge_builtin_work(1)?;
                     let value = self.array_generic_get(code, inst, source)?;
                     self.array_generic_create_data_property(code, result, target, value)?;
                     target += 1;
@@ -50148,8 +50266,7 @@ impl Interp {
                 // Append the leaf: the per-leaf cost plus the `mxDefineIndex`
                 // chunk growth to `out.len() + 1` slots.
                 self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
-                self.meter
-                    .tick_raw(self.array_item_grow_metering(out.len() as u64));
+                self.charge_and_check(self.array_item_grow_metering(out.len() as u64))?;
                 self.admit_scratch::<Slot>(out.len() + 1)?;
                 out.try_reserve(1)
                     .map_err(|_| Step::Host(Halt::HeapExhausted))?;
@@ -50901,7 +51018,7 @@ impl Interp {
         match key {
             ReadKey::Id(id) => self.property_key_slot(id),
             ReadKey::Index(index) => {
-                let offset = self.alloc_str_text_metered(index.to_string().as_bytes());
+                let offset = self.alloc_str_text_metered(index.to_string().as_bytes())?;
                 Ok(Slot::of(Kind::String, Payload::String(offset)))
             }
         }
@@ -53638,16 +53755,26 @@ impl Interp {
                 let mut this_arg = this;
                 let mut combined: Vec<Slot> = match owned_args.take() {
                     Some(rebuilt) => rebuilt,
-                    None => initial_args.to_vec(),
+                    None => Self::fill_scratch(
+                        self.reserve_work_scratch(initial_args.len())?,
+                        initial_args.iter().copied(),
+                    ),
                 };
-                while let Some(data) = self.bound_functions.get(&current).cloned() {
-                    let mut next = data.args;
+                while let Some(data) = self.bound_functions.get(&current) {
+                    let target = data.target;
+                    let receiver = data.this_arg;
+                    let length = data
+                        .args
+                        .len()
+                        .checked_add(combined.len())
+                        .ok_or(Step::Host(Halt::HeapExhausted))?;
+                    self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
+                    let mut next = self.reserve_scratch(length)?;
+                    next.extend_from_slice(&self.bound_functions[&current].args);
                     next.extend_from_slice(&combined);
-                    self.meter
-                        .tick_raw(BIND_CALL_METERING + next.len() as u64 * BIND_CALL_PER_ARG);
                     combined = next;
-                    this_arg = data.this_arg;
-                    current = data.target;
+                    this_arg = receiver;
+                    current = target;
                 }
                 func = Slot::of(Kind::Reference, Payload::Reference(current));
                 this = this_arg;
@@ -53674,10 +53801,14 @@ impl Interp {
                     );
                 }
                 let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
-                let forwarded: Vec<Slot> = args.get(1..).unwrap_or_default().to_vec();
-                self.meter.tick_raw(
-                    CALL_TRAMPOLINE_METERING + forwarded.len() as u64 * CALL_TRAMPOLINE_PER_ARG,
+                let tail = args.get(1..).unwrap_or_default();
+                let forwarded = Self::fill_scratch(
+                    self.reserve_work_scratch(tail.len())?,
+                    tail.iter().copied(),
                 );
+                self.charge_and_check(
+                    CALL_TRAMPOLINE_METERING + forwarded.len() as u64 * CALL_TRAMPOLINE_PER_ARG,
+                )?;
                 func = this;
                 this = this_arg;
                 owned_args = Some(forwarded);
@@ -53703,8 +53834,7 @@ impl Interp {
                     let meter = self.apply_arraylike_metering(arg_array, forwarded.len());
                     (forwarded, meter)
                 };
-                self.meter
-                    .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
+                self.charge_and_check(CALL_TRAMPOLINE_METERING + array_read_meter)?;
                 func = this;
                 this = this_arg;
                 owned_args = Some(forwarded);
@@ -54913,7 +55043,7 @@ impl Interp {
         }
         if meter_forwarded_target {
             let terminal_is_wrapper = self.wrapper_data.contains_key(&inst);
-            self.meter.tick_raw(if after_active_trap {
+            self.charge_and_check(if after_active_trap {
                 if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING {
                     ARRAY_ITERATOR_PROXY_VALUE_ACTIVE_FORWARD_TARGET_METERING
                 } else {
@@ -54925,16 +55055,16 @@ impl Interp {
                 ARRAY_ITERATOR_PROXY_VALUE_FORWARD_TARGET_METERING
             } else {
                 ARRAY_ITERATOR_PROXY_FORWARD_TARGET_METERING
-            });
+            })?;
         }
         if meter_terminal_wrapper {
             if let Some(value) = self.wrapper_data.get(&inst) {
                 if value.kind == Kind::String {
-                    self.meter.tick_raw(if meter_forwarded_target {
+                    self.charge_and_check(if meter_forwarded_target {
                         ARRAY_ITERATOR_PROXY_STRING_RECEIVER_METERING
                     } else {
                         ARRAY_ITERATOR_STRING_RECEIVER_METERING
-                    });
+                    })?;
                 } else if matches!(value.kind, Kind::Symbol | Kind::BigInt) {
                     self.meter
                         .tick_raw(ARRAY_ITERATOR_WIDE_PRIMITIVE_RECEIVER_METERING);
@@ -55336,17 +55466,18 @@ impl Interp {
         code: &[u8],
         inst: crate::value::SlotIndex,
     ) -> Result<Vec<Slot>, Step> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| vm.mop_own_keys_inner(code, inst))
+        // Keep the large materialization frame out of a forwarding Proxy chain.
+        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+            if vm.proxies.contains_key(&inst) {
+                vm.proxy_own_keys(code, inst)
+            } else {
+                vm.mop_own_keys_inner(inst)
+            }
+        })
     }
 
-    fn mop_own_keys_inner(
-        &mut self,
-        code: &[u8],
-        inst: crate::value::SlotIndex,
-    ) -> Result<Vec<Slot>, Step> {
-        if self.proxies.contains_key(&inst) {
-            return self.proxy_own_keys(code, inst);
-        }
+    #[inline(never)]
+    fn mop_own_keys_inner(&mut self, inst: crate::value::SlotIndex) -> Result<Vec<Slot>, Step> {
         self.materialize_intrinsic_own_surface(inst);
         // An exotic-array target: integer indices ascending, then the Array's
         // exotic `length` (ordinary and deletable for an arguments object),
@@ -55354,8 +55485,14 @@ impl Interp {
         if self.arrays.contains_key(&inst) {
             let mut out = Vec::new();
             let is_arguments = self.arguments_objects.contains(&inst);
-            let mut idxs: Vec<u32> = self.arrays[&inst].items().keys().copied().collect();
+            let count = self.arrays[&inst].items().len();
+            let buffer = self.reserve_work_scratch(count)?;
+            let mut idxs = Self::fill_scratch(buffer, self.arrays[&inst].items().keys().copied());
             let ordinary_ids = self.ordered_own_key_ids(inst);
+            self.admit_scratch::<u32>(idxs.len() + ordinary_ids.len())?;
+            idxs.try_reserve(ordinary_ids.len())
+                .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            self.charge_builtin_work((ordinary_ids.len() + idxs.len()) as u64)?;
             idxs.extend(ordinary_ids.iter().filter_map(|id| {
                 self.scalar_key_text(*id)
                     .and_then(|name| string_to_index(&name))
@@ -55368,11 +55505,15 @@ impl Interp {
                 // per element walked the shared `u16` id space into its
                 // saturation guard — `Object.keys(a)` over a 70,000-element
                 // array poisoned the machine.
-                out.push(self.read_key_slot(ReadKey::Index(i))?);
+                self.charge_builtin_work(1)?;
+                let key = self.read_key_slot(ReadKey::Index(i))?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             let length_id = self.intern_key("length");
             if !is_arguments {
-                out.push(self.property_key_slot(length_id)?);
+                self.charge_builtin_work(1)?;
+                let key = self.property_key_slot(length_id)?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             for id in ordinary_ids {
                 if (!is_arguments && id == length_id)
@@ -55382,7 +55523,9 @@ impl Interp {
                 {
                     continue;
                 }
-                out.push(self.property_key_slot(id)?);
+                self.charge_builtin_work(1)?;
+                let key = self.property_key_slot(id)?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             return Ok(out);
         }
@@ -55397,7 +55540,9 @@ impl Interp {
             };
             let mut out = Vec::new();
             for index in 0..length {
-                out.push(self.read_key_slot(ReadKey::Index(index))?);
+                self.charge_builtin_work(1)?;
+                let key = self.read_key_slot(ReadKey::Index(index))?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             for id in self.ordered_own_key_ids(inst) {
                 if self
@@ -55406,7 +55551,9 @@ impl Interp {
                 {
                     continue;
                 }
-                out.push(self.property_key_slot(id)?);
+                self.charge_builtin_work(1)?;
+                let key = self.property_key_slot(id)?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             return Ok(out);
         }
@@ -55422,7 +55569,9 @@ impl Interp {
             let mut out = Vec::new();
             let units = self.str_len(offset);
             for index in 0..units {
-                out.push(self.read_key_slot(ReadKey::Index(index as u32))?);
+                self.charge_builtin_work(1)?;
+                let key = self.read_key_slot(ReadKey::Index(index as u32))?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             // An expando whose name is a canonical index BEYOND the string's
             // length is a real own property, and XS lists it right here:
@@ -55446,10 +55595,14 @@ impl Interp {
                 .collect();
             index_expandos.sort_unstable_by_key(|&(index, _)| index);
             for (_, id) in index_expandos {
-                out.push(self.property_key_slot(id)?);
+                self.charge_builtin_work(1)?;
+                let key = self.property_key_slot(id)?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             let length_id = self.intern_key("length");
-            out.push(self.property_key_slot(length_id)?);
+            self.charge_builtin_work(1)?;
+            let key = self.property_key_slot(length_id)?;
+            self.push_prepaid_scratch(&mut out, key)?;
             for id in ordinary_ids {
                 // Every index-named expando is already placed above, in range
                 // as a unit and out of range as its own key.
@@ -55460,7 +55613,9 @@ impl Interp {
                 {
                     continue;
                 }
-                out.push(self.property_key_slot(id)?);
+                self.charge_builtin_work(1)?;
+                let key = self.property_key_slot(id)?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             return Ok(out);
         }
@@ -55480,18 +55635,28 @@ impl Interp {
                         .scalar_key_text(id)
                         .is_some_and(|name| string_to_index(&name).is_some())
                 {
-                    out.push(self.property_key_slot(id)?);
+                    self.charge_builtin_work(1)?;
+                    let key = self.property_key_slot(id)?;
+                    self.push_prepaid_scratch(&mut out, key)?;
                 }
             }
-            out.push(self.property_key_slot(length_id)?);
-            out.push(self.property_key_slot(name_id)?);
+            self.charge_builtin_work(1)?;
+            let key = self.property_key_slot(length_id)?;
+            self.push_prepaid_scratch(&mut out, key)?;
+            self.charge_builtin_work(1)?;
+            let key = self.property_key_slot(name_id)?;
+            self.push_prepaid_scratch(&mut out, key)?;
             if has_proto {
-                out.push(self.property_key_slot(prototype_id)?);
+                self.charge_builtin_work(1)?;
+                let key = self.property_key_slot(prototype_id)?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             let intrinsic_ids = self.intrinsic_own_string_order(inst).unwrap_or_default();
             for &id in &intrinsic_ids {
                 if ordinary_ids.contains(&id) {
-                    out.push(self.property_key_slot(id)?);
+                    self.charge_builtin_work(1)?;
+                    let key = self.property_key_slot(id)?;
+                    self.push_prepaid_scratch(&mut out, key)?;
                 }
             }
             for id in ordinary_ids {
@@ -55506,7 +55671,9 @@ impl Interp {
                 {
                     continue;
                 }
-                out.push(self.property_key_slot(id)?);
+                self.charge_builtin_work(1)?;
+                let key = self.property_key_slot(id)?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             return Ok(out);
         }
@@ -55516,10 +55683,14 @@ impl Interp {
         // queues the internal index chunk before `fxQueueIDKeys`. These keys
         // are spelled from the index, so listing them mints nothing.
         for index in self.index_prop_indices(inst) {
-            out.push(self.read_key_slot(ReadKey::Index(index))?);
+            self.charge_builtin_work(1)?;
+            let key = self.read_key_slot(ReadKey::Index(index))?;
+            self.push_prepaid_scratch(&mut out, key)?;
         }
         for id in ids {
-            out.push(self.property_key_slot(id)?);
+            self.charge_builtin_work(1)?;
+            let key = self.property_key_slot(id)?;
+            self.push_prepaid_scratch(&mut out, key)?;
         }
         Ok(out)
     }
@@ -55562,11 +55733,11 @@ impl Interp {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let trap = self.mop_get(code, handler, trap_id, handler_slot)?;
         if trap.kind == Kind::Undefined || trap.kind == Kind::Null {
-            self.meter.tick_raw(if self.proxies.contains_key(&target) {
+            self.charge_and_check(if self.proxies.contains_key(&target) {
                 PROXY_GET_PROTOTYPE_FORWARD_PROXY_METERING
             } else {
                 PROXY_GET_PROTOTYPE_FORWARD_TARGET_METERING
-            });
+            })?;
             return self.mop_get_prototype(code, target);
         }
         if !self.is_callable_value(trap) {
@@ -55945,15 +56116,15 @@ impl Interp {
         meter_terminal_wrapper: bool,
     ) -> Result<Slot, Step> {
         if meter_forwarded_target {
-            self.meter.tick_raw(
+            self.charge_and_check(
                 if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING {
                     ARRAY_ITERATOR_PROXY_VALUE_FORWARD_ACTIVE_METERING
                 } else {
                     ARRAY_ITERATOR_PROXY_FORWARD_ACTIVE_METERING
                 },
-            );
+            )?;
         }
-        self.meter.tick_raw(proxy_trap_metering);
+        self.charge_and_check(proxy_trap_metering)?;
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         // Built here, after the trap's metering, so the id-keyed read keeps
@@ -56271,7 +56442,7 @@ impl Interp {
                 } else {
                     PROXY_CALL_FORWARD_USER_METERING
                 };
-                self.meter.tick_raw(metering);
+                self.charge_and_check(metering)?;
                 return self.invoke_value(code, target_slot, this, args);
             }
         };
@@ -56370,26 +56541,20 @@ impl Interp {
                 Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
             }
             NativeMethod::ObjectGetOwnPropertyNames => {
-                let keys = self.mop_own_keys(code, proxy)?;
-                let strings: Vec<Slot> = keys
-                    .into_iter()
-                    .filter(|k| k.kind == Kind::String)
-                    .collect();
+                let mut strings = self.mop_own_keys(code, proxy)?;
+                strings.retain(|key| key.kind == Kind::String);
                 Ok(self.array_from_slots(&strings))
             }
             NativeMethod::ObjectGetOwnPropertySymbols => {
-                let keys = self.mop_own_keys(code, proxy)?;
-                let symbols: Vec<Slot> = keys
-                    .into_iter()
-                    .filter(|k| k.kind == Kind::Symbol)
-                    .collect();
+                let mut symbols = self.mop_own_keys(code, proxy)?;
+                symbols.retain(|key| key.kind == Kind::Symbol);
                 Ok(self.array_from_slots(&symbols))
             }
             NativeMethod::ObjectKeys | NativeMethod::ObjectValues | NativeMethod::ObjectEntries => {
                 // EnumerableOwnPropertyNames: string keys whose own descriptor
                 // is enumerable; then keys / values / [key,value] entries.
                 let keys = self.mop_own_keys(code, proxy)?;
-                let mut out = Vec::new();
+                let mut out = self.reserve_scratch(keys.len())?;
                 for key in keys {
                     if key.kind != Kind::String {
                         continue;
@@ -57078,8 +57243,7 @@ impl Interp {
     ) -> Result<bool, Step> {
         let (present, frames) = self.mop_has_with_recursions(code, obj, id)?;
         self.meter.tick_raw(WITH_SCOPABLE_HAS_METERING);
-        self.meter
-            .tick_raw(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING);
+        self.charge_and_check(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING)?;
         if !present {
             return Ok(false);
         }
@@ -61772,13 +61936,38 @@ fn units_to_be16(units: &[u16]) -> Vec<u8> {
 /// context-sensitive SpecialCasing rules see their neighbors. An unpaired
 /// surrogate is a Unicode code point in ECMAScript string iteration but not a
 /// Rust `char`; it maps to itself and acts as a boundary between scalar runs.
-fn unicode_case_convert_utf16(units: &[u16], upper: bool) -> Vec<u16> {
-    let mut out = Vec::with_capacity(units.len());
-    let mut scalar_run = String::new();
-    let flush = |scalar_run: &mut String, out: &mut Vec<u16>| {
-        if scalar_run.is_empty() {
-            return;
+fn unicode_case_convert_utf16(
+    vm: &mut Interp,
+    units: &[u16],
+    upper: bool,
+) -> Result<Vec<u16>, Step> {
+    let mut output_units = 0u64;
+    let mut output_bytes = 0usize;
+    for decoded in char::decode_utf16(units.iter().copied()) {
+        match decoded {
+            Ok(ch) => {
+                if upper {
+                    for mapped in ch.to_uppercase() {
+                        output_units += mapped.len_utf16() as u64;
+                        output_bytes += mapped.len_utf8();
+                    }
+                } else {
+                    for mapped in ch.to_lowercase() {
+                        output_units += mapped.len_utf16() as u64;
+                        output_bytes += mapped.len_utf8();
+                    }
+                }
+            }
+            Err(_) => {
+                output_units += 1;
+            }
         }
+    }
+    let size = vm.reserve_units(output_units)?;
+    vm.admit_scratch::<u8>(output_bytes)?;
+    let mut out = Interp::reserved_vec(size)?;
+    let mut scalar_run = admitted_scalar_run(vm, units.len())?;
+    let flush = |scalar_run: &mut String, out: &mut Vec<u16>| {
         if upper {
             out.extend(scalar_run.to_uppercase().encode_utf16());
         } else {
@@ -61796,18 +61985,36 @@ fn unicode_case_convert_utf16(units: &[u16], upper: bool) -> Vec<u16> {
         }
     }
     flush(&mut scalar_run, &mut out);
-    out
+    debug_assert_eq!(out.len(), size);
+    Ok(out)
+}
+
+/// At most three UTF-8 bytes per UTF-16 code unit (four bytes for a pair).
+fn admitted_scalar_run(vm: &mut Interp, units: usize) -> Result<String, Step> {
+    let bytes = units
+        .checked_mul(3)
+        .ok_or(Step::Host(Halt::HeapExhausted))?;
+    vm.admit_scratch::<u8>(bytes)?;
+    let mut run = String::new();
+    run.try_reserve_exact(bytes)
+        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+    Ok(run)
 }
 
 /// Apply the locale tailoring required by the frozen Intl profile before the
 /// Unicode whole-string conversion. Turkish and Azeri specialize dotted and
 /// dotless I; every other supported or fallback locale uses default casing.
-fn unicode_locale_case_convert_utf16(units: &[u16], upper: bool, locale: &str) -> Vec<u16> {
+fn unicode_locale_case_convert_utf16(
+    vm: &mut Interp,
+    units: &[u16],
+    upper: bool,
+    locale: &str,
+) -> Result<Vec<u16>, Step> {
     let language = locale.split('-').next().unwrap_or(locale);
     if !matches!(language, "tr" | "az") {
-        return unicode_case_convert_utf16(units, upper);
+        return unicode_case_convert_utf16(vm, units, upper);
     }
-    let mut tailored = Vec::with_capacity(units.len());
+    let mut tailored = vm.reserve_scratch(units.len())?;
     let mut index = 0;
     while index < units.len() {
         let unit = units[index];
@@ -61831,7 +62038,7 @@ fn unicode_locale_case_convert_utf16(units: &[u16], upper: bool, locale: &str) -
         }
         index += 1;
     }
-    unicode_case_convert_utf16(&tailored, upper)
+    unicode_case_convert_utf16(vm, &tailored, upper)
 }
 
 #[derive(Clone, Copy)]
@@ -61846,48 +62053,72 @@ enum UnicodeNormalizationForm {
 /// ICU4X's UTF-16 entry point deliberately maps invalid pairs to U+FFFD, so
 /// valid scalar runs are normalized separately and each unpaired surrogate is
 /// copied verbatim as a normalization boundary.
-fn unicode_normalize_utf16(units: &[u16], form: UnicodeNormalizationForm) -> Vec<u16> {
-    let mut out = Vec::with_capacity(units.len());
-    let mut scalar_run = String::new();
-    let flush = |scalar_run: &mut String, out: &mut Vec<u16>| {
-        if scalar_run.is_empty() {
-            return;
-        }
-        match form {
-            UnicodeNormalizationForm::Nfc => {
-                let normalized =
-                    icu_normalizer::ComposingNormalizer::new_nfc().normalize(scalar_run);
-                out.extend(normalized.as_ref().encode_utf16());
+fn unicode_normalize_utf16(
+    vm: &mut Interp,
+    units: &[u16],
+    form: UnicodeNormalizationForm,
+) -> Result<Vec<u16>, Step> {
+    let mut out = Vec::new();
+    let mut scalar_run = admitted_scalar_run(vm, units.len())?;
+    // ICU's canonical-ordering buffer retains (scalar, combining class) pairs.
+    // The pinned ICU data's largest compatibility decomposition is 18
+    // scalars (U+FDFA); include its complete expansion in scratch admission.
+    vm.admit_scratch::<(char, u8)>(
+        units
+            .len()
+            .checked_mul(18)
+            .ok_or(Step::Host(Halt::HeapExhausted))?,
+    )?;
+    let flush =
+        |vm: &mut Interp, scalar_run: &mut String, out: &mut Vec<u16>| -> Result<(), Step> {
+            let mut append = |ch: char| -> Result<(), Step> {
+                let mut units = [0u16; 2];
+                vm.extend_reserved_units(out, ch.encode_utf16(&mut units))
+            };
+            match form {
+                UnicodeNormalizationForm::Nfc => {
+                    for ch in icu_normalizer::ComposingNormalizer::new_nfc()
+                        .normalize_iter(scalar_run.chars())
+                    {
+                        append(ch)?;
+                    }
+                }
+                UnicodeNormalizationForm::Nfd => {
+                    for ch in icu_normalizer::DecomposingNormalizer::new_nfd()
+                        .normalize_iter(scalar_run.chars())
+                    {
+                        append(ch)?;
+                    }
+                }
+                UnicodeNormalizationForm::Nfkc => {
+                    for ch in icu_normalizer::ComposingNormalizer::new_nfkc()
+                        .normalize_iter(scalar_run.chars())
+                    {
+                        append(ch)?;
+                    }
+                }
+                UnicodeNormalizationForm::Nfkd => {
+                    for ch in icu_normalizer::DecomposingNormalizer::new_nfkd()
+                        .normalize_iter(scalar_run.chars())
+                    {
+                        append(ch)?;
+                    }
+                }
             }
-            UnicodeNormalizationForm::Nfd => {
-                let normalized =
-                    icu_normalizer::DecomposingNormalizer::new_nfd().normalize(scalar_run);
-                out.extend(normalized.as_ref().encode_utf16());
-            }
-            UnicodeNormalizationForm::Nfkc => {
-                let normalized =
-                    icu_normalizer::ComposingNormalizer::new_nfkc().normalize(scalar_run);
-                out.extend(normalized.as_ref().encode_utf16());
-            }
-            UnicodeNormalizationForm::Nfkd => {
-                let normalized =
-                    icu_normalizer::DecomposingNormalizer::new_nfkd().normalize(scalar_run);
-                out.extend(normalized.as_ref().encode_utf16());
-            }
-        }
-        scalar_run.clear();
-    };
+            scalar_run.clear();
+            Ok(())
+        };
     for decoded in char::decode_utf16(units.iter().copied()) {
         match decoded {
             Ok(ch) => scalar_run.push(ch),
             Err(error) => {
-                flush(&mut scalar_run, &mut out);
-                out.push(error.unpaired_surrogate());
+                flush(vm, &mut scalar_run, &mut out)?;
+                vm.extend_reserved_units(&mut out, &[error.unpaired_surrogate()])?;
             }
         }
     }
-    flush(&mut scalar_run, &mut out);
-    out
+    flush(vm, &mut scalar_run, &mut out)?;
+    Ok(out)
 }
 
 /// The stored UTF-16BE payload for a Rust `&str`, encoding it to code units
@@ -64637,14 +64868,28 @@ fn bi_to_decimal(neg: bool, mag: &[u32]) -> String {
 }
 
 /// Render a sign/magnitude BigInt in radix 2 through 36.
-fn bi_to_radix(negative: bool, magnitude: &[u32], radix: u32) -> String {
+fn bi_to_radix(
+    vm: &mut Interp,
+    negative: bool,
+    magnitude: &[u32],
+    radix: u32,
+) -> Result<String, Step> {
     debug_assert!((2..=36).contains(&radix));
     if bi_is_zero(magnitude) {
-        return "0".into();
+        return Ok("0".into());
     }
-    let mut limbs = magnitude.to_vec();
-    let mut digits = Vec::new();
+    let mut limbs = Interp::fill_scratch(
+        vm.reserve_work_scratch(magnitude.len())?,
+        magnitude.iter().copied(),
+    );
+    let capacity = magnitude
+        .len()
+        .checked_mul(32)
+        .and_then(|n| n.checked_add(1))
+        .ok_or(Step::Host(Halt::HeapExhausted))?;
+    let mut digits = vm.reserve_scratch::<u8>(capacity)?;
     while !bi_is_zero(&limbs) {
+        vm.charge_builtin_work(limbs.len() as u64)?;
         let mut remainder = 0u64;
         for limb in limbs.iter_mut().rev() {
             let value = (remainder << 32) | *limb as u64;
@@ -64652,12 +64897,13 @@ fn bi_to_radix(negative: bool, magnitude: &[u32], radix: u32) -> String {
             remainder = value % radix as u64;
         }
         limbs = bi_trim(limbs);
-        digits.push(char::from_digit(remainder as u32, radix).expect("radix digit"));
+        digits.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[remainder as usize]);
     }
     if negative {
-        digits.push('-');
+        digits.push(b'-');
     }
-    digits.iter().rev().collect()
+    digits.reverse();
+    Ok(String::from_utf8(digits).expect("ASCII radix digits"))
 }
 
 /// Render a completion value the way JS `String()` does.
