@@ -34,6 +34,8 @@ try {
     }
   } else if (
     [
+      'http-grant',
+      'http-services',
       'revoke-invite',
       'invite',
       'connect',
@@ -56,7 +58,18 @@ try {
   ) {
     const client = await connectLocalControl(join(statePath, 'control.sock'));
     try {
-      if (command === 'mail') {
+      if (command === 'http-grant') {
+        const [key, port] = args;
+        console.log(
+          JSON.stringify(
+            await client.call('httpGrant', key, Number(port)),
+            null,
+            2,
+          ),
+        );
+      } else if (command === 'http-services') {
+        console.log(JSON.stringify(await client.call('httpServices'), null, 2));
+      } else if (command === 'mail') {
         await showMailbox(client);
       } else if (
         [
@@ -156,7 +169,7 @@ try {
     }
   } else {
     console.log(
-      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|http-grant|http-services|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
