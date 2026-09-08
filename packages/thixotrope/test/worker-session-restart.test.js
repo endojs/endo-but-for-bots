@@ -28,6 +28,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makePeerSnapshottingReplayEngine } from '../src/peer-replay-engine.js';
 import { makeFsStore } from '../src/store-fs.js';
+import { parkWorkers } from './_park-workers.js';
 
 const COUNTER_SOURCE = `
 (() => {
@@ -154,8 +155,7 @@ test('worker sessions survive a daemon restart', async t => {
     t.truthy(hubState.sessions[idA], 'worker A has hub session rows');
     t.truthy(hubState.sessions[idB], 'worker B has hub session rows');
 
-    await workerA.sleep();
-    await workerB.sleep();
+    await parkWorkers(d1);
     t.false(workerA.isAwake());
     t.false(workerB.isAwake());
 
@@ -167,10 +167,10 @@ test('worker sessions survive a daemon restart', async t => {
     const d2 = await makeDaemon(statePath);
     t.teardown(() => d2.shutdown());
 
-    t.false(
-      d2.getWorker(idB).isAwake(),
-      'restoring records and obligations woke no worker',
-    );
+    // Startup may resume journal work. Park explicitly before checking that
+    // restored references transparently wake their targets on the next call.
+    await parkWorkers(d2);
+    t.false(d2.getWorker(idB).isAwake());
 
     const greeter = await d2.lookup('greeter-cap');
     t.is(
