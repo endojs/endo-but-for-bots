@@ -17,9 +17,11 @@
 //! ```
 //!
 //! The instrument prints medians and ratios; the phase-3 gate's
-//! detached half lives in `ironhorse-vm/tests/dispatch_bench.rs` and
+//! detached half lives in `ironhorse-snapshot/tests/dispatch_bench.rs` and
 //! is unaffected by attachment (detached machines pay one
 //! always-false branch).
+
+mod bench_support;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -137,6 +139,13 @@ fn attached_vs_detached_hot_crank() {
         median(resident_ms),
         median(faulting_ms),
     );
+    for (name, value) in [
+        ("attached_detached_ms", d),
+        ("attached_resident_ms", r),
+        ("attached_faulting_ms", f),
+    ] {
+        bench_support::report(name, value);
+    }
     println!("detached hot crank median:          {d:.3} ms");
     println!(
         "attached-resident hot crank median: {r:.3} ms  (x{:.3} of detached)",

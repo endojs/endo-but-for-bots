@@ -11,6 +11,8 @@
 //! medians and their ratio; the operator compares across heap sizes
 //! (the fixture loop count scales the heap).
 
+mod bench_support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
@@ -80,6 +82,8 @@ fn wake_latency_eager_vs_lazy() {
         })
         .collect();
     let (e, l) = (median(eager), median(lazy));
+    bench_support::report("wake_eager_ms", e);
+    bench_support::report("wake_lazy_ms", l);
     println!("eager wake median: {e:.3} ms");
     println!("lazy  wake median: {l:.3} ms");
     println!("lazy/eager ratio:  {:.3}", l / e);
@@ -117,6 +121,7 @@ fn placeholder_alloc_cost_across_slot_counts() {
             drop(arena);
         }
         ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        bench_support::report(&format!("placeholder_{slots}_ms"), ms[2]);
         println!(
             "slots={slots:>8} | placeholder alloc median {:>7.3} ms ({:.1} ns/slot)",
             ms[2],
