@@ -21,8 +21,12 @@
 //!
 //! Encoding always zero-fills the record first, so a round-trip
 //! (write → read → write) is byte-identical: unused payload bytes are
-//! deterministically zero both times.
+//! deterministically zero both times. Number NaNs are written in XS's
+//! canonical form, including payloads constructed without `Slot::number`.
+//! Decoding preserves legacy NaN bits; re-encoding normalizes them. Raw
+//! chunk/ArrayBuffer bytes are outside this codec and remain unchanged.
 
+use ironhorse_vm::value::canonicalize_nan;
 use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot, SlotIndex};
 
 /// The fixed serialized width of one slot record, in bytes.
@@ -75,7 +79,7 @@ fn encode_payload(p: &Payload) -> (u8, [u8; 10]) {
             P_INT
         }
         Payload::Number(n) => {
-            d[0..8].copy_from_slice(&n.to_bits().to_be_bytes());
+            d[0..8].copy_from_slice(&canonicalize_nan(n).to_bits().to_be_bytes());
             P_NUM
         }
         Payload::String(o) => {
@@ -186,19 +190,53 @@ mod tests {
     }
 
     #[test]
-    fn nan_bits_preserved() {
-        // A signaling-NaN bit pattern must survive exactly, not collapse
-        // to a canonical NaN.
-        let raw: u64 = 0x7ff0_0000_0000_0001;
-        let slot = Slot::number(f64::from_bits(raw));
-        let mut buf = Vec::new();
-        encode_slot(&slot, &mut buf);
-        let back = decode_slot(&buf).unwrap();
-        // NaN != NaN under PartialEq, so compare the raw bits directly:
-        // the exact bit pattern must survive, not collapse to canonical.
-        match back.value {
-            Payload::Number(n) => assert_eq!(n.to_bits(), raw),
-            other => panic!("expected number payload, got {:?}", other),
+    fn nan_is_canonicalized_even_when_slot_constructor_is_bypassed() {
+        for bits in [
+            0x7ff0_0000_0000_0001,
+            0x7ff8_0000_0000_0042,
+            0xfff0_0000_0000_0001,
+            0xfff8_0000_0000_0042,
+        ] {
+            let mut slot = Slot::number(0.0);
+            slot.value = Payload::Number(f64::from_bits(bits));
+            let mut buf = Vec::new();
+            encode_slot(&slot, &mut buf);
+            assert_eq!(&buf[10..18], &0x7ff8_0000_0000_0000u64.to_be_bytes());
+            let back = decode_slot(&buf).unwrap();
+            let Payload::Number(n) = back.value else {
+                panic!("expected number")
+            };
+            assert_eq!(n.to_bits(), 0x7ff8_0000_0000_0000);
+            assert_eq!(encode_slots(&[back]), buf);
+
+            // Old records remain readable, but their next write is canonical.
+            buf[10..18].copy_from_slice(&bits.to_be_bytes());
+            let legacy = decode_slot(&buf).unwrap();
+            assert_eq!(
+                &encode_slots(&[legacy])[10..18],
+                &0x7ff8_0000_0000_0000u64.to_be_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn non_nan_number_bits_are_unchanged() {
+        for bits in [
+            0,
+            0x8000_0000_0000_0000,
+            1,
+            0x8000_0000_0000_0001,
+            0x7ff0_0000_0000_0000,
+            0xfff0_0000_0000_0000,
+            0x7fef_ffff_ffff_ffff,
+        ] {
+            let slot = Slot::number(f64::from_bits(bits));
+            let buf = encode_slots(&[slot]);
+            assert_eq!(&buf[10..18], &bits.to_be_bytes());
+            let Payload::Number(n) = decode_slot(&buf).unwrap().value else {
+                panic!("expected number")
+            };
+            assert_eq!(n.to_bits(), bits);
         }
     }
 

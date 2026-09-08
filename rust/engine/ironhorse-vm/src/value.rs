@@ -322,6 +322,18 @@ pub struct Slot {
     pub value: Payload,
 }
 
+/// Normalize Number NaNs to XS's `mxCanonicalNaN` binary64 representation.
+/// Preserve every non-NaN bit, including negative zero and subnormals.
+/// Raw ArrayBuffer bytes are not Numbers and must not pass through this helper.
+#[inline]
+pub fn canonicalize_nan(n: f64) -> f64 {
+    if n.is_nan() {
+        f64::from_bits(0x7ff8_0000_0000_0000)
+    } else {
+        n
+    }
+}
+
 impl Slot {
     #[inline]
     pub fn undefined() -> Slot {
@@ -364,6 +376,10 @@ impl Slot {
     }
     #[inline]
     pub fn of(kind: Kind, value: Payload) -> Slot {
+        let value = match value {
+            Payload::Number(n) => Payload::Number(canonicalize_nan(n)),
+            other => other,
+        };
         Slot {
             next: SlotIndex::NULL,
             id: 0,
