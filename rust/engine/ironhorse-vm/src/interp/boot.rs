@@ -7,6 +7,20 @@ pub(crate) struct BootTemplate {
 }
 
 impl BootTemplate {
+    /// Carry compilation's live meter into a fresh realm. The caller charges
+    /// linkage after releasing the template cache borrow, since a host callback
+    /// may itself evaluate another compartment using that cache.
+    pub(crate) fn instantiate_continuing_meter(
+        &self,
+        meter: Meter,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) -> (Interp, u64) {
+        let mut interp = self.instantiate();
+        interp.meter = meter;
+        interp.meter_host = host;
+        (interp, self.link_charge)
+    }
+
     pub(crate) fn new(names: &[SymbolName]) -> Self {
         let mut inner = Interp::new();
         let before = inner.meter_index();

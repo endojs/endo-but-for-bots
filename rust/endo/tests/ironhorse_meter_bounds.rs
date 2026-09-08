@@ -29,6 +29,35 @@ fn options(dir: &std::path::Path, meter: MeterBounds) -> HeapStoreOptions {
 }
 
 #[test]
+fn compilation_failure_rewinds_pending_window_without_persisting_charges() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut options = options(dir.path(), MeterBounds::per_crank(200_000));
+    options.cadence.checkpoint_every = 3;
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine.eval("var n = 7; n").unwrap();
+    machine.close().unwrap();
+    for source in [
+        "var = ;".to_string(),
+        // Source admission costs 1/4 computron per byte in the shared table.
+        format!("/*{}*/ 1", "x".repeat(1_000_000)),
+    ] {
+        let mut machine = PersistentMachine::open(&options).unwrap();
+        let epoch = machine.epoch().unwrap();
+        machine.eval("var n; n = 99; n").unwrap();
+        assert_eq!(machine.epoch().unwrap(), epoch);
+        let error = machine.eval(&source).unwrap_err();
+        match error {
+            MachineError::Compile { meter_raw, .. } => assert!(meter_raw > 0),
+            MachineError::MeterAbort { computrons, limit } => assert_eq!(computrons, limit),
+            other => panic!("unexpected preparation error: {other:?}"),
+        }
+        assert_eq!(machine.epoch().unwrap(), epoch);
+        assert_eq!(machine.eval("var n; n").unwrap().result, "7");
+        machine.close().unwrap();
+    }
+}
+
+#[test]
 fn the_default_machine_is_bounded() {
     assert_eq!(Machine::new().bounds(), &MeterBounds::default());
     assert!(

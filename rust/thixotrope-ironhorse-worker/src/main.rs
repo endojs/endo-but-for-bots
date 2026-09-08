@@ -60,17 +60,43 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     let m = session.machine_mut();
     let ceiling = (m.meter_index() >> 16).saturating_add(budget);
     m.rearm_meter(
-        1000.min(budget.max(1)),
+        budget.clamp(1, 1000),
         Box::new(move |spent| spent <= ceiling),
     );
-    let compiled = ironhorse_compile::compile_atoms_budgeted(
-        source,
-        ironhorse_compile::Goal::Script,
-        false,
-        &mut |raw| m.charge_compilation(raw),
-    )
-    .map_err(|error| format!("compile: {error:?}"))?;
-    let (code, symbols) = (compiled.bytecode, compiled.symbols);
+    let raw_budget = budget
+        .saturating_mul(1 << 16)
+        .min(u64::MAX - m.meter_index());
+    let mut charge = |raw| m.charge_compilation(raw);
+    let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, &mut charge);
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ironhorse_compile::compile_atoms_goal_with_meter(
+            source,
+            ironhorse_compile::Goal::Script,
+            false,
+            meter.clone(),
+        )
+    }));
+    // Refusal takes precedence even if a compiler error or unwind follows it.
+    if meter.exhausted() {
+        return Err("guest crank halted: MeterAbort during compilation".into());
+    }
+    let (code, symbols) = compiled
+        .map_err(|_| "guest crank halted: Panic during compilation".to_string())?
+        .map_err(|e| match e.kind {
+            ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                ..
+            }) => "guest crank halted: HeapExhausted during compilation".to_string(),
+            ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                ..
+            })
+            | ironhorse_compile::ParseErrorKind::MeterLimit => {
+                "guest crank halted: MeterAbort during compilation".to_string()
+            }
+            _ => e.to_string(),
+        })?;
+    drop(meter);
     let names = parse_symbols(&symbols);
     m.set_source_compiler(Rc::new(Compiler));
     let code = if m.program_symbol_names().is_empty() {
@@ -233,5 +259,57 @@ fn main() {
             }
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ironhorse_snapshot::store::MemoryStore;
+
+    #[test]
+    fn worker_compilation_is_charged_without_changing_script_semantics() {
+        let source = "var n = 7; n";
+        let signature = Signature::new("worker-compile-test");
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(Interp::new(), &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let meter = ironhorse_compile::ParseMeter::with_budget(u64::MAX);
+        let (code, symbols) = ironhorse_compile::compile_atoms_goal_with_meter(
+            source,
+            ironhorse_compile::Goal::Script,
+            false,
+            meter.clone(),
+        )
+        .unwrap();
+        let mut baseline = Interp::new();
+        baseline.link_intrinsics(&parse_symbols(&symbols));
+        let expected = baseline.run(&code);
+        assert_eq!(
+            eval(&mut session, source, 1_000_000).unwrap(),
+            expected.result
+        );
+        assert_eq!(
+            session.machine_mut().meter_index(),
+            expected.meter_raw + meter.raw()
+        );
+    }
+
+    #[test]
+    fn worker_admission_refuses_before_link_or_dispatch() {
+        let signature = Signature::new("worker-compile-test");
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(Interp::new(), &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let start = session.machine_mut().meter_index();
+        let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
+        assert_eq!(
+            eval(&mut session, &source, 32).unwrap_err(),
+            "guest crank halted: MeterAbort during compilation"
+        );
+        assert_eq!(session.machine_mut().meter_index() - start, 32 << 16);
+        assert!(session.machine_mut().program_symbol_names().is_empty());
     }
 }

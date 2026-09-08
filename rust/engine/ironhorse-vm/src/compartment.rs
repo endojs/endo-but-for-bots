@@ -117,20 +117,27 @@ pub struct Intrinsics {
 }
 
 impl Intrinsics {
+    fn with_template<R>(
+        &self,
+        names: &[crate::symbols::SymbolName],
+        use_template: impl FnOnce(&crate::interp::BootTemplate) -> R,
+    ) -> R {
+        let mut cache = self.boot.borrow_mut();
+        if cache.as_ref().is_none_or(|(cached, _)| cached != names) {
+            *cache = Some((names.to_vec(), crate::interp::BootTemplate::new(names)));
+        }
+        use_template(&cache.as_ref().unwrap().1)
+    }
+
     fn fresh_linked(
         &self,
         names: &[crate::symbols::SymbolName],
         meter: Option<(u64, Box<dyn FnMut(u64) -> bool>)>,
     ) -> Interp {
-        let mut cache = self.boot.borrow_mut();
-        if cache.as_ref().is_none_or(|(cached, _)| cached != names) {
-            *cache = Some((names.to_vec(), crate::interp::BootTemplate::new(names)));
-        }
-        let template = &cache.as_ref().unwrap().1;
-        match meter {
+        self.with_template(names, |template| match meter {
             Some((interval, host)) => template.instantiate_metered(interval, host),
             None => template.instantiate(),
-        }
+        })
     }
 
     pub fn new() -> Rc<Intrinsics> {
@@ -543,6 +550,51 @@ impl Compartment {
         self.evaluate_linked_shared(interp, Rc::from(bytecode))
     }
 
+    /// Evaluate with the live meter already charged by source compilation.
+    /// The index, next checkpoint, and host callback continue unchanged.
+    /// This preserves the pristine boot cache without replaying compilation's
+    /// charges or resetting its consultation window.
+    pub fn evaluate_with_symbols_continuing_meter_shared(
+        &self,
+        bytecode: Rc<[u8]>,
+        symbols: &[u8],
+        meter: crate::Meter,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) -> RunOutcome {
+        let names = match crate::symbols::parse_symbols_checked(symbols) {
+            Ok(names) => names,
+            Err(halt) => {
+                let mut outcome = crate::symbols::decode_refusal(halt);
+                outcome.meter_raw = meter.state().index;
+                outcome.computrons = outcome.meter_raw >> 16;
+                return outcome;
+            }
+        };
+        let (mut interp, link_charge) = self.intrinsics.with_template(&names, |template| {
+            template.instantiate_continuing_meter(meter, host)
+        });
+        // The callback runs outside the cache borrow, including on a cache hit.
+        if !interp.charge_compilation(link_charge) {
+            return RunOutcome {
+                completed: false,
+                result: String::new(),
+                coercion_error: None,
+                host_render_halt: None,
+                computrons: interp.meter_index() >> 16,
+                meter_raw: interp.meter_index(),
+                dispatched: 0,
+                halt: Halt::MeterAbort,
+            };
+        }
+        if let Err(skip) = self.seeded_globals() {
+            let mut outcome = Self::refused(skip);
+            outcome.meter_raw = interp.meter_index();
+            outcome.computrons = outcome.meter_raw >> 16;
+            return outcome;
+        }
+        self.evaluate_linked_shared(interp, bytecode)
+    }
+
     /// The shared body of the symbol-linked evaluators: seed this
     /// compartment's globals into the independent linked copy, then run.
     fn evaluate_linked_shared(&self, mut interp: Interp, bytecode: Rc<[u8]>) -> RunOutcome {
@@ -684,6 +736,100 @@ mod tests {
                 assert_eq!(outcome.result, "7");
             }
         }
+    }
+
+    #[test]
+    fn continuing_meter_rejects_malformed_symbols_without_losing_bill() {
+        let machine = Machine::new();
+        let mut meter = crate::Meter::new();
+        assert!(meter.charge_compilation(7 << 16, None));
+        let outcome = machine
+            .new_compartment()
+            .evaluate_with_symbols_continuing_meter_shared(Rc::from([]), &[0xff], meter, None);
+        assert!(!outcome.completed);
+        assert_eq!(outcome.meter_raw, 7 << 16);
+        assert_eq!(outcome.dispatched, 0);
+    }
+
+    #[test]
+    fn continuing_meter_preserves_charges_and_host_schedule() {
+        let (code, symbols) =
+            ironhorse_compile::compile_atoms("Object.keys({a:1}).length").unwrap();
+        let machine = Machine::new();
+        let compartment = machine.new_compartment();
+        for interval in [1, 32, 1000] {
+            let expected_calls = Rc::new(RefCell::new(Vec::new()));
+            let calls = expected_calls.clone();
+            let mut baseline = Interp::new();
+            baseline.arm_meter(
+                interval,
+                Box::new(move |n| {
+                    calls.borrow_mut().push(n);
+                    true
+                }),
+            );
+            assert!(baseline.charge_compilation(7 << 16));
+            baseline.link_intrinsics(&crate::parse_symbols(&symbols));
+            let expected = baseline.run(&code);
+            for _ in 0..3 {
+                let actual_calls = Rc::new(RefCell::new(Vec::new()));
+                let calls = actual_calls.clone();
+                let mut host: Box<dyn FnMut(u64) -> bool> = Box::new(move |n| {
+                    calls.borrow_mut().push(n);
+                    true
+                });
+                let mut meter = crate::Meter::new();
+                meter.begin(interval);
+                assert!(meter.charge_compilation(7 << 16, Some(host.as_mut())));
+                let actual = compartment.evaluate_with_symbols_continuing_meter_shared(
+                    code.clone().into(),
+                    &symbols,
+                    meter,
+                    Some(host),
+                );
+                assert_eq!(
+                    (actual.completed, actual.result, actual.meter_raw),
+                    (
+                        expected.completed,
+                        expected.result.clone(),
+                        expected.meter_raw
+                    )
+                );
+                assert_eq!(*actual_calls.borrow(), *expected_calls.borrow());
+            }
+        }
+    }
+
+    #[test]
+    fn continuing_meter_host_can_reenter_shared_template_cache() {
+        let (code, symbols) =
+            ironhorse_compile::compile_atoms("Object.keys({a:1}).length").unwrap();
+        let machine = Machine::new();
+        let outer = machine.new_compartment();
+        let inner = machine.new_compartment();
+        let inner_code = code.clone();
+        let inner_symbols = symbols.clone();
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let seen = calls.clone();
+        let host = Box::new(move |_| {
+            seen.set(seen.get() + 1);
+            assert!(
+                inner
+                    .evaluate_with_symbols(&inner_code, &inner_symbols)
+                    .completed
+            );
+            true
+        });
+        let mut meter = crate::Meter::new();
+        meter.begin(1);
+        let outcome = outer.evaluate_with_symbols_continuing_meter_shared(
+            code.into(),
+            &symbols,
+            meter,
+            Some(host),
+        );
+        assert!(outcome.completed);
+        assert!(calls.get() > 0);
     }
 
     #[test]
