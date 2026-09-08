@@ -190,6 +190,9 @@ fn incremental_batch(
         // This harness builds batches directly, outside the cadence, so
         // it records no crank history.
         cranks: 0,
+        collect_every: 0,
+        collections: 0,
+        parent_seal: prev_seal.to_string(),
         root: String::new(),
         seal: String::new(),
     };
@@ -301,6 +304,7 @@ fn incremental_batch(
         edges_all[*i as usize] = targets.clone();
     }
     manifest.root = ironhorse_snapshot::store::compute_root(
+        &manifest,
         &ironhorse_snapshot::store::leaf_hash(
             ironhorse_snapshot::store::LEAF_SMALL,
             0,

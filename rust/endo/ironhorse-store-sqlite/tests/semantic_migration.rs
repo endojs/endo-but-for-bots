@@ -28,7 +28,7 @@ fn incompatible_legacy_boot_store_is_rejected_before_adoption() {
     let before = std::fs::read(&path).expect("read old store");
     let mut store = SqliteHeapStore::open(&path).expect("open old store");
     match migrate_store(&mut store, &signature()) {
-        Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
+        Err(StoreError::Snapshot(SnapshotError::BootLayoutMismatch { found: None, .. })) => {}
         Ok(false) => panic!("legacy schema 23 requires migration"),
         Err(other) => panic!("legacy boot migration refused incorrectly: {other:?}"),
         Ok(true) => panic!("legacy boot layout must not be restamped"),

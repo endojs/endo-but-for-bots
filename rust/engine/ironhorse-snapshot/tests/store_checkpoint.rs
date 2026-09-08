@@ -489,7 +489,7 @@ fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
 
     let mut forged = image_to_batch(&image, 1, "");
     forged.manifest.seal = batch.manifest.seal.clone();
-    forged.slot_pages[0].1[0] ^= 0xff; // content no longer matches the seal
+    *forged.chunk_extents[0].1.last_mut().unwrap() ^= 1; // valid geometry, changed content
     let mut store = MemoryStore::new();
     match store.commit(&forged) {
         Err(StoreError::BaselineMismatch { .. }) => {}

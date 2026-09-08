@@ -90,7 +90,9 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// the changed small leaf.
 /// v26: NAME entries use canonical XS CESU-8 instead of UTF-8. Migration
 /// converts the name section and recomputes the root, preserving all ids.
-pub const STORE_SCHEMA_VERSION: u32 = 26;
+/// v27 authenticates the manifest core and collection cadence, verifies the
+/// current seal at open, and admits one canonical encoding of small state.
+pub const STORE_SCHEMA_VERSION: u32 = 27;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -223,11 +225,16 @@ pub struct StoreManifest {
     /// Reads 0 from a schema-7 store, which is correct: such a store
     /// predates the counter, and 0 is where a fresh one starts.
     pub cranks: u64,
-    /// The **row-hash tree root** (store seam design, phase 5): SHA-256
-    /// (hex) over the small-state leaf and every row leaf
-    /// ([`combine_root`]). Unlike the seal — which chains commit
-    /// *deltas* — the root attests the store's complete CURRENT
-    /// content, so a length-preserving byte flip at rest fails closed
+    /// Replica-visible collection interval; zero disables scheduled collection.
+    pub collect_every: u32,
+    /// Successful durable collection events, including explicit collections.
+    pub collections: u64,
+    /// Previous seal, retained so the current seal is verifiable at open.
+    pub parent_seal: String,
+    /// SHA-256 root over the manifest core, small state, and every row leaf
+    /// ([`compute_root`]). Schema 27 binds identity, geometry, epoch, counters,
+    /// cadence, and parent seal; only the root and seal themselves are omitted
+    /// to avoid a circular hash. A length-preserving byte flip at rest fails closed
     /// (at open for a leaf flip, at first read for a row flip)
     /// instead of resuming a different machine. Store-native identity;
     /// the CAS blob key remains SHA-256 of the canonical export.
@@ -304,6 +311,12 @@ impl StoreManifest {
         // rejects as trailing garbage, breaking the intermediate step.
         if self.store_schema >= 8 {
             v.extend_from_slice(&self.cranks.to_be_bytes());
+        }
+        if self.store_schema >= 27 {
+            v.extend_from_slice(&self.collect_every.to_be_bytes());
+            v.extend_from_slice(&self.collections.to_be_bytes());
+            v.extend_from_slice(&(self.parent_seal.len() as u32).to_be_bytes());
+            v.extend_from_slice(self.parent_seal.as_bytes());
         }
         v
     }
@@ -396,6 +409,24 @@ impl StoreManifest {
         } else {
             0
         };
+        let (collect_every, collections, parent_seal) = if store_schema >= 27 {
+            let every = u32::from_be_bytes(take4(&mut i)?);
+            let collections = u64::from_be_bytes(take8(&mut i)?);
+            let len = u32::from_be_bytes(take4(&mut i)?) as usize;
+            let end = i
+                .checked_add(len)
+                .ok_or(SnapshotError::Corrupt("manifest parent seal length"))?;
+            let bytes = p
+                .get(i..end)
+                .ok_or(SnapshotError::Corrupt("manifest parent seal truncated"))?;
+            let parent = std::str::from_utf8(bytes)
+                .map_err(|_| SnapshotError::Corrupt("manifest parent seal not utf8"))?
+                .to_string();
+            i = end;
+            (every, collections, parent)
+        } else {
+            (0, 0, String::new())
+        };
         // Store contents are untrusted; a manifest that decodes but
         // carries extra bytes is malformed, not forward-compatible —
         // format evolution goes through the schema version gate above.
@@ -415,6 +446,9 @@ impl StoreManifest {
             free_len,
             epoch,
             cranks,
+            collect_every,
+            collections,
+            parent_seal,
             root,
             seal,
         })
@@ -435,6 +469,16 @@ pub fn seal_commit(
     free_segs: &[(u32, Vec<u8>)],
     page_edges: &[(u32, Vec<u32>)],
 ) -> String {
+    if manifest_core.store_schema >= 27 {
+        let mut h = crate::sha256::Sha256::new();
+        h.update(b"S27");
+        h.update(&(prev_seal.len() as u64).to_be_bytes());
+        h.update(prev_seal.as_bytes());
+        let mut sealed = manifest_core.clone();
+        sealed.seal.clear();
+        h.update(&sealed.encode());
+        return crate::sha256::hex(&h.finalize());
+    }
     let mut h = crate::sha256::Sha256::new();
     h.update(prev_seal.as_bytes());
     // The COMPLETE manifest with only the seal field cleared (that is
@@ -739,6 +783,7 @@ pub fn update_class_tree(
 /// 6's class-tree combination. The v5 flat formula stays available
 /// as [`combine_root`] for migration verification only.
 pub fn compute_root(
+    manifest: &StoreManifest,
     small_leaf: &[u8; 32],
     pages: &[[u8; 32]],
     exts: &[[u8; 32]],
@@ -758,11 +803,40 @@ pub fn compute_root(
         &edge_leaves,
         &build_class_tree(TREE_EDGES, &edge_leaves),
     );
-    combine_class_roots(
-        small_leaf,
-        [pages.len() as u32, exts.len() as u32, frees.len() as u32],
-        [&pr, &xr, &fr, &sr],
+    bind_manifest_root(
+        manifest,
+        &combine_class_roots(
+            small_leaf,
+            [pages.len() as u32, exts.len() as u32, frees.len() as u32],
+            [&pr, &xr, &fr, &sr],
+        ),
     )
+}
+
+/// Add a domain-separated manifest term to the historical row root.
+/// Legacy schema roots remain available only for migration verification.
+fn bind_manifest_root(manifest: &StoreManifest, row_root: &str) -> String {
+    if manifest.store_schema < 27 {
+        return row_root.to_string();
+    }
+    let mut core = manifest.clone();
+    core.root.clear();
+    core.seal.clear();
+    let mut h = crate::sha256::Sha256::new();
+    h.update(b"C27");
+    h.update(row_root.as_bytes());
+    h.update(b"M27");
+    h.update(&core.encode());
+    crate::sha256::hex(&h.finalize())
+}
+
+fn verify_current_seal(manifest: &StoreManifest) -> Result<(), StoreError> {
+    if manifest.store_schema >= 27
+        && manifest.seal != seal_commit(&manifest.parent_seal, manifest, &[], &[], &[], &[], &[])
+    {
+        return Err(SnapshotError::Corrupt("store manifest seal mismatch").into());
+    }
+    Ok(())
 }
 
 /// The v6 combined root: counts, the small-state leaf, and the four
@@ -871,20 +945,23 @@ impl RootLedger {
     }
 
     /// The combined root over the ledger's current state.
-    pub fn root(&self) -> String {
-        combine_class_roots(
-            &self.small_leaf,
-            [
-                self.pages.len() as u32,
-                self.exts.len() as u32,
-                self.frees.len() as u32,
-            ],
-            [
-                &class_tree_root(TREE_PAGES, &self.pages, &self.pages_levels),
-                &class_tree_root(TREE_EXTS, &self.exts, &self.exts_levels),
-                &class_tree_root(TREE_FREES, &self.frees, &self.frees_levels),
-                &class_tree_root(TREE_EDGES, &self.edge_leaves, &self.edges_levels),
-            ],
+    pub fn root(&self, manifest: &StoreManifest) -> String {
+        bind_manifest_root(
+            manifest,
+            &combine_class_roots(
+                &self.small_leaf,
+                [
+                    self.pages.len() as u32,
+                    self.exts.len() as u32,
+                    self.frees.len() as u32,
+                ],
+                [
+                    &class_tree_root(TREE_PAGES, &self.pages, &self.pages_levels),
+                    &class_tree_root(TREE_EXTS, &self.exts, &self.exts_levels),
+                    &class_tree_root(TREE_FREES, &self.frees, &self.frees_levels),
+                    &class_tree_root(TREE_EDGES, &self.edge_leaves, &self.edges_levels),
+                ],
+            ),
         )
     }
 
@@ -984,7 +1061,7 @@ impl RootLedger {
             &edge_dirty,
         )?;
         self.small_leaf = leaf_hash(LEAF_SMALL, 0, small);
-        Ok(self.root())
+        Ok(self.root(manifest))
     }
 }
 
@@ -1287,7 +1364,7 @@ pub fn apply_batch(
         *slot = targets.clone();
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &batch.small);
-    let root = compute_root(&small_leaf, pages, exts, frees, edges);
+    let root = compute_root(&batch.manifest, &small_leaf, pages, exts, frees, edges);
     if root != batch.manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -1447,6 +1524,14 @@ impl SmallState {
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
+        let small = Self::decode_legacy(p)?;
+        if small.encode() != p {
+            return Err(SnapshotError::Corrupt("non-canonical small state").into());
+        }
+        Ok(small)
+    }
+
+    fn decode_legacy(p: &[u8]) -> Result<SmallState, StoreError> {
         let mut i = 0usize;
         let mut section = |name: &'static str| -> Result<&[u8], StoreError> {
             if i + 4 > p.len() {
@@ -2089,6 +2174,7 @@ pub fn migrate_store(
             23 => migrate_v23_to_v24(store)?,
             24 => migrate_v24_to_v25(store)?,
             25 => migrate_v25_to_v26(store)?,
+            26 => migrate_v26_to_v27(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2121,7 +2207,7 @@ fn migrate_v5_to_v6(store: &mut dyn HeapStore) -> Result<(), StoreError> {
         });
     }
     manifest.store_schema = 6;
-    manifest.root = compute_root(&small_leaf, &pages, &exts, &frees, &edges);
+    manifest.root = compute_root(&manifest, &small_leaf, &pages, &exts, &frees, &edges);
     store.replace_manifest_for_migration(&manifest)
 }
 
@@ -2139,6 +2225,7 @@ fn migrate_v6_to_v7(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2157,6 +2244,7 @@ fn migrate_v6_to_v7(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 12]);
     manifest.store_schema = 7;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2184,6 +2272,7 @@ fn migrate_v7_to_v8(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2220,6 +2309,7 @@ fn migrate_v8_to_v9(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2237,6 +2327,7 @@ fn migrate_v8_to_v9(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 9;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2259,6 +2350,7 @@ fn migrate_v9_to_v10(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2276,6 +2368,7 @@ fn migrate_v9_to_v10(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 12]);
     manifest.store_schema = 10;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2299,6 +2392,7 @@ fn migrate_v10_to_v11(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2316,6 +2410,7 @@ fn migrate_v10_to_v11(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 16]);
     manifest.store_schema = 11;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2342,6 +2437,7 @@ fn migrate_v11_to_v12(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2359,6 +2455,7 @@ fn migrate_v11_to_v12(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 8]);
     manifest.store_schema = 12;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2382,6 +2479,7 @@ fn migrate_v12_to_v13(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2399,6 +2497,7 @@ fn migrate_v12_to_v13(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 13;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2418,6 +2517,7 @@ fn migrate_v13_to_v14(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2434,6 +2534,7 @@ fn migrate_v13_to_v14(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 14;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2453,6 +2554,7 @@ fn migrate_v14_to_v15(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2469,6 +2571,7 @@ fn migrate_v14_to_v15(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 15;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2488,6 +2591,7 @@ fn migrate_v15_to_v16(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2504,6 +2608,7 @@ fn migrate_v15_to_v16(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 16;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2523,6 +2628,7 @@ fn migrate_v16_to_v17(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2539,6 +2645,7 @@ fn migrate_v16_to_v17(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 17;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2558,6 +2665,7 @@ fn migrate_v17_to_v18(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2574,6 +2682,7 @@ fn migrate_v17_to_v18(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 18;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2592,6 +2701,7 @@ fn migrate_v18_to_v19(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2608,6 +2718,7 @@ fn migrate_v18_to_v19(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 19;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2625,6 +2736,7 @@ fn migrate_v19_to_v20(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2641,6 +2753,7 @@ fn migrate_v19_to_v20(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 20;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2661,6 +2774,7 @@ fn migrate_v21_to_v22(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2677,6 +2791,7 @@ fn migrate_v21_to_v22(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 22;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2693,6 +2808,7 @@ fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2709,6 +2825,7 @@ fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 21;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2729,6 +2846,7 @@ fn migrate_v22_to_v23(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2745,6 +2863,7 @@ fn migrate_v22_to_v23(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 23;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2762,6 +2881,7 @@ fn migrate_v23_to_v24(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2778,6 +2898,7 @@ fn migrate_v23_to_v24(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 24;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2802,6 +2923,7 @@ fn migrate_v24_to_v25(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2818,6 +2940,7 @@ fn migrate_v24_to_v25(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 25;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2834,6 +2957,7 @@ fn migrate_v25_to_v26(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let frees = store.free_leaf_hashes()?;
     let edges = store.page_edges()?;
     let old = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &exts,
@@ -2878,6 +3002,7 @@ fn migrate_v25_to_v26(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     new_small.extend_from_slice(&small[cursor..]);
     manifest.store_schema = 26;
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
         &exts,
@@ -2885,6 +3010,41 @@ fn migrate_v25_to_v26(store: &mut dyn HeapStore) -> Result<(), StoreError> {
         &edges,
     );
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
+fn migrate_v26_to_v27(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(
+        &manifest,
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root,
+        });
+    }
+    let small = SmallState::decode_legacy(&small)?.encode();
+    manifest.parent_seal = manifest.seal.clone();
+    manifest.store_schema = 27;
+    manifest.root = compute_root(
+        &manifest,
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    manifest.seal = seal_commit(&manifest.parent_seal, &manifest, &[], &[], &[], &[], &[]);
+    store.replace_manifest_and_small_for_migration(&manifest, &small)
 }
 
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
@@ -2895,6 +3055,20 @@ pub fn check_succession(
     stored: Option<&StoreManifest>,
     batch: &CheckpointBatch,
 ) -> Result<(), StoreError> {
+    if batch.manifest.store_schema >= 27 && batch.manifest.parent_seal != batch.prev_seal {
+        return Err(SnapshotError::Corrupt("batch parent seal mismatch").into());
+    }
+
+    if let Some(previous) = stored {
+        if previous.collect_every != batch.manifest.collect_every {
+            return Err(SnapshotError::Corrupt("collection cadence mismatch").into());
+        }
+        if batch.manifest.cranks < previous.cranks
+            || batch.manifest.collections < previous.collections
+        {
+            return Err(SnapshotError::Corrupt("durable counter regression").into());
+        }
+    }
     check_epoch(stored.map(|m| m.epoch), batch.manifest.epoch)?;
     let expected = stored.map(|m| m.seal.as_str()).unwrap_or("");
     if batch.prev_seal != expected {
@@ -2996,6 +3170,15 @@ pub fn encode_chunk_extent(chunks: &[u8], ext: u32) -> Vec<u8> {
 /// [`import_from_container`] shape; incremental batches are built by
 /// the machine surface from dirty bits.
 pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> CheckpointBatch {
+    image_to_batch_with_cadence(image, epoch, prev_seal, 0)
+}
+
+pub(crate) fn image_to_batch_with_cadence(
+    image: &MachineImage,
+    epoch: u64,
+    prev_seal: &str,
+    collect_every: u32,
+) -> CheckpointBatch {
     let mut manifest = StoreManifest {
         version: image.version.clone(),
         store_schema: STORE_SCHEMA_VERSION,
@@ -3009,6 +3192,9 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         // A container carries no crank history — importing one starts
         // the cadence schedule from zero, exactly like a fresh store.
         cranks: 0,
+        collect_every,
+        collections: 0,
+        parent_seal: prev_seal.to_string(),
         root: String::new(),
         seal: String::new(),
     };
@@ -3073,6 +3259,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
     // edge section (v5) combines over them in page order.
     let dense_edges: Vec<Vec<u32>> = page_edges.iter().map(|(_, t)| t.clone()).collect();
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small_bytes),
         &pages,
         &exts,
@@ -3120,6 +3307,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             "unsupported store schema version",
         )));
     }
+    verify_current_seal(&manifest)?;
     let small_bytes = store.read_small_state()?;
     let small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
@@ -3157,6 +3345,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
     let root = compute_root(
+        &manifest,
         &small_leaf,
         &leaf_pages,
         &leaf_exts,
@@ -3419,6 +3608,7 @@ pub fn validate_store(
         )));
     }
 
+    verify_current_seal(&manifest)?;
     let small_bytes = store.read_small_state()?;
     let mut small = SmallState::decode(&small_bytes)?;
     if manifest.cost_gate_mismatch(&small) {
@@ -3521,7 +3711,14 @@ pub fn validate_store(
         });
     }
     let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
-    let root = compute_root(&small_leaf, &leaf_pages, &leaf_exts, &leaf_frees, &edges);
+    let root = compute_root(
+        &manifest,
+        &small_leaf,
+        &leaf_pages,
+        &leaf_exts,
+        &leaf_frees,
+        &edges,
+    );
     if root != manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -3948,6 +4145,9 @@ mod tests {
             free_len: 5,
             epoch: 3,
             cranks: 41,
+            collect_every: 3,
+            collections: 7,
+            parent_seal: "parent".to_string(),
             root: "r00t".to_string(),
             seal: "abc123".to_string(),
         };
@@ -4266,15 +4466,103 @@ mod tests {
     }
 
     #[test]
+    fn manifest_core_and_seal_tampering_refuse_at_open() {
+        let image = ran_image();
+        let mutations: &[fn(&mut StoreManifest)] = &[
+            |m| m.cranks += 1,
+            |m| m.epoch += 1,
+            |m| m.collect_every += 1,
+            |m| m.collections += 1,
+            |m| m.parent_seal.push('0'),
+            |m| m.seal.push('0'),
+            |m| m.root.push('0'),
+            |m| m.creation.initial_slot_count += 1,
+        ];
+        for mutate in mutations {
+            let mut store = MemoryStore::new();
+            store.commit(&image_to_batch(&image, 1, "")).unwrap();
+            mutate(store.manifest.as_mut().unwrap());
+            assert!(validate_store(&store, &sig()).is_err());
+            assert!(store_to_image(&store).is_err());
+        }
+    }
+
+    #[test]
+    fn manifest_core_tampering_cannot_hide_behind_a_recomputed_seal() {
+        let mutations: &[fn(&mut StoreManifest)] = &[
+            |m| m.cranks += 1,
+            |m| m.epoch += 1,
+            |m| m.collect_every += 1,
+            |m| m.collections += 1,
+            |m| m.parent_seal.push('0'),
+            |m| m.creation.initial_slot_count += 1,
+        ];
+        for mutate in mutations {
+            let mut store = MemoryStore::new();
+            store.commit(&image_to_batch(&ran_image(), 1, "")).unwrap();
+            let manifest = store.manifest.as_mut().unwrap();
+            mutate(manifest);
+            manifest.seal = seal_commit(&manifest.parent_seal, manifest, &[], &[], &[], &[], &[]);
+            verify_current_seal(manifest).unwrap();
+            assert!(matches!(
+                validate_store(&store, &sig()),
+                Err(StoreError::BaselineMismatch { .. })
+            ));
+            assert!(matches!(
+                store_to_image(&store),
+                Err(StoreError::BaselineMismatch { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn small_state_rejects_legacy_empty_sections_until_migrated() {
+        let mut store = MemoryStore::new();
+        store.commit(&image_to_batch(&ran_image(), 1, "")).unwrap();
+        let canonical = store.read_small_state().unwrap();
+        let mut offset = 0;
+        for _ in 0..6 {
+            let len =
+                u32::from_be_bytes(canonical[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4 + len;
+        }
+        // The arrays table is empty, but its canonical encoding has a count.
+        assert_eq!(&canonical[offset..offset + 8], &[0, 0, 0, 4, 0, 0, 0, 0]);
+        let mut legacy = canonical.clone();
+        legacy.drain(offset + 4..offset + 8);
+        legacy[offset..offset + 4].copy_from_slice(&0u32.to_be_bytes());
+        assert!(SmallState::decode(&legacy).is_err());
+        assert_eq!(
+            SmallState::decode_legacy(&legacy).unwrap().encode(),
+            canonical
+        );
+        let mut manifest = store.manifest().unwrap();
+        manifest.store_schema = 26;
+        let (pages, exts) = store.leaf_hashes().unwrap();
+        manifest.root = compute_root(
+            &manifest,
+            &leaf_hash(LEAF_SMALL, 0, &legacy),
+            &pages,
+            &exts,
+            &store.free_leaf_hashes().unwrap(),
+            &store.page_edges().unwrap(),
+        );
+        store
+            .replace_manifest_and_small_for_migration(&manifest, &legacy)
+            .unwrap();
+        migrate_store(&mut store, &sig()).unwrap();
+        validate_store(&store, &sig()).unwrap();
+        assert_eq!(store.read_small_state().unwrap(), canonical);
+    }
+
+    #[test]
     fn validate_fails_closed_on_accounting_mismatch() {
         let image = ran_image();
-        let mut batch = image_to_batch(&image, 1, "");
-        // Corrupt the live count so live + free != count — resealed,
-        // so the accounting gate (not the seal check) is what trips.
-        batch.manifest.slot_live += 1;
-        reseal_batch(&mut batch);
+        let mut corrupt = image.clone();
+        // Recompute both the root and seal so accounting is the failing gate.
+        corrupt.slot_live += 1;
         let mut store = MemoryStore::new();
-        store.commit(&batch).unwrap();
+        store.commit(&image_to_batch(&corrupt, 1, "")).unwrap();
         match validate_store(&store, &sig()) {
             Err(StoreError::Snapshot(SnapshotError::Corrupt(
                 "store live/free/count accounting mismatch",
@@ -4555,6 +4843,7 @@ mod tests {
                 edges[*i as usize] = t.clone();
             }
             let scratch = compute_root(
+                &manifest,
                 &leaf_hash(LEAF_SMALL, 0, &small),
                 &pages,
                 &exts,
@@ -4567,7 +4856,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(incremental, scratch, "step {step}");
-            assert_eq!(ledger.root(), scratch, "step {step} re-read");
+            assert_eq!(ledger.root(&manifest), scratch, "step {step} re-read");
             assert_eq!(
                 ledger.widths(),
                 [n_pages as usize, n_exts as usize, n_frees as usize]

@@ -64,10 +64,12 @@ use crate::image::{
     read_validated_machine, write_machine, MachineImage, MeterImage, ValidatedSnapshot,
 };
 use crate::sha256::{hex, Sha256};
+#[cfg(test)]
+use crate::store::image_to_batch;
 use crate::store::{
-    chunk_extent_count, compute_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
-    slot_page_count, store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState,
-    StoreError, StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL, STORE_SCHEMA_VERSION,
+    chunk_extent_count, compute_root, derive_page_edges, leaf_hash, seal_commit, slot_page_count,
+    store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState, StoreError,
+    StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL, STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -909,6 +911,8 @@ pub struct StoreSession {
     /// crank. The caller that does — `PersistentMachine` — sets it with
     /// [`StoreSession::set_cranks`] before checkpointing.
     cranks: u64,
+    collect_every: u32,
+    collections: u64,
 }
 
 impl std::fmt::Debug for StoreSession {
@@ -938,6 +942,21 @@ impl StoreSession {
     /// notion of a crank — so the caller that does owns it.
     pub fn set_cranks(&mut self, cranks: u64) {
         self.cranks = cranks;
+    }
+
+    /// Collection cadence committed at genesis (zero disables scheduling).
+    pub fn collect_every(&self) -> u32 {
+        self.collect_every
+    }
+
+    /// Durable collection events, including explicit collections.
+    pub fn collections(&self) -> u64 {
+        self.collections
+    }
+
+    /// Record a completed collection before checkpointing it atomically.
+    pub fn set_collections(&mut self, collections: u64) {
+        self.collections = collections;
     }
 
     /// The bound machine.
@@ -976,6 +995,9 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) 
         free_len: interp.slots.free_list().len() as u32,
         epoch,
         cranks,
+        collect_every: 0,
+        collections: 0,
+        parent_seal: String::new(),
         root: String::new(),
         seal: String::new(),
     }
@@ -1034,9 +1056,19 @@ fn small_state_of(interp: &Interp) -> SmallState {
 /// already holds an epoch is refused ([`StoreError::NotEmpty`]) —
 /// adopting existing content is [`resume_from_store`]'s job.
 pub fn begin_store_session(
+    interp: Interp,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+) -> Result<StoreSession, (Interp, StoreError)> {
+    begin_store_session_with_cadence(interp, signature, store, 0)
+}
+
+/// Bind a fresh store with its immutable collection cadence.
+pub fn begin_store_session_with_cadence(
     mut interp: Interp,
     signature: &Signature,
     store: &mut dyn HeapStore,
+    collect_every: u32,
 ) -> Result<StoreSession, (Interp, StoreError)> {
     match store.manifest() {
         Err(StoreError::Empty) => {}
@@ -1067,7 +1099,7 @@ pub fn begin_store_session(
         // so the match stays exhaustive if the error type grows an arm.
         Err(MachineSnapshotError::Io(e)) => return Err((interp, StoreError::Io(e.to_string()))),
     };
-    let batch = image_to_batch(&image, 1, "");
+    let batch = crate::store::image_to_batch_with_cadence(&image, 1, "", collect_every);
     if let Err(e) = store.commit(&batch) {
         // A failed commit hands the machine back with its dirt intact.
         return Err((interp, e));
@@ -1112,6 +1144,8 @@ pub fn begin_store_session(
         // A fresh store has absorbed no cranks; the first checkpoint
         // records however many the caller reports.
         cranks: 0,
+        collect_every,
+        collections: 0,
     })
 }
 
@@ -1244,6 +1278,7 @@ pub fn checkpoint_to_store(
             let edges_all = store.page_edges()?;
             let stored_small = store.read_small_state()?;
             let recombined = compute_root(
+                &stored,
                 &leaf_hash(LEAF_SMALL, 0, &stored_small),
                 &leaf_pages,
                 &leaf_exts,
@@ -1266,6 +1301,9 @@ pub fn checkpoint_to_store(
     };
     let interp = &mut session.interp;
     let mut manifest = manifest_of(interp, signature, epoch, session.cranks);
+    manifest.parent_seal = session.seal.clone();
+    manifest.collect_every = session.collect_every;
+    manifest.collections = session.collections;
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
@@ -1366,6 +1404,7 @@ pub fn checkpoint_to_store(
                 edges_all[*i as usize] = targets.clone();
             }
             compute_root(
+                &manifest,
                 &leaf_hash(LEAF_SMALL, 0, &small),
                 leaf_pages,
                 leaf_exts,
@@ -1545,7 +1584,7 @@ pub fn resume_from_store(
         &edges,
     );
     debug_assert_eq!(
-        root_ledger.root(),
+        root_ledger.root(&manifest),
         manifest.root,
         "seed from validated state"
     );
@@ -1558,6 +1597,8 @@ pub fn resume_from_store(
         pin: None,
         root_ledger: Some(root_ledger),
         cranks: manifest.cranks,
+        collect_every: manifest.collect_every,
+        collections: manifest.collections,
     })
 }
 
@@ -1690,7 +1731,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         &edges,
     );
     debug_assert_eq!(
-        root_ledger.root(),
+        root_ledger.root(&manifest),
         manifest.root,
         "seed from validated state"
     );
@@ -1777,6 +1818,8 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         pin: Some(pin),
         root_ledger: Some(root_ledger),
         cranks: manifest.cranks,
+        collect_every: manifest.collect_every,
+        collections: manifest.collections,
     })
 }
 

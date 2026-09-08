@@ -78,6 +78,7 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
     manifest.version.format_version = 14;
     let (pages, extents) = store.leaf_hashes().unwrap();
     manifest.root = compute_root(
+        &manifest,
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
         &extents,
@@ -89,9 +90,13 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
         .unwrap();
     assert!(migrate_store(&mut store, &signature).unwrap());
     let migrated = store.manifest().unwrap();
-    assert_eq!(migrated.store_schema, 26);
+    assert_eq!(
+        migrated.store_schema,
+        ironhorse_snapshot::store::STORE_SCHEMA_VERSION
+    );
     assert_eq!(migrated.epoch, manifest.epoch);
-    assert_eq!(migrated.seal, manifest.seal);
+    assert_eq!(migrated.parent_seal, manifest.seal);
+    assert_ne!(migrated.seal, manifest.seal);
     assert!(!migrate_store(&mut store, &signature).unwrap());
     let mut resumed = resume_from_store(&mut store, &signature).unwrap();
     assert_eq!(resumed.machine().program_symbol_names(), names);
