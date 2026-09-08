@@ -212,6 +212,44 @@ Restart removes abandoned sessions and never recreates an old HTTP request or so
 A guest invocation already accepted can still finish and retain its effects after the client leaves.
 Other guest promise listeners remain durable; losing an HTTP response does not cancel guest work.
 
+## Durable alarms and reminders
+
+Grant the public clock to an application:
+
+```sh
+thix clock-grant ./private-state clock
+thix install ./private-state reminders ./examples/reminder.js clock=clock
+thix alarms ./private-state
+thix attach ./private-state
+```
+
+In the attached workspace, schedule a reminder using the clock's Unix milliseconds:
+
+```js
+E(inventory.get('clock')).now().then(now => E(E(apps).get('reminders')).arm(now + 60000n, 'check the oven'))
+E(E(apps).get('reminders')).status()
+```
+
+Applications receive `now()` and `when(deadline)`.
+A separate guest clock vat owns the promise returned by `when`, its resolver, and the pending alarm.
+The reminder example attaches its listener in another guest vat; both survive restart.
+If a deadline passes while the supervisor is down, restart delivers the overdue alarm to that
+original promise and listener.
+Repeated delivery acknowledgments cannot settle it twice.
+
+The host holds a private control facet and rebuilds its timer index from guest registrations.
+Lost host registration answers are repaired by startup and periodic scans.
+OS timers and observation sessions are disposable; stopping them does not cancel guest alarms.
+Host metadata selects the clock vat and its private publication; it contains no alarm records.
+`alarms` reports scheduler activity and failures without exposing the control capability or secret.
+
+This version supports one-shot absolute deadlines, with up to 1,024 pending alarms shared by the clock.
+Deadlines are nonnegative signed 64-bit bigint milliseconds.
+The host checks wall-clock time before firing and scans every second, so this is not a precise timer.
+A backward clock adjustment delays firing; forward adjustments make elapsed deadlines due.
+The periodic scans currently wake the clock vat even when no alarms are pending.
+Cancellation, recurring scheduling, per-application quotas, and notification UI are future work.
+
 ## Local introductions and capability mail
 
 Each supervisor also listens on `peers.sock`, a private Unix socket.

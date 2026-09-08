@@ -218,6 +218,25 @@ and text body into the guest.
 Exact Host checks and browser Origin/Fetch Metadata checks reject cross-origin browser access.
 These checks do not authenticate local processes; the guest HTTP interface is available to local clients.
 
+### Durable time promises
+
+The supervisor can grant a public clock backed by a separate persistent guest vat.
+`when(deadline)` allocates a guest promise and records its resolver before requesting a host timer.
+The pending alarm Map is the authoritative state; host timer handles and registration replies are not.
+A private control facet lets the host enumerate pending alarms and deliver due events idempotently.
+Applications receive only time and scheduling authority, not the control facet or host scheduler.
+
+Startup and periodic reconciliation rebuild the host index and repair lost registration answers.
+A missed firing acknowledgment retries the same alarm identity; the guest resolves each alarm once.
+A deadline that passes during downtime settles the original promise after restart, preserving listeners
+in other guest vats through comms.
+Observation sessions are bounded and disposable, and shutdown drains their cleanup before store release.
+
+The initial profile uses absolute bigint Unix milliseconds with a signed 64-bit nonnegative range,
+a shared limit of 1,024 pending alarms, and a one-second host scan interval.
+Wall-clock adjustments affect when deadlines become due; this is not a real-time scheduling guarantee.
+Cancellation and recurring scheduling are not yet provided.
+
 ## Workspace and installed applications
 
 The local supervisor owns a persistent workspace and exposes administration over a private Unix socket.
