@@ -15,6 +15,8 @@
 //! detached machine; the comparison across trees is done by the
 //! operator (or CI) running the same file on both.
 
+mod bench_support;
+
 use ironhorse_vm::{parse_symbols, Interp};
 use std::time::Instant;
 
@@ -64,5 +66,12 @@ fn detached_hot_path_bench() {
          for (i = 0; i < 40000; i = i + 1) { t = s + 'x'; if (t == s) { n = n + 1; } } n",
         "0",
     );
+    for (name, value) in [
+        ("dispatch_ms", dispatch),
+        ("slots_ms", slots),
+        ("chunks_ms", chunks),
+    ] {
+        bench_support::report(name, value);
+    }
     println!("BENCH dispatch_ms={dispatch:.2} slots_ms={slots:.2} chunks_ms={chunks:.2}");
 }
