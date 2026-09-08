@@ -1,0 +1,33 @@
+2790824	(function(){return Math.max.apply(null,arguments)})(3,8)
+3905024	(function(a,b){return a+b}).apply(null,{length:2,0:3,1:8})
+3525304	JSON.stringify([1,2,3,4])
+3082784	JSON.stringify([1,2,3])
+2640304	JSON.stringify([1,2])
+2197856	JSON.stringify([1])
+5721784	JSON.stringify([[1,2],[3,4]])
+1805384	JSON.stringify({a:1})
+2312008	Math.max.apply(null,[,8])
+2574496	Math.max.apply(null,{length:2,0:3,1:8})
+3835800	f.apply(o, [4, 5])
+2508056	f.call(o, 2, 3)
+5169880	var b=(function(a){return a+1}).bind(null),p=new Proxy(b,{});p(1)
+2693568	var f = function (a, b) { return this.k + a + b; }; var o = { k: 10 }; 0
+5447736	var f=(function(a,b){return a+b}).bind(null);f.apply(null,{length:2,0:3,1:8})
+4557768	var n = 0; var a = 0; a = [1, 2]; n = a.push; n.apply(a); a.length
+7163928	var n = 0; var a = 0; a = [1, 2]; n = a.push; n.apply(a, [7, 8, 9, 10]); a.length
+6180568	var n = 0; var a = 0; a = [1, 2]; n = a.push; n.apply(a, [7, 8]); a.length
+5688936	var n = 0; var a = 0; a = [1, 2]; n = a.push; n.apply(a, [7]); a.length
+5197256	var n = 0; var a = 0; a = [1, 2]; n = a.push; n.apply(a, []); a.length
+4738104	var n = 0; var a = 0; a = [1, 2]; n = a.push; n.call(a, 9); a.length
+4918360	var n = 0; var a = 0; a = [1, 2]; n = a.push; n.call(a, 9, 10); a.length
+4082552	var n = 0; var a = 0; a = [3]; n = a.pop; n.apply(a)
+4657600	var n = 0; var o = 0; o = { a: 1 }; n = Object.keys; n.apply(null, [o]).length
+3706768	var n = 0; var o = 0; o = { a: 1 }; n = Object.keys; n.call(null, o).length
+2772104	var p=new Proxy(Math.max,{});p(1,2)
+3361928	var p=new Proxy(Math.max,{});p.call(null,1,2)
+6235944	var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p(1)
+6793000	var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p.call(null,1)
+3725480	var p=new Proxy(function(a){return a+1},{});p(1)
+5233368	var p=new Proxy(function(a){return a+1},{});p.apply(null,[1])
+4282536	var p=new Proxy(function(a){return a+1},{});p.call(null,1)
+4430760	var p=new Proxy(new Proxy(function(a){return a+1},{}),{});p(1)

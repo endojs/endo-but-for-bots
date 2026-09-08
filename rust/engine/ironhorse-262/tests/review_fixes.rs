@@ -3,8 +3,10 @@
 //! Each case reproduced a divergence from the pinned XS oracle at
 //! `fa3ecfcfd`; the assertions here pin the fixed behaviour so it cannot
 //! silently regress. Result agreement is the gate throughout, plus raw-meter
-//! equality on the `JSON.stringify` cases, where the defect was purely a
-//! metering over-charge.
+//! version-2 pins on the `JSON.stringify` cases. These retain coverage of
+//! allocation overcharging while accounting for new admitted key-copy work.
+
+mod w2_meter_support;
 
 use ironhorse_262::{dual_run, Agreement};
 
@@ -24,18 +26,11 @@ fn agrees(source: &str) {
     );
 }
 
-/// Both engines complete with the same value; raw costs are diagnostic.
-fn agrees_raw_exact(source: &str) {
+/// Both engines agree on the value; raw work matches its version-2 pin.
+fn agrees_version_two(source: &str) {
     agrees(source);
     let run = dual_run(source).expect("the pinned XS oracle must start");
-    assert!(
-        run.observables_agree(),
-        "`{source}`: oracle={} ({}) ironhorse={} ({})",
-        run.oracle_computrons,
-        run.oracle_meter_raw,
-        run.ironhorse_computrons,
-        run.ironhorse_meter_raw,
-    );
+    w2_meter_support::assert_raw(source, run.ironhorse_meter_raw);
 }
 
 /// `IsLooselyEqual` steps 10-11 only convert an object operand when the other
@@ -134,7 +129,7 @@ fn object_to_string_retains_object_receiver_tags() {
 /// allocation. Charging it put IronHorse exactly 256 raw units per element
 /// above the oracle, which accumulates across a persisted meter.
 #[test]
-fn json_stringify_array_indices_are_raw_exact() {
+fn json_stringify_array_indices_have_version_two_raw_costs() {
     for source in [
         "JSON.stringify([1])",
         "JSON.stringify([1,2])",
@@ -145,7 +140,7 @@ fn json_stringify_array_indices_are_raw_exact() {
         // the control showing the per-element charge was array-index-specific.
         "JSON.stringify({a:1})",
     ] {
-        agrees_raw_exact(source);
+        agrees_version_two(source);
     }
     // `{a:[1,2]}` reaches the same array walk and agrees on whole computrons,
     // but carries an unrelated -8 raw drift from the ordinary object-property

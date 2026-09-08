@@ -719,3 +719,12 @@ fn regexp_compilation_refusal_bypasses_guest_catch_in_constructor_and_eval() {
         assert!(!machine.is_quiescent());
     }
 }
+
+#[test]
+fn copied_iterator_setters_fit_the_contract_stack() {
+    for key in ["'constructor'", "Symbol.toStringTag"] {
+        assert_stack_overflow(&on_contract_stack(format!(
+            "var k={key};var d=Object.getOwnPropertyDescriptor(Iterator.prototype,k);var o={{}};Object.defineProperty(o,k,d);o[k]=1;'done'"
+        )), "copied Iterator setter recursion");
+    }
+}

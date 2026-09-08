@@ -13,7 +13,7 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let source = ironhorse_fuzz::gen_stage3b_regexp_program(data);
-    if let Err(divergence) = ironhorse_fuzz::differential_check_with_symbols(&source) {
+    if let Err(divergence) = ironhorse_fuzz::differential_check_meter_v2(&source) {
         panic!("regexp-surface differential divergence vs XS pin: {:?}", divergence);
     }
 });

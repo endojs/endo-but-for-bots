@@ -7,8 +7,8 @@
 //! carried — **same totals** (one case per corpus line, 1:1), **zero
 //! divergence** (every case the covered grammar reaches meets the runner's
 //! bar), and the **same bit-exact set under `--gate-meter-exact`** (every
-//! meter-exact-tagged case reproduces its historical computron agreement, so
-//! the gate is green). It runs the checked-in `cases/` tree through the same
+//! unchanged meter-exact case reproduces historical computron agreement;
+//! W2-affected cases carry explicit version-2 raw pins instead). It runs the checked-in `cases/` tree through the same
 //! `endot-ih` machinery a nightly run uses.
 //!
 //! The oracle accumulates process RSS across machine create/destroy cycles;

@@ -82,7 +82,7 @@
 //! fails the build today, and the metering work has a named home rather than
 //! living in a comment nobody runs.
 
-use ironhorse_262::dual_run;
+use ironhorse_262::{dual_run, Agreement};
 
 /// The program runs end-to-end bit-exact with the XS oracle (value + computrons).
 fn exact(source: &str) {
@@ -370,7 +370,12 @@ fn array_unscopables_key_order() {
     exact(
         "var a = []; for (var k in Array.prototype[Symbol.unscopables]) { a.push(k); } a.join(',')",
     );
-    exact("JSON.stringify(Array.prototype[Symbol.unscopables])");
+    let source = "JSON.stringify(Array.prototype[Symbol.unscopables])";
+    let run = dual_run(source).expect("oracle starts");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+    assert!(run.result_agrees, "{run:?}");
+    // Freeze version-2 enumeration work independently of XS rounding.
+    assert_eq!(run.ironhorse_meter_raw, 3_250_648);
 }
 
 #[test]

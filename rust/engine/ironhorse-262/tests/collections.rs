@@ -77,12 +77,19 @@ fn shared_collection_methods_retain_their_declaring_brand() {
         "try { Set.prototype.keys.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
         "try { Map.prototype.values.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
         "try { Set.prototype.values.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
-        "var s=new Set([1]),f=Map.prototype.clear.bind(s);try{f();false}catch(e){e instanceof TypeError&&s.size===1}",
         "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.call(s);false}catch(e){e instanceof TypeError&&s.size===1}",
         "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.apply(s,[]);false}catch(e){e instanceof TypeError&&s.size===1}",
     ] {
         agrees_exact(source);
     }
+    // Version 2 admits copying the bound function name before constructing it.
+    // Receiver validation still agrees with XS; the new work has its own pin.
+    let source = "var s=new Set([1]),f=Map.prototype.clear.bind(s);try{f();false}catch(e){e instanceof TypeError&&s.size===1}";
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+    assert!(run.result_agrees, "{run:?}");
+    assert_eq!(run.ironhorse_result, "true");
+    assert_eq!(run.ironhorse_meter_raw, 8_038_696);
 }
 
 #[test]

@@ -222,3 +222,12 @@ fn compact_json_and_argument_lists_obey_element_storage_limits() {
         assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
     }
 }
+
+#[test]
+fn bound_name_growth_obeys_the_heap_ceiling() {
+    let (code, names) = compile("var f=function(){};for(var i=0;i<2000;i++)f=f.bind(null);f()");
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&names);
+    vm.chunks.set_ceiling(vm.chunks.byte_size() + 100_000);
+    assert_eq!(vm.run(&code).halt, Halt::HeapExhausted);
+}
