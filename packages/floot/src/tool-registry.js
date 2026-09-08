@@ -209,6 +209,11 @@ harden(makeEndoToolSet);
  * @param {() => Promise<{ inputTokens: number, outputTokens: number }>} [options.getUsage]
  * @param {() => string} [options.getModelId]
  * @param {Set<string>} [options.settledMail]
+ * @param {Map<string, any>} [options.extraTools] - Tools the factory builds
+ *   for this session beyond the built-ins — the container-mount tools of a
+ *   session with a sandbox, say. They enter the same pinned catalog, so a
+ *   hosted thread's `toolSetId` covers them and a name that collides with a
+ *   built-in is refused rather than shadowing it.
  */
 export const makeFlootToolRegistry = (
   powers,
@@ -219,6 +224,7 @@ export const makeFlootToolRegistry = (
     getUsage,
     getModelId,
     settledMail,
+    extraTools,
   } = {},
 ) => {
   /** @type {Map<string, any>} */
@@ -283,6 +289,12 @@ export const makeFlootToolRegistry = (
       'accountStatus',
       makeAccountStatusTool({ oracle: accountOracle, getUsage, getModelId }),
     );
+  }
+  for (const [name, tool] of extraTools ?? []) {
+    if (builtins.has(name)) {
+      throw Error(`Floot tool "${name}" is already defined`);
+    }
+    builtins.set(name, tool);
   }
 
   const snapshot = async () => {

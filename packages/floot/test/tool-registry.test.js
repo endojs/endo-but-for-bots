@@ -191,3 +191,41 @@ test('a stored caplet tool is located with the path as separate name arguments',
   t.true(snapshot.toolSetId.includes('endo://node/formula'));
   t.is(await snapshot.execute('weather', harden({})), 'sunny');
 });
+
+test('extra tools join the pinned catalog and cannot shadow a built-in', async t => {
+  const powers = Far('Powers', {
+    list: () => harden([]),
+    locate: () => 'test-locator',
+  });
+  const extra = harden({
+    schema: () =>
+      harden({
+        type: 'function',
+        function: {
+          name: 'attachContainerMount',
+          description: 'bind a held capability under /mnt/',
+          parameters: { type: 'object', properties: {}, required: [] },
+        },
+      }),
+    execute: async () => 'attached',
+    help: () => 'attach',
+  });
+  const registry = makeFlootToolRegistry(powers, {
+    extraTools: new Map([['attachContainerMount', extra]]),
+  });
+  const snapshot = await registry.snapshot();
+  t.true(snapshot.names.includes('attachContainerMount'));
+  t.is(await snapshot.execute('attachContainerMount', {}), 'attached');
+  // The tool-set id pins the extras too: a hosted thread that resumed
+  // without them would be resuming with different powers.
+  const bare = await makeFlootToolRegistry(powers).snapshot();
+  t.not(snapshot.toolSetId, bare.toolSetId);
+
+  t.throws(
+    () =>
+      makeFlootToolRegistry(powers, {
+        extraTools: new Map([['exec', extra]]),
+      }),
+    { message: /"exec" is already defined/ },
+  );
+});

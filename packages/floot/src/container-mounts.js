@@ -148,6 +148,18 @@ harden(attachKeyFor);
  */
 
 /**
+ * What the bridge provider minted for a record: the daemon `Mount` cap a
+ * ClaudeClient binds, the 9P mount handle, and — when the provider serves
+ * through a host directory — the host mountpoint a declaration-bound
+ * (hosted, attested) client names as the bind's `source`.
+ *
+ * @typedef {object} Bridge
+ * @property {any} mountCap
+ * @property {any} handle
+ * @property {string} [mountPoint]
+ */
+
+/**
  * @param {unknown} value
  * @returns {value is AttachRecord}
  */
@@ -337,7 +349,7 @@ export const makeContainerMountRegistrar = ({
   // key, the armed ClaudeClient per client identity, which client each armed
   // session resolved to, and the last extras signature pushed per client (so
   // an unchanged set never recreates a live slice).
-  /** @type {Map<string, { mountCap: any, handle: any }>} */
+  /** @type {Map<string, Bridge>} */
   const bridges = new Map();
   /** @type {Map<string, any>} */
   const clients = new Map();
@@ -368,7 +380,7 @@ export const makeContainerMountRegistrar = ({
 
   /**
    * @param {AttachRecord} record
-   * @returns {Promise<{ mountCap: any, handle: any }>}
+   * @returns {Promise<Bridge>}
    */
   const ensureBridge = async record => {
     await null;
@@ -384,7 +396,7 @@ export const makeContainerMountRegistrar = ({
           'not available in this deployment.',
       );
     }
-    /** @type {{ mountCap: any, handle: any }} */
+    /** @type {Bridge} */
     const bridge = await E(provider).provideContainerMountBridge(
       harden({ key: record.key, capId: record.capId, mode: record.mode }),
     );
@@ -469,7 +481,7 @@ export const makeContainerMountRegistrar = ({
     const pushedRecords = [];
     const extras = [];
     for (const record of clientRecords) {
-      /** @type {{ mountCap: any, handle: any } | undefined} */
+      /** @type {Bridge | undefined} */
       let bridge;
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -484,10 +496,19 @@ export const makeContainerMountRegistrar = ({
         pushedRecords.push(record);
         extras.push(
           harden({
+            // Identity and host layout ride along for a client that binds
+            // by declaration rather than by cap: the attested hosted
+            // runtime declares `{ key, mountPoint }` and its sandbox proves
+            // the path is a 9P projection. A ClaudeClient binds `cap` and
+            // ignores them.
+            key: record.key,
             cap: bridge.mountCap,
             innerPath: record.innerPath,
             mode: record.mode,
             handle: bridge.handle,
+            ...(bridge.mountPoint === undefined
+              ? {}
+              : { mountPoint: bridge.mountPoint }),
           }),
         );
       }

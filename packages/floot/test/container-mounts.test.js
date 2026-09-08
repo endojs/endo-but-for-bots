@@ -149,6 +149,7 @@ const makeHarness = () => {
             handleUnmounts.push(key);
           },
         }),
+        mountPoint: `/host/mounts/claude-attach-${key}`,
       });
     },
     /** @param {string} key */
@@ -235,10 +236,16 @@ test('attach proves possession, bridges, persists, and pushes the bind', async t
   t.is(sets[0].length, 1);
   t.like(sets[0][0], { innerPath: '/mnt/project', mode: 'rw' });
   // The pushed bind must carry the BRIDGE's mount cap and handle, not some
-  // other object.
+  // other object — and, for a client that binds by declaration, the record
+  // key and the host mountpoint the bridge chose.
   t.is(sets[0][0].cap.kind, 'bridged-mount');
   t.is(sets[0][0].cap.key, h.bridgeCalls[0].key);
   t.truthy(sets[0][0].handle);
+  t.is(sets[0][0].key, h.bridgeCalls[0].key);
+  t.is(
+    sets[0][0].mountPoint,
+    `/host/mounts/claude-attach-${h.bridgeCalls[0].key}`,
+  );
 
   // Persisted for replay.
   const stored = /** @type {any[]} */ (h.storedRecords());
