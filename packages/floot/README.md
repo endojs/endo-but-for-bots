@@ -42,6 +42,12 @@ Codex policy composition and broker primitives are available, but live runtime,
 listener, and subscription acceptance remain prerequisites for production use.
 See [deployment acceptance](../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md).
 
+Runtime container mounts — a session attaching a capability it holds under
+`/mnt/` of its sandbox with `attachContainerMount` — stay inside that contract:
+each attach is declared on the hosted session's policy and attested as a 9P
+projection served through the capability, never an undeclared bind.
+See [runtime-container-fs-mount](../../designs/runtime-container-fs-mount.md).
+
 ## Demo dependencies
 
 Everything below must be present on the machine running the Endo daemon (the
