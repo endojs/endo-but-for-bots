@@ -467,3 +467,83 @@ test.serial(
     );
   },
 );
+
+for (const importFirst of [true, false]) {
+  test.serial(
+    `publication imports and third-party gifts share a session (${importFirst ? 'import' : 'gift'} first)`,
+    async t => {
+      t.timeout(20_000);
+      const exporterPath = await mkdtemp(
+        join(tmpdir(), 'thix-mixed-exporter-'),
+      );
+      t.teardown(() => rm(exporterPath, { recursive: true, force: true }));
+      const holderPath = await mkdtemp(join(tmpdir(), 'thix-mixed-holder-'));
+      t.teardown(() => rm(holderPath, { recursive: true, force: true }));
+      const exporter = await makeDaemon(exporterPath, 0);
+      t.teardown(() => exporter.shutdown());
+      const holder = await makeDaemon(holderPath, 0);
+      t.teardown(() => holder.shutdown());
+      const counterWorker = await exporter.createWorker();
+      const counter = await counterWorker.evaluate(COUNTER_SOURCE);
+      const secret = exporter.publish(counter);
+      const holderWorker = await holder.createWorker();
+      const receiver = await holderWorker.evaluate(`(() => {
+        let counter;
+        return Far('Receiver', {
+          hold: value => { counter = value; return true; },
+          incr: () => E(counter).incr(),
+        });
+      })()`);
+      const receiverSecret = holder.publish(receiver);
+      const gifter = await makeDurableClient('mixed-route-gifter');
+      t.teardown(() => gifter.shutdown());
+      const remoteCounter = await gifter.enlivenSturdyRef(
+        gifter.makeSturdyRef(exporter.location, secret),
+      );
+      const remoteReceiver = await gifter.enlivenSturdyRef(
+        gifter.makeSturdyRef(holder.location, receiverSecret),
+      );
+      const importCounter = () =>
+        holder.importReference(exporter.location, secret);
+      const giveCounter = async () => {
+        t.true(await E(remoteReceiver).hold(remoteCounter));
+        return E(remoteReceiver).incr();
+      };
+      let imported;
+      if (importFirst) {
+        imported = await importCounter();
+        t.is(await E(imported).incr(), 1);
+        t.is(await giveCounter(), 2);
+      } else {
+        t.is(await giveCounter(), 1);
+        imported = await importCounter();
+        t.is(await E(imported).incr(), 2);
+      }
+      t.is(await E(imported).incr(), 3);
+      t.is(await E(remoteReceiver).incr(), 4);
+      const store = makeFsStore(holderPath);
+      const outgoing = store
+        .listSessionTokens()
+        .filter(
+          token => store.provideSessionStore(token).getMeta().isOriginator,
+        );
+      t.is(outgoing.length, 1);
+      const before = store.provideSessionStore(outgoing[0]).getMeta();
+      await holder.shutdown();
+      const restored = await makeDaemon(
+        holderPath,
+        Number(holder.location.hints.port),
+      );
+      t.teardown(() => restored.shutdown());
+      t.is(await E(remoteReceiver).incr(), 5);
+      const importedAgain = await restored.importReference(
+        exporter.location,
+        secret,
+      );
+      t.is(await E(importedAgain).incr(), 6);
+      const after = store.provideSessionStore(outgoing[0]).getMeta();
+      t.deepEqual(after.identity, before.identity);
+      t.is(after.hubSessionKey, before.hubSessionKey);
+    },
+  );
+}

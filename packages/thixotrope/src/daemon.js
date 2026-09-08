@@ -5,11 +5,7 @@ import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
 import { E, Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
-import {
-  encodeSwissnum,
-  locationToLocationId,
-  swissnumFromBytes,
-} from '@endo/ocapn/client/util';
+import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
   readOcapnHandshakeMessage,
@@ -1162,13 +1158,13 @@ const buildDaemon = async ({
       return wrapped;
     },
     importReference: (remoteLocation, secret) => {
-      const key = `handoff:import:${locationToLocationId(remoteLocation)}`;
-      hub.prepareRemoteSession(key, remoteLocation);
+      const { sessionKey: key, location: dialLocation } =
+        hub.prepareRemoteSession(remoteLocation);
       const position = hub.introduce(ENDPOINT_SESSION, {
         session: key,
         position: 0n,
       });
-      handoffDialRef.connect(remoteLocation, key);
+      handoffDialRef.connect(dialLocation, key);
       const bootstrap = endpointResumed.provideImport({ type: 'o', position });
       return E(bootstrap).fetch(encodeSwissnum(secret));
     },
