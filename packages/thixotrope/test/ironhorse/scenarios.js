@@ -1,7 +1,7 @@
 // @ts-check
 import { E } from '@endo/eventual-send';
 import test from '@endo/ses-ava/test.js';
-import { appendFile, readdir } from 'node:fs/promises';
+import { appendFile, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { listenerSource, producerSource } from '../../src/demo-promise-vats.js';
@@ -282,18 +282,26 @@ test.serial(
   async t => {
     t.timeout(120_000);
     const f = await makeFixture(t);
-    await f.restart(false, async () => {
-      const ref = f.store.provideWorkerStore(f.ownerId).getMeta().snapshot?.ref;
-      t.is(typeof ref, 'string');
-      await appendFile(
-        join(f.statePath, 'heaps', 'snapshots', `${ref}.sqlite`),
-        'corrupt',
-      );
-    });
-    await t.throwsAsync(() => f.daemon.getWorker(f.ownerId).wake(), {
-      message: /digest mismatch/,
-    });
+    let imagePath = '';
+    /** @type {Uint8Array} */
+    let original = new Uint8Array();
+    await t.throwsAsync(
+      () =>
+        f.restart(false, async () => {
+          const ref = f.store.provideWorkerStore(f.ownerId).getMeta()
+            .snapshot?.ref;
+          t.is(typeof ref, 'string');
+          imagePath = join(f.statePath, 'heaps', 'snapshots', `${ref}.sqlite`);
+          original = await readFile(imagePath);
+          await appendFile(imagePath, 'corrupt');
+        }),
+      { message: /digest mismatch/ },
+    );
     t.deepEqual(await readdir(join(f.statePath, 'heaps', 'incarnations')), []);
+    // Startup refuses an unusable recovery image and releases ownership.
+    // Restoring the immutable image permits a fresh startup to recover work.
+    await writeFile(imagePath, original);
+    await f.restart(true);
     t.is(await f.daemon.getWorker(f.guestId).evaluate('6 * 7'), 42);
   },
 );

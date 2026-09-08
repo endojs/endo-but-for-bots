@@ -6,6 +6,7 @@ export default {
   files: [
     'test/ironhorse/scenarios.js',
     'test/ironhorse/reliability.js',
+    'test/ironhorse/remote-delivery.js',
     'test/ironhorse/reachability.js',
     'test/ironhorse/supervisor.js',
   ],
