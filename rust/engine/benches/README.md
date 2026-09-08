@@ -240,8 +240,8 @@ unequal size steps, rather than the doubling test used by other fixtures.
 [results/f043-section-foundation.json](results/f043-section-foundation.json) retains
 paired measurements for the section identity and integrity primitives.
 Both revisions fail at 10,000 and 50,000 elements: **F043 remains open**.
-The active checkpoint still copies, encodes, hashes, and stores the whole small state.
-The primitives preserve legacy framing and do not activate a new store schema.
+At that revision, checkpoints still copied, encoded, hashed, and stored the whole small state.
+The primitives preserved legacy framing without activating a new store schema.
 The timing differences do not establish an improvement; the largest case is slower.
 This MemoryStore array fixture does not establish SQLite write amplification or
 coverage of all side tables.
@@ -254,3 +254,31 @@ cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-snapshot --test checkpoint_scaling_bench \
   -- --ignored --nocapture --test-threads=1
 ```
+
+## Section storage and migration (F043, second increment)
+
+Schema 28 replaces the whole-small-state leaf with a tree of 32 section leaves.
+Schema 26 remains the earlier CESU-8 NAME migration.
+Schema 27 retains canonical small state and authenticated manifest policy.
+SQLite stores section payloads and hashes separately; migration from schema 27
+verifies the old root and seal before atomically restamping without changing payloads.
+The migration tests cover partial-insert rollback, table-creation rollback, retry,
+and byte-preserving refusal of incompatible legacy stores.
+The canonical container hash and raw-charge golden values remain unchanged;
+the store seal changes because it binds the new schema and root.
+
+[results/f043-section-storage.json](results/f043-section-storage.json) records the
+original pre-rebase MemoryStore checkpoint pair under its earlier schema.
+Fresh latest-base measurements follow final integration.
+Both runs still fail its scaling threshold, so **F043 remains open**.
+The integrated sparse protocol retains omitted sections, validates each supplied
+payload canonically, and retains the shared manifest seal over the authenticated root.
+MemoryStore and SQLite write only changed sections; FileStore still rewrites its file.
+SQLite tests verify that a `1 + 1` crank with 10,000 live array elements updates only
+the meter section on both cached and cold paths, and that a failed array write
+rolls back before a successful retry.
+All sections are still extracted and hashed to discover the changes.
+The next increment must select dirty sections before extraction.
+These MemoryStore timings do not establish SQLite performance.
+At 50,000 retained array elements, the measured checkpoint median falls from
+14.36 ms to 3.82 ms (3.76x), but its growth remains linear and fails the gate.

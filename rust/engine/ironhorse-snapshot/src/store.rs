@@ -22,10 +22,11 @@
 //! | Small state | stack, free list, keys/names/symbols, meter | `STAC`, the `HEAP` header, `KEYS`/`NAME`/`SYMB`, `METR` |
 //! | Manifest | version + signature + creation + geometry + epoch | `VERS`/`SIGN`/`CREA` |
 //!
-//! The free list is persisted verbatim — its LIFO order is load-bearing
-//! for deterministic slot reuse after resume — and at quiescence the
-//! stack is empty and the tables are small, so the small state is
-//! genuinely small and travels whole on every commit.
+//! The free list is persisted verbatim in segments: its LIFO order is
+//! load-bearing for deterministic slot reuse after resume. The 32 small-state
+//! sections include BULK side tables, so they need not be small. Schema 28
+//! checkpoints send only changed sections; full framing remains the import
+//! and export representation.
 //!
 //! # Fail-closed discipline
 //!
@@ -92,7 +93,9 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// converts the name section and recomputes the root, preserving all ids.
 /// v27 authenticates the manifest core and collection cadence, verifies the
 /// current seal at open, and admits one canonical encoding of small state.
-pub const STORE_SCHEMA_VERSION: u32 = 27;
+/// v28 binds the 32 small-state payloads independently under a fixed section tree.
+/// Migration from v27 preserves payload bytes and export framing.
+pub const STORE_SCHEMA_VERSION: u32 = 28;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -584,15 +587,13 @@ pub(crate) fn bfs_pages(
 /// the machine checkpoint) seal correctly by construction; a mutated
 /// batch without a reseal fails [`check_succession`]'s recomputation.
 pub fn reseal_batch(batch: &mut CheckpointBatch) {
-    batch.manifest.seal = seal_commit(
-        &batch.prev_seal,
-        &batch.manifest,
-        &batch.small,
-        &batch.slot_pages,
-        &batch.chunk_extents,
-        &batch.free_segs,
-        &batch.page_edges,
-    );
+    batch.manifest.seal = batch_seal(batch);
+}
+
+fn batch_seal(batch: &CheckpointBatch) -> String {
+    // The authenticated manifest root binds full and sparse representations
+    // identically, and lets readers recompute the seal without the old delta.
+    seal_commit(&batch.prev_seal, &batch.manifest, &[], &[], &[], &[], &[])
 }
 
 /// Row-leaf domain tags for the [`leaf_hash`] tree: slot page, chunk
@@ -881,6 +882,7 @@ pub fn combine_class_roots(
 /// verification (the v6 design's stated discipline).
 pub struct RootLedger {
     small_leaf: [u8; 32],
+    sections: Option<crate::store_sections::SectionLeaves>,
     pages: Vec<[u8; 32]>,
     exts: Vec<[u8; 32]>,
     frees: Vec<[u8; 32]>,
@@ -910,6 +912,16 @@ impl RootLedger {
         frees: Vec<[u8; 32]>,
         edges: &[Vec<u32>],
     ) -> RootLedger {
+        Self::from_small_root(leaf_hash(LEAF_SMALL, 0, small), pages, exts, frees, edges)
+    }
+
+    fn from_small_root(
+        small_leaf: [u8; 32],
+        pages: Vec<[u8; 32]>,
+        exts: Vec<[u8; 32]>,
+        frees: Vec<[u8; 32]>,
+        edges: &[Vec<u32>],
+    ) -> RootLedger {
         let edge_leaves: Vec<[u8; 32]> = edges
             .iter()
             .enumerate()
@@ -920,7 +932,8 @@ impl RootLedger {
         let frees_levels = build_class_tree(TREE_FREES, &frees);
         let edges_levels = build_class_tree(TREE_EDGES, &edge_leaves);
         RootLedger {
-            small_leaf: leaf_hash(LEAF_SMALL, 0, small),
+            small_leaf,
+            sections: None,
             pages,
             exts,
             frees,
@@ -935,6 +948,52 @@ impl RootLedger {
     /// Consume derived metadata to write dense leaf vectors in simple backends.
     pub(crate) fn into_leaf_vectors(self) -> (Vec<[u8; 32]>, Vec<[u8; 32]>, Vec<[u8; 32]>) {
         (self.pages, self.exts, self.frees)
+    }
+
+    /// Build the current schema's ledger from validated complete section framing.
+    pub fn build_sectioned(
+        small: &[u8],
+        pages: Vec<[u8; 32]>,
+        exts: Vec<[u8; 32]>,
+        frees: Vec<[u8; 32]>,
+        edges: &[Vec<u32>],
+    ) -> Result<Self, StoreError> {
+        let sections = crate::store_sections::SectionLeaves::from_payloads(
+            &crate::store_sections::split_small_state(small)?,
+        );
+        Ok(Self::build_from_sections(
+            sections, pages, exts, frees, edges,
+        ))
+    }
+
+    pub fn build_from_sections(
+        sections: crate::store_sections::SectionLeaves,
+        pages: Vec<[u8; 32]>,
+        exts: Vec<[u8; 32]>,
+        frees: Vec<[u8; 32]>,
+        edges: &[Vec<u32>],
+    ) -> Self {
+        let mut ledger = Self::from_small_root(sections.root(), pages, exts, frees, edges);
+        ledger.sections = Some(sections);
+        ledger
+    }
+
+    pub fn section_leaves(&self) -> Option<&crate::store_sections::SectionLeaves> {
+        self.sections.as_ref()
+    }
+
+    pub fn apply_checkpoint(&mut self, batch: &CheckpointBatch) -> Result<String, StoreError> {
+        let sections = crate::store_sections::updated_leaves(self.sections.as_ref(), batch)?;
+        let root = self.apply_with_small_root(
+            &batch.manifest,
+            sections.root(),
+            &batch.slot_pages,
+            &batch.chunk_extents,
+            &batch.free_segs,
+            &batch.page_edges,
+        )?;
+        self.sections = Some(sections);
+        Ok(root)
     }
 
     /// The prior free-segment leaves — the checkpoint producer's
@@ -982,6 +1041,37 @@ impl RootLedger {
         &mut self,
         manifest: &StoreManifest,
         small: &[u8],
+        slot_pages: &[(u32, Vec<u8>)],
+        chunk_extents: &[(u32, Vec<u8>)],
+        free_segs: &[(u32, Vec<u8>)],
+        page_edges: &[(u32, Vec<u32>)],
+    ) -> Result<String, StoreError> {
+        let sections = if manifest.store_schema >= 28 {
+            Some(crate::store_sections::SectionLeaves::from_payloads(
+                &crate::store_sections::split_small_state(small)?,
+            ))
+        } else {
+            None
+        };
+        let small_root = sections
+            .as_ref()
+            .map_or_else(|| leaf_hash(LEAF_SMALL, 0, small), |s| s.root());
+        let root = self.apply_with_small_root(
+            manifest,
+            small_root,
+            slot_pages,
+            chunk_extents,
+            free_segs,
+            page_edges,
+        )?;
+        self.sections = sections;
+        Ok(root)
+    }
+
+    fn apply_with_small_root(
+        &mut self,
+        manifest: &StoreManifest,
+        small_root: [u8; 32],
         slot_pages: &[(u32, Vec<u8>)],
         chunk_extents: &[(u32, Vec<u8>)],
         free_segs: &[(u32, Vec<u8>)],
@@ -1065,7 +1155,7 @@ impl RootLedger {
             n_pages,
             &edge_dirty,
         )?;
-        self.small_leaf = leaf_hash(LEAF_SMALL, 0, small);
+        self.small_leaf = small_root;
         Ok(self.root(manifest))
     }
 }
@@ -1149,6 +1239,7 @@ pub fn check_batch(
     prior: Option<(&StoreManifest, [usize; 3])>,
     batch: &CheckpointBatch,
 ) -> Result<(), StoreError> {
+    crate::store_sections::validate_batch(batch, prior.is_none())?;
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
     let n_frees = free_seg_count(batch.manifest.free_len) as usize;
@@ -1332,6 +1423,23 @@ pub fn apply_batch(
     prior: Option<&StoreManifest>,
     batch: &CheckpointBatch,
 ) -> Result<String, StoreError> {
+    let small_root = crate::store_sections::framed_root(&batch.small)?;
+    apply_batch_with_small_root(pages, exts, frees, edges, prior, batch, small_root)
+}
+
+/// Row maintenance with a separately verified small-section root. The caller
+/// must derive this from retained section leaves plus this batch's updates,
+/// never from an unverified manifest. This function still validates the batch
+/// shape and compares the resulting combined root with the manifest.
+pub fn apply_batch_with_small_root(
+    pages: &mut Vec<[u8; 32]>,
+    exts: &mut Vec<[u8; 32]>,
+    frees: &mut Vec<[u8; 32]>,
+    edges: &mut Vec<Vec<u32>>,
+    prior: Option<&StoreManifest>,
+    batch: &CheckpointBatch,
+    small_root: [u8; 32],
+) -> Result<String, StoreError> {
     check_batch(
         prior.map(|p| (p, [pages.len(), exts.len(), frees.len()])),
         batch,
@@ -1368,8 +1476,7 @@ pub fn apply_batch(
             .ok_or(StoreError::MissingRow("page-edge summary", *i))?;
         *slot = targets.clone();
     }
-    let small_leaf = leaf_hash(LEAF_SMALL, 0, &batch.small);
-    let root = compute_root(&batch.manifest, &small_leaf, pages, exts, frees, edges);
+    let root = compute_root(&batch.manifest, &small_root, pages, exts, frees, edges);
     if root != batch.manifest.root {
         return Err(StoreError::BaselineMismatch {
             expected: root,
@@ -1820,8 +1927,8 @@ impl SmallState {
     }
 }
 
-/// One atomic checkpoint: the full (tiny) manifest and small state,
-/// plus only the **dirty** slot pages and chunk extents, already
+/// One atomic checkpoint: the full manifest, full or sparse small-state
+/// sections, and only the **dirty** slot pages and chunk extents, already
 /// encoded. `commit` applies all of it or none of it, and drops any
 /// stored row beyond the new geometry (a chunk arena may shrink across
 /// a GC compaction; stale rows must not survive to satisfy a later,
@@ -1834,8 +1941,11 @@ pub struct CheckpointBatch {
     /// stored manifest's seal ([`check_succession`]).
     pub prev_seal: String,
     pub manifest: StoreManifest,
-    /// Encoded [`SmallState`].
+    /// Full encoded [`SmallState`] when `small_updates` is absent.
     pub small: Vec<u8>,
+    /// Sparse section replacements. When present, `small` must be empty.
+    /// Omission preserves a section; an explicit empty payload replaces it.
+    pub small_updates: Option<Vec<crate::store_sections::SectionUpdate>>,
     /// `(page index, encoded records)` for each dirty slot page.
     pub slot_pages: Vec<(u32, Vec<u8>)>,
     /// `(extent index, raw bytes)` for each dirty chunk extent.
@@ -1895,14 +2005,7 @@ pub trait HeapStoreCommit: HeapStore {
                 }
             }
             check_batch(stored.map(|m| (m, ledger.widths())), batch)?;
-            let root = ledger.apply(
-                &batch.manifest,
-                &batch.small,
-                &batch.slot_pages,
-                &batch.chunk_extents,
-                &batch.free_segs,
-                &batch.page_edges,
-            )?;
+            let root = ledger.apply_checkpoint(batch)?;
             if root != batch.manifest.root {
                 return Err(StoreError::BaselineMismatch {
                     expected: root,
@@ -1932,6 +2035,16 @@ pub trait HeapStore {
     fn manifest(&self) -> Result<StoreManifest, StoreError>;
     /// The encoded [`SmallState`] of the current epoch.
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError>;
+    /// Fixed-size section hash inventory. Whole-state fallback is for reference
+    /// backends; database backends override this without reading payloads.
+    fn small_section_hashes(
+        &self,
+    ) -> Result<[[u8; 32]; crate::store_sections::SMALL_SECTION_COUNT], StoreError> {
+        Ok(*crate::store_sections::SectionLeaves::from_payloads(
+            &crate::store_sections::split_small_state(&self.read_small_state()?)?,
+        )
+        .hashes())
+    }
     /// The raw bytes of slot page `page`.
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError>;
     /// The raw bytes of chunk extent `ext`.
@@ -2245,6 +2358,7 @@ pub fn migrate_store(
             24 => migrate_v24_to_v25(store)?,
             25 => migrate_v25_to_v26(store)?,
             26 => migrate_v26_to_v27(store)?,
+            27 => migrate_v27_to_v28(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -3117,6 +3231,44 @@ fn migrate_v26_to_v27(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &small)
 }
 
+/// 27 → 28: retain canonical payloads and authenticated manifest policy,
+/// replacing only the monolithic small-state leaf with a section tree.
+fn migrate_v27_to_v28(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    verify_current_seal(&manifest)?;
+    let small = store.read_small_state()?;
+    SmallState::decode(&small)?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(
+        &manifest,
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root,
+        });
+    }
+    manifest.parent_seal = manifest.seal.clone();
+    manifest.store_schema = 28;
+    manifest.root = compute_root(
+        &manifest,
+        &crate::store_sections::framed_root(&small)?,
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    manifest.seal = seal_commit(&manifest.parent_seal, &manifest, &[], &[], &[], &[], &[]);
+    store.replace_manifest_and_small_for_migration(&manifest, &small)
+}
+
 /// The epoch discipline every [`HeapStoreCommit::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -3139,6 +3291,23 @@ pub fn check_succession(
             return Err(SnapshotError::Corrupt("durable counter regression").into());
         }
     }
+    if let Some(prior) = stored {
+        if prior.store_schema < STORE_SCHEMA_VERSION {
+            return Err(StoreError::NeedsMigration {
+                found: prior.store_schema,
+            });
+        }
+        if prior.store_schema > STORE_SCHEMA_VERSION {
+            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "unsupported store schema version",
+            )));
+        }
+    }
+    if batch.manifest.store_schema != STORE_SCHEMA_VERSION {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "checkpoint requires current store schema",
+        )));
+    }
     check_epoch(stored.map(|m| m.epoch), batch.manifest.epoch)?;
     let expected = stored.map(|m| m.seal.as_str()).unwrap_or("");
     if batch.prev_seal != expected {
@@ -3152,15 +3321,8 @@ pub fn check_succession(
     // forged constant seal could stitch divergent stores into one
     // apparent lineage and defeat the equal-epoch fork guard (the
     // PR-review finding). Every backend calls this before persisting.
-    let recomputed = seal_commit(
-        &batch.prev_seal,
-        &batch.manifest,
-        &batch.small,
-        &batch.slot_pages,
-        &batch.chunk_extents,
-        &batch.free_segs,
-        &batch.page_edges,
-    );
+    crate::store_sections::validate_batch(batch, stored.is_none())?;
+    let recomputed = batch_seal(batch);
     if batch.manifest.seal != recomputed {
         return Err(StoreError::BaselineMismatch {
             expected: recomputed,
@@ -3359,7 +3521,7 @@ fn encode_image_batch(
     let dense_edges: Vec<Vec<u32>> = page_edges.iter().map(|(_, t)| t.clone()).collect();
     manifest.root = compute_root(
         &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small_bytes),
+        &crate::store_sections::framed_root(&small_bytes).expect("freshly encoded section framing"),
         &pages,
         &exts,
         &frees,
@@ -3378,6 +3540,7 @@ fn encode_image_batch(
         prev_seal: prev_seal.to_string(),
         manifest,
         small: small_bytes,
+        small_updates: None,
         slot_pages,
         chunk_extents,
         free_segs,
@@ -3442,7 +3605,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             found: edges.len() as u32,
         });
     }
-    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
+    let small_leaf = crate::store_sections::framed_root(&small_bytes)?;
     let root = compute_root(
         &manifest,
         &small_leaf,
@@ -3810,7 +3973,7 @@ pub fn validate_store(
             found: edges.len() as u32,
         });
     }
-    let small_leaf = leaf_hash(LEAF_SMALL, 0, &small_bytes);
+    let small_leaf = crate::store_sections::framed_root(&small_bytes)?;
     let root = compute_root(
         &manifest,
         &small_leaf,
@@ -4003,6 +4166,8 @@ pub struct CommitStats {
     /// axis (LIFO churn must rewrite only the tail segment), which
     /// the review found asserted in prose and observed by nothing.
     pub free_segs_written: usize,
+    pub small_sections_written: usize,
+    pub small_bytes_written: usize,
 }
 
 /// The in-memory [`HeapStore`]: the reference semantics every backend
@@ -4011,6 +4176,8 @@ pub struct CommitStats {
 pub struct MemoryStore {
     manifest: Option<StoreManifest>,
     small: Vec<u8>,
+    sections: Option<[Vec<u8>; crate::store_sections::SMALL_SECTION_COUNT]>,
+    section_leaves: Option<crate::store_sections::SectionLeaves>,
     slot_pages: std::collections::HashMap<u32, Vec<u8>>,
     chunk_extents: std::collections::HashMap<u32, Vec<u8>>,
     leaf_pages: Vec<[u8; 32]>,
@@ -4050,8 +4217,24 @@ impl HeapStore for MemoryStore {
         manifest: &StoreManifest,
         small: &[u8],
     ) -> Result<(), StoreError> {
+        let sections = if manifest.store_schema >= 28 {
+            let refs = crate::store_sections::split_small_state(small)?;
+            Some(std::array::from_fn(|id| refs[id].to_vec()))
+        } else {
+            None
+        };
+        self.section_leaves = sections.as_ref().map(|rows| {
+            crate::store_sections::SectionLeaves::from_payloads(&std::array::from_fn(|id| {
+                rows[id].as_slice()
+            }))
+        });
+        self.sections = sections;
+        self.small = if self.sections.is_some() {
+            Vec::new()
+        } else {
+            small.to_vec()
+        };
         self.manifest = Some(manifest.clone());
-        self.small = small.to_vec();
         Ok(())
     }
 
@@ -4059,7 +4242,22 @@ impl HeapStore for MemoryStore {
         if self.manifest.is_none() {
             return Err(StoreError::Empty);
         }
-        Ok(self.small.clone())
+        if let Some(sections) = &self.sections {
+            crate::store_sections::frame_small_state(&std::array::from_fn(|id| {
+                sections[id].as_slice()
+            }))
+        } else {
+            Ok(self.small.clone())
+        }
+    }
+
+    fn small_section_hashes(
+        &self,
+    ) -> Result<[[u8; 32]; crate::store_sections::SMALL_SECTION_COUNT], StoreError> {
+        self.section_leaves
+            .as_ref()
+            .map(|leaves| *leaves.hashes())
+            .ok_or(StoreError::Empty)
     }
 
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
@@ -4140,8 +4338,10 @@ impl HeapStore for MemoryStore {
     }
 
     fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError> {
-        let ledger = RootLedger::build(
-            &self.small,
+        let ledger = RootLedger::build_from_sections(
+            self.section_leaves.clone().unwrap_or_else(|| {
+                crate::store_sections::SectionLeaves::from_hashes([[0; 32]; 32])
+            }),
             self.leaf_pages.clone(),
             self.leaf_exts.clone(),
             self.leaf_frees.clone(),
@@ -4150,6 +4350,11 @@ impl HeapStore for MemoryStore {
         let (batch, ledger) = verify(self.manifest.as_ref(), ledger)?.into_parts();
         let pages = slot_page_count(batch.manifest.slot_count);
         let exts = chunk_extent_count(batch.manifest.chunk_len);
+        let next_sections = ledger
+            .section_leaves()
+            .cloned()
+            .expect("verified section ledger");
+        let updates = crate::store_sections::batch_updates(batch)?;
         let (leaf_pages, leaf_exts, leaf_frees) = ledger.into_leaf_vectors();
         let mut edges = self.edges.clone();
         edges.resize(pages as usize, Vec::new());
@@ -4175,12 +4380,23 @@ impl HeapStore for MemoryStore {
         // compaction; slot pages are monotone but the sweep is uniform).
         self.slot_pages.retain(|&p, _| p < pages);
         self.chunk_extents.retain(|&e, _| e < exts);
-        self.small = batch.small.clone();
+        let rows = self
+            .sections
+            .get_or_insert_with(|| std::array::from_fn(|_| Vec::new()));
+        let small_sections_written = updates.len();
+        let small_bytes_written = updates.iter().map(|u| u.bytes.len()).sum();
+        for update in updates {
+            rows[update.section.id() as usize] = update.bytes;
+        }
+        self.section_leaves = Some(next_sections);
+        self.small.clear();
         self.manifest = Some(batch.manifest.clone());
         self.last_commit = CommitStats {
             slot_pages_written: batch.slot_pages.len(),
             chunk_extents_written: batch.chunk_extents.len(),
             free_segs_written: batch.free_segs.len(),
+            small_sections_written,
+            small_bytes_written,
         };
         Ok(())
     }
@@ -4514,9 +4730,17 @@ mod tests {
         let mut image = ran_image();
         image.meter.cost_table_version = "ironhorse-meter-999".to_string();
         let mut store = MemoryStore::new();
+        assert!(matches!(
+            store.commit(&image_to_batch_unchecked(&image, 1, "")),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
             .unwrap();
+        store.sections.as_mut().unwrap()
+            [crate::store_sections::SmallSection::Meter.id() as usize] = image.meter.encode();
         match validate_store(&store, &sig()) {
             Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { .. })) => {}
             other => panic!("expected cost-table mismatch, got {other:?}"),
@@ -4528,9 +4752,17 @@ mod tests {
         let mut image = ran_image();
         image.meter.cost_table_digest[0] ^= 1;
         let mut store = MemoryStore::new();
+        assert!(matches!(
+            store.commit(&image_to_batch_unchecked(&image, 1, "")),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
             .unwrap();
+        store.sections.as_mut().unwrap()
+            [crate::store_sections::SmallSection::Meter.id() as usize] = image.meter.encode();
         assert!(matches!(
             validate_store(&store, &sig()),
             Err(StoreError::Snapshot(
@@ -4746,6 +4978,9 @@ mod tests {
                 slot_pages_written: batch.slot_pages.len(),
                 chunk_extents_written: batch.chunk_extents.len(),
                 free_segs_written: batch.free_segs.len(),
+                small_sections_written: crate::store_sections::SMALL_SECTION_COUNT,
+                small_bytes_written: batch.small.len()
+                    - 4 * crate::store_sections::SMALL_SECTION_COUNT,
             }
         );
     }
@@ -4897,7 +5132,8 @@ mod tests {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
         let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
-        let template = image_to_batch_unchecked(&image, 1, "").manifest;
+        let mut template = image_to_batch_unchecked(&image, 1, "").manifest;
+        template.store_schema = 27;
 
         let leaf_bytes = |i: u32, salt: u8| -> Vec<u8> { vec![salt, i as u8, (i >> 8) as u8] };
         let mut small = b"small-0".to_vec();

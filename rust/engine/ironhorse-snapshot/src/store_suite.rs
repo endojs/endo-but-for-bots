@@ -986,3 +986,116 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
     );
     store
 }
+
+/// Sparse section protocol locks, shared by all three storage backends.
+pub fn sparse_section_acceptance<S: HeapStore>(mut fresh: impl FnMut() -> S) {
+    use crate::store::{image_to_batch, reseal_batch, RootLedger};
+    use crate::store_sections::{batch_updates, SectionLeaves, SectionUpdate, SmallSection};
+    let image_of = |source: &str| {
+        let mut machine = Interp::new();
+        let (code, names) = compile(source);
+        machine.link_intrinsics(&names);
+        assert!(machine.run(&code).completed);
+        machine.snapshot_image(&sig()).unwrap()
+    };
+    // The initial sparse NAME update must accept canonical CESU-8, including
+    // lone surrogates and supplementary characters, without replacement.
+    let populated =
+        image_of(r#"var a = [1, 2, 3]; var o = {"\uD800":7,"\uDC00":8,"\uD800\uDC00":9}; 0"#);
+    let empty = image_of("0");
+    assert!(!populated.arrays.is_empty());
+    assert!(empty.arrays.is_empty());
+    let first = image_to_batch(&populated, 1, "");
+    let mut initial = first.clone();
+    initial.small_updates = Some(batch_updates(&initial).unwrap());
+    initial.small.clear();
+    reseal_batch(&mut initial);
+    assert_eq!(
+        initial.manifest.seal, first.manifest.seal,
+        "the manifest seal binds the same complete state"
+    );
+    let mut reverse = initial.clone();
+    reverse.small_updates.as_mut().unwrap().reverse();
+    reseal_batch(&mut reverse);
+    assert_eq!(
+        reverse.manifest.seal, initial.manifest.seal,
+        "canonical update order"
+    );
+    let mut store = fresh();
+    let mut missing = initial.clone();
+    missing.small_updates.as_mut().unwrap().pop();
+    reseal_batch(&mut missing);
+    assert!(store.commit(&missing).is_err());
+    assert!(matches!(
+        store.manifest(),
+        Err(crate::store::StoreError::Empty)
+    ));
+    store.commit(&reverse).unwrap();
+    assert_eq!(&store_to_image(&store).unwrap(), populated.image());
+
+    // Full -> unchanged sparse -> explicit empty table -> full again.
+    let mut store = fresh();
+    store.commit(&first).unwrap();
+    let mut unchanged = image_to_batch(&populated, 2, &first.manifest.seal);
+    unchanged.small.clear();
+    unchanged.small_updates = Some(Vec::new());
+    unchanged.slot_pages.clear();
+    unchanged.chunk_extents.clear();
+    unchanged.free_segs.clear();
+    unchanged.page_edges.clear();
+    reseal_batch(&mut unchanged);
+    store.commit(&unchanged).unwrap();
+    assert_eq!(&store_to_image(&store).unwrap(), populated.image());
+    let prior = store.manifest().unwrap();
+    let next = image_to_batch(&populated, 3, &prior.seal);
+    let meter = batch_updates(&next)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.section == SmallSection::Meter)
+        .unwrap();
+    let mut duplicate = next.clone();
+    duplicate.small.clear();
+    duplicate.small_updates = Some(vec![meter.clone(), meter]);
+    let mut conflict = next.clone();
+    conflict.small_updates = Some(Vec::new());
+    let mut malformed = next.clone();
+    malformed.small.clear();
+    malformed.small_updates = Some(vec![SectionUpdate {
+        section: SmallSection::NameFloor,
+        bytes: vec![0; 3],
+    }]);
+    let mut noncanonical = next.clone();
+    noncanonical.small.clear();
+    noncanonical.small_updates = Some(vec![SectionUpdate {
+        section: SmallSection::Arrays,
+        bytes: Vec::new(), // Empty arrays require the canonical count header.
+    }]);
+    for mut bad in [duplicate, conflict, malformed, noncanonical] {
+        reseal_batch(&mut bad);
+        assert!(store.commit(&bad).is_err());
+        assert_eq!(store.manifest().unwrap(), prior);
+        assert_eq!(&store_to_image(&store).unwrap(), populated.image());
+    }
+    let mut clear = image_to_batch(&empty, 3, &prior.seal);
+    let updates = batch_updates(&clear).unwrap();
+    clear.small.clear();
+    clear.small_updates = Some(updates);
+    let (pages, exts) = store.leaf_hashes().unwrap();
+    let mut ledger = RootLedger::build_from_sections(
+        SectionLeaves::from_hashes(store.small_section_hashes().unwrap()),
+        pages,
+        exts,
+        store.free_leaf_hashes().unwrap(),
+        &store.page_edges().unwrap(),
+    );
+    assert_eq!(ledger.root(&prior), prior.root);
+    clear.manifest.root = ledger.apply_checkpoint(&clear).unwrap();
+    reseal_batch(&mut clear);
+    store.commit(&clear).unwrap();
+    assert_eq!(&store_to_image(&store).unwrap(), empty.image());
+    let restored = resume_from_store(&store, &sig()).unwrap();
+    assert_eq!(restored.machine().snapshot_image(&sig()).unwrap(), empty);
+    let full = image_to_batch(&populated, 4, &clear.manifest.seal);
+    store.commit(&full).unwrap();
+    assert_eq!(&store_to_image(&store).unwrap(), populated.image());
+}

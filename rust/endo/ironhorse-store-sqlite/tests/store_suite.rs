@@ -22,6 +22,11 @@ fn in_memory() -> SqliteHeapStore {
 }
 
 #[test]
+fn sqlite_sparse_sections_match_full_snapshots() {
+    ironhorse_snapshot::store_suite::sparse_section_acceptance(in_memory);
+}
+
+#[test]
 fn sqlite_in_memory_agrees_seven_ways() {
     metamorphic_suite(in_memory);
 }

@@ -40,7 +40,7 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
     use ironhorse_snapshot::format::{Version, NAME, VERS};
     use ironhorse_snapshot::machine::checkpoint_to_store;
     use ironhorse_snapshot::store::{
-        compute_root, leaf_hash, migrate_store, HeapStore, LEAF_SMALL,
+        compute_root, leaf_hash, migrate_store, seal_commit, HeapStore, LEAF_SMALL,
     };
 
     let signature = Signature::new("surrogate-migration");
@@ -95,7 +95,29 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
         ironhorse_snapshot::store::STORE_SCHEMA_VERSION
     );
     assert_eq!(migrated.epoch, manifest.epoch);
-    assert_eq!(migrated.parent_seal, manifest.seal);
+    // Migration stamps both schema 27 and schema 28. The final parent is
+    // the authenticated schema-27 seal, whose parent is the legacy seal.
+    let mut intermediate = migrated.clone();
+    intermediate.store_schema = 27;
+    intermediate.parent_seal = manifest.seal.clone();
+    intermediate.root = compute_root(
+        &intermediate,
+        &leaf_hash(LEAF_SMALL, 0, &store.read_small_state().unwrap()),
+        &pages,
+        &extents,
+        &store.free_leaf_hashes().unwrap(),
+        &store.page_edges().unwrap(),
+    );
+    let intermediate_seal = seal_commit(
+        &intermediate.parent_seal,
+        &intermediate,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    );
+    assert_eq!(migrated.parent_seal, intermediate_seal);
     assert_ne!(migrated.seal, manifest.seal);
     assert!(!migrate_store(&mut store, &signature).unwrap());
     let mut resumed = resume_from_store(&mut store, &signature).unwrap();

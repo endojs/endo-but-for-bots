@@ -68,9 +68,9 @@ use crate::sha256::{hex, Sha256};
 #[cfg(test)]
 use crate::store::image_to_batch_unchecked as image_to_batch;
 use crate::store::{
-    chunk_extent_count, compute_root, derive_page_edges, leaf_hash, seal_commit, slot_page_count,
-    store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState, StoreError,
-    StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL, STORE_SCHEMA_VERSION,
+    chunk_extent_count, derive_page_edges, leaf_hash, slot_page_count, store_to_image,
+    validate_store, CheckpointBatch, HeapStore, SmallState, StoreError, StoreLeaves, StoreManifest,
+    LEAF_EXT, LEAF_PAGE, STORE_SCHEMA_VERSION,
 };
 use ironhorse_vm::Interp;
 
@@ -1280,42 +1280,24 @@ pub fn checkpoint_to_store(
     // reads the edited bytes — and the edit stays detected by the
     // backend's own recombination, every fault's row/leaf check, and
     // the next open.
-    enum RootPath {
-        Fast(crate::store::RootLedger),
-        Slow {
-            leaf_pages: Vec<[u8; 32]>,
-            leaf_exts: Vec<[u8; 32]>,
-            prior_frees: Vec<[u8; 32]>,
-            edges_all: Vec<Vec<u32>>,
-        },
-    }
-    let mut path = match session.root_ledger.take() {
-        Some(ledger) => RootPath::Fast(ledger),
+    let mut ledger = match session.root_ledger.take() {
+        Some(ledger) => ledger,
         None => {
-            let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
-            let prior_frees = store.free_leaf_hashes()?;
-            let edges_all = store.page_edges()?;
-            let stored_small = store.read_small_state()?;
-            let recombined = compute_root(
-                &stored,
-                &leaf_hash(LEAF_SMALL, 0, &stored_small),
-                &leaf_pages,
-                &leaf_exts,
-                &prior_frees,
-                &edges_all,
-            );
-            if recombined != stored.root {
+            let (pages, exts) = store.leaf_hashes()?;
+            let frees = store.free_leaf_hashes()?;
+            let edges = store.page_edges()?;
+            let sections =
+                crate::store_sections::SectionLeaves::from_hashes(store.small_section_hashes()?);
+            let ledger =
+                crate::store::RootLedger::build_from_sections(sections, pages, exts, frees, &edges);
+            let root = ledger.root(&stored);
+            if root != stored.root {
                 return Err(StoreError::BaselineMismatch {
-                    expected: recombined,
+                    expected: root,
                     found: stored.root.clone(),
                 });
             }
-            RootPath::Slow {
-                leaf_pages,
-                leaf_exts,
-                prior_frees,
-                edges_all,
-            }
+            ledger
         }
     };
     let interp = &mut session.interp;
@@ -1364,16 +1346,30 @@ pub fn checkpoint_to_store(
         .map(|e| (e, interp.chunks.extent_bytes(e)))
         .collect();
 
-    let small = small_state_of(interp).encode();
+    // Storage increment: omit unchanged sections from the batch. Selecting
+    // before extraction still requires VM dirty tracking (F043 remains open).
+    let prior_sections =
+        ledger
+            .section_leaves()
+            .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
+                "checkpoint ledger lacks section inventory",
+            )))?;
+    let small_updates = small_state_of(interp)
+        .encode_sections()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(id, bytes)| {
+            let section = crate::store_sections::SmallSection::ALL[id];
+            (crate::store_sections::section_hash(section, &bytes) != prior_sections.hashes()[id])
+                .then_some(crate::store_sections::SectionUpdate { section, bytes })
+        })
+        .collect();
     // Free-list segments (phase 9): diff against the prior segment
     // leaves so only CHANGED segments travel — LIFO churn touches the
     // tail segment, making per-commit free bytes O(1) in heap size.
-    // Both paths hold the prior free leaves: the ledger carries them
-    // live; the slow path just read them.
-    let prior_frees: &[[u8; 32]] = match &path {
-        RootPath::Fast(ledger) => ledger.free_leaves(),
-        RootPath::Slow { prior_frees, .. } => prior_frees,
-    };
+    // The ledger holds prior free leaves, either retained from the last
+    // successful checkpoint or rebuilt from the verified store inventory.
+    let prior_frees = ledger.free_leaves();
     let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
     let free_segs: Vec<(u32, Vec<u8>)> = free_all
         .into_iter()
@@ -1382,95 +1378,23 @@ pub fn checkpoint_to_store(
                 != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
         })
         .collect();
-    // Root maintenance: prior state + this commit's dirty
-    // leaves/summaries → the new sealed root. Fast path: the ledger
-    // patches the traveling rows and recomputes only their tree
-    // paths. Slow path: patch the full vectors read above and
-    // recombine from scratch (also the ledger's rebuild material).
-    manifest.root = match &mut path {
-        RootPath::Fast(ledger) => ledger.apply(
-            &manifest,
-            &small,
-            &slot_pages,
-            &chunk_extents,
-            &free_segs,
-            &page_edges,
-        )?,
-        RootPath::Slow {
-            leaf_pages,
-            leaf_exts,
-            prior_frees,
-            edges_all,
-        } => {
-            let leaf_frees = prior_frees;
-            leaf_pages.resize(page_count as usize, [0u8; 32]);
-            leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
-            leaf_frees.resize(
-                crate::store::free_seg_count(manifest.free_len) as usize,
-                [0u8; 32],
-            );
-            for (i, bytes) in &slot_pages {
-                leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
-            }
-            for (i, bytes) in &chunk_extents {
-                leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
-            }
-            for (i, bytes) in &free_segs {
-                leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
-            }
-            edges_all.resize(page_count as usize, Vec::new());
-            for (i, targets) in &page_edges {
-                edges_all[*i as usize] = targets.clone();
-            }
-            compute_root(
-                &manifest,
-                &leaf_hash(LEAF_SMALL, 0, &small),
-                leaf_pages,
-                leaf_exts,
-                leaf_frees,
-                edges_all,
-            )
-        }
-    };
-    manifest.seal = seal_commit(
-        &session.seal,
-        &manifest,
-        &small,
-        &slot_pages,
-        &chunk_extents,
-        &free_segs,
-        &page_edges,
-    );
-    let seal = manifest.seal.clone();
-    let batch = CheckpointBatch {
+    let mut batch = CheckpointBatch {
         prev_seal: session.seal.clone(),
         manifest,
-        small,
+        small: Vec::new(),
+        small_updates: Some(small_updates),
         slot_pages,
         chunk_extents,
         free_segs,
         page_edges,
     };
+    batch.manifest.root = ledger.apply_checkpoint(&batch)?;
+    crate::store::reseal_batch(&mut batch);
+    let seal = batch.manifest.seal.clone();
     store.commit(&batch)?;
-    // The commit landed: hand the advanced ledger back to the session
-    // (fast path), or rebuild one from the slow path's freshly
-    // verified-and-patched vectors — either way the NEXT checkpoint
-    // is O(dirty · log n).
-    session.root_ledger = Some(match path {
-        RootPath::Fast(ledger) => ledger,
-        RootPath::Slow {
-            leaf_pages,
-            leaf_exts,
-            prior_frees,
-            edges_all,
-        } => crate::store::RootLedger::build(
-            &batch.small,
-            leaf_pages,
-            leaf_exts,
-            prior_frees,
-            &edges_all,
-        ),
-    });
+    // Failed writes drop the advanced ledger; the next attempt validates the
+    // persisted inventory and reoffers every difference against that baseline.
+    session.root_ledger = Some(ledger);
     // Accumulate the traveled slot pages into the generational
     // candidate set (dirtied ∪ grown — exactly what this commit
     // shipped); a collection consumes and clears it.
@@ -1595,13 +1519,13 @@ pub fn resume_from_store(
             found: after.seal,
         });
     }
-    let root_ledger = crate::store::RootLedger::build(
+    let root_ledger = crate::store::RootLedger::build_sectioned(
         &small_bytes,
         leaves.pages,
         leaves.exts,
         leaves.frees,
         &edges,
-    );
+    )?;
     debug_assert_eq!(
         root_ledger.root(&manifest),
         manifest.root,
@@ -1742,13 +1666,13 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
             });
         }
     }
-    let root_ledger = crate::store::RootLedger::build(
+    let root_ledger = crate::store::RootLedger::build_sectioned(
         &small_bytes,
         leaves.pages.clone(),
         leaves.exts.clone(),
         leaves.frees.clone(),
         &edges,
-    );
+    )?;
     debug_assert_eq!(
         root_ledger.root(&manifest),
         manifest.root,
@@ -1842,6 +1766,220 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     })
 }
 
+/// **Summary-driven partial collection** (store seam phase 6): free
+/// every page unreachable from the machine's GC roots and side-table
+/// references, deciding arena reachability ENTIRELY from the store's
+/// persisted page-edge summaries — zero row-content reads, no
+/// full-heap reification.
+///
+/// The root set is [`ironhorse_vm::Interp::gc_roots`] **plus**
+/// [`ironhorse_vm::Interp::side_table_ref_slots`]: the stored
+/// summaries carry only arena edges, so every side-table-held
+/// reference (an Array's elements, a Map entry, a captured closure
+/// record, a suspended frame) roots its page directly — the
+/// page-granular equivalent of the full collector's `extra_edges`
+/// hook. Without it, an object reachable only through a side table
+/// would be freed while live (the review's unsoundness finding).
+///
+/// Page-conservative by design, twice over: garbage co-resident with
+/// live data in a reachable page survives, and a side-table entry
+/// whose key is dead still roots its values' pages until the full
+/// [`ironhorse_vm::Interp::collect_garbage`] reclaims exactly (only
+/// it compacts chunk space). Deterministic: a pure function of store
+/// content and machine state — which also means the *schedule* of
+/// partial collections is part of a replica's decision sequence,
+/// exactly like the full collector's (it rewrites the free list, so
+/// a replica that collects and one that does not diverge in
+/// subsequent allocation order).
+///
+/// Contract: call at a checkpoint boundary while the session has no
+/// dirty rows — the summaries describe the committed state, and dirt
+/// would make them stale. A dirty machine panics with a named message
+/// (a caller bug, like the fault contract).
+///
+/// Returns the number of slots freed. Freeing never dirties (no
+/// record byte changes), so the next checkpoint carries the
+/// reclamation as free-list state alone.
+pub fn partial_collect(
+    session: &mut StoreSession,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
+    let interp = session.machine();
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    assert!(
+        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        "partial collect requires a clean checkpoint boundary (dirty rows present)"
+    );
+    let manifest = store.manifest()?;
+    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: manifest.seal,
+        });
+    }
+    let total = slot_page_count(manifest.slot_count);
+    // Refuse a summary count that disagrees with the geometry BEFORE
+    // deciding anything from the summaries: reachability treats an
+    // absent entry as "no outgoing edges", so a truncated store would
+    // read as maximal garbage and free live pages. Metadata-scale via
+    // the trait (the dense default counts the full read; indexed
+    // backends answer with a COUNT).
+    let found = store.summary_page_count()?;
+    if found != total {
+        return Err(StoreError::SummaryCount {
+            expected: total,
+            found,
+        });
+    }
+    let mut root_pages: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for r in interp.gc_roots() {
+        if !r.is_null() {
+            root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
+        }
+    }
+    // The side-table roots come as the page-bit projection: the same
+    // single-body enumeration as `side_table_ref_slots` (parity-locked),
+    // without materializing the O(live) index vector.
+    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+        if hit {
+            root_pages.insert(p as u32);
+        }
+    }
+    // The projection can discover counted-state corruption and poison
+    // the machine. Refuse before querying or applying a collection.
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    // The decision query goes through the trait so an indexed backend
+    // answers it with transfer proportional to the ANSWER (the SQLite
+    // recursive CTE) instead of the dense whole-edge-set read.
+    let roots: Vec<u32> = root_pages.into_iter().collect();
+    let reached = store.reachable_page_set(&roots)?;
+    let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
+    let freed = session.machine_mut().free_pages(&dead);
+    // Pruning a dead bulk row can discover an undercount masked in
+    // the bitmap by another reference to the same page.
+    if !session.machine().is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    // A full partial collect re-examines everything, so the
+    // generational candidate set restarts empty.
+    session.gen_dirty.clear();
+    Ok(freed)
+}
+
+/// **Summary-generational collection** (store seam phase 11): the
+/// steady-state variant of [`partial_collect`] whose work is bounded
+/// by the MUTATED region, not the live heap. Candidates are only the
+/// pages dirtied (or grown) since the last collection this session
+/// ran; a candidate survives when it is
+///
+/// 1. a current ROOT page (arena roots or side-table refs),
+/// 2. referenced from an UN-dirtied old page (whose stored edges are
+///    its current edges — the reverse-index seed), or
+/// 3. reachable from either seed class through summary edges WITHIN
+///    the dirty region (edges leaving the region land on old pages,
+///    which this pass never frees).
+///
+/// Old-generation garbage is deliberately retained — the periodic
+/// [`partial_collect`] (or the full in-memory collector) reclaims it;
+/// every page this pass frees, a full partial pass would also free
+/// (retention-only divergence, locked by test). Timing stays a pure
+/// function of store content and the session's own checkpoint
+/// history. Returns the number of slots freed.
+///
+/// # Not resume-invariant — do NOT wire this to `collect_every`
+///
+/// The candidate set is `gen_dirty`, which a resume seeds EMPTY while a
+/// continuous session keeps accumulating. Two replicas running the same
+/// program under the same `CadencePolicy` therefore free DIFFERENT pages
+/// if one suspends and resumes mid-window, and the free list is
+/// container-visible — so the replicas' bytes diverge (review wave 4,
+/// DET-5).
+///
+/// This is latent today and must stay that way: `PersistentMachine`'s
+/// scheduled collection calls [`partial_collect`], whose candidate set is
+/// the whole store and which is therefore resume-invariant, and this
+/// collector is reached only from tests. The `CadencePolicy` replica
+/// claim ("same policy ⟹ same bytes") assumes a resume-invariant
+/// collector. Anyone flipping `collect_every` to this one must first make
+/// the candidate set depend on durable state rather than session
+/// lifetime.
+pub fn generational_collect(
+    session: &mut StoreSession,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
+    let interp = session.machine();
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    assert!(
+        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        "generational collect requires a clean checkpoint boundary (dirty rows present)"
+    );
+    let manifest = store.manifest()?;
+    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: manifest.seal,
+        });
+    }
+    let total = slot_page_count(manifest.slot_count);
+    let found = store.summary_page_count()?;
+    if found != total {
+        return Err(StoreError::SummaryCount {
+            expected: total,
+            found,
+        });
+    }
+    let dirty: Vec<u32> = session
+        .gen_dirty
+        .iter()
+        .copied()
+        .filter(|p| *p < total)
+        .collect();
+    if dirty.is_empty() {
+        return Ok(0);
+    }
+    let dirty_set: std::collections::BTreeSet<u32> = dirty.iter().copied().collect();
+
+    // Seed class 1: candidate pages that are current roots.
+    let mut seeds: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let interp = session.machine();
+    for r in interp.gc_roots() {
+        if !r.is_null() {
+            let p = r.0 / crate::store::SLOTS_PER_PAGE;
+            if dirty_set.contains(&p) {
+                seeds.insert(p);
+            }
+        }
+    }
+    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+        if hit && dirty_set.contains(&(p as u32)) {
+            seeds.insert(p as u32);
+        }
+    }
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    // Seed class 2: candidates referenced from outside the region.
+    for t in store.externally_referenced(&dirty)? {
+        seeds.insert(t);
+    }
+    // Expansion within the region only.
+    let seed_vec: Vec<u32> = seeds.into_iter().collect();
+    let kept = store.reachable_within(&seed_vec, &dirty)?;
+    let dead: Vec<u32> = dirty.into_iter().filter(|p| !kept.contains(p)).collect();
+    let freed = session.machine_mut().free_pages(&dead);
+    if !session.machine().is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    session.gen_dirty.clear();
+    Ok(freed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1849,6 +1987,58 @@ mod tests {
 
     fn sig() -> Signature {
         Signature::new("ironhorse-worker-v1")
+    }
+
+    #[test]
+    fn checkpoint_refuses_a_legacy_ledger_then_rebuilds_without_losing_state() {
+        use crate::store::{HeapStore, MemoryStore, RootLedger};
+        let (code, symbols) = ironhorse_compile::compile_atoms("1").unwrap();
+        let mut machine = Interp::new();
+        machine.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
+        assert!(machine.run(&code).completed);
+        let mut store = MemoryStore::new();
+        let mut session = begin_store_session(machine, &sig(), &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let prior = store.manifest().unwrap();
+        let (pages, extents) = store.leaf_hashes().unwrap();
+        session.root_ledger = Some(RootLedger::build(
+            &store.read_small_state().unwrap(),
+            pages,
+            extents,
+            store.free_leaf_hashes().unwrap(),
+            &store.page_edges().unwrap(),
+        ));
+        assert!(matches!(
+            checkpoint_to_store(&mut session, &sig(), &mut store),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "checkpoint ledger lacks section inventory"
+            )))
+        ));
+        assert_eq!(store.manifest().unwrap(), prior);
+        assert!(session.root_ledger.is_none());
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+        assert_eq!(store.manifest().unwrap().epoch, prior.epoch + 1);
+    }
+
+    #[test]
+    fn checkpoint_batch_must_use_the_current_schema() {
+        use crate::store::{HeapStore, HeapStoreCommit, MemoryStore};
+        let (code, symbols) = ironhorse_compile::compile_atoms("1").unwrap();
+        let mut machine = Interp::new();
+        machine.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
+        assert!(machine.run(&code).completed);
+        let image = machine.snapshot_image(&sig()).unwrap();
+        let mut batch = image_to_batch(&image, 1, "");
+        batch.manifest.store_schema = STORE_SCHEMA_VERSION - 1;
+        let mut store = MemoryStore::new();
+        assert!(matches!(
+            store.commit(&batch),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "checkpoint requires current store schema"
+            )))
+        ));
+        assert!(matches!(store.manifest(), Err(StoreError::Empty)));
     }
 
     /// Wave-6 W6-14: a store whose hashes are CONSISTENT over hostile
@@ -2179,218 +2369,4 @@ mod tests {
             "meter continued through the CAS round-trip"
         );
     }
-}
-
-/// **Summary-driven partial collection** (store seam phase 6): free
-/// every page unreachable from the machine's GC roots and side-table
-/// references, deciding arena reachability ENTIRELY from the store's
-/// persisted page-edge summaries — zero row-content reads, no
-/// full-heap reification.
-///
-/// The root set is [`ironhorse_vm::Interp::gc_roots`] **plus**
-/// [`ironhorse_vm::Interp::side_table_ref_slots`]: the stored
-/// summaries carry only arena edges, so every side-table-held
-/// reference (an Array's elements, a Map entry, a captured closure
-/// record, a suspended frame) roots its page directly — the
-/// page-granular equivalent of the full collector's `extra_edges`
-/// hook. Without it, an object reachable only through a side table
-/// would be freed while live (the review's unsoundness finding).
-///
-/// Page-conservative by design, twice over: garbage co-resident with
-/// live data in a reachable page survives, and a side-table entry
-/// whose key is dead still roots its values' pages until the full
-/// [`ironhorse_vm::Interp::collect_garbage`] reclaims exactly (only
-/// it compacts chunk space). Deterministic: a pure function of store
-/// content and machine state — which also means the *schedule* of
-/// partial collections is part of a replica's decision sequence,
-/// exactly like the full collector's (it rewrites the free list, so
-/// a replica that collects and one that does not diverge in
-/// subsequent allocation order).
-///
-/// Contract: call at a checkpoint boundary while the session has no
-/// dirty rows — the summaries describe the committed state, and dirt
-/// would make them stale. A dirty machine panics with a named message
-/// (a caller bug, like the fault contract).
-///
-/// Returns the number of slots freed. Freeing never dirties (no
-/// record byte changes), so the next checkpoint carries the
-/// reclamation as free-list state alone.
-pub fn partial_collect(
-    session: &mut StoreSession,
-    store: &dyn HeapStore,
-) -> Result<u32, StoreError> {
-    let interp = session.machine();
-    if !interp.is_quiescent() {
-        return Err(StoreError::MachineNotQuiescent);
-    }
-    assert!(
-        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
-        "partial collect requires a clean checkpoint boundary (dirty rows present)"
-    );
-    let manifest = store.manifest()?;
-    if manifest.epoch != session.epoch || manifest.seal != session.seal {
-        return Err(StoreError::BaselineMismatch {
-            expected: session.seal.clone(),
-            found: manifest.seal,
-        });
-    }
-    let total = slot_page_count(manifest.slot_count);
-    // Refuse a summary count that disagrees with the geometry BEFORE
-    // deciding anything from the summaries: reachability treats an
-    // absent entry as "no outgoing edges", so a truncated store would
-    // read as maximal garbage and free live pages. Metadata-scale via
-    // the trait (the dense default counts the full read; indexed
-    // backends answer with a COUNT).
-    let found = store.summary_page_count()?;
-    if found != total {
-        return Err(StoreError::SummaryCount {
-            expected: total,
-            found,
-        });
-    }
-    let mut root_pages: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-    for r in interp.gc_roots() {
-        if !r.is_null() {
-            root_pages.insert(r.0 / crate::store::SLOTS_PER_PAGE);
-        }
-    }
-    // The side-table roots come as the page-bit projection: the same
-    // single-body enumeration as `side_table_ref_slots` (parity-locked),
-    // without materializing the O(live) index vector.
-    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
-        if hit {
-            root_pages.insert(p as u32);
-        }
-    }
-    // The projection can discover counted-state corruption and poison
-    // the machine. Refuse before querying or applying a collection.
-    if !interp.is_quiescent() {
-        return Err(StoreError::MachineNotQuiescent);
-    }
-    // The decision query goes through the trait so an indexed backend
-    // answers it with transfer proportional to the ANSWER (the SQLite
-    // recursive CTE) instead of the dense whole-edge-set read.
-    let roots: Vec<u32> = root_pages.into_iter().collect();
-    let reached = store.reachable_page_set(&roots)?;
-    let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
-    let freed = session.machine_mut().free_pages(&dead);
-    // Pruning a dead bulk row can discover an undercount masked in
-    // the bitmap by another reference to the same page.
-    if !session.machine().is_quiescent() {
-        return Err(StoreError::MachineNotQuiescent);
-    }
-    // A full partial collect re-examines everything, so the
-    // generational candidate set restarts empty.
-    session.gen_dirty.clear();
-    Ok(freed)
-}
-
-/// **Summary-generational collection** (store seam phase 11): the
-/// steady-state variant of [`partial_collect`] whose work is bounded
-/// by the MUTATED region, not the live heap. Candidates are only the
-/// pages dirtied (or grown) since the last collection this session
-/// ran; a candidate survives when it is
-///
-/// 1. a current ROOT page (arena roots or side-table refs),
-/// 2. referenced from an UN-dirtied old page (whose stored edges are
-///    its current edges — the reverse-index seed), or
-/// 3. reachable from either seed class through summary edges WITHIN
-///    the dirty region (edges leaving the region land on old pages,
-///    which this pass never frees).
-///
-/// Old-generation garbage is deliberately retained — the periodic
-/// [`partial_collect`] (or the full in-memory collector) reclaims it;
-/// every page this pass frees, a full partial pass would also free
-/// (retention-only divergence, locked by test). Timing stays a pure
-/// function of store content and the session's own checkpoint
-/// history. Returns the number of slots freed.
-///
-/// # Not resume-invariant — do NOT wire this to `collect_every`
-///
-/// The candidate set is `gen_dirty`, which a resume seeds EMPTY while a
-/// continuous session keeps accumulating. Two replicas running the same
-/// program under the same `CadencePolicy` therefore free DIFFERENT pages
-/// if one suspends and resumes mid-window, and the free list is
-/// container-visible — so the replicas' bytes diverge (review wave 4,
-/// DET-5).
-///
-/// This is latent today and must stay that way: `PersistentMachine`'s
-/// scheduled collection calls [`partial_collect`], whose candidate set is
-/// the whole store and which is therefore resume-invariant, and this
-/// collector is reached only from tests. The `CadencePolicy` replica
-/// claim ("same policy ⟹ same bytes") assumes a resume-invariant
-/// collector. Anyone flipping `collect_every` to this one must first make
-/// the candidate set depend on durable state rather than session
-/// lifetime.
-pub fn generational_collect(
-    session: &mut StoreSession,
-    store: &dyn HeapStore,
-) -> Result<u32, StoreError> {
-    let interp = session.machine();
-    if !interp.is_quiescent() {
-        return Err(StoreError::MachineNotQuiescent);
-    }
-    assert!(
-        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
-        "generational collect requires a clean checkpoint boundary (dirty rows present)"
-    );
-    let manifest = store.manifest()?;
-    if manifest.epoch != session.epoch || manifest.seal != session.seal {
-        return Err(StoreError::BaselineMismatch {
-            expected: session.seal.clone(),
-            found: manifest.seal,
-        });
-    }
-    let total = slot_page_count(manifest.slot_count);
-    let found = store.summary_page_count()?;
-    if found != total {
-        return Err(StoreError::SummaryCount {
-            expected: total,
-            found,
-        });
-    }
-    let dirty: Vec<u32> = session
-        .gen_dirty
-        .iter()
-        .copied()
-        .filter(|p| *p < total)
-        .collect();
-    if dirty.is_empty() {
-        return Ok(0);
-    }
-    let dirty_set: std::collections::BTreeSet<u32> = dirty.iter().copied().collect();
-
-    // Seed class 1: candidate pages that are current roots.
-    let mut seeds: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-    let interp = session.machine();
-    for r in interp.gc_roots() {
-        if !r.is_null() {
-            let p = r.0 / crate::store::SLOTS_PER_PAGE;
-            if dirty_set.contains(&p) {
-                seeds.insert(p);
-            }
-        }
-    }
-    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
-        if hit && dirty_set.contains(&(p as u32)) {
-            seeds.insert(p as u32);
-        }
-    }
-    if !interp.is_quiescent() {
-        return Err(StoreError::MachineNotQuiescent);
-    }
-    // Seed class 2: candidates referenced from outside the region.
-    for t in store.externally_referenced(&dirty)? {
-        seeds.insert(t);
-    }
-    // Expansion within the region only.
-    let seed_vec: Vec<u32> = seeds.into_iter().collect();
-    let kept = store.reachable_within(&seed_vec, &dirty)?;
-    let dead: Vec<u32> = dirty.into_iter().filter(|p| !kept.contains(p)).collect();
-    let freed = session.machine_mut().free_pages(&dead);
-    if !session.machine().is_quiescent() {
-        return Err(StoreError::MachineNotQuiescent);
-    }
-    session.gen_dirty.clear();
-    Ok(freed)
 }

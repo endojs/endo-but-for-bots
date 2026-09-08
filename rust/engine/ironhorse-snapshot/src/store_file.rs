@@ -577,17 +577,32 @@ impl HeapStore for FileStore {
             None
         };
         let ledger = match durable.as_ref() {
-            Some((loaded, _)) => RootLedger::build(
+            Some((loaded, _))
+                if loaded.manifest.store_schema < crate::store::STORE_SCHEMA_VERSION =>
+            {
+                RootLedger::build(
+                    &loaded.small,
+                    loaded.leaf_pages.clone(),
+                    loaded.leaf_exts.clone(),
+                    loaded.leaf_frees.clone(),
+                    &loaded.edges,
+                )
+            }
+            Some((loaded, _)) => RootLedger::build_sectioned(
                 &loaded.small,
                 loaded.leaf_pages.clone(),
                 loaded.leaf_exts.clone(),
                 loaded.leaf_frees.clone(),
                 &loaded.edges,
-            ),
+            )?,
             None => RootLedger::build(&[], Vec::new(), Vec::new(), Vec::new(), &[]),
         };
         let (batch, ledger) =
             verify(durable.as_ref().map(|(l, _)| &l.manifest), ledger)?.into_parts();
+        let small = crate::store_sections::merge_framed(
+            durable.as_ref().map(|(l, _)| l.small.as_slice()),
+            batch,
+        )?;
         let (leaf_pages, leaf_exts, leaf_frees) = ledger.into_leaf_vectors();
         let mut edges = durable
             .as_ref()
@@ -692,7 +707,7 @@ impl HeapStore for FileStore {
             + 4
             + manifest_bytes.len() as u64
             + 4
-            + batch.small.len() as u64
+            + small.len() as u64
             + 4
             + 4
             + 12 * (n_pages as u64 + n_exts as u64)
@@ -724,9 +739,9 @@ impl HeapStore for FileStore {
             tmp.write_all(&(manifest_bytes.len() as u32).to_be_bytes())
                 .map_err(io_err)?;
             tmp.write_all(&manifest_bytes).map_err(io_err)?;
-            tmp.write_all(&(batch.small.len() as u32).to_be_bytes())
+            tmp.write_all(&(small.len() as u32).to_be_bytes())
                 .map_err(io_err)?;
-            tmp.write_all(&batch.small).map_err(io_err)?;
+            tmp.write_all(&small).map_err(io_err)?;
             tmp.write_all(&n_pages.to_be_bytes()).map_err(io_err)?;
             tmp.write_all(&n_exts.to_be_bytes()).map_err(io_err)?;
             for (offset, length) in offsets.iter().zip(&lengths) {
@@ -928,6 +943,7 @@ mod tests {
             prev_seal: prev.clone(),
             manifest: full.manifest.clone(),
             small: full.small.clone(),
+            small_updates: None,
             slot_pages: full
                 .slot_pages
                 .iter()
