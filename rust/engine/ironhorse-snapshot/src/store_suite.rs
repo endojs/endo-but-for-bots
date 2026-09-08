@@ -134,12 +134,19 @@ fn assert_agrees(
 fn run_blob(
     compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)],
 ) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
+    run_blob_scheduled(compiled, &vec![true; compiled.len()])
+}
+
+fn run_blob_scheduled(
+    compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)],
+    suspend_before: &[bool],
+) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
     let mut computrons = Vec::new();
     for (i, (bytecode, _)) in compiled.iter().enumerate() {
-        if i > 0 {
+        if i > 0 && suspend_before[i] {
             let bytes = m
                 .write_snapshot(&sig())
                 .expect("quiescent machine snapshots");
@@ -181,6 +188,15 @@ fn run_store<S: HeapStore + 'static>(
     compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)],
     mode: Resume,
 ) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
+    run_store_scheduled(store, compiled, mode, &vec![true; compiled.len()])
+}
+
+fn run_store_scheduled<S: HeapStore + 'static>(
+    store: S,
+    compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)],
+    mode: Resume,
+    suspend_before: &[bool],
+) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
     let mut computrons = Vec::new();
@@ -196,14 +212,16 @@ fn run_store<S: HeapStore + 'static>(
         .expect("begin session");
 
     let mut evictions = 0u32;
-    for (bytecode, _) in compiled.iter().skip(1) {
-        drop(session);
-        session = match mode {
-            Resume::Eager => resume_from_store(&*store.borrow(), &sig()).expect("resumes"),
-            Resume::Lazy | Resume::LazyAdversarialPrefetch | Resume::LazyAdversarialEvict => {
-                resume_from_store_lazy(store.clone(), &sig()).expect("resumes lazily")
-            }
-        };
+    for (i, (bytecode, _)) in compiled.iter().enumerate().skip(1) {
+        if suspend_before[i] {
+            drop(session);
+            session = match mode {
+                Resume::Eager => resume_from_store(&*store.borrow(), &sig()).expect("resumes"),
+                Resume::Lazy | Resume::LazyAdversarialPrefetch | Resume::LazyAdversarialEvict => {
+                    resume_from_store_lazy(store.clone(), &sig()).expect("resumes lazily")
+                }
+            };
+        }
         if let Resume::LazyAdversarialEvict = mode {
             // Warm everything, then throw it all away again: the
             // re-faults must reinstall identical content.
@@ -344,6 +362,96 @@ fn metamorphic<S: HeapStore + 'static>(
     assert_agrees("checkpoint-every-crank", scenario, &baseline, &r, &c, &b);
 }
 
+/// Compare uninterrupted, blob, eager-store, and lazy-store executions under
+/// an arbitrary subset of the boundaries before cranks. Element zero must be
+/// false (there is no predecessor to resume). Fixtures use one symbol table.
+pub fn metamorphic_with_suspend_schedule<S: HeapStore + 'static>(
+    mut fresh: impl FnMut() -> S,
+    scenario: &str,
+    cranks: &[&str],
+    suspend_before: &[bool],
+) {
+    assert!(!cranks.is_empty());
+    assert_eq!(suspend_before.len(), cranks.len());
+    assert!(!suspend_before[0]);
+    let compiled: Vec<_> = cranks.iter().map(|source| compile(source)).collect();
+    for (_, names) in &compiled {
+        assert_eq!(names, &compiled[0].1);
+    }
+    let baseline = run_baseline(scenario, &compiled);
+    let (r, c, b) = run_blob_scheduled(&compiled, suspend_before);
+    assert_agrees("scheduled-blob", scenario, &baseline, &r, &c, &b);
+    for mode in [Resume::Eager, Resume::Lazy] {
+        let (r, c, b) = run_store_scheduled(fresh(), &compiled, mode, suspend_before);
+        assert_agrees("scheduled-store", scenario, &baseline, &r, &c, &b);
+    }
+}
+
+fn suspend_subset_scenario<S: HeapStore + 'static>(fresh: &mut dyn FnMut() -> S) {
+    let cranks = [
+        "var n; var s; var f; n=1; s='seed'; f=function(){return n+s;}; f()",
+        "var n; var s; var f; if(false) f.caller; n=n+1; s=s+'x'; f()",
+        "var n; var s; var f; if(false) f.caller; n=n+2; f()",
+        "var n; var s; var f; if(false) f.caller; s=s+'y'; f()",
+        "var n; var s; var f; if(false) f.caller; f()",
+    ];
+    for mask in 0..1u32 << (cranks.len() - 1) {
+        let schedule: Vec<_> = (0..cranks.len())
+            .map(|i| i > 0 && mask & (1 << (i - 1)) != 0)
+            .collect();
+        metamorphic_with_suspend_schedule(&mut *fresh, "all-suspend-subsets", &cranks, &schedule);
+    }
+}
+
+fn halting_crank_scenario<S: HeapStore + 'static>(fresh: &mut dyn FnMut() -> S) {
+    for resume_before in [false, true] {
+        let (setup, names) = compile("var n=1; n");
+        let mut baseline = Interp::new();
+        baseline.link_intrinsics(&names);
+        assert!(baseline.run(&setup).completed);
+        let stable = baseline.write_snapshot(&sig()).unwrap();
+        let store = Rc::new(RefCell::new(fresh()));
+        let worker = from_snapshot_bytes(&stable, &sig()).unwrap();
+        let mut session = begin_store_session(worker, &sig(), &mut *store.borrow_mut())
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let manifest = store.borrow().manifest().unwrap();
+        if resume_before {
+            drop(session);
+            session = resume_from_store_lazy(store.clone(), &sig()).unwrap();
+        }
+        let (abort, names) = compile("n=99; throw new Error('abort')");
+        let b = baseline.relink_crank(&abort, &names).unwrap();
+        let w = session.machine_mut().relink_crank(&abort, &names).unwrap();
+        let expected = baseline.run(&b);
+        let actual = session.machine_mut().run(&w);
+        assert!(!actual.completed);
+        assert_eq!(crank_result(&actual), crank_result(&expected));
+        assert_eq!(actual.computrons, expected.computrons);
+        assert!(session.machine().write_snapshot(&sig()).is_err());
+        assert!(checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).is_err());
+        assert_eq!(store.borrow().manifest().unwrap(), manifest);
+        assert_eq!(export_to_container(&*store.borrow()).unwrap(), stable);
+        // Rewind both to the last durable boundary, then verify continuation.
+        baseline = from_snapshot_bytes(&stable, &sig()).unwrap();
+        drop(session);
+        let mut session = resume_from_store_lazy(store.clone(), &sig()).unwrap();
+        let (next, names) = compile("var n; n=n+1; n");
+        let b = baseline.relink_crank(&next, &names).unwrap();
+        let w = session.machine_mut().relink_crank(&next, &names).unwrap();
+        let expected = baseline.run(&b);
+        let actual = session.machine_mut().run(&w);
+        assert_eq!(actual.result, "2");
+        assert_eq!(crank_result(&actual), crank_result(&expected));
+        assert_eq!(actual.computrons, expected.computrons);
+        checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).unwrap();
+        assert_eq!(
+            export_to_container(&*store.borrow()).unwrap(),
+            baseline.write_snapshot(&sig()).unwrap()
+        );
+    }
+}
+
 /// The full seven-way metamorphic determinism suite against a
 /// backend: five real-JS scenarios, each executed uninterrupted /
 /// blob / store-eager / store-lazy / adversarial-prefetch /
@@ -404,6 +512,8 @@ fn carry<S: HeapStore + 'static>(
 }
 
 pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
+    suspend_subset_scenario(&mut fresh);
+    halting_crank_scenario(&mut fresh);
     metamorphic(
         &mut fresh,
         "globals",
