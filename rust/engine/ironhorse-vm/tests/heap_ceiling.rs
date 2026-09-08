@@ -97,6 +97,8 @@ fn guest_sized_temporary_buffers_are_refused_before_they_are_created() {
         "Array(1000000).join('x')",
         "Array.prototype.join.call({length:1000000},'x')",
         "String.raw({raw:{length:1000000,0:'x'}})",
+        "JSON.stringify(Array(1000000))",
+        "[Array(1000).fill(1),Array(1000).fill(2)].flat()",
     ] {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
@@ -116,4 +118,19 @@ fn repeat_product_is_checked_independently_of_repeat_count() {
     let out = vm.run(&code);
     assert!(out.completed, "{:?}", out.halt);
     assert_eq!(out.result, "true");
+}
+
+#[test]
+fn json_output_prepaid_units_include_escaping_and_nested_indentation() {
+    for source in [
+        "JSON.stringify({a:[null,true,1,1.5,'x'],b:{c:'\\ud800',d:'\\ud83d\\ude00'},z:undefined},null,'..')",
+        "JSON.stringify([undefined,NaN,[],{},'\\u0000\\n\\t\\\"\\\\'],null,3)",
+        "JSON.stringify({a:undefined,b:function(){},c:Symbol()})",
+    ] {
+        let (code,names)=compile(source);
+        let mut vm=Interp::new();
+        vm.link_intrinsics(&names);
+        let out=vm.run(&code);
+        assert!(out.completed, "{source}: {:?}",out.halt);
+    }
 }
