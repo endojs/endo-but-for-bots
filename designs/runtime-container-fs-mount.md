@@ -222,6 +222,32 @@ consequence of the design as written, not an oversight in the code.
   declaration and carries the failure if it repeats; until then the records
   claim a bind the container does not yet have, and `listContainerMounts`
   says so as if it did.
+- **The kernel proves the projection, not which projection.** Attestation
+  requires fstype `9p` and `root === '/'` at the destination, so a host
+  directory and a bind of a subtree both fail. *Which* 9P tree is bound
+  still rests on the runtime's inspect `Source`, which
+  `packages/sandbox/src/observe.js` otherwise declines to trust. Closing it
+  means tying the mount's `deviceId` — the superblock's `major:minor`,
+  which `parseMountInfo` now keeps — to that of the host mount at the
+  attach's `source`, read from the daemon's own `/proc/self/mountinfo`.
+  That is a deployment-topology decision (it assumes the 9P mounter shares
+  the daemon's mount namespace) and would fail every attach where it does
+  not hold, so it is deliberately left for its own change rather than
+  slipped into a hardening pass.
+- **The attach source is confined by the 9P proof alone.** The hosted layer
+  accepts any absolute normal path as an attach `source`; nothing requires
+  it to lie under an operator-minted bridge root, so a source naming a
+  bridge's *parent* is refused only because that parent is not itself a 9P
+  mount. An operator-supplied root in `powers`, checked as a prefix, would
+  make the confinement structural instead of incidental.
+- **The mount table is a spot check, not a census.** It is read only when
+  the policy declares an attach, and only the declared destinations are
+  kept, so a bind present in the anchor's namespace but absent from the
+  runtime's inspect record is still invisible to attestation. That
+  predates attaches — the undeclared-mount scan has always walked the
+  runtime's record — and generalizing it (always read the table, require
+  every mount point to be declared or explicitly allowed) would harden
+  `hostHome` and `hostSockets` as well as attaches.
 
 ## Summary
 
