@@ -738,7 +738,9 @@ pub mod engine {
         /// machine at epoch 1; a populated one is validated against
         /// its sealed root and resumed lazily.
         pub fn open(options: &HeapStoreOptions) -> Result<PersistentMachine, MachineError> {
-            use ironhorse_snapshot::machine::{begin_store_session, resume_from_store_lazy};
+            use ironhorse_snapshot::machine::{
+                begin_store_session_with_cadence, resume_from_store_lazy,
+            };
             use ironhorse_snapshot::store::{HeapStore, StoreError};
 
             let signature = ironhorse_snapshot::Signature::new(&options.signature);
@@ -751,6 +753,15 @@ pub mod engine {
             // (incompatible signature) refuses to migrate it rather than
             // one-way restamping it out from under its rightful owner. A
             // fresh or already-current store is a no-op.
+            match store.manifest() {
+                Ok(manifest) if manifest.collect_every != options.cadence.collect_every => {
+                    return Err(MachineError::Store(
+                        "collection cadence mismatch".to_string(),
+                    ));
+                }
+                Ok(_) | Err(StoreError::Empty) => {}
+                Err(error) => return Err(store_err(error)),
+            }
             ironhorse_snapshot::store::migrate_store(&mut store, &signature).map_err(store_err)?;
             // No crank has run yet, so the ceiling's initial value is
             // irrelevant; `eval` re-points it before every crank.
@@ -765,8 +776,13 @@ pub mod engine {
                     if let Some(interval) = options.meter.check_interval() {
                         boot.arm_meter(interval, meter_host(&crank_ceiling));
                     }
-                    let session = begin_store_session(boot, &signature, &mut store)
-                        .map_err(|(_, e)| store_err(e))?;
+                    let session = begin_store_session_with_cadence(
+                        boot,
+                        &signature,
+                        &mut store,
+                        options.cadence.collect_every,
+                    )
+                    .map_err(|(_, e)| store_err(e))?;
                     let durable_cranks = session.cranks();
                     Ok(PersistentMachine {
                         store: std::rc::Rc::new(std::cell::RefCell::new(store)),
@@ -947,13 +963,18 @@ pub mod engine {
             // identical points. `checkpoint_every` is 1-normalized;
             // a due collection forces the flush (the collector needs a
             // checkpoint boundary).
-            let pending_after = self.pending_cranks.saturating_add(1);
+            let pending_after = self.pending_cranks.checked_add(1).ok_or_else(|| {
+                MachineError::Store("pending crank counter exhausted".to_string())
+            })?;
             // The absolute completed-crank total this crank would reach.
             // Deriving the schedule from a durable ABSOLUTE number is
             // what makes it resume-invariant: two replicas at the same
             // total agree on whether a collection is due, whatever their
             // suspend histories (review wave 5).
-            let total_after = self.durable_cranks.saturating_add(pending_after as u64);
+            let total_after = self
+                .durable_cranks
+                .checked_add(pending_after as u64)
+                .ok_or_else(|| MachineError::Store("crank counter exhausted".to_string()))?;
             let collect_due = self.cadence.collect_every > 0
                 && total_after % self.cadence.collect_every as u64 == 0;
             let checkpoint_due = pending_after >= self.cadence.checkpoint_every.max(1)
@@ -1133,7 +1154,11 @@ pub mod engine {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
+                let collections = session.collections().checked_add(1).ok_or_else(|| {
+                    MachineError::Store("collection counter exhausted".to_string())
+                })?;
                 let freed = partial_collect(session, &*self.store.borrow()).map_err(store_err)?;
+                session.set_collections(collections);
                 let r =
                     checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut());
                 (freed, r)
@@ -1209,7 +1234,8 @@ pub mod engine {
             }
             let total = self
                 .durable_cranks
-                .saturating_add(self.pending_cranks as u64);
+                .checked_add(self.pending_cranks as u64)
+                .ok_or_else(|| MachineError::Store("crank counter exhausted".to_string()))?;
             let r = {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())

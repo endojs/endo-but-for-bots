@@ -523,3 +523,41 @@ fn read_manifest(path: &std::path::Path) -> ironhorse_snapshot::store::StoreMani
     let store = ironhorse_store_sqlite::SqliteHeapStore::open(path).expect("open for manifest");
     store.manifest().expect("manifest")
 }
+
+#[test]
+fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = HeapStoreOptions {
+        path: dir.path().join("collection-policy.sqlite"),
+        signature: "collection-policy-v1".to_string(),
+        cadence: CadencePolicy {
+            checkpoint_every: 1,
+            collect_every: 2,
+        },
+        meter: MeterBounds::default(),
+    };
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine.eval("var x = 1; x").unwrap();
+    machine.eval("x += 1; x").unwrap();
+    machine.close().unwrap();
+    let scheduled = read_manifest(&options.path);
+    assert_eq!(scheduled.cranks, 2);
+    assert_eq!(scheduled.collect_every, 2);
+    assert_eq!(scheduled.collections, 1);
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    machine.collect().unwrap();
+    machine.close().unwrap();
+    let explicit = read_manifest(&options.path);
+    assert_eq!(explicit.collections, 2);
+    assert_ne!(scheduled.root, explicit.root);
+    options.cadence.collect_every = 3;
+    assert!(matches!(PersistentMachine::open(&options),
+        Err(MachineError::Store(message)) if message.contains("collection cadence mismatch")));
+    assert_eq!(read_manifest(&options.path), explicit);
+    options.cadence.collect_every = 2;
+    let mut reopened = PersistentMachine::open(&options).unwrap();
+    reopened.eval("x += 1; x").unwrap();
+    reopened.eval("x += 1; x").unwrap();
+    reopened.close().unwrap();
+    assert_eq!(read_manifest(&options.path).collections, 3);
+}

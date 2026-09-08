@@ -524,7 +524,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // W4: METR digest changes each committed small-state hash.
         // Format 16 also travels in the manifest signed by each seal.
         // The structured boot signature also travels in the manifest.
-        "d357a786abdf21d659743ba67d358d4305170b45f21941c133a08777618428f5",
+        "46eea32a9faae52d2b912982e66c2f03ae21bb0c427c666d5e1e52c62f76d02f",
         "epoch-3 seal chain"
     );
 }
