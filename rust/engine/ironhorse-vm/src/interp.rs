@@ -14708,6 +14708,18 @@ impl Interp {
             // in bounded time instead of spinning forever. Checked at the loop
             // top so every recursive `dispatch_at` entry (callbacks, promise
             // jobs) shares the one cumulative ceiling.
+            #[cfg(test)]
+            if tests::GC_AT_STEP.with(|step| {
+                if step.get() == Some(self.n_dispatched) {
+                    step.set(None);
+                    true
+                } else {
+                    false
+                }
+            }) {
+                self.collect_garbage();
+                tests::GC_HITS.with(|hits| hits.set(hits.get() + 1));
+            }
             if self.n_dispatched >= self.step_limit {
                 return Step::Host(Halt::StepLimit(self.n_dispatched));
             }
@@ -36606,35 +36618,46 @@ impl Interp {
                 if !self.is_callable_value(callback) {
                     return Err(self.catchable_type_error_msg("callback: not a function".into()));
                 }
-                let this_arg = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_MAP_FRAME_METERING);
                 let result = self.new_array_unmetered();
                 if length > 0 {
                     self.meter.tick_raw(self.array_chunk_size_metering(length));
                 }
-                for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
-                    if let Some(item) = item {
-                        self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
-                        let cb_args = [item, Slot::integer(i as i32), this];
-                        let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                        self.meter.tick_builtin_some(2);
-                        let mut v = r;
-                        v.id = 0;
-                        v.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&result).unwrap().insert_item(
-                            i,
-                            v,
-                            &mut self.side_refs,
-                        );
+                // The partial result otherwise exists only in this Rust local
+                // while guest callbacks run, so a mid-callback GC would sweep it.
+                let root_sp = self.stack.len();
+                self.stack
+                    .push(Slot::of(Kind::Reference, Payload::Reference(result)));
+                let mapped: Result<(), Step> = (|| {
+                    for i in 0..length {
+                        let item = self.arrays[&inst].items().get(&i).copied();
+                        if let Some(item) = item {
+                            self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
+                            let cb_args = [item, Slot::integer(i as i32), this];
+                            // Re-read the rooted argument after any prior callback GC.
+                            let this_arg = if argc > 1 {
+                                self.stack[base + 5]
+                            } else {
+                                Slot::undefined()
+                            };
+                            let r = self.run_callback(code, callback, this_arg, &cb_args)?;
+                            self.meter.tick_builtin_some(2);
+                            let mut v = r;
+                            v.id = 0;
+                            v.next = crate::value::SlotIndex::NULL;
+                            self.arrays.get_mut(&result).unwrap().insert_item(
+                                i,
+                                v,
+                                &mut self.side_refs,
+                            );
+                        }
                     }
-                }
-                self.arrays.get_mut(&result).unwrap().length = length;
+                    self.arrays.get_mut(&result).unwrap().length = length;
+                    Ok(())
+                })();
+                self.stack.truncate(root_sp);
+                mapped?;
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
             // `Array.prototype.some`/`every` — short-circuiting boolean folds.
@@ -61952,6 +61975,80 @@ mod tests {
         op as u8
     }
 
+    thread_local! {
+        pub(super) static GC_AT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+        pub(super) static GC_HITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    #[test]
+    fn every_dispatch_boundary_survives_a_full_collection() {
+        let scenarios = [
+            "function outer(x) { var s='captured'; return function inner(y) { return x+y+s; }; } var f=outer(7); f(8)",
+            "class A { constructor(x) { this.x=x; } } class B extends A { constructor(x) { super(x+1); this.y=2; } } var b=new B(4); b.x+b.y",
+            "function f(x) { try { if(x) throw {v:7}; return 1; } catch(e) { return e.v; } finally { var s='finally'; } } f(1)",
+            "var a=[1,2]; a.map(function(x) { return x+1; }).join(',')",
+            "var a=[1,2]; a.map(function(x) { 'use strict'; return this===undefined; }).join(',')",
+            "var a=[1,2]; a.map(function(x) { return this+x; }, 'context').join(',')",
+            "var a=[1,2]; try { a.map(function(x) { throw x; }); } catch(e) { a.map(function(x) { return x+e; }).join(','); }",
+        ];
+        for source in scenarios {
+            let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+            let names = crate::parse_symbols(&symbols);
+            let mut baseline = Interp::new();
+            baseline.link_intrinsics(&names);
+            let expected = baseline.run_bounded(&code, 20_000);
+            assert!(
+                expected.completed,
+                "baseline: {source}: {:?}",
+                expected.halt
+            );
+            if source.contains("this===undefined") {
+                assert_eq!(expected.result, "true,true");
+            }
+            if source.contains("'context'") {
+                assert_eq!(expected.result, "context1,context2");
+            }
+            let steps = baseline.n_dispatched;
+            assert!(steps > 10);
+            for at in 0..steps {
+                let mut machine = Interp::new();
+                machine.link_intrinsics(&names);
+                GC_AT_STEP.with(|step| step.set(Some(at)));
+                GC_HITS.with(|hits| hits.set(0));
+                let actual = machine.run_bounded(&code, 20_000);
+                GC_AT_STEP.with(|step| step.set(None));
+                GC_HITS.with(|hits| assert_eq!(hits.get(), 1, "step {at}: {source}"));
+                assert_eq!(
+                    (
+                        actual.completed,
+                        actual.result,
+                        actual.computrons,
+                        actual.halt,
+                        actual.coercion_error
+                    ),
+                    (
+                        expected.completed,
+                        expected.result.clone(),
+                        expected.computrons,
+                        expected.halt.clone(),
+                        expected.coercion_error.clone()
+                    ),
+                    "collection at dispatch {at}: {source}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn active_target_register_is_an_independent_gc_root() {
+        let mut machine = Interp::new();
+        let target = machine.slots.alloc(Slot::undefined());
+        machine.target_func = target;
+        assert!(machine.gc_roots().contains(&target));
+        machine.collect_garbage();
+        assert!(!machine.slots.free_list().contains(&target.0));
+    }
+
     #[test]
     fn first_relink_refuses_when_implicit_initialization_exhausts_ids() {
         let mut machine = Interp::new();
@@ -64361,6 +64458,7 @@ impl Interp {
             slot_roots(s, &mut roots);
         }
         roots.push(self.cur_func);
+        roots.push(self.target_func);
         roots.push(self.global_obj);
         roots.extend(self.global_props.values().copied());
         roots.extend(self.intrinsics.values().copied());
