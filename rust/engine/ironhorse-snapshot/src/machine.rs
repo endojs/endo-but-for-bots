@@ -1976,6 +1976,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn matching_version_with_different_weights_fails_closed() {
+        let mut m = Interp::new();
+        m.run(&PROG_A);
+        let mut image = m.snapshot_image(&sig()).unwrap();
+        image.meter.cost_table_digest[0] ^= 1;
+        assert!(matches!(
+            from_snapshot_bytes(&write_machine(&image), &sig()),
+            Err(SnapshotError::CostTableMismatch { .. })
+        ));
+    }
+
     /// A snapshot written under one host signature is refused by a machine
     /// on a different signature (the callback-table gate), at the machine
     /// surface.

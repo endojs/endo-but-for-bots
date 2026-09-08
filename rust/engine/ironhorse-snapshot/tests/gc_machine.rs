@@ -374,8 +374,9 @@ fn small_state_stays_small_with_a_large_free_list() {
         // The Promise/RegExp/ArrayBuffer species getters, matchAll iterator
         // natives, ArrayBuffer slice metadata, and the eagerly linked Error
         // name/message keys add only fixed boot state. Keep a tight constant
-        // ceiling while allowing those constant-sized rows.
-        small_len < 640,
+        // ceiling while allowing those constant-sized rows and the 32-byte
+        // cost-table digest in METR.
+        small_len < 672,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len
