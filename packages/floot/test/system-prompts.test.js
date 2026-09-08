@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import {
   composeSessionSystemPrompt,
+  getPreset,
   newProjectSystemPrompt,
 } from '../agent.js';
 
@@ -15,6 +16,34 @@ test('new-project prompt teaches the copy-data status and staging contract', t =
   t.false(newProjectSystemPrompt.includes('{ entry, path, worktree }'));
   t.false(newProjectSystemPrompt.includes('st.map'));
   t.false(newProjectSystemPrompt.includes('s => s.entry'));
+});
+
+test('the full-control prompt teaches attach without weakening the cap-is-policy rule', t => {
+  const { systemPrompt } = getPreset('full-control');
+
+  // The preset holds "endo", so it can mint a writable checkout; a session
+  // that can attach one as a disk should be told so
+  // (designs/runtime-container-fs-mount.md).
+  t.true(systemPrompt.includes('attachContainerMount'));
+  t.true(systemPrompt.includes('detachContainerMount'));
+  t.true(systemPrompt.includes('listContainerMounts'));
+
+  // The mode a session asks for never widens the capability it attaches: a
+  // read-only cap is a read-only disk, whatever the call says. A prompt that
+  // implied otherwise would teach a session to expect writes the bridge,
+  // the daemon Mount and the bind all refuse.
+  t.true(systemPrompt.includes('The capability is the policy'));
+  t.true(systemPrompt.includes('READ-ONLY disk'));
+
+  // The attach is disruptive: it restarts the sandbox and the call may never
+  // return its result, so the prompt must not invite a blind retry.
+  t.true(systemPrompt.includes('RESTARTS the sandbox'));
+  t.true(systemPrompt.includes('instead of retrying blindly'));
+
+  // No host path is ever named to a session — it attaches by pet name, and
+  // the host picks every host path.
+  t.false(systemPrompt.includes('hostPath'));
+  t.false(systemPrompt.includes('provideHostPath'));
 });
 
 test('a delegated session keeps the operator prompt and appends the parent’s', t => {

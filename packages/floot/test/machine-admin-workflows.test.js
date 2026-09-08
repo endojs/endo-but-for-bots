@@ -91,9 +91,19 @@ test("machine-admin prompt teaches this tree's exec and mount contracts", t => {
   // tree rejects.
   t.true(systemPrompt.includes('a slash-joined string is rejected'));
   t.false(systemPrompt.includes("readText('a/b')"));
-  // Container mounts are not part of this tree.
-  t.false(systemPrompt.includes('attachContainerMount'));
-  t.false(systemPrompt.includes('listContainerMounts'));
+  // Container mounts ARE part of this tree now
+  // (designs/runtime-container-fs-mount.md): the preset holds `endo`, so it
+  // can mint a writable checkout, and a session that can attach one as a
+  // disk should be told so rather than left to stumble over the schemas.
+  t.true(systemPrompt.includes('attachContainerMount'));
+  t.true(systemPrompt.includes('listContainerMounts'));
+  // The attach is disruptive and its result may never arrive, so the prompt
+  // must say to confirm on the next turn instead of retrying blindly.
+  t.true(systemPrompt.includes('aborts this turn'));
+  t.true(systemPrompt.includes('listContainerMounts()`'));
+  // Staging still goes through the git capability, which carries the clone's
+  // author identity; committing with in-sandbox git would lose it.
+  t.true(systemPrompt.includes('THROUGH THE GIT capability'));
   // git.status() is copy data, not an array (matching the new-project prompt).
   t.true(systemPrompt.includes('{ entries, truncated }'));
   t.false(systemPrompt.includes('st.map'));
