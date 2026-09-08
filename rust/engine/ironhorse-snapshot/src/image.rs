@@ -3899,7 +3899,7 @@ pub(crate) fn check_image_slot_bounds(
     };
     let check = |s: &Slot| -> Result<(), SnapshotError> {
         let mut bad = false;
-        s.each_ref_slot(|r| bad |= !r.is_null() && r.0 >= slot_count);
+        s.each_ref_slot(|r| bad |= !r.is_null() && (r.0 >= slot_count || is_free(r.0)));
         if bad {
             return Err(OOB);
         }
@@ -6446,6 +6446,54 @@ mod tests {
             ok(&[good_chunk], &[]).is_ok(),
             "an in-range chunk offset passes"
         );
+    }
+
+    #[test]
+    fn live_edges_cannot_reach_free_records() {
+        let reference = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(2)));
+        let mut next = Slot::undefined();
+        next.next = SlotIndex(2);
+        let poison = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(900_000)));
+        for edge in [reference, next] {
+            for location in 0..3 {
+                let mut heap = vec![Slot::undefined(), Slot::undefined(), poison];
+                let mut stack = Vec::new();
+                let mut arrays = Vec::new();
+                match location {
+                    0 => heap[1] = edge,
+                    1 => stack.push(edge),
+                    _ => arrays.push(ArrayImage {
+                        owner: 1,
+                        length: 1,
+                        items: vec![(0, edge)],
+                    }),
+                }
+                assert!(
+                    matches!(
+                        check_image_slot_bounds(
+                            &heap,
+                            &stack,
+                            &arrays,
+                            &[],
+                            &[],
+                            &[],
+                            &[],
+                            &[],
+                            &[],
+                            &LangRows::EMPTY,
+                            &[],
+                            0,
+                            &SymbolKeyImage::default(),
+                            3,
+                            64,
+                            &[2],
+                        ),
+                        Err(SnapshotError::Corrupt("slot index out of arena bounds"))
+                    ),
+                    "live edge in location {location} must not reach opaque free bytes"
+                );
+            }
+        }
     }
 
     /// Review findings 2+3 (free-record hygiene): a record on the free
