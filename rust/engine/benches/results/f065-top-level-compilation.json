@@ -1,8 +1,7 @@
 {
   "finding": "F065",
   "increment": "Top-level daemon and worker compilation charging",
-  "before_revision": "5b1e132d6",
-  "after": "source files in this commit",
+  "before_revision": "5b1e132d64b9c209927e6de7994507305d16fc25",
   "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
   "cpu": "Apple M3 Max",
   "platform": "macOS 26.6.2 arm64",
@@ -66,5 +65,8 @@
     "compile_budget_tests": 12,
     "daemon_clippy_limitation": "Rust 1.88 cannot build daemon dependencies requiring 1.91. Rust 1.91 clippy -p endo --lib --no-deps -D warnings reports 49 diagnostics at existing code sites. All but one are in unchanged files; the sole ironhorse_engine.rs diagnostic is its pre-existing total_after % collect_every expression. This is not a clean daemon Clippy result.",
     "compiler_tests": 126
-  }
+  },
+  "after_revision": "4122a825093a500f2c6df9f1064d89a3dbcd1f67",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }

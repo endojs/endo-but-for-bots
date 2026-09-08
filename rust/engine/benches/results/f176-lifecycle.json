@@ -1,7 +1,6 @@
 {
   "finding": "F176",
   "before_revision": "4ec6fd1f71b23b96ce01f4a9b6d247bd7a3efc02",
-  "after": "source files in this commit",
   "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
   "cpu": "Apple M3 Max",
@@ -127,5 +126,8 @@
       },
       "speedup": 3.808537044829711
     }
-  ]
+  ],
+  "after_revision": "9db9d39586f91339ccc2ec053b5e3b8d03bc0196",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }

@@ -2,7 +2,6 @@
   "finding": "F065",
   "increment": "compiler algorithms; bounded compilation metering remains open",
   "before_revision": "9aca80b6839047a263e02e98055525f0025f54e7",
-  "after": "source files in this commit",
   "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
   "cpu": "Apple M3 Max",
@@ -250,5 +249,8 @@
       },
       "speedup": 16.780581887287617
     }
-  ]
+  ],
+  "after_revision": "5b88031a923aa13d518d8f0208268a27ff0ad305",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }

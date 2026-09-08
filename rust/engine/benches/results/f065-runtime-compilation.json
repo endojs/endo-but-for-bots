@@ -1,8 +1,7 @@
 {
   "finding": "F065",
   "increment": "Live eval and Function compilation charging; top-level daemon and worker wiring pending",
-  "before_revision": "861dedcd7",
-  "after": "source files in this commit",
+  "before_revision": "861dedcd787be14e92e11cc05db3c2bf198a3597",
   "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
   "cpu": "Apple M3 Max",
   "platform": "macOS 26.6.2 arm64",
@@ -336,5 +335,8 @@
       "Caused by:",
       "  process didn't exit successfully: `/Users/xyz/Development/endo2/rust/engine/target/debug/deps/crash_class_defects-8d7bdd481313cba0` (signal: 6, SIGABRT: process abort signal)"
     ]
-  }
+  },
+  "after_revision": "5b1e132d64b9c209927e6de7994507305d16fc25",
+  "revision_context": "Historical pre-rebase per-increment measurements; these are not measurements of the integrated meter-release-5 branch.",
+  "preserved_history_branch": "codex/ironhorse-performance-pre-integration-4122a8250"
 }

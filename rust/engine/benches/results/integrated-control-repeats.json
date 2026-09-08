@@ -1,0 +1,101 @@
+{
+  "method": "Three complete baseline/candidate trials, alternating order, each fixture retains its five internal samples and original median. All trials retained; no threshold changes. Candidate has the ClassMap remove and PropertyIndex free fixes recorded in integrated-gc-review.json, before retain_keys.",
+  "runs": [
+    {
+      "trial": 0,
+      "side": "baseline",
+      "target": "gc_bench",
+      "binary_sha256": "b315a8e97a182d142c50058e258594b7a8f431a2fdf9ad5ceefe3d7364e84037",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.034417000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.039875000\nslots=  15886 | generational   0.034 ms (freed 768) | full partial   0.040 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.046875000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.063250000\nslots=  60886 | generational   0.047 ms (freed 768) | full partial   0.063 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.087583000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.161042000\nslots= 240886 | generational   0.088 ms (freed 768) | full partial   0.161 ms\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.61s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "baseline",
+      "target": "wake_latency_bench",
+      "binary_sha256": "d7a6d1c7a11ba5f39e1c198394081a03925bc978874b8cd4ad45fc89df8ef6ab",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.020208000\nslots=  120320 | placeholder alloc median   0.020 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.045041000\nslots=  500000 | placeholder alloc median   0.045 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.030000000\nslots= 1000000 | placeholder alloc median   0.030 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.104458000\nslots= 4000000 | placeholder alloc median   0.104 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 9.329958000\n\nBENCH_METRIC wake_lazy_ms 1.181750000\neager wake median: 9.330 ms\nlazy  wake median: 1.182 ms\nlazy/eager ratio:  0.127\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "candidate",
+      "target": "gc_bench",
+      "binary_sha256": "546a333f39effdd343ad95eef0253bcf50053ce8796ea4cfc71d72cc8fffb74f",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.049083000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.046208000\nslots=  15886 | generational   0.049 ms (freed 768) | full partial   0.046 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.056084000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.070459000\nslots=  60886 | generational   0.056 ms (freed 768) | full partial   0.070 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.101542000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.166083000\nslots= 240886 | generational   0.102 ms (freed 768) | full partial   0.166 ms\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.64s\n\n"
+    },
+    {
+      "trial": 0,
+      "side": "candidate",
+      "target": "wake_latency_bench",
+      "binary_sha256": "8c86336c045fb5c3a6801d1455fa392b3817213a48e734cf7f938606dc181d60",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.020083000\nslots=  120320 | placeholder alloc median   0.020 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.044042000\nslots=  500000 | placeholder alloc median   0.044 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.031167000\nslots= 1000000 | placeholder alloc median   0.031 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.091791000\nslots= 4000000 | placeholder alloc median   0.092 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 9.491750000\n\nBENCH_METRIC wake_lazy_ms 1.239791000\neager wake median: 9.492 ms\nlazy  wake median: 1.240 ms\nlazy/eager ratio:  0.131\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "candidate",
+      "target": "gc_bench",
+      "binary_sha256": "546a333f39effdd343ad95eef0253bcf50053ce8796ea4cfc71d72cc8fffb74f",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.049083000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.052875000\nslots=  15886 | generational   0.049 ms (freed 768) | full partial   0.053 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.057292000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.083000000\nslots=  60886 | generational   0.057 ms (freed 768) | full partial   0.083 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.094250000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.169250000\nslots= 240886 | generational   0.094 ms (freed 768) | full partial   0.169 ms\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.65s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "candidate",
+      "target": "wake_latency_bench",
+      "binary_sha256": "8c86336c045fb5c3a6801d1455fa392b3817213a48e734cf7f938606dc181d60",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.019917000\nslots=  120320 | placeholder alloc median   0.020 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.041542000\nslots=  500000 | placeholder alloc median   0.042 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.028708000\nslots= 1000000 | placeholder alloc median   0.029 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.097000000\nslots= 4000000 | placeholder alloc median   0.097 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 11.937167000\n\nBENCH_METRIC wake_lazy_ms 1.525459000\neager wake median: 11.937 ms\nlazy  wake median: 1.525 ms\nlazy/eager ratio:  0.128\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "baseline",
+      "target": "gc_bench",
+      "binary_sha256": "b315a8e97a182d142c50058e258594b7a8f431a2fdf9ad5ceefe3d7364e84037",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.041125000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.046000000\nslots=  15886 | generational   0.041 ms (freed 768) | full partial   0.046 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.044000000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.064083000\nslots=  60886 | generational   0.044 ms (freed 768) | full partial   0.064 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.094541000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.171250000\nslots= 240886 | generational   0.095 ms (freed 768) | full partial   0.171 ms\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.61s\n\n"
+    },
+    {
+      "trial": 1,
+      "side": "baseline",
+      "target": "wake_latency_bench",
+      "binary_sha256": "d7a6d1c7a11ba5f39e1c198394081a03925bc978874b8cd4ad45fc89df8ef6ab",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.017500000\nslots=  120320 | placeholder alloc median   0.017 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.035208000\nslots=  500000 | placeholder alloc median   0.035 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.028375000\nslots= 1000000 | placeholder alloc median   0.028 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.092083000\nslots= 4000000 | placeholder alloc median   0.092 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 9.339333000\n\nBENCH_METRIC wake_lazy_ms 1.180959000\neager wake median: 9.339 ms\nlazy  wake median: 1.181 ms\nlazy/eager ratio:  0.126\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "baseline",
+      "target": "gc_bench",
+      "binary_sha256": "b315a8e97a182d142c50058e258594b7a8f431a2fdf9ad5ceefe3d7364e84037",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.042333000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.045416000\nslots=  15886 | generational   0.042 ms (freed 768) | full partial   0.045 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.051459000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.075333000\nslots=  60886 | generational   0.051 ms (freed 768) | full partial   0.075 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.087750000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.168000000\nslots= 240886 | generational   0.088 ms (freed 768) | full partial   0.168 ms\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.62s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "baseline",
+      "target": "wake_latency_bench",
+      "binary_sha256": "d7a6d1c7a11ba5f39e1c198394081a03925bc978874b8cd4ad45fc89df8ef6ab",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.018625000\nslots=  120320 | placeholder alloc median   0.019 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.033917000\nslots=  500000 | placeholder alloc median   0.034 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.030000000\nslots= 1000000 | placeholder alloc median   0.030 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.087541000\nslots= 4000000 | placeholder alloc median   0.088 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 9.375042000\n\nBENCH_METRIC wake_lazy_ms 1.183500000\neager wake median: 9.375 ms\nlazy  wake median: 1.183 ms\nlazy/eager ratio:  0.126\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "candidate",
+      "target": "gc_bench",
+      "binary_sha256": "546a333f39effdd343ad95eef0253bcf50053ce8796ea4cfc71d72cc8fffb74f",
+      "exit_code": 0,
+      "output": "\nrunning 1 test\ntest generational_steady_state_cost ... \nBENCH_METRIC gc_5000_generational_ms 0.040708000\n\nBENCH_METRIC gc_5000_full_partial_ms 0.046292000\nslots=  15886 | generational   0.041 ms (freed 768) | full partial   0.046 ms\n\nBENCH_METRIC gc_20000_generational_ms 0.050583000\n\nBENCH_METRIC gc_20000_full_partial_ms 0.069583000\nslots=  60886 | generational   0.051 ms (freed 768) | full partial   0.070 ms\n\nBENCH_METRIC gc_80000_generational_ms 0.101417000\n\nBENCH_METRIC gc_80000_full_partial_ms 0.178250000\nslots= 240886 | generational   0.101 ms (freed 768) | full partial   0.178 ms\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.59s\n\n"
+    },
+    {
+      "trial": 2,
+      "side": "candidate",
+      "target": "wake_latency_bench",
+      "binary_sha256": "8c86336c045fb5c3a6801d1455fa392b3817213a48e734cf7f938606dc181d60",
+      "exit_code": 0,
+      "output": "\nrunning 2 tests\ntest placeholder_alloc_cost_across_slot_counts ... \nBENCH_METRIC placeholder_120320_ms 0.019375000\nslots=  120320 | placeholder alloc median   0.019 ms (0.2 ns/slot)\n\nBENCH_METRIC placeholder_500000_ms 0.040041000\nslots=  500000 | placeholder alloc median   0.040 ms (0.1 ns/slot)\n\nBENCH_METRIC placeholder_1000000_ms 0.028292000\nslots= 1000000 | placeholder alloc median   0.028 ms (0.0 ns/slot)\n\nBENCH_METRIC placeholder_4000000_ms 0.089084000\nslots= 4000000 | placeholder alloc median   0.089 ms (0.0 ns/slot)\nok\ntest wake_latency_eager_vs_lazy ... heap: 120888 slots, 44786 chunk bytes\n\nBENCH_METRIC wake_eager_ms 9.449750000\n\nBENCH_METRIC wake_lazy_ms 1.236709000\neager wake median: 9.450 ms\nlazy  wake median: 1.237 ms\nlazy/eager ratio:  0.131\nok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s\n\n"
+    }
+  ]
+}
