@@ -3121,7 +3121,8 @@ parser gap — ERM is simply not in the pinned grammar.
 **Parse-metering determinism** (`ironhorse-compile/tests/parse_meter_determinism.rs`,
 roadmap bar). A locked test: identical parse computrons across 64 repeats
 of the same source on the same build, over a spread of the ported grammar,
-pinned against the frozen meter release `ironhorse-meter-0`. Per the
+pinned against the shared VM/compiler release in `ironhorse-meter`.
+The shared crate owns the named weights, default-key table, and SHA-256 digest. Per the
 accuracy-over-parity doctrine the meter is Ironhorse's own table — the oracle
 certifies bytes; compile-computron-vs-oracle stays advisory telemetry.
 `ironhorse_compile::parse_computrons(src, strict)` exposes the figure.

@@ -2817,13 +2817,21 @@ dependencies = [
 name = "ironhorse-compile"
 version = "0.0.1"
 dependencies = [
+ "ironhorse-meter",
  "ironhorse-regexp",
  "ironhorse-text",
 ]
 
 [[package]]
+name = "ironhorse-meter"
+version = "0.0.1"
+
+[[package]]
 name = "ironhorse-regexp"
 version = "0.0.1"
+dependencies = [
+ "ironhorse-meter",
+]
 
 [[package]]
 name = "ironhorse-snapshot"
@@ -2853,6 +2861,7 @@ version = "0.0.1"
 dependencies = [
  "icu_normalizer",
  "icu_segmenter",
+ "ironhorse-meter",
  "ironhorse-regexp",
  "ironhorse-text",
 ]

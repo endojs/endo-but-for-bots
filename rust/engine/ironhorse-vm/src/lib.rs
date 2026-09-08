@@ -29,6 +29,7 @@ pub mod halt_labels;
 pub mod interp;
 pub mod intl_number;
 pub mod meter;
+pub use ironhorse_meter as cost_table;
 pub mod module;
 pub mod opcode;
 #[doc(hidden)]

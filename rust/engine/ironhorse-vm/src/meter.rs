@@ -1,18 +1,11 @@
 //! The computation meter (design § Metering; requirement 1a).
 //!
-//! A `u64` in 16.16 fixed point, incremented at exactly XS's points
-//! with exactly XS's weights, and checked only at loop-closing points.
-//! The host callback sees `meterIndex >> 16` ("computrons").
-//!
-//! Ground truth is `xs/sources/xsRun.c` and `xsCommon.h` at the
-//! `c/moddable` pin: under `mxMetering` the dispatch loop adds
-//! `XS_CODE_METERING = 1 << 16` per bytecode; built-in steps add
-//! `XS_BUILTIN_METERING = 1 << 14`; the parser adds
-//! `XS_PARSE_CODE_METERING = 1 << 16` per unit (parse metering is out
-//! of the interpreter-parity window, so it is not modeled here). The
-//! check (`fxCheckMetering`) fires only when `meterInterval` is set and
-//! `meterIndex > meterCount`, at backward branches, calls, returns, and
-//! catches; a false return aborts the crank.
+//! Ironhorse owns a frozen release-versioned table of XS-derived weights.
+//! Oracle computrons are advisory; result agreement and the local golden
+//! corpus are the gates. Raw units use 16 fractional bits; hosts see `>> 16`.
+//! The shared `ironhorse_meter` crate owns weights, parse costs, default keys,
+//! and their digest. Increment-point changes also require a release bump.
+//! Check points determine interruption, independently of accumulated cost.
 
 /// The frozen, release-versioned id of the meter's cost table (design
 /// `designs/ironhorse-engine.md` § roadmap row 6: "meter state across
@@ -31,15 +24,22 @@
 /// spent, so a resumed meter continues exactly across a change to them
 /// (design § Metering, "Check points and abort": the abort point is a
 /// release-defined outcome, not a cost-table fact).
-pub const COST_TABLE_VERSION: &str = "ironhorse-meter-1";
+pub use ironhorse_meter::COST_TABLE_VERSION;
+use ironhorse_meter::{CHUNK_ALIGNMENT, CHUNK_HEADER_BYTES};
 
-/// `XS_CODE_METERING`: one bytecode dispatch.
-pub const CODE_METERING: u64 = 1 << 16;
+/// `XS_BIGINT_METERING`.
+pub use ironhorse_meter::BIGINT_METERING;
 /// `XS_BUILTIN_METERING`: one built-in operation step (`mxMeterOne` /
 /// `mxMeterSome(k)`). Stage-2 finding: the property-set path meters one
 /// of these per `SET_VARIABLE`/`SET_PROPERTY`, so it already bites
 /// inside the control-flow subset, not only in stage-3 built-ins.
-pub const BUILTIN_METERING: u64 = 1 << 14;
+pub use ironhorse_meter::BUILTIN_METERING;
+/// `XS_CHUNK_ALLOCATION_METERING`: added per byte of chunk allocated
+/// (`fxNewChunk`/`fxRenewChunk`), so a string or bytecode allocation
+/// meters its length.
+pub use ironhorse_meter::CHUNK_ALLOCATION_METERING;
+/// `XS_CODE_METERING`: one bytecode dispatch.
+pub use ironhorse_meter::CODE_METERING;
 /// `XS_SLOT_ALLOCATION_METERING`: added by `fxNewSlot` on **every** slot
 /// allocation during a run (`xsMemory.c`). This is the stage-2 metering
 /// crux: once a program allocates at run time (a `var` environment, an
@@ -50,16 +50,10 @@ pub const BUILTIN_METERING: u64 = 1 << 14;
 /// `1<<14` (the set's `mxMeterOne`) + `2 * (1<<8)` (a closure cell + a
 /// property slot, per `fxRunEvalEnvironment`) + the property-name chunk
 /// bytes — the "16920 per var" the differential probe measured.
-pub const SLOT_ALLOCATION_METERING: u64 = 1 << 8;
-/// `XS_CHUNK_ALLOCATION_METERING`: added per byte of chunk allocated
-/// (`fxNewChunk`/`fxRenewChunk`), so a string or bytecode allocation
-/// meters its length.
-pub const CHUNK_ALLOCATION_METERING: u64 = 1;
+pub use ironhorse_meter::SLOT_ALLOCATION_METERING;
 /// `XS_STRING_METERING` / `XS_BIGINT_METERING`: one code unit of string
 /// concatenation / one BigInt digit step (`xsString.c`, `xsBigInt.c`).
-pub const STRING_METERING: u64 = 1 << 16;
-/// `XS_BIGINT_METERING`.
-pub const BIGINT_METERING: u64 = 1 << 16;
+pub use ironhorse_meter::STRING_METERING;
 
 /// Outcome of a metering check at a loop-closing point.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -258,8 +252,8 @@ impl Meter {
     /// length in the way XS's does.
     #[inline]
     pub fn tick_chunk_new(&mut self, size: u64) {
-        let aligned = (size + 7) & !7;
-        self.index += (aligned + 16) * CHUNK_ALLOCATION_METERING;
+        let aligned = (size + CHUNK_ALIGNMENT - 1) & !(CHUNK_ALIGNMENT - 1);
+        self.index += (aligned + CHUNK_HEADER_BYTES) * CHUNK_ALLOCATION_METERING;
     }
 
     /// Accrue `n` raw 16.16-fixed-point units directly. Used for the

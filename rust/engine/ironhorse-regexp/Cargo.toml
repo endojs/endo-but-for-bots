@@ -14,6 +14,7 @@ name = "ironhorse_regexp"
 path = "src/lib.rs"
 
 [dependencies]
+ironhorse-meter = { path = "../ironhorse-meter" }
 # Cargo does not support optional dev-dependencies; keep the C oracle off
 # the default graph and enable it only for the parity integration target.
 xs-oracle = { path = "../xs-oracle", optional = true }
