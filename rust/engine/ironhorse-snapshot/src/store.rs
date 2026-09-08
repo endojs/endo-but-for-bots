@@ -3318,7 +3318,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
 
 impl StoreManifest {
     fn cost_gate_mismatch(&self, small: &SmallState) -> bool {
-        small.meter.cost_table_version != COST_TABLE_VERSION
+        small.meter.validate().is_err()
     }
 }
 
@@ -4207,6 +4207,27 @@ mod tests {
             Err(StoreError::Snapshot(SnapshotError::CostTableMismatch { .. })) => {}
             other => panic!("expected cost-table mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn store_refuses_matching_version_with_changed_weights() {
+        let mut image = ran_image();
+        image.meter.cost_table_digest[0] ^= 1;
+        let mut store = MemoryStore::new();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        assert!(matches!(
+            validate_store(&store, &sig()),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
+        store.manifest.as_mut().unwrap().store_schema = STORE_SCHEMA_VERSION - 1;
+        assert!(matches!(
+            migrate_store(&mut store, &sig()),
+            Err(StoreError::Snapshot(
+                SnapshotError::CostTableMismatch { .. }
+            ))
+        ));
     }
 
     #[test]

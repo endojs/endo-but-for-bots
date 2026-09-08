@@ -38,7 +38,7 @@ pub const KEYS: FourCc = FourCc(*b"KEYS");
 pub const NAME: FourCc = FourCc(*b"NAME");
 /// `SYMB` — the symbol table (well-known / registered symbol identities).
 pub const SYMB: FourCc = FourCc(*b"SYMB");
-/// `METR` — the metering state (design row 6): the frozen 16.16
+/// `METR` — cost-table version and SHA-256 digest, plus the frozen 16.16
 /// fixed-point counters plus the cost-table version that produced them,
 /// so a resumed machine continues its meter exactly. Ironhorse-specific (XS
 /// carries meter state differently), which the Ironhorse `VERS` discriminator
@@ -420,7 +420,7 @@ pub enum SnapshotError {
         expected: Signature,
         found: Signature,
     },
-    /// The snapshot's cost-table version does not match this engine's
+    /// The snapshot's cost-table version or digest does not match this engine's
     /// frozen table ([`ironhorse_vm::COST_TABLE_VERSION`]) — resuming would
     /// continue a meter under changed weights. Fails closed, the metering
     /// analogue of [`SnapshotError::SignatureMismatch`] (design row 6).

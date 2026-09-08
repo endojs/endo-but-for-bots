@@ -36,13 +36,15 @@ use ironhorse_vm::{
 
 /// The metering state carried in the `METR` atom (design row 6: "meter
 /// state across suspend"). The frozen 16.16 fixed-point counters plus the
-/// **cost-table version** that produced them; a resume whose cost-table
+/// **cost-table version and digest** that produced them; a resume whose cost-table
 /// version differs from this engine's [`ironhorse_vm::COST_TABLE_VERSION`]
 /// fails closed ([`SnapshotError::CostTableMismatch`]) rather than
 /// silently continuing a meter whose weights changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeterImage {
     pub cost_table_version: String,
+    /// SHA-256 of the actual weights and default keys, independent of the name.
+    pub cost_table_digest: [u8; 32],
     pub index: u64,
     pub interval: u64,
     pub count: u64,
@@ -54,6 +56,7 @@ impl MeterImage {
     pub fn of(state: MeterState) -> MeterImage {
         MeterImage {
             cost_table_version: COST_TABLE_VERSION.to_string(),
+            cost_table_digest: ironhorse_vm::cost_table::digest(),
             index: state.index,
             interval: state.interval,
             count: state.count,
@@ -84,6 +87,7 @@ impl MeterImage {
         let vb = self.cost_table_version.as_bytes();
         v.extend_from_slice(&(vb.len() as u32).to_be_bytes());
         v.extend_from_slice(vb);
+        v.extend_from_slice(&self.cost_table_digest);
         v
     }
 
@@ -98,18 +102,40 @@ impl MeterImage {
         // Exact consumption: this decoder also reads the small state's
         // length-delimited meter section, where tolerated trailing
         // bytes would defeat the store decoders' fail-closed rule.
-        if 28 + vlen != p.len() {
+        if vlen.checked_add(60) != Some(p.len()) {
             return Err(SnapshotError::Corrupt("METR version string"));
         }
         let cost_table_version = std::str::from_utf8(&p[28..28 + vlen])
             .map_err(|_| SnapshotError::Corrupt("METR version not utf8"))?
             .to_string();
-        Ok(MeterImage {
+        let cost_table_digest = p[28 + vlen..].try_into().unwrap();
+        let meter = MeterImage {
             cost_table_version,
+            cost_table_digest,
             index,
             interval,
             count,
-        })
+        };
+        meter.validate()?;
+        Ok(meter)
+    }
+
+    /// Reject a name or digest mismatch before restoring any meter state.
+    pub fn validate(&self) -> Result<(), SnapshotError> {
+        if self.cost_table_version != COST_TABLE_VERSION {
+            return Err(SnapshotError::CostTableMismatch {
+                expected: COST_TABLE_VERSION.to_string(),
+                found: self.cost_table_version.clone(),
+            });
+        }
+        let expected = ironhorse_vm::cost_table::digest();
+        if self.cost_table_digest != expected {
+            return Err(SnapshotError::CostTableMismatch {
+                expected: crate::sha256::hex(&expected),
+                found: crate::sha256::hex(&self.cost_table_digest),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -4928,11 +4954,11 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
 
     // METR (design row 6): decode the metering state and fail closed on a
     // cost-table version this engine did not produce — the metering
-    // analogue of the SIGN check above. An absent METR (a pre-row-6
-    // container) reads as a zeroed meter under the current table.
+    // analogue of the SIGN check above. Name-only or absent records cannot
+    // establish the weights that produced a meter and are refused.
     let meter = match r.find(METR) {
         Some(a) => MeterImage::decode(a.payload)?,
-        None => MeterImage::current(),
+        None => return Err(SnapshotError::Corrupt("missing METR identity")),
     };
     if meter.cost_table_version != COST_TABLE_VERSION {
         return Err(SnapshotError::CostTableMismatch {
@@ -7059,5 +7085,28 @@ mod tests {
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("STAC records truncated"))
         );
+    }
+}
+
+#[cfg(test)]
+mod meter_identity_tests {
+    use super::*;
+
+    #[test]
+    fn meter_identity_requires_exact_digest_and_consumption() {
+        let meter = MeterImage::current();
+        let bytes = meter.encode();
+        assert_eq!(MeterImage::decode(&bytes).unwrap(), meter);
+        // An old name-only record cannot certify the current weights.
+        assert!(MeterImage::decode(&bytes[..bytes.len() - 32]).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(MeterImage::decode(&trailing).is_err());
+        let mut changed = bytes;
+        *changed.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            MeterImage::decode(&changed),
+            Err(SnapshotError::CostTableMismatch { .. })
+        ));
     }
 }
