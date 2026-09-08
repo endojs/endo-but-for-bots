@@ -85,7 +85,7 @@ const SCOPE_STRICT: u32 = flags::STRICT;
 /// equality is faithful. [`Sym::Anon`] models XS's `symbol->ID == -1`
 /// synthetic slots (class computed keys, init records) which never equal
 /// a source name.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Sym {
     Named(SymbolName),
     Anon(u32),
@@ -463,6 +463,14 @@ pub(crate) fn run_goal_metered(
     s.hoist_dispatch(root_node)?;
     // fxParserBind
     s.bind_dispatch(root_node)?;
+    // Eval scopes accumulate in insertion order. All hoist/bind resolution uses
+    // stable ids and newest-first name indexes; materialize XS's prepend order
+    // once, after the last possible synthetic declaration and before coding.
+    for scope in &mut s.scopes {
+        if scope.token == Token::Eval {
+            scope.declares.reverse();
+        }
+    }
     let root_scope = *s
         .node_scope
         .get(&node_ptr(root_node))
@@ -491,6 +499,12 @@ use crate::ast::TREE_DEPTH_LIMIT;
 /// Ambient hoister/binder state threaded through the passes, plus the
 /// arena and the by-address side tables the immutable AST needs.
 #[derive(Default)]
+struct DeclareIndex {
+    names: HashMap<Sym, u32>,
+    positions: Vec<Option<usize>>,
+}
+
+#[derive(Default)]
 struct Scoper<'a> {
     meter: crate::meter::ParseMeter<'a>,
     /// Tree levels currently on the native stack (see [`TREE_DEPTH_LIMIT`]
@@ -499,6 +513,7 @@ struct Scoper<'a> {
     /// The [`Goal`] this run is scoping for (see [`run_goal`]).
     goal: Goal,
     scopes: Vec<Scope>,
+    declare_indexes: Vec<DeclareIndex>,
     /// `hoister->scope` / `binder->scope` — the current scope.
     scope: Option<usize>,
     /// `hoister->functionScope`.
@@ -711,6 +726,7 @@ impl Scoper<'_> {
         let sc = Scope::new(parent, token, node_ptr(node), self.node_flags(node));
         let id = self.scopes.len();
         self.scopes.push(sc);
+        self.declare_indexes.push(DeclareIndex::default());
         self.scope = Some(id);
         id
     }
@@ -731,6 +747,7 @@ impl Scoper<'_> {
         sc.flags |= SCOPE_STRICT;
         let fi = self.scopes.len();
         self.scopes.push(sc);
+        self.declare_indexes.push(DeclareIndex::default());
         self.scope = Some(fi);
         let fs = self.function_scope;
         let bs = self.body_scope;
@@ -783,18 +800,25 @@ impl Scoper<'_> {
         }
     }
 
-    /// `fxScopeAddDeclareNode` — append (or, for an eval scope, prepend)
-    /// and, for a `using`, add the disposal `const`. Returns the id.
+    /// `fxScopeAddDeclareNode` — append and, for a `using`, add the disposal
+    /// `const`. Eval's logical prepend order is indexed during binding and
+    /// materialized once before returning the tree. Returns the stable id.
     fn scope_add_declare(&mut self, si: usize, decl: Declare) -> u32 {
         let is_using = decl.token == Token::Using;
         let id = decl.id;
         let sc = &mut self.scopes[si];
         sc.declare_count += 1;
-        if sc.token == Token::Eval {
-            sc.declares.insert(0, decl);
-        } else {
-            sc.declares.push(decl);
+        let index = &mut self.declare_indexes[si];
+        index.positions.resize(sc.next_id as usize, None);
+        index.positions[id as usize] = Some(sc.declares.len());
+        if let Some(symbol) = &decl.symbol {
+            if sc.token == Token::Eval {
+                index.names.insert(symbol.clone(), id);
+            } else {
+                index.names.entry(symbol.clone()).or_insert(id);
+            }
         }
+        sc.declares.push(decl);
         if is_using {
             let mut d = self.new_declare(si, Token::Const, None, 0);
             d.flags |= dflags::DISPOSABLE;
@@ -811,31 +835,35 @@ impl Scoper<'_> {
         sc.defines.push(DefineEntry { symbol, line });
     }
 
-    /// `fxScopeGetDeclareNode` — linear symbol lookup, returning the id.
+    /// `fxScopeGetDeclareNode`, preserving first-in-list resolution without a scan.
     fn scope_get_declare(&self, si: usize, symbol: &Sym) -> Option<u32> {
-        let sc = &self.scopes[si];
-        self.meter.work(sc.declares.len());
-        sc.declares
-            .iter()
-            .find(|d| d.symbol.as_ref() == Some(symbol))
-            .map(|d| d.id)
+        self.meter.work(1);
+        self.declare_indexes[si].names.get(symbol).copied()
     }
 
     fn declare_mut(&mut self, si: usize, id: u32) -> &mut Declare {
-        self.meter.work(self.scopes[si].declares.len());
-        self.scopes[si]
-            .declares
-            .iter_mut()
-            .find(|d| d.id == id)
-            .expect("declare id present")
+        self.meter.work(1);
+        let pos = self.declare_indexes[si].positions[id as usize].expect("declare id present");
+        &mut self.scopes[si].declares[pos]
     }
     fn declare_ref(&self, si: usize, id: u32) -> &Declare {
+        self.meter.work(1);
+        let pos = self.declare_indexes[si].positions[id as usize].expect("declare id present");
+        &self.scopes[si].declares[pos]
+    }
+
+    /// Block close removes NoToken placeholders; rebuild the lookup indexes once.
+    fn reindex_declarations(&mut self, si: usize) {
         self.meter.work(self.scopes[si].declares.len());
-        self.scopes[si]
-            .declares
-            .iter()
-            .find(|d| d.id == id)
-            .expect("declare id present")
+        let index = &mut self.declare_indexes[si];
+        index.names.clear();
+        index.positions.fill(None);
+        for (pos, decl) in self.scopes[si].declares.iter().enumerate() {
+            index.positions[decl.id as usize] = Some(pos);
+            if let Some(symbol) = &decl.symbol {
+                index.names.entry(symbol.clone()).or_insert(decl.id);
+            }
+        }
     }
 
     /// Whether the eval-token program scope `si` hoists its `var`/function
@@ -923,6 +951,7 @@ impl Scoper<'_> {
                 }
             });
             sc.declare_count -= removed;
+            self.reindex_declarations(si);
         } else if tok == Token::Program {
             let sc = &mut self.scopes[si];
             for d in &sc.declares {

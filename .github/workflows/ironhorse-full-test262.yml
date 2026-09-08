@@ -164,6 +164,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee scaling.log
+      - name: Check compiler scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-compile --test performance_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee compiler-scaling.log
       - name: Upload performance measurements
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -173,4 +178,5 @@ jobs:
             benchmark-report.json
             benchmark.log
             scaling.log
+            compiler-scaling.log
           if-no-files-found: error
