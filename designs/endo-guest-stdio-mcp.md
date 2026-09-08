@@ -137,17 +137,32 @@ world-readable `/proc/net/unix`, so any co-resident process could enumerate ever
 guest's broker and `connect()` to it. This design therefore rules the abstract
 namespace **out** and closes the vector with two concrete, layered mechanisms:
 
-  1. **A filesystem-path socket inside the guest's own hidden mount namespace.**
-     The broker binds its UDS at a path under a per-guest directory created
-     `0700` inside the same `@endo/claude-sandbox` mount-namespace slice that
-     already hides the daemon socket path from this guest ([endo-claude](endo-claude.md)
-     Design Decision 6). A filesystem-path UDS is reachable only by a process that
-     can traverse to its path; a sibling guest confined to its *own* mount
-     namespace cannot name, `stat`, or `connect()` to a path that does not exist
-     in its filesystem view, and the address is absent from `/proc/net/unix`'s
-     abstract-socket listing entirely. This makes cross-guest socket discovery a
-     structural absence, resting on the *same* isolation primitive the daemon
-     socket already relies on rather than on secrecy.
+  1. **A filesystem-path socket re-mounted into each per-spawn slice.**
+     The broker binds its UDS at a path under a **stable per-guest** directory
+     created `0700` and **owned by the harness outside any single spawn's
+     ephemeral tree** (disjoint from `whereEndoSock`, the way
+     [endo-claude](endo-claude.md) Design Decision 7 keeps its per-spawn
+     credential directory disjoint from the daemon socket path). The subtlety a
+     careful reader must not miss: the `@endo/claude-sandbox` slice is created
+     **per spawn**, not per guest ([endo-claude](endo-claude.md) Design Decisions
+     6 and 7 render confinement-relevant paths into a fresh
+     `.../endo-claude-spawn/<sessionTag>/` tree "created per spawn" and mount only
+     that tree into the slice), whereas the broker and its socket are **one per
+     guest** and outlive every one of those ephemeral slices (§ *Process lifetime
+     and topology*). A persistent per-guest socket therefore cannot simply "live
+     inside" a namespace that is torn down and recreated on every spawn. The
+     harness closes this by **re-mounting the same stable per-guest broker-socket
+     directory into each freshly created per-spawn slice** (exactly the move
+     Design Decision 7 makes for its per-spawn credential mount), while continuing
+     to exclude every *sibling* guest's broker-socket directory and the raw daemon
+     socket path from that slice's view. A filesystem-path UDS is reachable only
+     by a process that can traverse to its path; a sibling guest, whose per-spawn
+     slices receive only *its own* broker-socket directory, cannot name, `stat`,
+     or `connect()` to a path that is absent from its filesystem view, and the
+     address is absent from `/proc/net/unix`'s abstract-socket listing entirely.
+     This makes cross-guest socket discovery a structural absence, resting on the
+     *same* per-spawn scoped-mount primitive the daemon socket and credential
+     files already rely on rather than on secrecy.
   2. **`SO_PEERCRED` peer verification at `accept`.** As defense in depth against
      a misconfigured or shared namespace, the broker reads the connecting peer's
      credentials (`SO_PEERCRED`: pid/uid/gid) at accept and admits only the one
@@ -161,7 +176,7 @@ isolation plus peer-credential verification, not an unguessable address on a
 shared surface.
 
 This is the "isolation is per-process, not per-bearer" model
-[endo-claude](endo-claude.md) names: many guests means many broker+adapter pairs,
+[endo-claude](endo-claude.md) names: many guests mean many broker+adapter pairs,
 each private, with the daemon's one shared socket sitting *behind* the brokers,
 never in front of a confined process. The two processes are kept distinct
 **because** collapsing them re-opens the boundary: a single-process stdio server
@@ -227,18 +242,28 @@ Two reasons make this the correct behavior rather than a limitation:
    shrank live would leave the client naming tools the server now rejects. Both
    are divergence; pinning keeps the two halves derived from one value that never
    moves.
-2. **Fresh process per call.** [endo-claude](endo-claude.md) spawns a fresh
-   `claude -p` per inference, so "mid-session" is bounded by a single call. A
-   legitimately changed grant is picked up on the **next** spawn, whose broker
-   takes a **new** snapshot. Continuity of a long line of thought is an Endo-side
-   capability, never live catalog mutation (that design's threaded-session
-   extension).
+2. **Staleness is bounded by broker teardown, not by call lifetime.**
+   [endo-claude](endo-claude.md) spawns a fresh `claude -p` per inference, but
+   that freshness is a property of the **client** process only: the entity that
+   holds and enforces the pinned catalog is the **broker**, which is one per guest
+   and *outlives* an individual call (§ *Process lifetime and topology*). So a
+   fresh client says nothing about the staleness of the server-side pinned value
+   that answers every one of those fresh clients identically. What actually bounds
+   staleness is **broker teardown**: a legitimately changed grant is picked up
+   when the broker is reconstructed and takes a **new** snapshot, not on the next
+   client spawn against a still-live broker. The firm requirement that keeps the
+   client/server agreement of reason 1 from diverging on a long-lived guest is
+   therefore that **re-provisioning a guest's grants tears down and reconstructs
+   the broker** (any capability-set change, not only full revocation), so the
+   pinned catalog is never older than the last grant change. Continuity of a long
+   line of thought is an Endo-side capability, never live catalog mutation (that
+   design's threaded-session extension).
 
-The one wrinkle: a broker that is **reused across many calls of a long-lived
-guest** (below) will not observe a grant change until it is torn down and
-reconstructed. Whether such a broker needs an explicit, capability-gated
-re-pin is an open question (see below); the safe default is that re-provisioning
-a guest's grants tears down and reconstructs the broker.
+The narrower open question is only whether to *add* an explicit,
+capability-gated re-pin that refreshes the catalog **without** a full broker
+teardown (see below); the teardown-and-reconstruct default above already keeps
+the agreement sound, so the open question is an optimization, not a gap in the
+invariant.
 
 ## The stdio transport
 
@@ -254,9 +279,14 @@ subprocess," the pattern [endo-gateway-mcp](endo-gateway-mcp.md) names for stdio
 clients.
 
 **`initialize`.** The adapter answers with `serverInfo: { name: "endo", version }`
-(matching the fixed `mcp__endo__` label and the self-identifying shape
-[endo-gateway-mcp](endo-gateway-mcp.md) uses, so the two sibling transports spell
-the same handshake), `tools: { listChanged: false }`
+(the fixed `mcp__endo__` label of § *Naming*) and the same self-identifying
+`initialize` **response shape** [endo-gateway-mcp](endo-gateway-mcp.md) uses. The
+two sibling transports share the handshake *shape*, not the label *string*: each
+pins its own `serverInfo.name` (`endo` here, `endo-gateway` in
+[endo-gateway-mcp](endo-gateway-mcp.md)). So an implementer reconciling both
+transports reads two deliberately distinct server-identity labels for the same
+projection, one per transport, not a single shared name. This server further sets
+`tools: { listChanged: false }`
 (reflecting the pinned catalog) and, optionally, `logging: {}` so facet
 diagnostics can ship back as `notifications/message` (whether to advertise
 `logging` at all is an open question, since stderr already reaches the harness
@@ -326,13 +356,29 @@ collapsing it:
 | Unknown method (not `tools/list`/`tools/call`) | `-32601` method not found | no |
 | Policy rejection (name or arguments outside the pinned catalog / facet scope: the dispatch check, incl. the argument-scope check) | application code `-32001` `tool-not-permitted`, `data.reason` = `name` \| `argument-scope` | no (the surface will not widen) |
 | Broker or daemon connection down (the harness-side `bridge-down`) | application code `-32010` `bridge-down`, `data.detail` mirroring the harness's `{type: 'bridge-down', detail}` | transient (the harness may respawn on the next call) |
+| **Facet method threw** (an in-catalog, in-scope `tools/call` that *reached* the facet and the target application code raised, e.g. `readText` on a missing path) | **not** a JSON-RPC error: a successful `tools/call` **result** with `isError: true` and the failure in the result `content`, the standard MCP "the tool ran and failed" shape; the harness settles it to `{type: 'facet-threw', method, error}` ([endo-claude](endo-claude.md) Design Decision 8), carrying `error: toPassableError(caught)` | application-level: up to the model, given the surfaced error |
+
+The first four rows are **protocol** failures (the request was refused *before or
+instead of* invoking the facet method): the wire carries a JSON-RPC **error**
+response. The last row is an **application** failure (the request was in-catalog,
+in-scope, dispatched, and the facet method itself threw): the tool *ran*, so per
+the MCP tool-call contract the wire carries a successful JSON-RPC **result** whose
+`isError: true` and `content` describe the throw, never a JSON-RPC transport
+error. Collapsing the two would defeat the very distinction this section exists to
+preserve: "you're not allowed to call this" (`-32001`) and "the backend just
+died" (`-32010`) are protocol errors, while "the tool ran and the application code
+threw" is a normal result the model can read and act on. The broker classifies;
+the adapter relays without collapsing, in both directions (a JSON-RPC error stays
+an error, an `isError` result stays a result).
 
 The `-3200x`/`-3201x` application codes sit in JSON-RPC's implementation-defined
 server-error range and are the wire counterpart of the harness-side typed
 outcomes, so the two consumers (the MCP client and the harness) see the same
 failure at matching specificity rather than one typed and one opaque. A policy
-rejection is never reported as a transport error and `bridge-down` is never
-reported as a policy rejection, so neither is mistaken for the other.
+rejection is never reported as a transport error, `bridge-down` is never reported
+as a policy rejection, and a facet-method throw is never reported as either (it is
+a tool-result `isError`, not a protocol error at all), so none is mistaken for
+another.
 
 ## Naming
 
@@ -470,6 +516,12 @@ positive-confinement test. An implementation is accepted only when these pass.
   connection drop returns `-32010` `bridge-down` for the in-flight call and never
   a fabricated success or a re-widened surface. Canceling one call's
   `sessionTag`-keyed token never blocks a concurrent call on the same broker.
+- **Facet-method throw is a result, not a protocol error.** An in-catalog,
+  in-scope `tools/call` whose facet method raises (e.g. `readText` on a missing
+  path) returns a **successful** `tools/call` result with `isError: true` and the
+  error in `content` (not a JSON-RPC `-3200x`/`-3201x` error), and the harness
+  settles it to `{type: 'facet-threw', method, error}`, distinct from both the
+  `-32001` policy rejection and the `-32010` `bridge-down` paths.
 
 ## Dependencies
 
@@ -477,7 +529,7 @@ positive-confinement test. An implementation is accepted only when these pass.
 |---|---|
 | [endo-claude](endo-claude.md) | **Consumer / harness.** Spawns the broker and the confined `claude -p`, generates `--allowedTools` from the catalog this server pins, and settles inference outcomes on this server's errors. Names this server as its "adapter-implementation prerequisite." |
 | [endo-agent-tools](endo-agent-tools.md) | **Projection.** The MCP adapter (`packages/agent-tools/src/adapters/mcp.js`, a declared stub) that maps a `ToolRecord`'s name/description/parameters/invoke to an MCP tool and dispatches `tools/call` to the facet. This server hosts it over stdio; it does not reinvent it. |
-| [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, `initialize` shape, and the `mcp__<server>__<tool>` naming; differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
+| [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, the `initialize` response *shape*, and the `mcp__<server>__<tool>` naming *grammar* (each transport pins its own `serverInfo.name` label, `endo` here vs `endo-gateway` there, so the shape is shared but the label string is not); differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
 | [daemon-agent-tools](daemon-agent-tools.md) | **Future catalog source.** The capability-scoped tool surface that composes into the projection via `extra`; once live it tightens per-guest scoping (each guest's catalog reflects only its granted capabilities). |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | **Framing precedent, not the same surface.** Its LF-delimited JSONL framing lesson (split on `\n` only) carries over; but it is a *drive-the-agent* RPC (prompt/steer/abort), not an MCP *tool-call* server, so it is prior art for framing only. |
 | `kriscendobot/minion.town` PR [#79](https://github.com/kriscendobot/minion.town/pull/79) | **Naming convention, adopted (not a construction gate).** A cross-repo reference, open and unmerged at the time of writing. This server adopts its flat interface-native camelCase convention; it does **not** key any fail-closed construction throw on that PR's reserved-name list (server-scoping already prevents wire collisions, and a security-critical construction path must not depend on an unmerged external artifact). A bare-name collision against its reservations is at most an advisory warning here. |
