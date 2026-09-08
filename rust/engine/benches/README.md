@@ -1,0 +1,68 @@
+# Performance instruments (F106/F122)
+
+Run all seven existing snapshot benchmarks, serially in release mode:
+
+```sh
+python3 rust/engine/benches/run.py --check-baseline --output /tmp/benchmark-report.json
+```
+
+Each workload emits its median and its ratio against `baseline.json`.
+The file records the source revision, Rust compiler, and host of the measured baseline.
+The regression floor is 1.25x the baseline time for each measurement.
+It is an early-warning floor, separate from the stage-8 geometric-mean envelope of 2x XS.
+A missing, extra, duplicate, zero, or nonfinite measurement is an error.
+Fixture failures remain errors, even if the benchmark printed measurements first.
+
+Absolute timings from different machines are not comparable.
+For nightly CI, remeasure the pinned source revision on the same runner using the
+candidate's benchmark fixtures, then compare the candidate against that reference:
+
+```sh
+python3 rust/engine/benches/run.py --reference-baseline --check-baseline
+```
+
+This needs the baseline commit in local Git history and `tar` on PATH.
+The reference checkout is temporary, uses a separate build directory, and is removed
+when the command finishes.
+The checked-in medians retain the initial measurement; CI reports also record the
+reference host and revision used for that run.
+Baseline updates are explicit, reviewable operations, never part of a check:
+
+```sh
+python3 rust/engine/benches/run.py --write-baseline
+```
+
+Run the growth-class suite separately:
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-snapshot --test scaling_bench -- --ignored --nocapture --test-threads=1
+```
+
+It checks string indexing, Map insertion, for-in, and string for-of across consecutive
+input doublings, with one warmup and seven measured runs per size.
+Every fixture checks its result and deterministic computron count.
+Both raw median elapsed time and computrons must grow by less than 2.5x per doubling.
+Construction is included in these end-to-end workload measurements.
+The known F044/F045 quadratic paths intentionally make this gate fail until repaired;
+there is no expected-failure or skip exception for them.
+The existing nightly full-test262 workflow runs both instruments in an independent
+job, and uploads their logs and JSON even when a gate fails.
+Ordinary PR CI does not run timing assertions.
+
+## Daemon arm: explicitly blocked
+
+The fourth daemon variant cannot run yet.
+`endor worker -e ironhorse` explicitly refuses the worker protocol in
+`rust/endo/src/ironhorse_engine.rs`; CBOR transport, host functions, and SES boot
+are still needed (F054's open host-function half and roadmap stage 4).
+`packages/daemon/test/bench-daemon.js` reports that blocker, and an explicit
+`--ironhorse-only` invocation fails instead of timing a substitute or silently skipping.
+Per the requested scope, this change does not implement that worker protocol.
+Consequently it does not claim the four-variant daemon envelope is measured or met.
+
+## Checker tests
+
+```sh
+python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'
+```

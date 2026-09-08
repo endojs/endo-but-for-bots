@@ -134,3 +134,43 @@ jobs:
             test262-report/discovery.txt
             test262-report/pending.txt
           if-no-files-found: warn
+
+  # In-process engine instruments only. The fourth daemon arm is explicitly
+  # blocked on F054 host-function registration and the stage-4 SES boot bundle.
+  benchmarks:
+    name: Performance baselines and scaling
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Match the documented local before/after measurement environment.
+      CARGO_INCREMENTAL: '0'
+      RUST_MIN_STACK: '33554432'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The baseline revision is remeasured on the same host as the candidate.
+          fetch-depth: 0
+      - name: Test benchmark checker
+        run: python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'
+      - name: Check snapshot performance baselines
+        run: |
+          set -euo pipefail
+          python3 rust/engine/benches/run.py --reference-baseline --check-baseline --output benchmark-report.json 2>&1 | tee benchmark.log
+      # F044/F045 are known failing gates, not expected failures or exemptions.
+      - name: Check elapsed time and computron scaling
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee scaling.log
+      - name: Upload performance measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-performance
+          path: |
+            benchmark-report.json
+            benchmark.log
+            scaling.log
+          if-no-files-found: error
