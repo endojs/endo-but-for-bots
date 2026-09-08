@@ -9,8 +9,8 @@ use std::path::Path;
 
 use ironhorse_snapshot::sha256::hex_sha256;
 use ironhorse_snapshot::{
-    encode_slot, from_snapshot_bytes, read_validated_machine, write_machine_unchecked, MachineImage,
-    Signature,
+    encode_slot, from_snapshot_bytes, read_validated_machine, write_machine_unchecked,
+    MachineImage, Signature,
 };
 use ironhorse_vm::{Kind, Payload};
 use rusqlite::{params, Connection, OpenFlags};

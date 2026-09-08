@@ -37,8 +37,8 @@ use ironhorse_snapshot::store::HeapStoreCommit;
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
-    chunk_extent_count, free_seg_count, leaf_hash, slot_page_count,
-    HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_FREE, LEAF_PAGE,
+    chunk_extent_count, free_seg_count, leaf_hash, slot_page_count, HeapStore, StoreError,
+    StoreManifest, LEAF_EXT, LEAF_FREE, LEAF_PAGE,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -864,7 +864,10 @@ impl HeapStore for SqliteHeapStore {
         Ok(out)
     }
 
-    fn commit_verified(&mut self, verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>) -> Result<(), StoreError> {
+    fn commit_verified(
+        &mut self,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), StoreError> {
         // Take the ledger cache up front: every early return below
         // drops it (the [`RootLedger`] drop-on-failure discipline —
         // rusqlite rolls the transaction back on drop, and a rolled-
@@ -943,9 +946,22 @@ impl HeapStore for SqliteHeapStore {
                 }
 
                 let small: Vec<u8> = if stored.is_some() {
-                    tx.query_row("SELECT bytes FROM small_state WHERE name = ?1", params![SMALL_NAME], |row| row.get(0)).map_err(sql_err)?
-                } else { Vec::new() };
-                ironhorse_snapshot::store::RootLedger::build(&small, prior_pages, prior_exts, prior_frees, &prior_edges)
+                    tx.query_row(
+                        "SELECT bytes FROM small_state WHERE name = ?1",
+                        params![SMALL_NAME],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_err)?
+                } else {
+                    Vec::new()
+                };
+                ironhorse_snapshot::store::RootLedger::build(
+                    &small,
+                    prior_pages,
+                    prior_exts,
+                    prior_frees,
+                    &prior_edges,
+                )
             };
             let (batch, ledger) = verify(stored.as_ref(), ledger)?.into_parts();
             new_cache = ledger;
@@ -1145,8 +1161,8 @@ mod tests {
         begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
     };
     use ironhorse_snapshot::store::{
-        export_to_container, image_to_batch_unchecked, import_from_container, reseal_batch, store_to_image,
-        validate_store, STORE_SCHEMA_VERSION,
+        export_to_container, image_to_batch_unchecked, import_from_container, reseal_batch,
+        store_to_image, validate_store, STORE_SCHEMA_VERSION,
     };
     use ironhorse_snapshot::{Signature, SnapshotError};
     use ironhorse_vm::Interp;
@@ -1224,7 +1240,9 @@ mod tests {
         assert!(m.run(&PROG_A).completed);
         let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
-        store.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image1, 1, ""))
+            .unwrap();
         let prev = store.manifest().unwrap();
 
         // The engine suite's crafted omit-the-tail batch: shrink
@@ -1263,7 +1281,9 @@ mod tests {
         assert!(m.run(&PROG_A).completed);
         let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
-        store.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image1, 1, ""))
+            .unwrap();
         let prior = store.manifest().unwrap();
         let prior_image = store_to_image(&store).unwrap();
         let prior_counts: Vec<i64> = [
@@ -1507,7 +1527,9 @@ mod tests {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
         let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
-        store.commit(&image_to_batch_unchecked(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         assert!(
             !image.chunks.is_empty(),
             "fixture must carry chunk bytes for the shrink to mean anything"
@@ -1559,7 +1581,9 @@ mod tests {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
         let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
-        store.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image1, 1, ""))
+            .unwrap();
 
         // Pick a page with outgoing edges (the boot region guarantees
         // cross-page references exist).
@@ -1590,7 +1614,9 @@ mod tests {
             *s = ironhorse_vm::Slot::undefined();
         }
         let prev = store.manifest().unwrap().seal;
-        store.commit(&image_to_batch_unchecked(&image2, 2, &prev)).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image2, 2, &prev))
+            .unwrap();
 
         let after: i64 = store
             .conn
@@ -1718,14 +1744,22 @@ mod tests {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
         let image1 = m.snapshot_image_for_testing(&sig()).expect("gated image");
-        sqlite.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
-        memory.commit(&image_to_batch_unchecked(&image1, 1, "")).unwrap();
+        sqlite
+            .commit(&image_to_batch_unchecked(&image1, 1, ""))
+            .unwrap();
+        memory
+            .commit(&image_to_batch_unchecked(&image1, 1, ""))
+            .unwrap();
 
         assert!(m.run(&PROG_B).completed);
         let image2 = m.snapshot_image_for_testing(&sig()).expect("gated image");
         let prev = memory.manifest().unwrap().seal;
-        sqlite.commit(&image_to_batch_unchecked(&image2, 2, &prev)).unwrap();
-        memory.commit(&image_to_batch_unchecked(&image2, 2, &prev)).unwrap();
+        sqlite
+            .commit(&image_to_batch_unchecked(&image2, 2, &prev))
+            .unwrap();
+        memory
+            .commit(&image_to_batch_unchecked(&image2, 2, &prev))
+            .unwrap();
 
         assert_eq!(
             export_to_container(&sqlite).unwrap(),
