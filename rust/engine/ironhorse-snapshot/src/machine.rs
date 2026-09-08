@@ -129,9 +129,30 @@ impl From<SnapshotError> for MachineSnapshotError {
     }
 }
 
-/// The name of the temp file `suspend_to_cas` writes before the atomic
-/// rename to its content hash.
-const CAS_TMP_NAME: &str = ".snapshot.tmp";
+/// Removes an unpublished CAS temporary on every exit path.
+struct CasTemporary(std::path::PathBuf);
+impl Drop for CasTemporary {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn cas_temporary(dir: &Path) -> io::Result<(CasTemporary, File)> {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    loop {
+        let n = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = dir.join(format!(".snapshot-{}-{n}.tmp", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((CasTemporary(path), file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
 
 /// The xsnap-shaped machine snapshot surface, implemented for the ironhorse
 /// [`Interp`] (the engine's machine). See the module docs.
@@ -218,11 +239,10 @@ pub trait MachineSnapshot {
         cas_dir: &Path,
     ) -> Result<String, MachineSnapshotError> {
         std::fs::create_dir_all(cas_dir)?;
-        let tmp_path = cas_dir.join(CAS_TMP_NAME);
-        let file = File::create(&tmp_path)?;
+        let (temporary, file) = cas_temporary(cas_dir)?;
         let hash = self.write_snapshot_to_file(signature, file)?;
         let final_path = cas_dir.join(&hash);
-        std::fs::rename(&tmp_path, &final_path)?;
+        std::fs::rename(&temporary.0, &final_path)?;
         // Durable publish: the rename is final only once the CAS
         // directory itself is synced (same discipline as the file
         // store's commit).
@@ -809,9 +829,18 @@ pub fn resume_from_cas(
     sha256: &str,
     expected_sig: &Signature,
 ) -> Result<Interp, MachineSnapshotError> {
-    let path = cas_dir.join(sha256);
-    let file = File::open(&path)?;
-    from_snapshot_file(file, expected_sig)
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(SnapshotError::Corrupt("CAS digest is not canonical SHA-256").into());
+    }
+    let bytes = std::fs::read(cas_dir.join(sha256))?;
+    if crate::sha256::hex_sha256(&bytes) != sha256 {
+        return Err(SnapshotError::Corrupt("CAS content digest mismatch").into());
+    }
+    Ok(from_snapshot_bytes(&bytes, expected_sig)?)
 }
 
 // --- the store-backed checkpoint surface (store seam design, phase 2)
