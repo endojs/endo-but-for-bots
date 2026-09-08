@@ -3,15 +3,18 @@
 | | |
 |---|---|
 | **Created** | 2026-08-10 |
-| **Updated** | 2026-09-07 |
+| **Updated** | 2026-09-08 |
 | **Author** | kumavis (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 
 ## Status
 
-The mechanism is built and tested end to end across the floot/claude-sandbox
-pair. What remains is the floot **session** wiring, which has no place to
-attach on `llm` yet — see *Not yet wired* below.
+Built and wired end to end for the runtime `llm` has: a Floot session on the
+attested hosted backend attaches a capability it holds under `/mnt/`, the
+sandbox is recreated with the bind declared and kernel-proved, and the bind
+survives a daemon restart.
+The ClaudeClient (CLI-runtime) path is built and tested but has no session
+runtime on `llm` to be wired into — see *Hosted wiring* below.
 
 Built:
 
@@ -39,42 +42,100 @@ Built:
   touches an extra's 9P handle: the registrar owns every bridge, because
   releasing one also means dropping its daemon `Mount` pet name and the
   provider's cache entry for it (see *Who releases a bridge* below).
+  The bridge also reports the host **mountpoint** it served the cap at, for
+  a runtime that binds by declaration rather than by cap.
+- `packages/sandbox/src/policy.js`, `observe.js`, `drivers/podman.js` — a
+  `kind: 'attach'` mount in `SlicePolicyRequest.mounts`: validated (the
+  destination under `/mnt/`, the host source the bridge chose), bound like
+  any other mount, and **attested** by reading the container's own mount
+  table (`/proc/<pid>/mountinfo`) and requiring a `9p` filesystem at the
+  destination — the kernel's proof that the bind is a projection served
+  through a capability, not a host directory.
+- `packages/codex-sandbox/src/sandbox-policy.js`, `backend-factory.js` — a
+  hosted session spec may carry
+  `containerMounts: [{ key, source, destination, mode }]`; each becomes an
+  `attach-<key>` row of the slice table, `assertHostedAgentPolicyV1`
+  expects `5 + n` rows and verifies every attach against the attestation,
+  and `createSession` audits them.
+- `packages/floot/agent.js` — the session wiring: a per-session kit built
+  before the hosted tool catalog is pinned, so the thread's `toolSetId`
+  covers the three tools, and `makeHostedMountClient`, the registrar's view
+  of a hosted backend session, whose bind set is the `containerMounts` its
+  next `create` declares (see *Hosted wiring* below).
+  The full-control and machine-admin presets teach the tools.
 - Tests: `packages/floot/test/container-mounts.test.js` (the registrar
   against fakes), `packages/claude-sandbox/test/container-mount-bridge.test.js`
   (the 9P bridge), recreate coverage in
   `packages/claude-sandbox/test/claude-client.test.js` and
-  `claude-client-module.test.js`, and
+  `claude-client-module.test.js`,
   `packages/floot/test/container-mounts-sandbox.test.js` — the three real
   pieces wired together with only the daemon host agent, the 9P mounter and
   the sandbox factory faked: a held cap becomes a `/mnt/` bind in the
   slice's mount list, survives a restart of every worker-local map, honours
   `ro` at all three layers, is released by the registrar on last detach, and
-  outlives a `terminate()` that has no business releasing it.
+  outlives a `terminate()` that has no business releasing it —
+  `packages/floot/test/container-mounts-hosted.test.js` — the factory's
+  hosted path against a fake backend: an attach recreates with the
+  declaration once the tool call has settled, a bind declared during a
+  recreate is applied by one more while a turn sent meanwhile waits, a
+  restart replays into the first create, a refused recreate sheds the bind,
+  and deletion releases the bridges after the backend is gone — and the
+  attach cases of `packages/sandbox/test/{observe,policy,podman-policy}.test.js`
+  and `packages/codex-sandbox/test/{backend-factory,sandbox-policy}.test.js`.
 
-### Not yet wired
+### Hosted wiring
 
-`packages/floot/agent.js` does not yet build a per-session kit, because
-`llm` has no Claude CLI runtime for a Floot session to run in: `getAgent`
-refuses legacy CLI sessions outright, and the hosted backends attest a
-**fixed** five-mount slice table that an extra bind would (correctly)
-invalidate. The pieces that would host the wiring — the session
-provisioner, `provision-claude-session.js`, and the per-session MCP tool
-bridge — are the separate *claude-cli runtime + MCP bridge* cluster of #994
-and have not landed. When they do, the wiring is:
+`llm` has no Claude CLI runtime for a Floot session to run in (`getAgent`
+refuses legacy CLI sessions outright), so the session wiring lands on the
+hosted backend, whose slice table is **attested**: a bind the policy did not
+declare would (correctly) fail verification.
+Rather than smuggle an undeclared sixth mount, an attach is a declared,
+verified part of the policy.
 
-- a per-session kit built in the CLI-runtime branch of `getAgent` before
-  the MCP server starts (so the CLI's tool loop discovers the three tools),
-  armed with the resolved client after provisioning;
-- `identifyClient` on the client resolver, for the cap identity records are
-  keyed by;
-- `containerMountRegistrar.releaseSession(id)` in `deleteSession`, after
-  the client removal;
-- `getBridgeProvider` resolving the deployment's named bridge provider —
-  either the standalone caplet above, or a session provisioner that mixed
-  in `makeContainerMountBridge`;
-- the system-prompt paragraphs that teach the endo-capable presets to mount
-  a clone as a disk, which are only true once a session actually gets the
-  tools.
+- **Declaration.** The registrar's bind set for a hosted session becomes
+  `containerMounts` on the backend session spec — `{ key, source,
+  destination, mode }`, where `source` is the host mountpoint the bridge
+  reports (host layout the bridge chose, never guest input) and `key` is the
+  registrar's content-hash key. The hosted policy expects `5 + n` rows, the
+  attach rows named `attach:<key>`.
+- **Proof.** The sandbox attests each attach by reading the container's
+  mount table and requiring a `9p` filesystem at the destination. A host
+  directory bound at `/mnt/…` does not pass; only a projection served by the
+  9P mounter — through the cap — does. This is the attested form of "the cap
+  is the policy".
+- **Recreate, deferred.** The attested runtime cannot change a live slice's
+  mount table (the table is what it attests), so a changed set terminates
+  the backend session and creates it again with the new declaration; the
+  workspace, the state volume and the thread survive, the turn in flight
+  does not. A backend refuses to stop under an unsettled Endo tool call, and
+  the attach that asks for the recreate *is* one until its result is back,
+  so `setExtraMounts` records the declaration and schedules the recreate on
+  a per-session chain that retries `terminate` until the call settles
+  (bounded at 10 s). The recreate is idempotent — a declaration that changes
+  while a create is in flight is applied by the next chain entry, and one
+  the live session already declares costs no restart — and a turn sent
+  meanwhile waits for the successor rather than failing.
+- **Restart.** The registrar replays its journal into the adapter when the
+  kit is armed, *before* the first create, which therefore already declares
+  the persisted binds: a restart costs no recreate.
+- **Refusal.** A recreate the sandbox rejects (its attestation would not
+  prove an attach) sheds this session's binds — records and bridges — so no
+  record claims a bind the container lacks, recreates without them, and
+  reports why on the session's next turn.
+- **Teardown.** `deleteSession` waits for a recreate in flight and closes
+  the adapter so none is scheduled after, terminates the backend, and only
+  then calls `containerMountRegistrar.releaseSession(id)` — no container
+  still binds a mountpoint being unmounted.
+- `getBridgeProvider` resolves the deployment's named bridge provider
+  (`FLOOT_CONTAINER_MOUNT_BRIDGE`, default `container-mount-bridge`) and
+  checks for `provideContainerMountBridge` by introspection; a deployment
+  without one leaves attach unavailable, with a clear error.
+
+The ClaudeClient path (`setExtraMounts` + slice recreate) stays built and
+tested for a CLI runtime.
+When the *claude-cli runtime + MCP bridge* cluster of #994 lands, its wiring
+is the same kit armed with a ClaudeClient instead of the hosted adapter, plus
+`identifyClient` for a shareable client key.
 
 Deviations from the sketch:
 
@@ -103,8 +164,9 @@ Deviations from the sketch:
 - The shared-client ref counting (Goal 5) is implemented and tested at the
   registrar (records keyed by client cap identity, session-id reference
   sets, last-reference teardown), but nothing in floot yet hands two live
-  sessions the same `clientKey`. The machinery is the forward-looking
-  safety story for when sharing is wired, not a behavior reachable today.
+  sessions the same `clientKey`: a hosted session's client key is its own
+  session id. The machinery is the forward-looking safety story for when
+  sharing is wired, not a behavior reachable today.
 
 ### Known gaps
 
@@ -144,15 +206,31 @@ consequence of the design as written, not an oversight in the code.
   from the slice's own binds, which holds while `WORKSPACE_PATH` is
   `/workspace`. A deployment that set it under `/mnt/` could let a guest attach
   over the workspace; the registrar has no way to ask the client what it
-  already binds.
+  already binds. The hosted policy validates the same structural rule at
+  its own boundary, so an overlap there fails the create rather than the
+  attestation.
+- **The three tools rotate every existing hosted thread once.** The hosted
+  tool catalog is pinned per thread by `toolSetId`, and the Codex client
+  starts a new thread when it changes. Adding the three tools changes it for
+  every hosted session that predates this change, so each resumes on a
+  fresh thread the first time it runs after the upgrade — a one-time cost
+  of the tool set being part of the thread's identity, which is the
+  property that stops a thread from silently resuming with different powers.
+- **The settle budget is a wait, not a guarantee.** A hosted backend that
+  keeps refusing to stop for the whole budget (a tool call that never
+  settles) fails that recreate. The next turn retries it with the current
+  declaration and carries the failure if it repeats; until then the records
+  claim a bind the container does not yet have, and `listContainerMounts`
+  says so as if it did.
 
 ## Summary
 
-A `ClaudeClient` runs Claude Code inside an `@endo/sandbox` slice, and a Floot
-CLI session drives one.
-The slice binds a fixed set of host capabilities at first provision — today
-the workspace alone, plus whatever the CLI runtime adds (a config dir, an MCP
-socket dir).
+A Floot session drives an agent inside an `@endo/sandbox` slice — a
+`ClaudeClient` running Claude Code on the CLI runtime, or a hosted backend
+session on the attested runtime.
+The slice binds a fixed set of host capabilities at first provision — the
+workspace, plus whatever the runtime adds (a config dir, an MCP socket dir,
+the hosted runtime's attested state volumes).
 Sessions often **acquire filesystem authority at runtime** (MCP tools, adopted
 `workspace`, future code mode) and need that same tree visible inside the
 Linux environment so shell tools — especially **`git`** — can read, modify, and
@@ -388,7 +466,11 @@ that owns the slice.
 | `packages/claude-sandbox/src/claude-client-module.js` | Lazy 9P, `provideMount`, `sandboxFactory.make({ mounts })` |
 | `packages/claude-sandbox/src/claude-client.js` | `setExtraMounts`, slice recreate, teardown gate |
 | `packages/floot/src/container-mounts.js` | Attach registrar, ref counting, persistence, session tools |
-| `packages/floot/agent.js` | Session guest, client resolver — the wiring point, not yet present |
+| `packages/floot/agent.js` | Session wiring: per-session kit, hosted adapter (`makeHostedMountClient`), release on delete, preset prose |
+| `packages/sandbox/src/policy.js` | `kind: 'attach'` validation, bind argv, and 9P attestation |
+| `packages/sandbox/src/observe.js` | The container's mount table, read for attestation |
+| `packages/codex-sandbox/src/sandbox-policy.js` | `attach-<key>` rows; `5 + n` hosted policy expectation |
+| `packages/codex-sandbox/src/backend-factory.js` | `containerMounts` on the session spec; attach audit |
 | `packages/9p-server/mount-caplet.js` | `mount(fs, mountPoint, { lazyUnmount, readOnly })` |
 | `packages/sandbox/src/factory.js` | Mount resolution at slice create; Phase 1 dynamic mount note |
 | `designs/endo-agent-tools.md` | Cap-only persistence across turns |
@@ -409,9 +491,12 @@ that owns the slice.
    terminate clears all; restart replay. ✅ (an end-to-end in-container
    `git commit` against a live daemon remains a live-daemon follow-up,
    alongside the existing `test:live` suite)
-7. **Session wiring** — a per-session kit in floot's CLI-runtime branch, so a
-   live session reaches the three tools. ⏳ Blocked on the *claude-cli runtime
-   + MCP bridge* cluster of #994; see *Not yet wired* under Status.
+7. **Session wiring** — a per-session kit in floot's session path, so a
+   live session reaches the three tools. ✅ (the hosted path; the CLI-runtime
+   branch follows the *claude-cli runtime + MCP bridge* cluster of #994)
+8. **Attested declaration** — an attach as a declared, kernel-proved `9p`
+   row of the hosted slice policy, and the deferred recreate that applies a
+   changed declaration. ✅ (see *Hosted wiring* under Status)
 
 ## Related
 

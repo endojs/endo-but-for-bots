@@ -86,6 +86,10 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
         continuity: 'explicit',
         toolOwnership: 'endo',
       }),
+    /**
+     * @param {{ sessionId: string, containerMounts?: any[] }} spec
+     * @param {any} toolSet
+     */
     create: async (spec, toolSet) => {
       hostedTools = toolSet;
       const index = creates.length;
@@ -277,7 +281,9 @@ test('the mount tools reach a hosted session and an attach recreates it with the
 
   // The tools are in the pinned catalog the backend was handed.
   const catalog = await E(world.hostedTools()).describe();
-  const names = catalog.dynamicTools.map((/** @type {any} */ tool) => tool.name);
+  const names = catalog.dynamicTools.map(
+    (/** @type {any} */ tool) => tool.name,
+  );
   t.true(names.includes('attachContainerMount'));
   t.true(names.includes('listContainerMounts'));
   t.true(names.includes('detachContainerMount'));
@@ -337,7 +343,9 @@ test('a bind declared during a recreate is applied by one more, and a turn sent 
     innerPath: '/mnt/project',
   });
   await untilCreates(world, 2);
-  t.deepEqual(world.lastDeclared(), [{ destination: '/mnt/project', mode: 'rw' }]);
+  t.deepEqual(world.lastDeclared(), [
+    { destination: '/mnt/project', mode: 'rw' },
+  ]);
 
   // The second attach lands while the first recreate's create is in flight,
   // and a turn is sent while the sandbox has no live backend session.
@@ -375,7 +383,9 @@ test('a persisted bind is declared on the first create after a restart, without 
     mode: 'ro',
   });
   await untilCreates(world, 2);
-  t.deepEqual(world.lastDeclared(), [{ destination: '/mnt/project', mode: 'ro' }]);
+  t.deepEqual(world.lastDeclared(), [
+    { destination: '/mnt/project', mode: 'ro' },
+  ]);
 
   // "Daemon restart": a fresh factory over the same host petstore. The
   // registrar replays its journal into the adapter BEFORE the first create,
@@ -388,7 +398,9 @@ test('a persisted bind is declared on the first create after a restart, without 
   const before = world.terminated.length;
   await runTurn(restarted);
   t.is(world.creates.length, 3);
-  t.deepEqual(world.lastDeclared(), [{ destination: '/mnt/project', mode: 'ro' }]);
+  t.deepEqual(world.lastDeclared(), [
+    { destination: '/mnt/project', mode: 'ro' },
+  ]);
   t.is(world.terminated.length, before);
   // The bridge was re-minted at the same deterministic key.
   t.is(world.bridged.length, 2);
