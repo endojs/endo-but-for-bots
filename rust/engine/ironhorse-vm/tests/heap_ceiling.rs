@@ -134,3 +134,21 @@ fn json_output_prepaid_units_include_escaping_and_nested_indentation() {
         assert!(out.completed, "{source}: {:?}",out.halt);
     }
 }
+
+#[test]
+fn element_scratch_is_bounded_by_bytes_instead_of_source_element_count() {
+    for source in [
+        "Array.prototype.sort.call({length:1000000})",
+        "new Uint8Array(100000).sort()",
+        "new Uint16Array(100000).set(new Uint8Array(100000))",
+        "var r=/x/;r.exec=function(){return {0:'x',length:1000000,index:0}}; 'x'.replace(r,'y')",
+    ] {
+        let (code, names) = compile(source);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        vm.chunks.set_ceiling(vm.chunks.byte_size() + 1_000_000);
+        let out = vm.run(&code);
+        assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
+        assert!(!vm.is_quiescent());
+    }
+}
