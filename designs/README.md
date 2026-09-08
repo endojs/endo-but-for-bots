@@ -270,6 +270,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-08 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
@@ -498,6 +499,11 @@ totals from the table is the subject of a separate pass
 ([#1146](https://github.com/endojs/endo-but-for-bots/pull/1146)); this entry
 deliberately leaves the arithmetic to it rather than adjusting numbers it cannot
 reproduce.
+The same pass also gains
+[hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (In Progress), the
+hosted-agent broker's OAuth credential lifecycle and the record of why both
+vendor subscription modes stay closed; its buckets are left to #1146 for the
+same reason.
 
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
@@ -571,6 +577,7 @@ inventing implementation commitments.
 | `http-confine`, `platform-range-and-tree-reads`, `endo-fs-seam-review-followups` | M3 | HTTP and readable-tree foundations for tools and daemon guests. |
 | `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
+| `hosted-agent-broker-oauth` | M5 | Which credential bills a hosted agent session, and who holds it. Records why both vendor subscription modes stay closed. |
 | `daemon-engo-supervisor`, `worker-rust-xs` | M11 | Supervisor and native worker path for `endor`. |
 | `hardener-indexed-cardinality` | Out of milestone | Localized `master`-based hardener performance work; no roadmap dependency or critical-path effect. |
 | `outliner-design-doc-2`, `outliner_drag_and_drop`, `OUTLINER_INTERACTION_PATTERNS`, `threading-research-overview`, `type-1-chat-spec`, `type-2-chat-spec`, `type-3-chat-spec` | M9 | UX research inputs, held as reference until an owned Chat or Outliner implementation slice needs them. |
@@ -686,12 +693,14 @@ flowchart TD
         eworkflow[endo-workflow<br/><i>IN PROGRESS</i>]
         efdeploy[floot-admin-deploy-workflows<br/><i>IN PROGRESS</i>]
         eselfupd[hosted-endo-self-update-loop<br/><i>COMPLETE</i>]
+        ebroker[hosted-agent-broker-oauth<br/><i>IN PROGRESS</i>]
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
         eoauth --> ebridge
         eoauth --> eproactive
         eoauth --> esheets
+        eoauth -.-> ebroker
         ereminder -.-> eworkflow
         eworkflow --> efdeploy
         efdeploy --> eselfupd
@@ -1116,6 +1125,7 @@ from M3's "build the gateway package and ship a self-host story".
 | gateway-oauth-bonding *(gap)* | — | **Design gap.** Bond an OAuth identity (Google, GitHub, Microsoft) to a public-key identity so a user can sign in with an external account. Distinct from [endoclaw-oauth](endoclaw-oauth.md) (agent-side OAuth client, in M7) and [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) (LLM-provider OAuth). |
 | gateway-key-recovery *(gap)* | — | **Design gap.** Operator-side bearer-token re-issue conditioned on OAuth-proof-of-identity; narrower than the removed endo-gateway Open Question 1 (Pass-Invariant-Eq), whose material is now folded into [gateway-package](gateway-package.md), and which stays open as the broader follow-up of [daemon-agent-network-identity](daemon-agent-network-identity.md). |
 | gateway-stripe-adapter *(gap)* | — | **Design gap.** Reference adapter for the `verifyPaymentProof` power Phase 8 (PR [#396](https://github.com/endojs/endo-but-for-bots/pull/396)) injected. Webhook signature validation, Stripe-API integration, idempotency, refund handling. May be small enough to live as implementation rather than design, but a short design note pinning the wire shape and failure modes reduces drift risk; recommended as a design file. |
+| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | In Progress | Credential custody for hosted agent sessions: `authMode: 'oauth'` in `@endo/hosted-agent`'s provider broker, with expiry, single-flight refresh, rotate-only write-back, and account binding, plus the sourced finding that **neither vendor permits a proxy to supply a subscription credential**, so both subscription modes stay closed. Answers the "which credential bills this session" half of the metering rows below; distinct from [endoclaw-oauth](endoclaw-oauth.md) (generic agent-side OAuth capability, M7), which it is the bounded inference-only instance of. |
 | gateway-resource-classes *(gap, may fold into stripe-adapter)* | — | **Design gap.** Phase 8 (PR #396) names compute (computrons), storage, network, and inference (cogitrons) as the resource classes; the per-class measurement surfaces (what counts as a computron, how cogitrons map to upstream provider tokens, how network bytes are counted across HTTP / WS / OCapN) need per-class spec text. Likely folds into `gateway-stripe-adapter` unless the metering becomes its own work. |
 
 **Exit criterion:** A user signs into a hosted gateway via OAuth,
@@ -1724,6 +1734,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | gateway-oauth-bonding *(gap)* | M | 4-5 days | 5 | Design gap; OAuth-to-formula-id bonding (referenced by M6 P4 slice) |
 | gateway-key-recovery *(gap)* | S-M | 3 days | 5 | Design gap; operator-side bearer-token re-issue (referenced by M6 P4 slice) |
 | gateway-stripe-adapter *(gap)* | S-M | 3 days | 5 | Design gap; reference adapter for `verifyPaymentProof` (referenced by M6 P3 slice) |
+| hosted-agent-broker-oauth | S-M | 3 days | 5 | Broker-side OAuth lifecycle (expiry, single-flight refresh, rotate-only write-back, account binding, one bounded retry) plus the vendor feasibility finding; landed. Remaining effort is the live acceptance matrix against a real upstream, not further design. |
 | endo-gateway-mcp | M | ~2 weeks | 6 | MCP JSON-RPC termination; counted under M6 as the MCP-bridge milestone's own work. Design merged today (PR [#376](https://github.com/endojs/endo-but-for-bots/pull/376)) |
 | familiar-unified-weblet-server | M | 3 days | 7 | Web-server restructuring; design revised in PR #100 |
 | familiar-chat-weblet-hosting | M | 4-5 days | 7 | Iframe hosting, guest profiles (1.2x bump) |

@@ -163,6 +163,38 @@ Discovery as `claude-backend` is an operator decision made by running
 contract described in
 [`@endo/codex-sandbox`'s deployment acceptance](../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md).
 
+### A deliberate, time-boxed exception (recorded 2026-09-08)
+
+This posture contradicts `@endo/codex-sandbox`'s
+[merge blockers](../codex-sandbox/MERGE-BLOCKERS.md), which rule out
+`CLAUDE_CODE_OAUTH_TOKEN` environment injection.
+It is kept, for now, because the alternative removes the feature rather than
+securing it: Anthropic documents that a gateway credential "replaces the
+subscription login for that session, and the subscription's usage limits don't
+apply", so putting this backend behind the broker converts a subscription
+session into a per-token billed one.
+Token-free and subscription-backed are mutually exclusive for Claude Code
+today; this backend chooses the subscription and says so, rather than claiming
+both.
+The reasoning and its sources are in
+[`designs/hosted-agent-broker-oauth.md`](../../designs/hosted-agent-broker-oauth.md).
+
+The box, so this does not become permanent by inattention:
+
+- It applies to `@endo/claude-sandbox` only.
+  Nothing here may be reused to reintroduce credential materialization into the
+  Codex hosted path, and this backend must not be described as satisfying the
+  token-free hosted contract.
+- Review by **2026-12-08**, or sooner if Anthropic documents a gateway
+  credential that does not displace the claude.ai login, or a way for a gateway
+  to present a subscription credential upstream.
+  Either one retires the exception by making the broker path keep the
+  subscription.
+- If neither has appeared at review, the choice is explicit: move this backend
+  behind the broker as an API-key backend and drop the subscription mode, or
+  re-book the exception with a fresh reason.
+  Letting the review date pass unremarked is not one of the options.
+
 ## Setup
 
 Provisioning is split by machine role; everything nests under host

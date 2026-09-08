@@ -90,6 +90,32 @@ The old `codex-auth-seeder`, shared `CODEX_HOME`,
 `CLAUDE_CODE_OAUTH_TOKEN` environment injection, and credential materialization
 from PR #994 must not land underneath this feature.
 
+Subscription mode is now disabled for a recorded reason rather than for want of
+an implementation.
+Neither vendor documents a configuration in which a proxy or gateway supplies
+the subscription credential: Codex's proxy mode authenticates with the CLI's own
+`auth.json`, and a Claude Code gateway credential displaces the claude.ai login
+rather than carrying it.
+The finding, with quoted sources, is in
+[SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) § "Finding" and
+[`designs/hosted-agent-broker-oauth.md`](../../designs/hosted-agent-broker-oauth.md).
+The broker's own credential lifecycle no longer waits on that question: it
+tracks expiry, refreshes under a single-flight guard, rotates the stored state
+through a rotate-only capability that carries no `revoke`, `delete`, or
+`setDescription`, and retries a rejected credential exactly once.
+`BrokerLeaseV1` now carries `authMode`, proved by construction because the
+broker core refuses to exist in `oauth` mode without both authorities.
+
+`@endo/claude-sandbox` still injects `CLAUDE_CODE_OAUTH_TOKEN` into its own
+slice, which this section otherwise rules out.
+That is now a recorded, time-boxed exception scoped to that package, with a
+2026-12-08 review date, rather than an unremarked inconsistency: for Claude Code
+the token-free and subscription-backed postures are mutually exclusive, because
+a gateway credential displaces the claude.ai login.
+See [`@endo/claude-sandbox`'s README](../claude-sandbox/README.md) §
+"A deliberate, time-boxed exception".
+Nothing in that exception may be reused for the Codex hosted path.
+
 The daemon secret manager (`@secrets`) now supplies the *storage* half of this
 requirement: durable envelope-encrypted bytes, a delegable read capability
 separate from the administration facet, replacement without re-delegation,

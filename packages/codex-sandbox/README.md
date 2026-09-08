@@ -35,9 +35,13 @@ When the CLI is authenticated with ChatGPT it operates against the eligible
 ChatGPT subscription; when authenticated with an API key it uses API billing.
 This package deliberately exposes neither authentication nor account/session
 administration to the sandboxed agent.
-Hosted subscription deployment remains disabled until an external credential
-broker can support the pinned stock CLI without placing reusable credentials in
-the slice; see [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md).
+Hosted subscription deployment is disabled because no vendor-supported
+configuration lets a broker supply the subscription credential: Codex's LLM-proxy
+mode authenticates with the CLI's own `~/.codex/auth.json`, so pointing it at a
+broker would put the reusable token in the slice.
+The broker does support a refreshing `oauth` credential it holds itself, which
+is not a subscription; see [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) for
+the finding and its sources.
 
 `send()` returns an Endo reader of provider-neutral events:
 

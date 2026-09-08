@@ -83,6 +83,9 @@ Do not convert a skipped test or an expected host refusal into a pass.
    descendant, and escape attempt cannot.
 2. Verify the runtime's effective environment and state contain no provider
    bearer, proxy credential, shared home, or login/refresh material.
+   The default verifier's probe asserts the session's `CODEX_HOME` holds no
+   `auth.json` and reports `codexHomeCredentials: 'absent'`; confirm that the
+   assertion actually ran rather than that the field is present.
    Exercise read-only control state through symlink, hardlink, rename, subprocess,
    and configuration override attempts.
 3. Run `yarn workspace @endo/sandbox test:drivers` and
@@ -96,6 +99,10 @@ Do not convert a skipped test or an expected host refusal into a pass.
 4. Exercise broker expiration, revocation during an active response, secret
    replacement, model/route denial, quotas, redirects, malformed HTTP, listener
    crash, and audit redaction over the real listener and provider protocol.
+   For `authMode: 'oauth'`, also exercise a token expiring mid-session, an
+   upstream rejecting the credential mid-session, a refresh endpoint that fails
+   or returns another account, and concurrent turns arriving on one expiring
+   credential.
 5. Exercise failed interrupt, failed reap, restart/orphan recovery, and retry of
    failed provisioning cleanup without reusing a poisoned backend or replaying
    an unacknowledged prompt.
@@ -107,14 +114,31 @@ Codex's documented external ChatGPT authentication gives an access token to
 app-server; that alone does not satisfy this contract's token-free slice.
 Claude's documented gateway flow distinguishes gateway credentials from a
 saved subscription login.
-Neither establishes this project's token-free subscription broker for the pinned
-runtime without further implementation and live verification.
-Subscription modes therefore remain unavailable.
+Subscription modes remain unavailable, and as of 2026-09-08 that is a sourced
+finding rather than pending implementation: neither vendor documents a
+configuration in which a proxy or gateway supplies the subscription credential
+itself.
+Codex's LLM-proxy mode (`requires_openai_auth = true`) authenticates the proxied
+request with the CLI's own `~/.codex/auth.json`, and a Claude Code gateway
+credential "replaces the subscription login for that session".
+See [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) § "Finding" for the quoted
+text and the two specific configurations a future re-check should look for.
 
-Sources checked 2026-09-07:
+The broker's own OAuth lifecycle — expiry, single-flight refresh, rotation, one
+bounded refresh-and-retry, account binding — is implemented and covered by unit
+tests against a controlled upstream.
+It is `authMode: 'oauth'`, admitted only when a refresh authority and a
+rotate-only capability are both provisioned, and it makes no claim about any
+subscription.
+Live acceptance for it is gate 4 below.
+
+Sources checked 2026-09-08 (superseding the 2026-09-07 pass):
 [Codex authentication](https://learn.chatgpt.com/docs/auth),
+[Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference),
 [Codex app-server](https://learn.chatgpt.com/docs/app-server),
-[Claude gateways](https://code.claude.com/docs/en/llm-gateway), and
+[Claude gateways](https://code.claude.com/docs/en/llm-gateway),
+[Claude gateway compatibility](https://code.claude.com/docs/en/llm-gateway-protocol),
+[Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway), and
 [Claude Bash sandbox scope](https://code.claude.com/docs/en/sandboxing).
 
 Floot no longer advertises or revives the legacy `claude-cli` route, which
@@ -126,6 +150,11 @@ A Claude implementation must be supplied as a hosted backend; adding
 credential inside its slice and keeps a `private` network profile, so it
 satisfies Floot's hosted seam and tool isolation without satisfying this
 contract's token-free slice.
+That divergence is now a recorded, time-boxed exception with a review date
+rather than an unremarked inconsistency, because for Claude Code the two
+postures are mutually exclusive: a gateway credential ends the subscription.
+See [`@endo/claude-sandbox`'s README](../claude-sandbox/README.md) §
+"A deliberate, time-boxed exception".
 
 ## Non-blocking scope
 
