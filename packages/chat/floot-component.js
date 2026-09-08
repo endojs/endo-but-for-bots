@@ -2135,7 +2135,12 @@ export const flootComponent = (
   $mount.style.height = '100%';
   $parent.appendChild($mount);
 
-  renderConfined(h(FlootApp, { controller }), $mount);
+  // `target` is opted in so a published capability URL in a reply opens in a
+  // new tab as the tool promises: the renderer admits only `_self`/`_blank`
+  // for it and forces `rel="noopener noreferrer"`, so nothing else widens.
+  renderConfined(h(FlootApp, { controller }), $mount, {
+    allowedAttrs: ['target'],
+  });
 
   // Sticky-bottom transcript scrolling lives HOST-side: the confined view cannot
   // touch DOM nodes (the renderer strips refs), so the host owns `$mount` and

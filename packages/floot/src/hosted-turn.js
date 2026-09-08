@@ -15,6 +15,61 @@ export const UNREPORTED_TOOL_RESULT =
   'The backend completed the turn without reporting a result for this tool call.';
 harden(UNREPORTED_TOOL_RESULT);
 
+// Stands in for the result of a tool the turn was stopped, or failed, before it
+// reported on. Persisted when a transcript backend's partial turn is mirrored,
+// so the record says why the result is missing.
+export const UNSETTLED_TOOL_RESULT =
+  'The turn ended before this tool call reported a result.';
+harden(UNSETTLED_TOOL_RESULT);
+
+/**
+ * @typedef {object} HostedTurnPartial
+ * @property {boolean} delivered - whether the backend took the prompt at all:
+ *   anything it emitted before a terminal means it did; a spawn refusal or a
+ *   stop before dispatch arrives as a leading abort.
+ * @property {string} finalContent - the reply text that streamed.
+ * @property {Array<{ id: string, name: string, args: string, result: string | null }>} toolCalls
+ *   - the tool activity that streamed (`result` is null for a call the turn
+ *   ended before settling).
+ */
+
+/**
+ * Fail a turn with what the backend already did with it. A backend whose
+ * continuity is its own transcript keeps the delivered prompt and whatever
+ * streamed before the failure, so the caller mirrors those instead of dropping
+ * a turn the model still remembers.
+ *
+ * @param {string} reason
+ * @param {HostedTurnPartial} partial
+ * @returns {Error}
+ */
+const failTurn = (reason, partial) => {
+  const error = Error(reason);
+  Object.defineProperty(error, 'hostedTurn', {
+    value: harden({
+      delivered: partial.delivered,
+      finalContent: partial.finalContent,
+      toolCalls: partial.toolCalls.map(call => harden({ ...call })),
+    }),
+    enumerable: false,
+  });
+  return error;
+};
+
+/**
+ * What a failed hosted turn had already done, when the error came from
+ * `runHostedTurn`; `undefined` for any other error (the prompt never reached
+ * the backend).
+ *
+ * @param {unknown} error
+ * @returns {HostedTurnPartial | undefined}
+ */
+export const hostedTurnPartialOf = error =>
+  error && typeof error === 'object' && 'hostedTurn' in error
+    ? /** @type {any} */ (error).hostedTurn
+    : undefined;
+harden(hostedTurnPartialOf);
+
 /**
  * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string }} options
  */
@@ -29,7 +84,12 @@ export const runHostedTurn = async ({
   acknowledgedCheckpoint,
 }) => {
   if (signal?.aborted) {
-    return harden({ finalContent: '', usage: undefined, toolCalls: [] });
+    return harden({
+      delivered: false,
+      finalContent: '',
+      usage: undefined,
+      toolCalls: [],
+    });
   }
   /** @type {ReturnType<typeof iterateReader> | undefined} */
   let iterator;
@@ -73,6 +133,7 @@ export const runHostedTurn = async ({
     cancellationP.then(resolveAbort, rejectAbort);
   };
   if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  let delivered = false;
   let finalContent = '';
   let checkpoint;
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
@@ -98,7 +159,12 @@ export const runHostedTurn = async ({
         ])
       : { reader: await readerP };
     if ('aborted' in outcome) {
-      return harden({ finalContent: '', usage: undefined, toolCalls: [] });
+      return harden({
+        delivered: false,
+        finalContent: '',
+        usage: undefined,
+        toolCalls: [],
+      });
     }
     iterator = iterateReader(/** @type {any} */ (outcome.reader));
     for (;;) {
@@ -112,6 +178,9 @@ export const runHostedTurn = async ({
       if ('aborted' in nextOutcome) break;
       if (nextOutcome.result.done) break;
       const event = /** @type {any} */ (nextOutcome.result.value);
+      // Anything the backend emits before a terminal means it took the prompt;
+      // a spawn refusal or a stop before dispatch arrives as a leading abort.
+      if (event?.type !== 'abort') delivered = true;
       switch (event?.type) {
         case 'phase':
           writer.setPhase(`${event.phase || 'thinking'}`);
@@ -161,7 +230,11 @@ export const runHostedTurn = async ({
           usage.outputTokens += Number(event.outputTokens) || 0;
           break;
         case 'abort':
-          throw Error(`${event.reason || 'hosted turn aborted'}`);
+          throw failTurn(`${event.reason || 'hosted turn aborted'}`, {
+            delivered,
+            finalContent,
+            toolCalls,
+          });
         case 'end':
           checkpoint =
             typeof event.checkpoint === 'string' && event.checkpoint !== ''
@@ -182,6 +255,7 @@ export const runHostedTurn = async ({
             }
           }
           return harden({
+            delivered,
             finalContent,
             usage,
             toolCalls: toolCalls.map(call => harden({ ...call })),
@@ -197,9 +271,15 @@ export const runHostedTurn = async ({
     // A failed barrier takes precedence so the session can quarantine itself.
     if (cancellationP) await cancellationP;
   }
-  if (!signal?.aborted)
-    throw Error('hosted turn ended without a terminal event');
+  if (!signal?.aborted) {
+    throw failTurn('hosted turn ended without a terminal event', {
+      delivered,
+      finalContent,
+      toolCalls,
+    });
+  }
   return harden({
+    delivered,
     finalContent,
     usage,
     toolCalls: toolCalls.map(call => harden({ ...call })),

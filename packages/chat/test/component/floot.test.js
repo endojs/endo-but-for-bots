@@ -393,6 +393,33 @@ test.serial(
   },
 );
 
+test.serial('a URL in a reply renders as a new-tab link', async t => {
+  const { parent, turns, send, setHistoryReader } = await setup(t);
+  await send('publish it');
+  await waitFor(() => turns.length === 1);
+  setHistoryReader(() =>
+    Promise.resolve(
+      harden([
+        { role: 'user', content: 'publish it' },
+        {
+          role: 'assistant',
+          content: 'Published at http://127.0.0.1:8080/abc/ (open it).',
+        },
+      ]),
+    ),
+  );
+  turns[0].channel.push(harden({ type: 'end' }));
+  await waitFor(() => parent.querySelector('a.floot-link'));
+  const link = /** @type {HTMLAnchorElement} */ (
+    parent.querySelector('a.floot-link')
+  );
+  t.is(link.getAttribute('href'), 'http://127.0.0.1:8080/abc/');
+  // The sanitizing renderer drops `target` unless the host opts it in; a
+  // published capability URL must open in a new tab, as the tool promises.
+  t.is(link.getAttribute('target'), '_blank');
+  t.regex(link.getAttribute('rel') || '', /noopener/);
+});
+
 test.serial(
   'session creation failure does not poison later submissions',
   async t => {

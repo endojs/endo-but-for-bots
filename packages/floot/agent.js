@@ -46,7 +46,12 @@ import {
 
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
-import { runHostedTurn } from './src/hosted-turn.js';
+import {
+  UNSETTLED_TOOL_RESULT,
+  hostedTurnPartialOf,
+  runHostedTurn,
+} from './src/hosted-turn.js';
+import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
@@ -260,7 +265,13 @@ capability. Use it via exec:
 - To stage one desired row: \`const result = await E(workspace).status(); const row = result.entries.find(({ path }) => path === "src/main.js"); if (!row) throw new Error("row not found"); await E(workspace).add([row.path])\`.
   Then \`E(workspace).commit(message)\` records them.
 Build what the user asks for in the workspace, committing as you reach working
-states. Speak short, plain summaries of what you did — never read code aloud.`;
+states. Speak short, plain summaries of what you did — never read code aloud.
+
+To share your work, call the publishWorkspace tool when it is available. It
+serves the current workspace as a static website and returns an unguessable
+capability URL that opens in a new browser tab (great for an index.html). Re-run
+publishWorkspace after you change files to refresh what it serves, and give the
+user the URL it returns.`;
 harden(newProjectSystemPrompt);
 
 // "Full control" persona: the base voice persona plus a reference to the daemon
@@ -874,6 +885,12 @@ const provisionPresetObjects = async (
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @param {Map<string, any>} [options.extraTools] - Session-specific tools
  *   the factory built (see `makeFlootToolRegistry`).
+ * @param {string} [options.hostedContinuity] - The hosted backend's declared
+ *   continuity. A `'transcript'` backend keeps its own record of every
+ *   delivered prompt and streamed reply (a CLI resuming its transcript), so an
+ *   aborted or failed turn is mirrored into the tree rather than dropped —
+ *   otherwise the history the UI shows and the context the model resumes with
+ *   drift apart. Other backends reconcile through checkpoints instead.
  * @returns {Promise<{
  *   converse: (
  *     input: string | object,
@@ -900,8 +917,10 @@ export const makeStreamingAgent = async (
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
     extraTools,
+    hostedContinuity,
   } = {},
 ) => {
+  const retainsDeliveredTurns = hostedContinuity === 'transcript';
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   let hostedClient = /** @type {any} */ (providerConfig).hostedClient;
   const provideHostedClient = /** @type {any} */ (providerConfig)
@@ -1177,6 +1196,41 @@ export const makeStreamingAgent = async (
       writer.end();
     };
 
+    // Mirror a turn the backend's own transcript already retains — the
+    // delivered prompt, and whatever tool activity and reply streamed before a
+    // stop or a failure — without the usage accounting or reply traffic of a
+    // completed turn. Nothing to add (mail already recorded, nothing streamed)
+    // leaves the branch where it was.
+    const commitDeliveredTurn = async (replyText, toolCalls = []) => {
+      const messages = receivedMail ? [] : [...inputMessages];
+      if (toolCalls.length > 0) {
+        messages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: toolCalls.map(call => ({
+            id: call.id,
+            type: 'function',
+            function: { name: call.name, arguments: call.args },
+          })),
+        });
+        messages.push(
+          ...toolCalls.map(call => ({
+            role: 'tool',
+            tool_call_id: call.id,
+            // A call the turn ended before settling: say so, rather than
+            // record an empty result that reads as a tool still running.
+            content: call.result ?? UNSETTLED_TOOL_RESULT,
+          })),
+        );
+      }
+      if (replyText) {
+        messages.push({ role: 'assistant', content: replyText });
+      }
+      if (messages.length === 0) return;
+      const node = await tree.addNode(baseLeafId, messages);
+      cachedLeaf = node.id;
+    };
+
     if (claudeClient) {
       // Claude-CLI turn: one send to the ClaudeClient capability. The CLI runs
       // its own agentic loop in the sandbox (tools, continuity via the
@@ -1193,20 +1247,57 @@ export const makeStreamingAgent = async (
 
     if (hostedClient) {
       writer.setPhase('thinking');
+      let hosted;
+      try {
+        hosted = await runHostedTurn({
+          client: hostedClient,
+          text,
+          writer,
+          signal,
+          systemPrompt: effectivePrompt,
+          acknowledgedCheckpoint,
+        });
+      } catch (error) {
+        // A transcript backend keeps a delivered prompt and whatever streamed
+        // before the failure (an error_max_turns turn retains every tool
+        // round), so mirror them — otherwise the next history drops messages
+        // the model still remembers. A prompt the backend never took (spawn
+        // refused, stopped before dispatch) is not mirrored: the transcript
+        // does not have it either.
+        const partial = hostedTurnPartialOf(error);
+        if (retainsDeliveredTurns && partial?.delivered) {
+          try {
+            await commitDeliveredTurn(partial.finalContent, partial.toolCalls);
+          } catch (commitError) {
+            // The turn's own failure is the one to surface; a mirroring
+            // failure must not mask it.
+            console.error(
+              '[floot] could not mirror the failed hosted turn:',
+              commitError instanceof Error
+                ? commitError.message
+                : String(commitError),
+            );
+          }
+        }
+        throw error;
+      }
       const {
+        delivered,
         finalContent: replyText,
         usage: turnUsage,
         toolCalls,
         checkpoint,
-      } = await runHostedTurn({
-        client: hostedClient,
-        text,
-        writer,
-        signal,
-        systemPrompt: effectivePrompt,
-        acknowledgedCheckpoint,
-      });
-      if (signal?.aborted) return;
+      } = hosted;
+      if (signal?.aborted) {
+        if (retainsDeliveredTurns && delivered) {
+          // Stopped mid-turn. The backend's transcript retains the prompt and
+          // whatever streamed before the kill; mirror that partial turn into
+          // the tree instead of dropping it. A stop that landed before the
+          // prompt was dispatched leaves nothing to mirror.
+          await commitDeliveredTurn(replyText, toolCalls);
+        }
+        return;
+      }
       await commitExternalTurn(replyText, turnUsage, checkpoint, toolCalls);
       return;
     }
@@ -2023,6 +2114,49 @@ export const composeSessionSystemPrompt = ({
 };
 harden(composeSessionSystemPrompt);
 
+/**
+ * The host directory backing a session's git workspace, so a hosted backend
+ * that runs its tools in a container can mount that exact worktree rather than
+ * a second, unrelated filesystem. Resolves to `undefined` when the session has
+ * no git workspace or its path cannot be resolved; the backend then falls back
+ * to an isolated workspace of its own.
+ *
+ * The path never reaches the session guest or the UI: it is handed only to the
+ * operator-endowed backend factory, which already holds host authority.
+ *
+ * @param {any} host - the factory's own host powers
+ * @param {any} sessionGuest
+ * @param {string} [petName] - the guest's pet name for its workspace, as the
+ *   preset binds it.
+ * @returns {Promise<string | undefined>}
+ */
+export const resolveSharedWorkspaceHostPath = async (
+  host,
+  sessionGuest,
+  petName = 'workspace',
+) => {
+  try {
+    if (!(await E(sessionGuest).has(petName))) return undefined;
+    const workspace = await E(sessionGuest).lookup(petName);
+    // eslint-disable-next-line no-underscore-dangle
+    const methods = await E(workspace).__getMethodNames__();
+    if (!methods.includes('worktree')) return undefined;
+    const worktree = await E(workspace).worktree();
+    return `${await E(host).provideHostPath(worktree)}`;
+  } catch (error) {
+    // Loud, not fatal: the session still opens, but its CLI is then
+    // provisioned over a private directory and keeps it (the provisioner
+    // binds a workspace once), so the operator has to hear why sharing
+    // failed rather than find the publisher serving an empty tree.
+    console.error(
+      `[floot-factory] could not resolve the shared host path of workspace "${petName}":`,
+      error instanceof Error ? error.message : String(error),
+    );
+    return undefined;
+  }
+};
+harden(resolveSharedWorkspaceHostPath);
+
 export const make = (hostPowers, _context, { env } = {}) => {
   /** @type {any} */
   const powers = hostPowers;
@@ -2163,6 +2297,71 @@ export const make = (hostPowers, _context, { env } = {}) => {
       });
     }
     return accountOracleP;
+  };
+
+  // The shared static asset server, an operator-endowed capability the hosted
+  // setup binds into this factory's profile so a new-project session can
+  // publish its workspace. Resolved on every publish, never cached: the
+  // binding runs late in ENDO_EXTRA (after the factory itself is provisioned
+  // or revived), so a lookup can legitimately miss on a fresh boot, and each
+  // start re-mints the server, so a presence held across that would be dead.
+  const assetServerName = env?.FLOOT_ASSET_SERVER || 'asset-server';
+  const getAssetServer = async () => {
+    try {
+      if (await E(powers).has(assetServerName)) {
+        const assetServer = await E(powers).lookup(assetServerName);
+        return assetServer;
+      }
+    } catch {
+      // Not resolvable (yet); the next publish looks again.
+    }
+    return undefined;
+  };
+
+  // Per-session bounded workspace publishers. Held so the served mount can be
+  // revoked when the session is rebuilt or deleted.
+  /** @type {Map<string, { revoke: () => Promise<void> }>} */
+  const publishers = new Map();
+  const stopPublisher = async id => {
+    const publisher = publishers.get(id);
+    if (publisher) {
+      publishers.delete(id);
+      await publisher.revoke().catch(() => {});
+    }
+  };
+  /**
+   * The session-scoped extra tools for a session: a bounded workspace
+   * publisher when the preset provisions a git workspace. Present whenever the
+   * preset has that workspace — not only while an asset server happens to be
+   * bound — because the tool set's identity is pinned into a hosted backend's
+   * thread, and a tool that came and went with the server's availability
+   * would rotate that thread (and lose the model's conversation) on every
+   * flip. The same map backs the API tool loop and the pinned tool set.
+   *
+   * @param {string} id
+   * @param {any} sessionGuest
+   * @param {{ objects: Array<{ kind: string, petName: string }> }} preset
+   * @returns {Promise<Map<string, any>>}
+   */
+  const buildExtraTools = async (id, sessionGuest, preset) => {
+    // A fresh agent replaces the tool instance, so drop the prior publisher
+    // (and its served mount) first.
+    await stopPublisher(id);
+    const workspaceObject = preset.objects.find(
+      object => object.kind === 'git-workspace',
+    );
+    if (!workspaceObject) return new Map();
+    const publishTool = makePublishTool({
+      getAssetServer,
+      getWorkspace: async () => {
+        if (await E(sessionGuest).has(workspaceObject.petName)) {
+          return E(sessionGuest).lookup(workspaceObject.petName);
+        }
+        return undefined;
+      },
+    });
+    publishers.set(id, { revoke: publishTool.revoke });
+    return new Map([['publishWorkspace', publishTool]]);
   };
 
   /**
@@ -2680,28 +2879,61 @@ export const make = (hostPowers, _context, { env } = {}) => {
           preset.objects,
           codePath,
         );
+        // Session-scoped extra tools (the bounded workspace publisher for a
+        // session with a git workspace). Threaded into the tool registry, so
+        // the API tool loop and a hosted backend's pinned tool set see the
+        // same authority. Best-effort: a session opens without them rather
+        // than failing to open at all.
+        /** @type {Map<string, any>} */
+        let extraTools = new Map();
+        try {
+          extraTools = await buildExtraTools(id, sessionGuest, preset);
+        } catch (error) {
+          console.error(
+            `[floot-factory] could not build extra tools for session ${id}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         // Build (or reuse) the backend for this session's pinned model; an
         // unpinned session follows the factory's configured default.
         // Persisted legacy CLI sessions fail instead of bypassing admission.
         let agentConfig;
-        /** @type {Map<string, any> | undefined} */
-        let extraTools;
+        /** @type {string | undefined} */
+        let hostedContinuity;
         if (entry?.backendId) {
           const backend = (await getHostedBackends()).get(entry.backendId);
           if (!backend) {
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
           }
+          hostedContinuity = backend.descriptor.continuity;
           // Runtime container-mount tools (designs/runtime-container-fs-mount.md):
           // let the session bind capabilities it holds into its sandbox
           // under /mnt/. Built before the tool catalog is pinned, so the
           // hosted thread's toolSetId covers them; armed below with the
           // adapter that turns the registrar's bind set into the backend
-          // session's declared attaches.
+          // session's declared attaches. They join the session-scoped tools
+          // already built above (the workspace publisher), which the registry
+          // refuses to let shadow a built-in.
           const mountKit = containerMountRegistrar.makeSessionKit({
             sessionId: id,
             sessionGuest,
           });
-          extraTools = mountKit.tools;
+          for (const [name, tool] of mountKit.tools) {
+            extraTools.set(name, tool);
+          }
+          // A backend that runs its tools in a container can mount the
+          // session's git worktree at its workspace, so its file tools, the
+          // guest's workspace cap, and the publisher all operate on one tree.
+          const workspaceObject = preset.objects.find(
+            object => object.kind === 'git-workspace',
+          );
+          const workspaceHostPath = workspaceObject
+            ? await resolveSharedWorkspaceHostPath(
+                host,
+                sessionGuest,
+                workspaceObject.petName,
+              )
+            : undefined;
           agentConfig = {
             provideHostedClient: async snapshot => {
               const toolSet = makeEndoToolSet(snapshot);
@@ -2713,6 +2945,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
                   model: entry.modelId || '',
                   reasoningEffort: entry.reasoningEffort || '',
                   systemPrompt: sessionPrompt,
+                  ...(workspaceHostPath ? { workspaceHostPath } : {}),
                 }),
                 getToolSet: () => toolSet,
                 dropOwnBinds: async () => {
@@ -2756,7 +2989,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sessionPrompt,
           harden({
             maxToolRounds,
-            ...(extraTools ? { extraTools } : {}),
+            ...(extraTools.size > 0 ? { extraTools } : {}),
+            ...(hostedContinuity ? { hostedContinuity } : {}),
             ...(sessionDepth < maxSubagentDepth
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
               : {}),
@@ -3005,6 +3239,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
         error instanceof Error ? error.message : String(error),
       );
     }
+    // Release any published workspace URL before the guest that owns the
+    // workspace goes.
+    await stopPublisher(id);
     const host = getHost();
     for (const name of [`session-${id}`, `session-agent-${id}`]) {
       try {

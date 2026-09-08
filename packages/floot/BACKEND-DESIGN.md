@@ -14,6 +14,17 @@ descriptor against that contract.
 Descriptors are projected to the exact five capability-free fields `id`,
 `title`, `kind`, `continuity`, and `toolOwnership`; backend-supplied metadata is
 never forwarded to the UI.
+`continuity` names how the backend carries a conversation between turns, which
+decides what Floot's own tree must retain:
+`explicit` (Floot supplies the whole history on every turn),
+`opaque` (the backend keeps the conversation and the tree is display-only),
+`opaque-reconciled` (as `opaque`, with per-turn checkpoints Floot acknowledges,
+so a stopped or failed turn is rolled back on both sides), and
+`transcript` (the backend's persisted transcript retains every delivered prompt
+and whatever streamed before a stop or a failure, so Floot mirrors those into
+the tree instead of dropping them).
+The validator in `@endo/hosted-agent` refuses any other value, so a typo on
+either side fails loudly instead of degrading to drop-on-stop.
 Each provider adapter translates its native model schema before the seam.
 `@endo/hosted-agent` then validates and projects one exact neutral DTO containing
 bounded `id`, `title`, and `description` strings, a `default` boolean, a
