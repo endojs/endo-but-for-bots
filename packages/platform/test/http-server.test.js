@@ -1,6 +1,5 @@
 // @ts-nocheck
-/* eslint-disable import/order, no-await-in-loop */
-/* global setTimeout, Buffer */
+/* eslint-disable no-await-in-loop */
 
 // Exercises the platform-agnostic HTTP server (`@endo/platform/http/server`)
 // over its Node backend (`@endo/platform/http/node`): lifecycle (start /
