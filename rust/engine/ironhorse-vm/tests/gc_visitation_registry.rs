@@ -380,6 +380,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("segment_iterator_identity", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %SegmentIterator.prototype%"),
     ("error_stack_accessor", &[Req::DocumentedOnly], "identity cache; the proto and both accessor functions are boot slots, and the installed pair is a property of the rooted %Error.prototype%"),
     ("this_captures", &[Req::DocumentedOnly], "non-owning property-slot indices; each property is owned by a closure environment reachable through its rooted arrow function"),
+    ("classes", &[Req::DocumentedOnly], "derived non-root membership; ClassMap removal/retention clears owner bits in both collectors before slot reuse"),
     // --- boundary-empty transient ---
     ("pending_new_target", &[Req::GcRoots], "armed by SUPER; rooted across non-throw halts, gated at quiescence, reset at run entry (F025)"),
     ("array_iterator_proxy_get_context", &[Req::DocumentedOnly], "installed only across one synchronous Proxy trap call, restored on success/throw, and rejected by is_quiescent if leaked"),
@@ -400,6 +401,10 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
         mentions(ty, "Slot")
             || mentions(ty, "SlotIndex")
             || mentions(ty, "ChunkOffset")
+            // These external wrappers own SlotIndex keys; their generic
+            // argument (ClassMap only) remains the value type checked below.
+            || mentions(ty, "ClassMap")
+            || mentions(ty, "ClassIndex")
             || bearing_types
                 .iter()
                 .any(|t| *t != "Interp" && mentions(ty, t))
@@ -478,7 +483,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
                     // asking whether anything slot-bearing remains.
                     let after_key = match ty.find("SlotIndex") {
                         Some(p) => &ty[p + "SlotIndex".len()..],
-                        None => ty,
+                        None => ty.strip_prefix("ClassMap<").unwrap_or(ty),
                     };
                     !is_bearing(after_key)
                 }
