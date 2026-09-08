@@ -51,8 +51,9 @@
 //!   both cleared/reset at the crank boundary (wave-6 W6-11/W6-6), so a
 //!   resumed twin's fresh defaults match.
 //! - `pending_new_target` — armed by `SUPER` for the construct about to
-//!   happen; consumed by the construct frame and disarmed on unwind
-//!   (wave-6 W6-15).
+//!   happen; consumed by the construct frame and disarmed on unwind.
+//!   Non-throw halts may retain it for inspection: it is a GC root, refuses
+//!   quiescence, and is reset when the next run abandons that activation (F025).
 //! - `direct_eval_hoist`, `eval_program_hoist`, `eval_direct`,
 //!   `active_segment`, `top_level_code` — the eval bridge's per-crank
 //!   registers, re-established at every run entry and save/restored around
@@ -1097,6 +1098,11 @@ mod tests {
             "last_crank_completed",
             // The Proxy-trap context, refused if leaked.
             "array_iterator_proxy_get_context",
+            // Hidden control latches may survive a halted activation (F025).
+            "pending_new_target",
+            "resume_status",
+            "eval_direct",
+            "direct_eval_hoist",
             // The in-flight thrown value.
             "exception",
             // The native-recursion budget in flight: every guarded entry
