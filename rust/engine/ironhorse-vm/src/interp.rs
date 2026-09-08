@@ -13640,6 +13640,22 @@ impl Interp {
         be16_to_units(&self.str_content(off))
     }
 
+    /// The single code unit at `index`, read straight out of the stored
+    /// UTF-16BE payload.
+    ///
+    /// O(1), and that is the point: reading one unit through [`Self::str_units`]
+    /// decodes and ALLOCATES the whole string first, so walking a String
+    /// wrapper's units one at a time was quadratic. At 70,000 units
+    /// `harden(new String('x'.repeat(70000)))` spent over 400 seconds for
+    /// ~18,000 computrons — work the meter cannot see, which is a denial of
+    /// service in a metered engine even though nothing is minted.
+    fn str_unit_at(&self, off: crate::value::ChunkOffset, index: u32) -> Option<u16> {
+        let content = self.str_content(off);
+        let bytes: &[u8] = &content;
+        let at = (index as usize).checked_mul(2)?;
+        Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
+    }
+
     /// The string value's code-unit length (`length`, O(1) — half the stored
     /// byte payload, no decode walk).
     #[inline]
@@ -53995,11 +54011,9 @@ impl Interp {
     /// (`fxStringGetProperty` → `fxNewChunk`), metered via
     /// [`Interp::new_string_units`].
     fn string_index_get(&mut self, off: crate::value::ChunkOffset, index: u32) -> Slot {
-        let units = self.str_units(off);
-        if let Some(&u) = units.get(index as usize) {
-            self.new_string_units(&[u])
-        } else {
-            Slot::undefined()
+        match self.str_unit_at(off, index) {
+            Some(unit) => self.new_string_units(&[unit]),
+            None => Slot::undefined(),
         }
     }
 
