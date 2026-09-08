@@ -1,18 +1,15 @@
 // @ts-check
 import test from '@endo/ses-ava/test.js';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
-import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
-import { makeOcapnHub } from '@endo/ocapn/hub';
-import { syrupCodec } from '@endo/ocapn/syrup';
-
-// Test fixtures need the private signed-descriptor codec to seed crash state.
-/* eslint-disable import/no-relative-packages */
 import {
   DescHandoffGiveSigEnvelopeCodec,
   makeHandoffGiveDescriptor,
   makeHandoffGiveSigEnvelope,
-} from '../../ocapn/src/codecs/descriptors.js';
-/* eslint-enable import/no-relative-packages */
+} from '@endo/ocapn';
+import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
+import { syrupCodec } from '@endo/ocapn/syrup';
+
+import { makeOcapnHub } from '../src/hub.js';
 import { makeDurableNetLayer } from '../src/durable-netlayer.js';
 
 /** @param {Uint8Array} bytes */

@@ -6,13 +6,13 @@ import { Fail, q } from '@endo/errors';
 import { E, Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
 import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
-import { makeOcapnHub } from '@endo/ocapn/hub';
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
   readOcapnHandshakeMessage,
   writeOcapnHandshakeMessage,
 } from '@endo/ocapn/operations';
 
+import { makeOcapnHub } from './hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { derivePipeResumption } from './pipe-network.js';
 import { isSessionToken } from './store-fs.js';
@@ -30,7 +30,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
 /**
  * The thixotrope daemon, hub edition: mostly a forwarding and
  * slot-rewriting hub, per design. The daemon is NOT an OCapN client —
- * the OCapN hub (`@endo/ocapn/hub`) routes every message between
+ * the Thixotrope hub (`src/hub.js`) routes every message between
  * sessions by structural transcoding over persisted c-list tables, so
  * the daemon reifies nothing that flows between workers and peers:
  * no presences, no promises, no subscriptions, no obligation rows.

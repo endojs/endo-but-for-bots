@@ -33,8 +33,7 @@
     "./codec-interface": {
       "types": "./src/codec-interface.d.ts"
     },
-    "./package.json": "./package.json",
-    "./hub": "./src/hub/hub.js"
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "exit 0",

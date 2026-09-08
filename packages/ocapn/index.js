@@ -27,3 +27,17 @@ export {
   swissnumFromBytes,
   swissnumToBytes,
 } from './src/client/util.js';
+
+// Protocol building blocks for consumers that route frames without reifying
+// their references as local objects or promises.
+export {
+  DescHandoffGiveSigEnvelopeCodec,
+  makeDescCodecs,
+  makeHandoffGiveDescriptor,
+  makeHandoffGiveSigEnvelope,
+  makeHandoffReceiveDescriptor,
+  makeHandoffReceiveSigEnvelope,
+} from './src/codecs/descriptors.js';
+export { makePassableCodecs } from './src/codecs/passable.js';
+export { getSelectorName, makeSelector } from './src/selector.js';
+export { makeSturdyRef } from './src/client/sturdyrefs.js';
