@@ -210,6 +210,7 @@ test.serial('a promise resolution crosses a daemon restart', async t => {
 });
 
 test.serial('an answer a resource owes rejects after a restart', async t => {
+  t.timeout(30_000);
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-ans-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
@@ -218,10 +219,20 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
   // pending state, hub rows persist, but a resource promise lives in
   // endpoint memory. The endpoint's records reject it at-most-once on
   // restart, so the guest sees a rejection, never a hang.
+  /** @type {() => void} */
+  let entered = () => {};
+  const gateEntered = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  let calls = 0;
   const resources = {
     gate: () =>
       Far('Gate', {
-        wait: () => new Promise(() => {}),
+        wait: () => {
+          calls += 1;
+          entered();
+          return new Promise(() => {});
+        },
       }),
   };
 
@@ -234,14 +245,16 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
     `
     (() => {
       let failure = null;
-      E(gate)
+      const failed = E(gate)
         .wait()
         .catch(reason => {
           failure = String((reason && reason.message) || reason);
+          return failure;
         });
       return Far('Waiter', {
         ping: () => 'pong',
         getFailure: () => failure,
+        waitForFailure: () => failed,
       });
     })()
     `,
@@ -255,6 +268,10 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
     client.makeSturdyRef(daemon1.location, secret),
   );
   t.is(await E(remoteWaiter).ping(), 'pong');
+  // A guest ping does not prove that a separate host-resource call arrived.
+  // Cross the actual host dispatch boundary before killing its pending answer.
+  await gateEntered;
+  t.is(calls, 1);
   t.is(await E(remoteWaiter).getFailure(), null, 'the wait is outstanding');
 
   // Crash, not clean shutdown: the resource promise dies with the
@@ -264,12 +281,10 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
   t.teardown(() => daemon2.shutdown());
 
   t.is(await E(remoteWaiter).ping(), 'pong', 'the session itself resumed');
-  /** @type {any} */
-  let failure = null;
-  for (let i = 0; i < 1000 && failure === null; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    failure = await E(remoteWaiter).getFailure();
-  }
+  // Await the guest's persisted listener instead of a machine-speed-dependent
+  // number of status polls. The explicit test timeout still bounds a lost break.
+  const failure = await E(remoteWaiter).waitForFailure();
+  t.is(calls, 1, 'recovery must not reissue the host-resource invocation');
   t.regex(
     String(failure),
     /aborted/,
