@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn the_write_stamp_is_past_the_side_table_addition() {
         assert!(
-            IRONHORSE_FORMAT_VERSION >= 10,
+            Version::current().format_version >= 10,
             "the generator atom is a format bump"
         );
         assert_eq!(Version::current().format_version, IRONHORSE_FORMAT_VERSION);

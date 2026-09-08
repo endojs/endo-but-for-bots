@@ -1,0 +1,340 @@
+{
+  "finding": "F065",
+  "increment": "Live eval and Function compilation charging; top-level daemon and worker wiring pending",
+  "before_revision": "861dedcd7",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "cpu": "Apple M3 Max",
+  "platform": "macOS 26.6.2 arm64",
+  "fixture_sha256": {
+    "rust/engine/ironhorse-262/tests/runtime_compile_bench.rs": "cca4e28b6c6d0d411a73f1b21a6ac1dacf947f080346519fb32bd0be6211b963"
+  },
+  "method": "Same-host serial release pair with identical fixture copied to archived baseline source, separate targets. Both built before the final pair; no concurrent agent builds or tests during timing. One warmup and five measured rounds per case, median. Outer source construction/compilation and realm creation/linking excluded. vm.run includes nested source preparation, compilation, relinking, execution, and outcome rendering. Exact successful outcomes checked after timing.",
+  "command": "CARGO_INCREMENTAL=0 cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-262 --test runtime_compile_bench -- --ignored --nocapture --test-threads=1",
+  "cost_tables": {
+    "before": "ironhorse-meter-1",
+    "after": "ironhorse-meter-2",
+    "compiler": "ironhorse-compile-meter-1"
+  },
+  "limitations": [
+    "Single-host medians do not establish statistical significance. No eval speedup claim; final eval at 4k is approximately unchanged and Function at 4k about10% slower.",
+    "Added compilation charges are deliberate policy changes; old/new raw charges must not be described as identical. A failed live source admission records its full reservation before the host rejects it, so the observed bill can exceed the host threshold. The explicit compiler raw allowance separately bounds its recorded capacity.",
+    "Refusal cases change outcomes: baseline 1k/10k complete, baseline 1M already aborts later; candidate refuses all. Timed source string allocation/decoding remain, so earlier refusal is not constant-time VM admission or same-work acceleration.",
+    "Byte identity is verified by the compiler corpus; runtime tests separately compare results and exact charge deltas, including nested eval and caught syntax errors.",
+    "All 1287 conformance tests pass in release. The copied-iterator-setter recursion test stack-overflows in debug on both baseline 861dedcd7 and candidate; retained evidence below.",
+    "Frozen meter-1 snapshots/stores fail closed. Schema-only tests use clearly labeled temporary current-cost derivatives, never an automatic production cost-table upgrade.",
+    "Top-level daemon and worker compilation remain open after this increment."
+  ],
+  "validation": {
+    "vm_tests": 539,
+    "snapshot_tests": 379,
+    "sqlite_tests": 115,
+    "release_conformance_tests": 1287,
+    "runtime_meter_tests": 7,
+    "clippy": "Rust 1.88 VM/snapshot/262 libs, new runtime tests, and worker pass; workflow Prettier passes",
+    "note": "VM full run passed all integration tests; its registry sorting unit failure was corrected, then all 162 library and 9 registry tests passed. Totals deduplicate registry tests. Snapshot golden re-pinned only for cost-table v2, with old hash reconstructed by changing just the marker."
+  },
+  "measurements": [
+    {
+      "shape": "eval",
+      "n": 100,
+      "before": {
+        "shape": "eval",
+        "n": 100,
+        "seconds": 0.000176417,
+        "raw": 27692888,
+        "computrons": 422,
+        "completed": true
+      },
+      "after": {
+        "shape": "eval",
+        "n": 100,
+        "seconds": 0.000185959,
+        "raw": 1509855064,
+        "computrons": 23038,
+        "completed": true
+      },
+      "after_over_before_time": 1.0540877579825074,
+      "added_raw": 1482162176
+    },
+    {
+      "shape": "eval",
+      "n": 1000,
+      "before": {
+        "shape": "eval",
+        "n": 1000,
+        "seconds": 0.00172625,
+        "raw": 263634192,
+        "computrons": 4022,
+        "completed": true
+      },
+      "after": {
+        "shape": "eval",
+        "n": 1000,
+        "seconds": 0.001514667,
+        "raw": 15016836368,
+        "computrons": 229138,
+        "completed": true
+      },
+      "after_over_before_time": 0.8774320057929037,
+      "added_raw": 14753202176
+    },
+    {
+      "shape": "eval",
+      "n": 4000,
+      "before": {
+        "shape": "eval",
+        "n": 4000,
+        "seconds": 0.006340875,
+        "raw": 1050105192,
+        "computrons": 16023,
+        "completed": true
+      },
+      "after": {
+        "shape": "eval",
+        "n": 4000,
+        "seconds": 0.006267666,
+        "raw": 60040107368,
+        "computrons": 916139,
+        "completed": true
+      },
+      "after_over_before_time": 0.9884544325507126,
+      "added_raw": 58990002176
+    },
+    {
+      "shape": "function",
+      "n": 100,
+      "before": {
+        "shape": "function",
+        "n": 100,
+        "seconds": 0.000186708,
+        "raw": 15818536,
+        "computrons": 241,
+        "completed": true
+      },
+      "after": {
+        "shape": "function",
+        "n": 100,
+        "seconds": 0.000176,
+        "raw": 885153576,
+        "computrons": 13506,
+        "completed": true
+      },
+      "after_over_before_time": 0.9426484135655676,
+      "added_raw": 869335040
+    },
+    {
+      "shape": "function",
+      "n": 1000,
+      "before": {
+        "shape": "function",
+        "n": 1000,
+        "seconds": 0.001307,
+        "raw": 133801376,
+        "computrons": 2041,
+        "completed": true
+      },
+      "after": {
+        "shape": "function",
+        "n": 1000,
+        "seconds": 0.00139325,
+        "raw": 8552883616,
+        "computrons": 130506,
+        "completed": true
+      },
+      "after_over_before_time": 1.0659908186687068,
+      "added_raw": 8419082240
+    },
+    {
+      "shape": "function",
+      "n": 4000,
+      "before": {
+        "shape": "function",
+        "n": 4000,
+        "seconds": 0.005100125,
+        "raw": 527077376,
+        "computrons": 8042,
+        "completed": true
+      },
+      "after": {
+        "shape": "function",
+        "n": 4000,
+        "seconds": 0.005613375,
+        "raw": 34111983616,
+        "computrons": 520507,
+        "completed": true
+      },
+      "after_over_before_time": 1.1006347883630305,
+      "added_raw": 33584906240
+    },
+    {
+      "shape": "refusal",
+      "n": 1000,
+      "before": {
+        "shape": "refusal",
+        "n": 1000,
+        "seconds": 4.1167e-05,
+        "raw": 1478192,
+        "computrons": 22,
+        "completed": true
+      },
+      "after": {
+        "shape": "refusal",
+        "n": 1000,
+        "seconds": 3.417e-06,
+        "raw": 66668824,
+        "computrons": 1017,
+        "completed": false
+      },
+      "after_over_before_time": 0.08300337649087862,
+      "added_raw": 65190632
+    },
+    {
+      "shape": "refusal",
+      "n": 10000,
+      "before": {
+        "shape": "refusal",
+        "n": 10000,
+        "seconds": 8.3291e-05,
+        "raw": 1487192,
+        "computrons": 22,
+        "completed": true
+      },
+      "after": {
+        "shape": "refusal",
+        "n": 10000,
+        "seconds": 2.5292e-05,
+        "raw": 656501824,
+        "computrons": 10017,
+        "completed": false
+      },
+      "after_over_before_time": 0.30365825839526484,
+      "added_raw": 655014632
+    },
+    {
+      "shape": "refusal",
+      "n": 1000000,
+      "before": {
+        "shape": "refusal",
+        "n": 1000000,
+        "seconds": 0.005866375,
+        "raw": 2346120,
+        "computrons": 35,
+        "completed": false
+      },
+      "after": {
+        "shape": "refusal",
+        "n": 1000000,
+        "seconds": 0.002563542,
+        "raw": 65538131824,
+        "computrons": 1000032,
+        "completed": false
+      },
+      "after_over_before_time": 0.43698911167458604,
+      "added_raw": 65535785704
+    }
+  ],
+  "logs": {
+    "initial_before": [
+      "warning: xs-oracle@0.0.1: /Users/xyz/Development/endo2/rust/engine/xs-oracle/../../../rust/endo/xsnap/xsnap-platform.c:94:1: warning: missing field 'signature' initializer [-Wmissing-field-initializers]",
+      "warning: xs-oracle@0.0.1:    94 | };",
+      "warning: xs-oracle@0.0.1:       | ^",
+      "warning: xs-oracle@0.0.1: 1 warning generated.",
+      "    Finished `release` profile [optimized] target(s) in 0.02s",
+      "     Running tests/runtime_compile_bench.rs (rust/engine/target/release/deps/runtime_compile_bench-0ab9968cc6859d0d)",
+      "",
+      "running 1 test",
+      "test runtime_compilation_cost ... RUNTIME_COMPILE shape=eval n=100 seconds=0.000164875 raw=27692888 completed=true",
+      "RUNTIME_COMPILE shape=eval n=1000 seconds=0.001322709 raw=263634192 completed=true",
+      "RUNTIME_COMPILE shape=eval n=4000 seconds=0.005283583 raw=1050105192 completed=true",
+      "RUNTIME_COMPILE shape=function n=100 seconds=0.000159250 raw=15818536 completed=true",
+      "RUNTIME_COMPILE shape=function n=1000 seconds=0.001234625 raw=133801376 completed=true",
+      "RUNTIME_COMPILE shape=function n=4000 seconds=0.004939458 raw=527077376 completed=true",
+      "RUNTIME_COMPILE shape=refusal n=1000 seconds=0.000037041 raw=1478192 completed=true",
+      "RUNTIME_COMPILE shape=refusal n=10000 seconds=0.000083750 raw=1487192 completed=true",
+      "RUNTIME_COMPILE shape=refusal n=1000000 seconds=0.005537750 raw=2346120 completed=false",
+      "ok",
+      "",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+      ""
+    ],
+    "final_before": [
+      "warning: xs-oracle@0.0.1: /tmp/f065-runtime-baseline/rust/engine/xs-oracle/../../../rust/endo/xsnap/xsnap-platform.c:94:1: warning: missing field 'signature' initializer [-Wmissing-field-initializers]",
+      "warning: xs-oracle@0.0.1:    94 | };",
+      "warning: xs-oracle@0.0.1:       | ^",
+      "warning: xs-oracle@0.0.1: 1 warning generated.",
+      "    Finished `release` profile [optimized] target(s) in 0.05s",
+      "     Running tests/runtime_compile_bench.rs (/tmp/f065-runtime-baseline/rust/engine/target/release/deps/runtime_compile_bench-0ab9968cc6859d0d)",
+      "",
+      "running 1 test",
+      "test runtime_compilation_cost ... RUNTIME_COMPILE shape=eval n=100 seconds=0.000176417 raw=27692888 completed=true",
+      "RUNTIME_COMPILE shape=eval n=1000 seconds=0.001726250 raw=263634192 completed=true",
+      "RUNTIME_COMPILE shape=eval n=4000 seconds=0.006340875 raw=1050105192 completed=true",
+      "RUNTIME_COMPILE shape=function n=100 seconds=0.000186708 raw=15818536 completed=true",
+      "RUNTIME_COMPILE shape=function n=1000 seconds=0.001307000 raw=133801376 completed=true",
+      "RUNTIME_COMPILE shape=function n=4000 seconds=0.005100125 raw=527077376 completed=true",
+      "RUNTIME_COMPILE shape=refusal n=1000 seconds=0.000041167 raw=1478192 completed=true",
+      "RUNTIME_COMPILE shape=refusal n=10000 seconds=0.000083291 raw=1487192 completed=true",
+      "RUNTIME_COMPILE shape=refusal n=1000000 seconds=0.005866375 raw=2346120 completed=false",
+      "ok",
+      "",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+      ""
+    ],
+    "final_after": [
+      "warning: xs-oracle@0.0.1: /Users/xyz/Development/endo2/rust/engine/xs-oracle/../../../rust/endo/xsnap/xsnap-platform.c:94:1: warning: missing field 'signature' initializer [-Wmissing-field-initializers]",
+      "warning: xs-oracle@0.0.1:    94 | };",
+      "warning: xs-oracle@0.0.1:       | ^",
+      "warning: xs-oracle@0.0.1: 1 warning generated.",
+      "    Finished `release` profile [optimized] target(s) in 0.02s",
+      "     Running tests/runtime_compile_bench.rs (rust/engine/target/release/deps/runtime_compile_bench-0ab9968cc6859d0d)",
+      "",
+      "running 1 test",
+      "test runtime_compilation_cost ... RUNTIME_COMPILE shape=eval n=100 seconds=0.000185959 raw=1509855064 completed=true",
+      "RUNTIME_COMPILE shape=eval n=1000 seconds=0.001514667 raw=15016836368 completed=true",
+      "RUNTIME_COMPILE shape=eval n=4000 seconds=0.006267666 raw=60040107368 completed=true",
+      "RUNTIME_COMPILE shape=function n=100 seconds=0.000176000 raw=885153576 completed=true",
+      "RUNTIME_COMPILE shape=function n=1000 seconds=0.001393250 raw=8552883616 completed=true",
+      "RUNTIME_COMPILE shape=function n=4000 seconds=0.005613375 raw=34111983616 completed=true",
+      "RUNTIME_COMPILE shape=refusal n=1000 seconds=0.000003417 raw=66668824 completed=false",
+      "RUNTIME_COMPILE shape=refusal n=10000 seconds=0.000025292 raw=656501824 completed=false",
+      "RUNTIME_COMPILE shape=refusal n=1000000 seconds=0.002563542 raw=65538131824 completed=false",
+      "ok",
+      "",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+      ""
+    ],
+    "baseline_debug_stack_failure": [
+      "warning: xs-oracle@0.0.1:       | ^",
+      "warning: xs-oracle@0.0.1: 1 warning generated.",
+      "   Compiling ironhorse-262 v0.0.1 (/tmp/f065-runtime-baseline/rust/engine/ironhorse-262)",
+      "    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.52s",
+      "     Running tests/crash_class_defects.rs (/tmp/f065-runtime-baseline/rust/engine/target/debug/deps/crash_class_defects-2377843b7c6558a5)",
+      "",
+      "running 1 test",
+      "",
+      "thread 'copied_iterator_setter_halts_instead_of_aborting_the_host' (25242078) has overflowed its stack",
+      "fatal runtime error: stack overflow, aborting",
+      "error: test failed, to rerun pass `-p ironhorse-262 --test crash_class_defects`",
+      "",
+      "Caused by:",
+      "  process didn't exit successfully: `/tmp/f065-runtime-baseline/rust/engine/target/debug/deps/crash_class_defects-2377843b7c6558a5 copied_iterator_setter_halts_instead_of_aborting_the_host --exact` (signal: 6, SIGABRT: process abort signal)"
+    ],
+    "candidate_debug_stack_failure": [
+      "test generated_cases_reproduce_corpus_coverage ... ok",
+      "",
+      "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.54s",
+      "",
+      "     Running tests/crash_class_defects.rs (target/debug/deps/crash_class_defects-8d7bdd481313cba0)",
+      "",
+      "running 8 tests",
+      "",
+      "thread 'copied_iterator_setter_halts_instead_of_aborting_the_host' (25218507) has overflowed its stack",
+      "fatal runtime error: stack overflow, aborting",
+      "error: test failed, to rerun pass `-p ironhorse-262 --test crash_class_defects`",
+      "",
+      "Caused by:",
+      "  process didn't exit successfully: `/Users/xyz/Development/endo2/rust/engine/target/debug/deps/crash_class_defects-8d7bdd481313cba0` (signal: 6, SIGABRT: process abort signal)"
+    ]
+  }
+}

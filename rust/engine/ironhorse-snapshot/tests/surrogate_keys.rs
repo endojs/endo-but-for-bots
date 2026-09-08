@@ -120,7 +120,7 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
     assert_eq!(migrated.parent_seal, intermediate_seal);
     assert_ne!(migrated.seal, manifest.seal);
     assert!(!migrate_store(&mut store, &signature).unwrap());
-    let mut resumed = resume_from_store(&mut store, &signature).unwrap();
+    let mut resumed = resume_from_store(&store, &signature).unwrap();
     assert_eq!(resumed.machine().program_symbol_names(), names);
     assert_eq!(crank(resumed.machine_mut(), r#"o["😀"]+o["\0"]"#).0, "5");
     checkpoint_to_store(&mut resumed, &signature, &mut store).unwrap();
@@ -189,7 +189,7 @@ fn names_survive_container_and_store_then_relink() {
             .map_err(|(_, e)| e)
             .unwrap(),
     );
-    let mut session = resume_from_store(&mut store, &signature).unwrap();
+    let mut session = resume_from_store(&store, &signature).unwrap();
     restored = from_snapshot_bytes(&bytes, &signature).unwrap();
     for source in [
         r#"o["\uD800"]+o["\uD801"]+o["😀"]+o["\0"]"#,

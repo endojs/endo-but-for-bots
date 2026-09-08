@@ -107,10 +107,8 @@ pub enum SourceCompileError {
 /// the compiler owns only source → bytecode. This is the principled
 /// replacement for the former `eval:string-source` source-text boundary.
 pub trait SourceCompiler {
-    /// Compile `source` as a **Script** goal for same-realm execution,
-    /// returning its bytecode and `symbols` atom. `charge` admits incremental
-    /// raw 16.16 work before doing it; false must return `MeterAbort` immediately.
-    /// `strict` requests the
+    /// Compile `source` as an **Eval** goal for same-realm execution,
+    /// returning its bytecode and `symbols` atom. `strict` requests the
     /// strict-mode Script parse (the `Function` constructor and a strict
     /// caller's direct eval); an indirect eval of ordinary source is sloppy.
     /// The source itself may still opt into strict via a `"use strict"`
@@ -119,10 +117,14 @@ pub trait SourceCompiler {
     /// other compilation phases, including partial work before syntax errors.
     /// A false callback or exhausted budget returns `MeterAbort`; storage
     /// refusal returns `HeapExhausted`. Neither is a syntax error.
+    /// Charge work incrementally through `charge`, including work before an
+    /// error or unwind. Stop when it returns false, or before exceeding
+    /// `raw_budget`. Successful output must report the sum of callback deltas.
     fn compile_source(
         &self,
         source: &str,
         strict: bool,
+        raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<CompiledSource, SourceCompileError>;
 }
@@ -10360,18 +10362,27 @@ impl Interp {
             None => return Err(Step::Host(Halt::NotImplemented("eval:no-compiler"))),
         };
         self.charge_and_check(0)?;
+        let raw_budget = u64::MAX - self.meter_index();
+        let mut charged = 0u64;
         let mut refused = false;
-        let compiled = compiler.compile_source(source, strict, &mut |raw| {
+        let result = compiler.compile_source(source, strict, raw_budget, &mut |raw| {
             if refused {
                 return false;
             }
+            let Some(next) = charged.checked_add(raw).filter(|next| *next <= raw_budget) else {
+                refused = true;
+                return false;
+            };
+            charged = next;
             refused = !self.charge_compilation(raw);
             !refused
         });
+        // Refusal wins even if an embedding compiler mistakenly returns
+        // successful output or a syntax error after its callback said stop.
         if refused {
             return Err(Step::Host(Halt::MeterAbort));
         }
-        let compiled = match compiled {
+        let compiled = match result {
             Err(SourceCompileError::HeapExhausted) => return Err(Step::Host(Halt::HeapExhausted)),
             Ok(compiled) => compiled,
             Err(SourceCompileError::MeterAbort) => return Err(Step::Host(Halt::MeterAbort)),
@@ -10384,6 +10395,11 @@ impl Interp {
                 )))
             }
         };
+        if compiled.parse_meter_raw != charged {
+            return Err(Step::Host(Halt::EngineInvariant(
+                "eval:compile-charge-receipt",
+            )));
+        }
         let eval_names =
             crate::symbols::parse_symbols_checked(&compiled.symbols).map_err(Step::Host)?;
         let code = match self.relink_program_symbols(&compiled.bytecode, &eval_names) {
@@ -13850,6 +13866,27 @@ impl Interp {
         self.meter.state().index
     }
 
+    /// Accrue a compiler work delta and consult the live meter host. A compiler
+    /// callback must stop at the first false result. This also supports host
+    /// compilation before a crank starts; failed admission prevents checkpointing
+    /// until the managed lifecycle rewinds or a subsequent crank completes.
+    pub fn charge_compilation(&mut self, raw: u64) -> bool {
+        let Some(next) = self.meter_index().checked_add(raw) else {
+            self.last_crank_completed = false;
+            return false;
+        };
+        self.meter.tick_raw(raw);
+        let accepted = next < u64::MAX
+            && match self.meter_host.as_mut() {
+                Some(host) => self.meter.check_compilation(host) == MeterCheck::Continue,
+                None => !self.meter.is_armed(),
+            };
+        if !accepted {
+            self.last_crank_completed = false;
+        }
+        accepted
+    }
+
     /// The three reaction-arena lengths `(combinators, from_async,
     /// promise_guards)` — diagnostic for the arena-growth lock
     /// (wave-6 W6-19): settled entries must be RECLAIMED by a
@@ -13955,13 +13992,6 @@ impl Interp {
             None if self.meter.is_armed() => MeterCheck::Abort,
             None => MeterCheck::Continue,
         }
-    }
-
-    /// Admit a raw 16.16 compilation charge on this interpreter's meter.
-    /// Source compilers must stop immediately on false. Costs already charged
-    /// here must not be charged again from `CompiledSource` reporting fields.
-    pub fn charge_compilation(&mut self, raw: u64) -> bool {
-        self.charge_and_check(raw).is_ok()
     }
 
     /// Admission inside a built-in, including the restored/armed/no-host
