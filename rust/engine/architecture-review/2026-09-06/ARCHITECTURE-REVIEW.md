@@ -8814,6 +8814,9 @@ currently assert this work is already done.
 
 ### W2. One budget, one chokepoint, one ceiling (medium; closes the abort class)
 
+**Implementation follow-up (2026-09-08):** see [W2 allocation and regexp admission](W2-ALLOCATION.md)
+for W2.3–W2.6, host policy, the version-2 cost table, and regression coverage.
+
 Every process-abort finding is the same missing invariant seen at a different
 site.
 Land the invariant, not the sites.
