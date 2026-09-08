@@ -17,6 +17,7 @@ import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { derivePipeResumption } from './pipe-network.js';
 import { isSessionToken } from './store-fs.js';
 import { inspectVatReachability } from './vat-reachability.js';
+import { WorkerHaltError } from './worker-engine.js';
 import { makeWorkerSessionRecords } from './worker-session-records.js';
 
 /**
@@ -1010,6 +1011,38 @@ const buildDaemon = async ({
       netlayerRef.netlayer.shutdown();
     }
   };
+
+  // An accepted dispatch can outlive the process before its worker runs.
+  // Resume journal suffixes now: hub deduplication correctly suppresses a
+  // second dispatch, so no future network traffic need wake these workers.
+  // Checkpointed sleepers and quarantined workers remain asleep.
+  try {
+    await Promise.all(
+      [...workers].map(async ([workerId, entry]) => {
+        const workerStore = store.provideWorkerStore(workerId);
+        const meta = workerStore.getMeta();
+        if (
+          meta.failure === undefined &&
+          workerStore.journalLength() > (meta.snapshot?.cut ?? 0)
+        ) {
+          try {
+            await entry.transport.wake();
+          } catch (error) {
+            // Fatal guest replay quarantines only that worker, just as live
+            // delivery does. Infrastructure failures still abort startup.
+            if (
+              !(error instanceof WorkerHaltError) ||
+              workerStore.getMeta().failure === undefined
+            )
+              throw error;
+          }
+        }
+      }),
+    );
+  } catch (error) {
+    await stopDaemon();
+    throw error;
+  }
 
   /** @param {{keep?: string[]}} [options] */
   const inspectReachability = ({ keep = [] } = {}) =>

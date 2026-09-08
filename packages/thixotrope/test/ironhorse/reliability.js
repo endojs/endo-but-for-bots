@@ -86,13 +86,18 @@ for (const phase of ['journal', 'heap', 'output', 'snapshot']) {
       const first = await launch(t, path);
       first.child.send({ command: 'kill-at', phase });
       t.deepEqual(await first.receive(), { event: 'boundary', phase });
+      const abandoned = await readdir(join(path, 'heaps', 'incarnations'));
       first.child.kill('SIGKILL');
       const [, signal] = await first.exited;
       t.is(signal, 'SIGKILL');
       const second = await launch(t, path);
-      // Recovery acquired the exclusive worker lease before reclaiming all old
-      // writable copies. Reading wakes fresh incarnations from image + journal.
-      t.deepEqual(await readdir(join(path, 'heaps', 'incarnations')), []);
+      // Recovery reclaims old writable copies before resuming journal suffixes
+      // in fresh incarnations. No abandoned database becomes a recovery image.
+      const recovered = await readdir(join(path, 'heaps', 'incarnations'));
+      t.deepEqual(
+        recovered.filter(name => abandoned.includes(name)),
+        [],
+      );
       second.child.send({ command: 'read' });
       t.deepEqual(await second.receive(), { event: 'result', count: '1' });
       second.child.send({ command: 'stop' });

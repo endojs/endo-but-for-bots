@@ -101,6 +101,8 @@ Sleep is host policy; it is not a guest application lifecycle callback.
 
 The worker transport serializes delivery, sleep, wake, crash handling, and retirement.
 Recovery pairs an immutable sleep image with its journal cut and replays the remaining journal suffix.
+Daemon startup wakes workers with a journal suffix so accepted work resumes without new traffic.
+Workers whose journals are fully checkpointed, and quarantined workers, remain asleep.
 An abandoned live database is not a recovery baseline: it may be ahead of the selected image without
 matching the host's committed delivery state.
 
