@@ -120,12 +120,35 @@ many `start` calls) is out of scope for this increment; a design that wants it
 must rework those three properties. The supervisor, not the bot, enforces the
 one-live-call-per-guest invariant.
 
+That per-guest single-flight covers repeated deliveries to *one* guest, but it
+cannot by itself keep two *different* guests from co-tenanting one incarnation.
+Because `provide` is memoized by formula identifier, two guests that resolved
+`bot` to the *same* formula identifier would share one `controllerForId`
+incarnation, and their two supervisor entries (keyed by guest identifier) would
+each call `start` on that shared instance, handing one bot process two guests'
+authority and breaking the retention, worker-cost, and one-live-call invariants
+above. Distinctness is therefore a *checked* precondition, not an assumption
+about caller hygiene: `provideGuest(name, { bot })` whose resolved `bot`
+identifier is already recorded as another live guest's `bot` edge is rejected
+with an error naming the conflicting guest, rather than silently sharing the
+incarnation. A bot factory that fails to mint a fresh formula per guest thus
+surfaces as a provisioning error rather than a silent co-tenancy. (A guest may
+re-request its *own* existing `bot` identifier under the get-or-create rule; only
+a collision with a *different* guest's binding is rejected.)
+
 `provideGuest(name, { bot })` accepts `bot` as a pet name or name path in the
 creating host's namespace, resolves it once to a local formula identifier, and
-persists that identifier. `bot` is typed on a guest-specific options type, not
-on the options bag `provideHost` shares: `provideHost` rejects an unrecognized
-`bot` key rather than silently dropping it, so `provideHost(name, { bot })` is
-both a type error and a runtime error rather than a silent no-op.
+persists that identifier. `bot` must be a guest-only option, so that
+`provideHost(name, { bot })` is both a type error and a runtime error rather than
+a silent no-op. This is a change this increment introduces, not existing
+behavior: today `provideHost` and `provideGuest` funnel their options through one
+shared `normalizeHostOrGuestOptions` helper (`host.js`) that destructures only
+`introducedNames` and `agentName` and silently drops every other key, so a stray
+`bot` on either method is currently ignored without error. The increment splits
+that shared helper — a guest-specific option type that recognizes and resolves
+`bot`, and a host path that rejects an unrecognized `bot` key — so the
+authority-boundary guarantee this paragraph states is actually enforced rather
+than assumed (see Affected Packages, `host.js`).
 
 An absent `bot` option preserves today's serialized guest formula exactly. The
 field is *omitted* from the record, not stored as `null` or `undefined`, so an
@@ -310,10 +333,26 @@ An unexpected start rejection, a `stopped` rejection, or an untyped `stopped`
 result is a transient failure. The supervisor retries with full-jitter
 exponential backoff: a one-second base, doubling per consecutive failure, capped
 at five minutes. One timer exists per guest. New messages during backoff do not
-bypass it. After eight consecutive failures the entry opens a `crash-loop`
-breaker and does not automatically retry until a host operator explicitly
-requests a retry or the guest is replaced with a different bot binding. Remaining
-`running` for sixty seconds resets the failure count.
+bypass it. The backoff *delay* still tracks a consecutive-failure count that a
+sustained `running` stretch resets, so a bot that recovers gets a short delay
+again; but the `crash-loop` *breaker* is governed by restart *rate*, not that
+consecutive count. The supervisor retains the timestamps of recent failures in a
+sliding window and opens the `crash-loop` breaker once eight failures fall within
+a fifteen-minute window, after which it does not automatically retry until a host
+operator explicitly requests a retry or the guest is replaced with a different
+bot binding.
+
+A rolling window rather than a reset-on-any-success count is deliberate. A bot
+that runs just long enough to look healthy — say ~61 seconds — and then crashes
+on every cycle would never accumulate eight *consecutive* failures under a hard
+reset, so the daemon would restart it forever: exactly the in-process hot loop
+this breaker exists to prevent, and one invisible to `getBotStatus` because such
+an entry only ever cycles `starting -> running -> backoff` and never reaches
+`blocked`. Bounding failures per unit time trips the breaker on that flapping bot
+while still letting a genuinely recovered bot — whose earlier failures age out of
+the window — resume without operator intervention. A clean `{ type: 'stopped' }`
+idle exit adds no failure timestamp, so the ordinary idle-exit lifecycle never
+advances the breaker.
 
 Unlike the process-local backoff timer and typed-policy breakers, the open state
 of the `crash-loop` breaker is persisted, so that a routine daemon restart
@@ -394,6 +433,14 @@ interface EndoHost {
 not disable subsequent backoff. `stopBot` cancels any live incarnation and opens
 the `operator` breaker, so ordinary mail no longer re-incarnates the bot until
 `retryBot`; the two together give the `operator` state both of its directions.
+This operator pause is process-local, like the other typed-policy breakers: it
+holds against ordinary mail within a daemon incarnation but, because only the
+`crash-loop` bit is persisted, does not survive a routine restart. A deploy,
+reboot, or upgrade rollout gives an `operator`-blocked guest with retained mail
+the same one-immediate-attempt the restart scan gives a backoff-blocked one, so
+an explicit `stopBot` does not outlast a restart in this increment. Persisting
+operator pauses is deferred (First Increment and Deferred Work); until then an
+operator who needs a pause to survive a restart must rebind or collect the guest.
 Both resolve once the supervisor has recorded the state change and scheduled
 (`retryBot`) or completed (`stopBot`) the cancellation, not once the resulting
 attempt reaches a terminal state; a caller learns that outcome from
@@ -511,8 +558,13 @@ in the reauthentication message, and notification deduplication.
    the retained-mail scan makes one start attempt. Verify an empty bot-bound
    guest starts no worker.
 5. Make the bot reject repeatedly. Verify exponential delays, one timer, no
-   message-triggered bypass, the eighth-failure breaker, status output, and one
-   operator-directed retry.
+   message-triggered bypass, and one operator-directed retry. Verify the
+   crash-loop breaker's rolling-window semantics with a controllable clock:
+   eight failures inside the fifteen-minute window open the breaker, while a bot
+   that reports `running` for ~61 seconds and then crashes on every cycle (the
+   flapping case that never accumulates eight *consecutive* failures) still trips
+   the breaker once eight of its failures fall within the window, and failures
+   spread beyond the window do not open it.
 6. Return `needs-auth` with a controllable `retryWhen`. Verify that no crash
    count or timed retry occurs, that status reports the credential blocker, and
    that fulfilling the signal makes exactly one new attempt while the original
@@ -544,7 +596,11 @@ in the reauthentication message, and notification deduplication.
     formula identifiers. Deliver to each and verify two independent incarnations
     in two workers, that collecting one guest cancels only its incarnation and
     reaps only its worker, and that neither guest ever receives the other's
-    `start` call.
+    `start` call. Then, separately, attempt to provision a second guest whose
+    `bot` resolves to the *same* formula identifier already bound to a live guest
+    and verify it is rejected with an error naming the conflicting guest rather
+    than co-tenanting one incarnation across both. Also verify `provideHost(name,
+    { bot })` is rejected rather than silently dropping the `bot` key.
 
 ## Affected Packages
 
@@ -552,11 +608,14 @@ in the reauthentication message, and notification deduplication.
   daemon-core types.
 - `packages/daemon/src/interfaces.js`: guarded host diagnostics and `EndoBot`
   method/result shapes.
-- `packages/daemon/src/host.js`: resolve and validate the provisioning option;
-  expose host-only status, stop, and retry methods.
-- `packages/daemon/src/manager.js`: persist the formula edge, manage
-  incarnations, scan retained mail after formula-graph seeding, persist the
-  crash-loop bit, and report lifecycle transitions.
+- `packages/daemon/src/host.js`: split the shared `normalizeHostOrGuestOptions`
+  helper (which today silently drops unknown keys) so the guest path resolves and
+  validates the `bot` provisioning option while the host path rejects an
+  unrecognized `bot`; expose host-only status, stop, and retry methods.
+- `packages/daemon/src/manager.js`: persist the formula edge, reject a `bot`
+  identifier already bound to another live guest, manage incarnations (including
+  the rolling-window crash-loop breaker), scan retained mail after formula-graph
+  seeding, persist the crash-loop bit, and report lifecycle transitions.
 - `packages/daemon/src/guest.js`: connect the bound guest to the mailbox wake
   hook and cancellation context.
 - `packages/daemon/src/mail.js`: invoke the optional hook after durable
