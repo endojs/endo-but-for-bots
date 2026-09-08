@@ -141,8 +141,15 @@ test('failed lease teardown retains authority and retries the same worker', asyn
   t.is(f.stops(), 2);
 });
 
+// The outer budget on these tests guards against a hang, not against a slow
+// runner: the expiry and admission timers they exercise are tens of
+// milliseconds, but spinning the fixture (listener, broker, worker) alongside
+// the rest of the affected set on a loaded macOS runner has taken well over a
+// second, which a one-second budget reported as a failure.
+const LOADED_RUNNER_BUDGET_MS = 10_000;
+
 test('lease expiry revokes traffic and stops worker', async t => {
-  t.timeout(1000);
+  t.timeout(LOADED_RUNNER_BUDGET_MS);
   // Setup can exceed the short expiry interval on a loaded CI runner. Keep
   // admission live, then advance the policy clock and await the real timer.
   let time = 0;
@@ -167,7 +174,7 @@ test('lease expiry revokes traffic and stops worker', async t => {
 });
 
 test('worker disconnect revokes host endpoint', async t => {
-  t.timeout(1000);
+  t.timeout(LOADED_RUNNER_BUDGET_MS);
   const f = fixture();
   t.teardown(f.issuer.dispose);
   await f.issuer(spec);
@@ -188,7 +195,7 @@ test('worker disconnect revokes host endpoint', async t => {
 });
 
 test('disposal during acquisition waits and cleans late worker', async t => {
-  t.timeout(1000);
+  t.timeout(LOADED_RUNNER_BUDGET_MS);
   let release = () => {};
   const startBarrier = new Promise(resolve => {
     release = () => resolve(undefined);
