@@ -3,10 +3,29 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-09-06 |
+| **Updated** | 2026-09-09 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
+
+**F043 section storage increment (schema 28, 2026-09-09).**
+The small-state root now binds 32 stable section identities through a fixed tree.
+SQLite stores each payload and its identity-bound leaf hash in `small_sections`.
+Schema 26 retains the earlier CESU-8 NAME conversion.
+Schema 27 retains canonical small state and authenticated manifest policy.
+The v27→v28 migration verifies the old monolithic root before atomically replacing
+the manifest and section rows; it preserves every payload byte, epoch, crank count,
+and collection policy; its new seal chains from the old seal.
+Whole-state export and the reference FileStore retain the existing framed encoding.
+Ordinary commits require the current schema; migration is the only schema transition.
+Sparse batches retain omitted sections and replace explicitly supplied payloads.
+Full and sparse batches share the canonical manifest seal, whose authenticated root
+binds the resulting section contents and identities.
+SQLite and MemoryStore write only supplied sections; FileStore merges them for its
+whole-file rewrite.
+This increment does **not** close F043: checkpoints still extract and hash all
+sections to discover the changes.
+VM dirty tracking must select sections before extraction to remove that work.
 
 Investigation of a seam in the Ironhorse engine's snapshot subsystem
 that lets the whole-heap snapshot artifact be replaced by a database

@@ -65,6 +65,17 @@ fn store_tracks_live_machine_file() {
     ironhorse_snapshot::store_suite::checkpoint_acceptance(&mut store);
 }
 
+#[test]
+fn sparse_sections_match_full_snapshots_on_reference_backends() {
+    ironhorse_snapshot::store_suite::sparse_section_acceptance(MemoryStore::new);
+    let dir = common::TempDir::new("sparse-sections");
+    let mut counter = 0;
+    ironhorse_snapshot::store_suite::sparse_section_acceptance(|| {
+        counter += 1;
+        FileStore::open(dir.join(format!("heap-{counter}.ihstore"))).unwrap()
+    });
+}
+
 /// The incrementality bar, measured exactly as before the session
 /// refactor.
 #[test]
@@ -99,6 +110,11 @@ fn incremental_checkpoint_writes_only_dirty_rows() {
     let stats = store.last_commit_stats();
     assert_eq!(stats.slot_pages_written, 0, "no false dirt");
     assert_eq!(stats.chunk_extents_written, 0, "no false dirt");
+    assert_eq!(stats.small_sections_written, 0, "no false section dirt");
+    assert_eq!(
+        stats.small_bytes_written, 0,
+        "unchanged payloads stay in store"
+    );
 }
 
 #[test]

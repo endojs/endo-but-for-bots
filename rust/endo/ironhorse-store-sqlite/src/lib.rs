@@ -38,6 +38,9 @@ use ironhorse_snapshot::store::{
     chunk_extent_count, free_seg_count, leaf_hash, slot_page_count, HeapStore, StoreError,
     StoreManifest, LEAF_EXT, LEAF_FREE, LEAF_PAGE,
 };
+use ironhorse_snapshot::store_sections::{
+    frame_small_state, split_small_state, SectionLeaves, SectionUpdate, SMALL_SECTION_COUNT,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// Map a rusqlite failure into the store vocabulary. SQLite errors
@@ -59,6 +62,126 @@ fn page_col(v: i64) -> Result<u32, StoreError> {
 const META_MANIFEST: &str = "manifest";
 /// The `small_state` row name holding the encoded small state.
 const SMALL_NAME: &str = "small";
+
+/// The caller owns a transaction so section rows and their manifest are atomic.
+fn write_small_state(conn: &Connection, schema: u32, bytes: &[u8]) -> Result<(), StoreError> {
+    if schema < 28 {
+        conn.execute(
+            "INSERT INTO small_state (name, bytes) VALUES (?1, ?2)
+             ON CONFLICT(name) DO UPDATE SET bytes = excluded.bytes",
+            params![SMALL_NAME, bytes],
+        )
+        .map_err(sql_err)?;
+        return Ok(());
+    }
+    let sections = split_small_state(bytes)?;
+    // Schema DDL belongs to the authorized write transaction. Merely opening
+    // a legacy store (which may have an incompatible signature) must not edit it.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS small_sections (
+           id INTEGER PRIMARY KEY CHECK (id >= 0 AND id < 32),
+           bytes BLOB NOT NULL,
+           hash BLOB NOT NULL CHECK (length(hash) = 32)
+         );",
+    )
+    .map_err(sql_err)?;
+    let leaves = SectionLeaves::from_payloads(&sections);
+    let mut upsert = conn
+        .prepare(
+            "INSERT INTO small_sections (id, bytes, hash) VALUES (?1, ?2, ?3)
+         ON CONFLICT(id) DO UPDATE SET bytes = excluded.bytes, hash = excluded.hash",
+        )
+        .map_err(sql_err)?;
+    for (id, payload) in sections.iter().enumerate() {
+        upsert
+            .execute(params![id as i64, payload, &leaves.hashes()[id][..]])
+            .map_err(sql_err)?;
+    }
+    conn.execute(
+        "DELETE FROM small_state WHERE name = ?1",
+        params![SMALL_NAME],
+    )
+    .map_err(sql_err)?;
+    Ok(())
+}
+
+fn read_section_hashes(conn: &Connection) -> Result<[[u8; 32]; SMALL_SECTION_COUNT], StoreError> {
+    let mut stmt = conn
+        .prepare("SELECT id, hash FROM small_sections ORDER BY id")
+        .map_err(sql_err)?;
+    let mut rows = stmt.query([]).map_err(sql_err)?;
+    let mut hashes = [[0; 32]; SMALL_SECTION_COUNT];
+    for (id, hash) in hashes.iter_mut().enumerate() {
+        let row = rows
+            .next()
+            .map_err(sql_err)?
+            .ok_or(StoreError::MissingRow("small section hash", id as u32))?;
+        let found: i64 = row.get(0).map_err(sql_err)?;
+        if found != id as i64 {
+            return Err(StoreError::MissingRow("small section hash", id as u32));
+        }
+        let bytes: Vec<u8> = row.get(1).map_err(sql_err)?;
+        *hash = bytes
+            .try_into()
+            .map_err(|_| StoreError::Io("sqlite: small section hash length".into()))?;
+    }
+    if rows.next().map_err(sql_err)?.is_some() {
+        return Err(StoreError::Io("sqlite: extra small section hashes".into()));
+    }
+    Ok(hashes)
+}
+
+fn write_section_updates(conn: &Connection, updates: &[SectionUpdate]) -> Result<(), StoreError> {
+    let mut upsert = conn
+        .prepare(
+            "INSERT INTO small_sections (id, bytes, hash) VALUES (?1, ?2, ?3)
+         ON CONFLICT(id) DO UPDATE SET bytes = excluded.bytes, hash = excluded.hash",
+        )
+        .map_err(sql_err)?;
+    for update in updates {
+        let hash = ironhorse_snapshot::store_sections::section_hash(update.section, &update.bytes);
+        upsert
+            .execute(params![
+                update.section.id() as i64,
+                &update.bytes,
+                &hash[..]
+            ])
+            .map_err(sql_err)?;
+    }
+    Ok(())
+}
+
+fn read_sectioned_state(conn: &Connection) -> Result<Vec<u8>, StoreError> {
+    let mut stmt = conn
+        .prepare("SELECT id, bytes, hash FROM small_sections ORDER BY id")
+        .map_err(sql_err)?;
+    let mut rows = stmt.query([]).map_err(sql_err)?;
+    let mut payloads: [Vec<u8>; SMALL_SECTION_COUNT] = std::array::from_fn(|_| Vec::new());
+    let mut hashes = [[0u8; 32]; SMALL_SECTION_COUNT];
+    for id in 0..SMALL_SECTION_COUNT {
+        let row = rows
+            .next()
+            .map_err(sql_err)?
+            .ok_or(StoreError::MissingRow("small section", id as u32))?;
+        let found: i64 = row.get(0).map_err(sql_err)?;
+        if found != id as i64 {
+            return Err(StoreError::MissingRow("small section", id as u32));
+        }
+        payloads[id] = row.get(1).map_err(sql_err)?;
+        let hash: Vec<u8> = row.get(2).map_err(sql_err)?;
+        hashes[id] = hash
+            .try_into()
+            .map_err(|_| StoreError::Io("sqlite: small section hash length".into()))?;
+    }
+    if rows.next().map_err(sql_err)?.is_some() {
+        return Err(StoreError::Io("sqlite: extra small sections".into()));
+    }
+    let refs = std::array::from_fn(|id| payloads[id].as_slice());
+    if SectionLeaves::from_payloads(&refs).hashes() != &hashes {
+        return Err(StoreError::Io("sqlite: small section hash mismatch".into()));
+    }
+    frame_small_state(&refs)
+}
 
 /// A SQLite-backed [`HeapStore`]. One store per database file; the
 /// worker's heap database is daemon-private state in the same trust
@@ -162,7 +285,7 @@ impl SqliteHeapStore {
         let lock_mode: String = conn
             .query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| r.get(0))
             .map_err(sql_err)?;
-        if lock_mode.to_ascii_lowercase() != "exclusive" {
+        if !lock_mode.eq_ignore_ascii_case("exclusive") {
             return Err(StoreError::Io(format!(
                 "sqlite: locking_mode=EXCLUSIVE refused (got {lock_mode})"
             )));
@@ -481,12 +604,7 @@ impl HeapStore for SqliteHeapStore {
         // small — the pair recombines to the new root only together.
         self.root_cache = None;
         let tx = self.conn.transaction().map_err(sql_err)?;
-        tx.execute(
-            "INSERT INTO small_state (name, bytes) VALUES (?1, ?2)
-             ON CONFLICT(name) DO UPDATE SET bytes = excluded.bytes",
-            params![SMALL_NAME, small],
-        )
-        .map_err(sql_err)?;
+        write_small_state(&tx, manifest.store_schema, small)?;
         tx.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -656,8 +774,9 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
-        if Self::stored_manifest(&self.conn)?.is_none() {
-            return Err(StoreError::Empty);
+        let manifest = Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)?;
+        if manifest.store_schema >= 28 {
+            return read_sectioned_state(&self.conn);
         }
         self.conn
             .query_row(
@@ -670,6 +789,13 @@ impl HeapStore for SqliteHeapStore {
             .ok_or(StoreError::Io(
                 "sqlite: committed store has no small-state row".to_string(),
             ))
+    }
+
+    fn small_section_hashes(&self) -> Result<[[u8; 32]; SMALL_SECTION_COUNT], StoreError> {
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        read_section_hashes(&self.conn)
     }
 
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
@@ -886,7 +1012,20 @@ impl HeapStore for SqliteHeapStore {
             // The common verifier runs inside this writer transaction. Reuse
             // the last committed ledger for O(dirty * log n) updates; rebuild
             // its metadata only after open or a failed commit.
-            let ledger = if let Some(ledger) = cache {
+            let ledger = if stored
+                .as_ref()
+                .is_some_and(|m| m.store_schema != ironhorse_snapshot::store::STORE_SCHEMA_VERSION)
+            {
+                // The shared verifier refuses incompatible schemas before it
+                // consults ledger contents; legacy stores have no section table.
+                ironhorse_snapshot::store::RootLedger::build(
+                    &[],
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    &[],
+                )
+            } else if let Some(ledger) = cache {
                 ledger
             } else {
                 let read_kind = |kind: i64,
@@ -942,24 +1081,19 @@ impl HeapStore for SqliteHeapStore {
                         );
                     }
                 }
-
-                let small: Vec<u8> = if stored.is_some() {
-                    tx.query_row(
-                        "SELECT bytes FROM small_state WHERE name = ?1",
-                        params![SMALL_NAME],
-                        |row| row.get(0),
-                    )
-                    .map_err(sql_err)?
+                let sections = if stored.is_some() {
+                    SectionLeaves::from_hashes(read_section_hashes(&tx)?)
                 } else {
-                    Vec::new()
+                    SectionLeaves::from_hashes([[0; 32]; SMALL_SECTION_COUNT])
                 };
-                ironhorse_snapshot::store::RootLedger::build(
-                    &small,
+                let ledger = ironhorse_snapshot::store::RootLedger::build_from_sections(
+                    sections,
                     prior_pages,
                     prior_exts,
                     prior_frees,
                     &prior_edges,
-                )
+                );
+                ledger
             };
             let (batch, ledger) = verify(stored.as_ref(), ledger)?.into_parts();
             new_cache = ledger;
@@ -1132,12 +1266,15 @@ impl HeapStore for SqliteHeapStore {
                 .map_err(sql_err)?;
             }
 
-            tx.execute(
-                "INSERT INTO small_state (name, bytes) VALUES (?1, ?2)
-                 ON CONFLICT(name) DO UPDATE SET bytes = excluded.bytes",
-                params![SMALL_NAME, batch.small],
-            )
-            .map_err(sql_err)?;
+            if stored.is_none() {
+                // Initial sparse writes require all sections, so framing here is
+                // bounded by the initial full snapshot, never a warmed checkpoint.
+                let small = ironhorse_snapshot::store_sections::merge_framed(None, batch)?;
+                write_small_state(&tx, batch.manifest.store_schema, &small)?;
+            } else {
+                let updates = ironhorse_snapshot::store_sections::batch_updates(batch)?;
+                write_section_updates(&tx, &updates)?;
+            }
             tx.execute(
                 "INSERT INTO meta (key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1160,8 +1297,8 @@ mod tests {
     };
     use ironhorse_snapshot::store::HeapStoreCommit;
     use ironhorse_snapshot::store::{
-        export_to_container, image_to_batch_unchecked, import_from_container, reseal_batch,
-        store_to_image, validate_store, STORE_SCHEMA_VERSION,
+        export_to_container, image_to_batch, image_to_batch_unchecked, import_from_container,
+        reseal_batch, store_to_image, validate_store, STORE_SCHEMA_VERSION,
     };
     use ironhorse_snapshot::{Signature, SnapshotError};
     use ironhorse_vm::Interp;
@@ -1169,6 +1306,247 @@ mod tests {
 
     fn sig() -> Signature {
         Signature::new("ironhorse-worker-v1")
+    }
+
+    #[test]
+    fn sparse_checkpoints_write_only_changes_and_retry_from_persisted_sections() {
+        use ironhorse_snapshot::store_sections::SmallSection;
+        let mut machine = Interp::new();
+        let (code, names) =
+            ironhorse_compile::compile_atoms("var a = []; for(var i=0;i<10000;i++) a[i]=i; 0")
+                .unwrap();
+        machine.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+        assert!(machine.run(&code).completed);
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        let mut session = begin_store_session(machine, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TABLE section_writes (id INTEGER, size INTEGER);
+             CREATE TEMP TRIGGER count_sections AFTER UPDATE ON main.small_sections
+             BEGIN INSERT INTO section_writes VALUES (NEW.id, length(NEW.bytes)); END;",
+            )
+            .unwrap();
+        let (hot, _) = ironhorse_compile::compile_atoms("1 + 1").unwrap();
+        for cold in [false, true] {
+            store
+                .conn
+                .execute("DELETE FROM section_writes", [])
+                .unwrap();
+            if cold {
+                store.root_cache = None;
+            }
+            assert!(session.machine_mut().run(&hot).completed);
+            checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+            let writes: Vec<i64> = store
+                .conn
+                .prepare("SELECT id FROM section_writes ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(writes, vec![SmallSection::Meter.id() as i64]);
+            assert_eq!(
+                store_to_image(&store).unwrap(),
+                session
+                    .machine()
+                    .snapshot_image(&sig())
+                    .unwrap()
+                    .into_image()
+            );
+        }
+        let before = store.manifest().unwrap();
+        let before_small = store.read_small_state().unwrap();
+        let (change, names) = ironhorse_compile::compile_atoms("var a; a[0] = 42").unwrap();
+        let change = session
+            .machine_mut()
+            .relink_crank(&change, &ironhorse_vm::parse_symbols(&names))
+            .unwrap();
+        assert!(session.machine_mut().run(&change).completed);
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER abort_array_section BEFORE UPDATE ON small_sections
+             WHEN NEW.id = 6 BEGIN SELECT RAISE(ABORT, 'array write failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            matches!(checkpoint_to_store(&mut session, &sig(), &mut store), Err(StoreError::Io(msg))
+            if msg.contains("array write failure"))
+        );
+        assert!(store.root_cache.is_none());
+        assert_eq!(store.manifest().unwrap(), before);
+        assert_eq!(store.read_small_state().unwrap(), before_small);
+        store
+            .conn
+            .execute_batch("DROP TRIGGER abort_array_section")
+            .unwrap();
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+        assert_eq!(
+            store_to_image(&store).unwrap(),
+            session
+                .machine()
+                .snapshot_image(&sig())
+                .unwrap()
+                .into_image()
+        );
+    }
+
+    #[test]
+    fn section_migration_preserves_bytes_and_rolls_back_partial_inserts() {
+        use ironhorse_snapshot::store::{compute_root, migrate_store, LEAF_SMALL};
+        let mut machine = Interp::new();
+        let (code, names) = ironhorse_compile::compile_atoms(
+            "var a = [1, 'kept', 3]; var m = new Map([[1, 'value']]); 0",
+        )
+        .unwrap();
+        machine.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+        assert!(machine.run(&code).completed);
+        let image = machine.snapshot_image(&sig()).unwrap();
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        let small = store.read_small_state().unwrap();
+        let mut old = store.manifest().unwrap();
+        let (pages, exts) = store.leaf_hashes().unwrap();
+        old.store_schema = 27;
+        old.root = compute_root(
+            &old,
+            &leaf_hash(LEAF_SMALL, 0, &small),
+            &pages,
+            &exts,
+            &store.free_leaf_hashes().unwrap(),
+            &store.page_edges().unwrap(),
+        );
+        old.seal =
+            ironhorse_snapshot::store::seal_commit(&old.parent_seal, &old, &[], &[], &[], &[], &[]);
+        store
+            .replace_manifest_and_small_for_migration(&old, &small)
+            .unwrap();
+        store
+            .conn
+            .execute("DELETE FROM small_sections", [])
+            .unwrap();
+        let next = image_to_batch(&image, old.epoch + 1, &old.seal);
+        assert!(matches!(
+            store.commit(&next),
+            Err(StoreError::NeedsMigration { found: 27 })
+        ));
+        assert_eq!(store.manifest().unwrap(), old);
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER abort_section_migration BEFORE INSERT ON small_sections
+             WHEN NEW.id = 16 BEGIN SELECT RAISE(ABORT, 'migration insert failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            matches!(migrate_store(&mut store, &sig()), Err(StoreError::Io(message))
+            if message.contains("migration insert failure"))
+        );
+        assert_eq!(store.manifest().unwrap(), old);
+        assert_eq!(store.read_small_state().unwrap(), small);
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM small_sections", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        store
+            .conn
+            .execute_batch("DROP TRIGGER abort_section_migration")
+            .unwrap();
+        // A real v27 database has no section table at all. DDL must roll back
+        // with the payload rows if the final manifest write fails.
+        store
+            .conn
+            .execute_batch(
+                "DROP TABLE small_sections;
+             CREATE TEMP TRIGGER abort_migration_manifest BEFORE UPDATE ON meta
+             WHEN NEW.key = 'manifest'
+             BEGIN SELECT RAISE(ABORT, 'migration manifest failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            matches!(migrate_store(&mut store, &sig()), Err(StoreError::Io(message))
+            if message.contains("migration manifest failure"))
+        );
+        assert_eq!(store.manifest().unwrap(), old);
+        assert_eq!(store.read_small_state().unwrap(), small);
+        assert_eq!(
+            store
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name = 'small_sections'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        store
+            .conn
+            .execute_batch("DROP TRIGGER abort_migration_manifest")
+            .unwrap();
+        assert!(migrate_store(&mut store, &sig()).unwrap());
+        assert_eq!(store.read_small_state().unwrap(), small);
+        assert_eq!(&store_to_image(&store).unwrap(), image.image());
+        let new = store.manifest().unwrap();
+        assert_eq!(new.store_schema, 28);
+        assert_ne!(new.root, old.root);
+        assert_eq!(
+            (new.epoch, new.cranks, new.parent_seal),
+            (old.epoch, old.cranks, old.seal)
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM small_sections", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            32
+        );
+        assert_eq!(
+            store
+                .conn
+                .query_row("SELECT count(*) FROM small_state", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(!migrate_store(&mut store, &sig()).unwrap());
+    }
+
+    #[test]
+    fn normal_commits_cannot_change_store_schema_on_warm_or_cold_paths() {
+        let mut machine = Interp::new();
+        assert!(machine.run(&PROG_A).completed);
+        let image = machine.snapshot_image(&sig()).unwrap();
+        for warm in [false, true] {
+            for schema in [STORE_SCHEMA_VERSION - 1, STORE_SCHEMA_VERSION + 1] {
+                let mut store = SqliteHeapStore::open_in_memory().unwrap();
+                let first = image_to_batch(&image, 1, "");
+                store.commit(&first).unwrap();
+                if !warm {
+                    store.root_cache = None;
+                }
+                let mut next = image_to_batch(&image, 2, &first.manifest.seal);
+                next.manifest.store_schema = schema;
+                reseal_batch(&mut next);
+                assert!(matches!(
+                    store.commit(&next),
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "checkpoint requires current store schema"
+                    )))
+                ));
+                assert_eq!(store.manifest().unwrap(), first.manifest);
+                assert_eq!(&store_to_image(&store).unwrap(), image.image());
+            }
+        }
     }
 
     // The captured oracle bytecodes the engine-side store tests use:
@@ -1272,7 +1650,7 @@ mod tests {
     }
 
     /// Exercise rollback after mutation has actually started. The trigger
-    /// fires on `small_state`, after pages, extents, leaf hashes, free rows,
+    /// fires on `small_sections`, after pages, extents, leaf hashes, free rows,
     /// and both edge tables have been updated inside the transaction.
     #[test]
     fn sql_abort_after_row_mutation_rolls_back_and_forces_a_cold_retry() {
@@ -1293,6 +1671,7 @@ mod tests {
             "page_edges",
             "edge_pairs",
             "small_state",
+            "small_sections",
             "meta",
         ]
         .iter()
@@ -1312,7 +1691,7 @@ mod tests {
             .conn
             .execute_batch(
                 "CREATE TEMP TRIGGER abort_late_commit
-                 BEFORE UPDATE ON small_state
+                 BEFORE UPDATE ON small_sections
                  BEGIN SELECT RAISE(ABORT, 'late commit failure'); END;",
             )
             .unwrap();
@@ -1348,6 +1727,7 @@ mod tests {
             "page_edges",
             "edge_pairs",
             "small_state",
+            "small_sections",
             "meta",
         ]
         .iter()

@@ -197,6 +197,12 @@ fn split_tests(tokens: &[Token]) -> (Vec<Token>, Vec<Token>) {
     (production, tests)
 }
 fn inventory(tokens: &[Token]) -> (BTreeSet<String>, BTreeMap<String, usize>) {
+    inventory_in(tokens, false)
+}
+fn inventory_in(
+    tokens: &[Token],
+    section_module: bool,
+) -> (BTreeSet<String>, BTreeMap<String, usize>) {
     let mut names = BTreeSet::new();
     let mut forwarded = BTreeMap::new();
     for i in 0..tokens.len().saturating_sub(1) {
@@ -210,7 +216,8 @@ fn inventory(tokens: &[Token]) -> (BTreeSet<String>, BTreeMap<String, usize>) {
             "row_len",
         ]
         .iter()
-        .any(|w| word(&tokens[i], w));
+        .any(|w| word(&tokens[i], w))
+            || (section_module && word(&tokens[i], "corrupt"));
         let cursor = i >= 3 && tokens[i - 3..=i] == lex("Cursor::new");
         assert!(
             !direct || tokens[i + 1] == Token::Punct('('),
@@ -255,7 +262,7 @@ fn inventory(tokens: &[Token]) -> (BTreeSet<String>, BTreeMap<String, usize>) {
             // These are the complete, audited forwarding expressions. Adding
             // another expression must extend this registry's data-flow model.
             let dynamic = if direct {
-                ["self.what", "what", "name", "&'static str"]
+                ["self.what", "what", "name", "message", "&'static str"]
                     .iter()
                     .any(|s| args == lex(s))
             } else {
@@ -346,10 +353,14 @@ fn every_named_corruption_is_asserted_or_explicitly_allowlisted() {
     let mut coverage = BTreeSet::new();
     for path in files {
         let (production, tests) = split_tests(&lex(&std::fs::read_to_string(&path).unwrap()));
-        let (found, forwarded) = inventory(&production);
+        let (found, forwarded) = inventory_in(
+            &production,
+            path.file_name().unwrap() == "store_sections.rs",
+        );
         let expected: &[(&str, &str, usize)] = match path.file_name().unwrap().to_str().unwrap() {
             "image.rs" => &[("Corrupt", "self.what", 7), ("Corrupt", "what", 2)],
             "store.rs" => &[("Corrupt", "name", 4)],
+            "store_sections.rs" => &[("Corrupt", "message", 1)],
             "store_file.rs" => &[("Corrupt", "what", 1), ("file_corrupt", "what", 4)],
             "format.rs" => &[("Corrupt", "&'static str", 1)],
             _ => &[],
@@ -472,5 +483,24 @@ fn negative_assertions_and_wrapper_aliases_do_not_count() {
         "let cursor = Cursor::new; cursor(bytes, \"x\")",
     ] {
         assert!(std::panic::catch_unwind(|| inventory(&lex(source))).is_err());
+    }
+}
+
+#[test]
+fn section_wrapper_literal_labels_are_inventoried() {
+    assert_eq!(
+        inventory_in(&lex("corrupt(\"section refusal\")"), true).0,
+        BTreeSet::from(["section refusal".into()])
+    );
+}
+
+#[test]
+fn section_wrapper_dynamic_labels_and_aliases_are_rejected() {
+    for source in [
+        "corrupt(dynamic_name)",
+        "corrupt(message)",
+        "let fail = corrupt; fail(\"x\")",
+    ] {
+        assert!(std::panic::catch_unwind(|| inventory_in(&lex(source), true)).is_err());
     }
 }

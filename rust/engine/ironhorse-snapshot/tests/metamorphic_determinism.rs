@@ -520,12 +520,14 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Error prototype data. Schema and format remain unchanged.
         // Re-pinned with the blob for format 14 (`IDXP`) and schema 25,
         // which appends the index-props small-state section.
-        // Format 15 / store schema 26 change the manifest in the seal.
+        // Format 15 / store schema 27 bind CESU-8 names and section leaves.
         // W4: METR digest changes each committed small-state hash.
         // Format 16 also travels in the manifest signed by each seal.
         // The structured boot signature also travels in the manifest.
         // Combined W3 authenticated manifest and W4 meter identity.
-        "1d8bd6ccf114e215d80df9351d1db3e84790232ff38d7306ec2cdd47412a1c24",
+        // Schema 28 replaces only the small-state leaf with a section tree;
+        // container bytes and raw execution charges above remain unchanged.
+        "89aadb2a85696d6e7734542a0abdc4c52baa93b918bddd714096b56194417a91",
         "epoch-3 seal chain"
     );
 }

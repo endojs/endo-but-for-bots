@@ -32,6 +32,88 @@ fn quiescent_machine(src: &str) -> Interp {
     m
 }
 
+/// A read-only external store can expose bytes that the current commit gate
+/// would never admit. Keep adoption validation independent of writer admission.
+struct CraftedSmallStore<'a> {
+    backing: &'a MemoryStore,
+    batch: &'a ironhorse_snapshot::store::CheckpointBatch,
+}
+
+impl HeapStore for CraftedSmallStore<'_> {
+    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+        Ok(self.batch.manifest.clone())
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+        Ok(self.batch.small.clone())
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        self.backing.read_slot_page(page)
+    }
+    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        self.backing.read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        self.backing.inventory()
+    }
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        self.backing.leaf_hashes()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.backing.read_free_seg(seg)
+    }
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        self.backing.free_leaf_hashes()
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.backing.page_edges()
+    }
+    fn commit_verified(
+        &mut self,
+        _verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), StoreError> {
+        panic!("the crafted store is read-only")
+    }
+}
+
+fn expect_commit_and_external_store_refusal(
+    honest: &ironhorse_snapshot::image::MachineImage,
+    crafted: &ironhorse_snapshot::image::MachineImage,
+    message: &'static str,
+) {
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch_unchecked(honest, 1, ""))
+        .unwrap();
+    let prior_manifest = store.manifest().unwrap();
+    let prior_image = ironhorse_snapshot::store::store_to_image(&store).unwrap();
+    let prior_small = store.read_small_state().unwrap();
+    let prior_leaves = store.leaf_hashes().unwrap();
+    let prior_free = store.free_leaf_hashes().unwrap();
+    let prior_edges = store.page_edges().unwrap();
+    let batch = image_to_batch_unchecked(crafted, 2, &prior_manifest.seal);
+    assert!(matches!(
+        store.commit(&batch),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found))) if found == message
+    ));
+    assert_eq!(store.manifest().unwrap(), prior_manifest);
+    assert_eq!(
+        ironhorse_snapshot::store::store_to_image(&store).unwrap(),
+        prior_image
+    );
+    assert_eq!(store.read_small_state().unwrap(), prior_small);
+    assert_eq!(store.leaf_hashes().unwrap(), prior_leaves);
+    assert_eq!(store.free_leaf_hashes().unwrap(), prior_free);
+    assert_eq!(store.page_edges().unwrap(), prior_edges);
+    let external = CraftedSmallStore {
+        backing: &store,
+        batch: &batch,
+    };
+    assert!(matches!(
+        validate_store(&external, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found))) if found == message
+    ));
+}
+
 /// Finding 4: a persisted regexp whose source is structurally valid
 /// (UTF-8, ascending owner) but does not RECOMPILE cannot come from an
 /// honest writer. The adoption validator must refuse it before restore —
@@ -183,19 +265,11 @@ fn an_explicit_full_name_floor_is_refused_as_non_canonical() {
         Err(other) => panic!("refused, but not by the canonicality gate: {other:?}"),
         Ok(_) => panic!("a non-canonical explicit floor must not restore"),
     }
-    // The store mirror: the same crafted floor in a raw-committed
-    // small state is refused at validation.
-    let mut store = MemoryStore::new();
-    store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
-        .expect("the raw commit models a crafted writer");
-    match validate_store(&store, &sig()) {
-        Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "installed-names floor: non-canonical explicit full floor",
-        ))) => {}
-        Err(other) => panic!("refused, but not by the canonicality gate: {other:?}"),
-        Ok(_) => panic!("a non-canonical explicit floor must not validate"),
-    }
+    expect_commit_and_external_store_refusal(
+        &read_machine(&bytes, &sig()).unwrap(),
+        &image,
+        "installed-names floor: non-canonical explicit full floor",
+    );
 }
 
 /// The store mirror of the generator resume-cursor gate: the shared
@@ -542,16 +616,11 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
         .expect("the fixture holds a pending reaction");
     row.reactions[0].kind = 4; // AsyncGeneratorAwait is still refused
     expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
-    let mut store = MemoryStore::new();
-    store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
-        .expect("the raw commit models a crafted writer");
-    match validate_store(&store, &sig()) {
-        Err(StoreError::Snapshot(SnapshotError::Corrupt(
-            "promise cluster: reaction kind does not resume",
-        ))) => {}
-        other => panic!("the store path must share the reaction-kind gate: {other:?}"),
-    }
+    expect_commit_and_external_store_refusal(
+        &read_machine(&bytes, &sig()).unwrap(),
+        &image,
+        "promise cluster: reaction kind does not resume",
+    );
 }
 
 #[test]

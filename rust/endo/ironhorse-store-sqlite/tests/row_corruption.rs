@@ -99,8 +99,16 @@ fn valid_database_row_corruption_fails_closed_on_every_adoption_path() {
             "UPDATE chunk_exts SET bytes = substr(bytes, 1, length(bytes) - 1)",
         ),
         (
+            "small-section-hash",
+            "UPDATE small_sections SET hash = zeroblob(32)",
+        ),
+        (
+            "missing-small-section",
+            "DELETE FROM small_sections WHERE id = 6",
+        ),
+        (
             "small-state-bytes",
-            "UPDATE small_state SET bytes = zeroblob(length(bytes))",
+            "UPDATE small_sections SET bytes = zeroblob(length(bytes))",
         ),
         ("free-segment-row", "DELETE FROM free_segs WHERE seg = 0"),
         (

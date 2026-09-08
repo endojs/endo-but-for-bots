@@ -306,11 +306,7 @@ fn incremental_batch(
     }
     manifest.root = ironhorse_snapshot::store::compute_root(
         &manifest,
-        &ironhorse_snapshot::store::leaf_hash(
-            ironhorse_snapshot::store::LEAF_SMALL,
-            0,
-            &small_bytes,
-        ),
+        &ironhorse_snapshot::store_sections::framed_root(&small_bytes).unwrap(),
         &lp,
         &le,
         &lf,
@@ -329,6 +325,7 @@ fn incremental_batch(
         prev_seal: prev_seal.to_string(),
         manifest,
         small: small_bytes,
+        small_updates: None,
         slot_pages,
         chunk_extents,
         free_segs,
