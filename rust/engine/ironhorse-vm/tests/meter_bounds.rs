@@ -113,3 +113,52 @@ fn a_fresh_machine_is_unarmed_and_a_host_refusal_aborts() {
     let out = armed.run(&b);
     assert!(matches!(out.halt, Halt::MeterAbort), "{:?}", out.halt);
 }
+
+#[test]
+fn builtin_allocation_admission_interrupts_before_the_temporary_buffer() {
+    for source in [
+        "'x'.repeat(1000000)",
+        "'x'.padStart(1000000, 'y')",
+        "'x'.padEnd(1000000, 'y')",
+        "new ArrayBuffer(1000000)",
+    ] {
+        let (code, names) = compile(source);
+        let mut plain = Interp::new();
+        plain.link_intrinsics(&names);
+        let whole = plain.run(&code);
+        assert!(whole.completed, "{source}: {:?}", whole.halt);
+        let limit = whole.computrons.saturating_sub(5);
+        let mut armed = Interp::new();
+        armed.link_intrinsics(&names);
+        armed.arm_meter(1, Box::new(move |spent| spent <= limit));
+        let before = armed.chunks.byte_size();
+        let out = armed.run(&code);
+        assert_eq!(out.halt, Halt::MeterAbort, "{source}");
+        assert!(
+            armed.chunks.byte_size() < before + 10000,
+            "result was allocated: {source}"
+        );
+    }
+}
+
+#[test]
+fn allocation_admission_preserves_completed_meter_totals() {
+    for source in [
+        "'ab'.repeat(100)",
+        "'x'.padStart(100, 'yz')",
+        "'x'.padEnd(100, 'yz')",
+        "new ArrayBuffer(100).byteLength",
+    ] {
+        let (code, names) = compile(source);
+        let mut plain = Interp::new();
+        plain.link_intrinsics(&names);
+        let unarmed = plain.run(&code);
+        let mut armed = Interp::new();
+        armed.link_intrinsics(&names);
+        armed.arm_meter(1, Box::new(|_| true));
+        let metered = armed.run(&code);
+        assert!(unarmed.completed && metered.completed, "{source}");
+        assert_eq!(unarmed.result, metered.result, "{source}");
+        assert_eq!(unarmed.meter_raw, metered.meter_raw, "{source}");
+    }
+}
