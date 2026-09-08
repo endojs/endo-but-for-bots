@@ -57,6 +57,11 @@ export const makeWorkerSessionRecords = ({
   const resourceInstances = new Map();
   /** @type {Map<string, any>} workerId -> ResumedSession controls */
   const resumedByWorkerId = new Map();
+  // Durable slot descriptions cannot keep the protocol's weak imports alive.
+  // An unreachable, forever-pending host promise may otherwise collect its
+  // resolver and release the hub route needed to reject it after a restart.
+  /** @type {Map<string, object>} */
+  const pendingResolverReferences = new Map();
   /** True while re-seating exports, whose re-fired hooks are echoes. */
   let restoring = false;
 
@@ -141,6 +146,15 @@ export const makeWorkerSessionRecords = ({
         return;
       }
       try {
+        const resumed = resumedByWorkerId.get(workerId);
+        resumed !== undefined || Fail`Worker session is not established`;
+        pendingResolverReferences.set(
+          `${workerId}:${resolverSlot}`,
+          resumed.provideImport({
+            type: 'o',
+            position: BigInt(resolverSlot.slice(2)),
+          }),
+        );
         const workerStore = store.provideWorkerStore(workerId);
         const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
         workerStore.setTablesRecord({
@@ -177,6 +191,7 @@ export const makeWorkerSessionRecords = ({
           delete pendingResolvers[resolverSlot];
           workerStore.setTablesRecord({ ...record, pendingResolvers });
         }
+        pendingResolverReferences.delete(`${workerId}:${resolverSlot}`);
       } catch (error) {
         reportError(error);
       }

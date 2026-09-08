@@ -268,6 +268,9 @@ Removing a registry entry releases its reference; it does not revoke references 
 ## Contacts and capability offers
 
 Local supervisors communicate through private, same-user Unix sockets with durable session recovery.
+The transport fragments large logical messages without imposing a smaller limit after durable admission.
+Publication imports and third-party gift redemptions share one outgoing session per exporter, preserving
+its routing alias and dial location across restart.
 An invitation grants one reciprocal exchange of contact inbox capabilities.
 Contact labels are local names, not authenticated human identities.
 The mailbox owner can cancel an invitation and withdraw its publication without revoking an

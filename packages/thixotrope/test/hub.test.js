@@ -764,3 +764,37 @@ test('released holdings return gc to the origin and shrink the tables', async t 
   );
   t.is(await E(shellAgain).evaluate('2 + 3'), 5);
 });
+
+test('remote route reuse preserves a legacy import alias and its serialized dial location', t => {
+  /** @type {any} */
+  let persisted;
+  const store = {
+    getState: () => persisted,
+    setState: state => {
+      persisted = JSON.parse(JSON.stringify(state));
+    },
+  };
+  const original = harden({
+    type: 'ocapn-peer',
+    network: 'tcp-testing-only',
+    transport: 'tcp-testing-only',
+    designator: 'exporter',
+    hints: { b: '2', a: '1' },
+  });
+  const first = makeOcapnHub({ codec: syrupCodec, store });
+  const { sessionKey } = first.prepareRemoteSession(original);
+  const legacyKey = 'handoff:import:legacy';
+  persisted.sessions[legacyKey] = persisted.sessions[sessionKey];
+  delete persisted.sessions[sessionKey];
+  const restored = makeOcapnHub({ codec: syrupCodec, store });
+  const equivalent = harden({
+    hints: { a: '1', b: '2' },
+    designator: 'exporter',
+    transport: 'tcp-testing-only',
+    type: 'ocapn-peer',
+  });
+  const route = restored.prepareRemoteSession(equivalent);
+  t.is(route.sessionKey, legacyKey);
+  t.is(JSON.stringify(route.location), JSON.stringify(original));
+  t.deepEqual(Object.keys(persisted.sessions), [legacyKey]);
+});

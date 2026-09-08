@@ -12,8 +12,9 @@ import { getuid } from 'node:process';
 /** @import { Socket } from 'node:net' */
 /** @import { Connection, NetlayerHandlers, Logger, NetLayer, SelfIdentity } from '@endo/ocapn/client/types' */
 
-// This private transport profile limits individual frames to one MiB.
+// Bound each physical fragment, not the already-admitted logical message.
 const maxFrameLength = 1024 * 1024;
+const continuationFlag = 0x8000_0000;
 const networkId = 'thix-unix';
 
 /**
@@ -49,8 +50,10 @@ export const assertUnixPeerLocation = location => {
 harden(assertUnixPeerLocation);
 
 /**
- * A same-user, private-directory Unix transport. Each frame is a four-byte
- * unsigned big-endian length followed by its payload. The caller must hold
+ * A same-user, private-directory Unix transport. Each fragment has a four-byte
+ * unsigned big-endian header: the high bit means more fragments follow, and
+ * the remaining bits are its payload length (at most one MiB). Logical messages
+ * are reassembled before delivery; socket loss discards incomplete messages. The caller must hold
  * exclusive ownership of the directory throughout the server lifetime and
  * remove any stale socket only after acquiring that ownership. This function
  * never unlinks a preexisting path or asynchronously unlinks a successor.
@@ -91,12 +94,18 @@ export const makeUnixNetLayer = async ({ socketPath, handlers, logger }) => {
     const connection = handlers.makeConnection(netlayer, originator, {
       write(bytes) {
         (!stopped && !socket.destroyed) || Fail`Unix connection is closed`;
-        (bytes.length > 0 && bytes.length <= maxFrameLength) ||
-          Fail`Invalid Unix frame length`;
-        const frame = new Uint8Array(4 + bytes.length);
-        new DataView(frame.buffer).setUint32(0, bytes.length);
-        frame.set(bytes, 4);
-        socket.write(frame);
+        bytes.length > 0 || Fail`Invalid Unix frame length`;
+        for (let offset = 0; offset < bytes.length; offset += maxFrameLength) {
+          const payload = bytes.subarray(offset, offset + maxFrameLength);
+          const more = offset + payload.length < bytes.length;
+          const frame = new Uint8Array(4 + payload.length);
+          new DataView(frame.buffer).setUint32(
+            0,
+            payload.length + (more ? continuationFlag : 0),
+          );
+          frame.set(payload, 4);
+          socket.write(frame);
+        }
       },
       end() {
         socket.destroy();
@@ -106,6 +115,10 @@ export const makeUnixNetLayer = async ({ socketPath, handlers, logger }) => {
     let headerUsed = 0;
     let payload = new Uint8Array();
     let payloadUsed = 0;
+    let more = false;
+    /** @type {Uint8Array[]} */
+    let fragments = [];
+    let messageLength = 0;
     socket.on('data', data => {
       if (typeof data === 'string') {
         socket.destroy();
@@ -120,7 +133,9 @@ export const makeUnixNetLayer = async ({ socketPath, handlers, logger }) => {
             headerUsed += count;
             offset += count;
             if (headerUsed < 4) return;
-            const size = new DataView(header.buffer).getUint32(0);
+            const encodedSize = new DataView(header.buffer).getUint32(0);
+            more = encodedSize >= continuationFlag;
+            const size = encodedSize % continuationFlag;
             (size > 0 && size <= maxFrameLength) ||
               Fail`Invalid Unix frame length`;
             payload = new Uint8Array(size);
@@ -137,7 +152,23 @@ export const makeUnixNetLayer = async ({ socketPath, handlers, logger }) => {
             headerUsed = 0;
             payloadUsed = 0;
             payload = new Uint8Array();
-            handlers.handleMessageData(connection, complete);
+            if (more) {
+              fragments.push(complete);
+              messageLength += complete.length;
+            } else if (fragments.length === 0) {
+              handlers.handleMessageData(connection, complete);
+            } else {
+              const message = new Uint8Array(messageLength + complete.length);
+              let messageOffset = 0;
+              for (const fragment of fragments) {
+                message.set(fragment, messageOffset);
+                messageOffset += fragment.length;
+              }
+              message.set(complete, messageOffset);
+              fragments = [];
+              messageLength = 0;
+              handlers.handleMessageData(connection, message);
+            }
           }
         }
       } catch (error) {
