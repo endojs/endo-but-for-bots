@@ -487,10 +487,9 @@ pub fn str_to_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-/// Render UTF-16 code units back to a Rust `String` for the text/symbol
-/// boundary (property keys, module specifiers, directives). Lone
-/// surrogates fold to U+FFFD (`from_utf16_lossy`); every well-formed key —
-/// which is all the corpus interns — round-trips exactly.
+/// Render UTF-16 code units lossily for diagnostics and directive comparison.
+/// Lone surrogates fold to U+FFFD. Property symbols must instead use the
+/// parser's checked conversion, which refuses unrepresentable keys.
 pub fn units_to_string(u: &[u16]) -> String {
     String::from_utf16_lossy(u)
 }
