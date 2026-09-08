@@ -518,8 +518,8 @@ transport netlayer (e.g. TCP) with resumable logical connections.
 Each logical connection carries an unguessable resume token; every
 OCapN frame rides in a sequence-numbered envelope; both sides retain
 unacknowledged frames; and when the socket dies, the originator
-reconnects with a `resume` preamble and each side replays what the
-other has not seen.
+reconnects with an idempotent version 2 `hello` and each side retransmits what the
+other has not durably accepted.
 The OCapN layer above is never told the socket dropped, so the
 session — and every live remote reference in it — survives
 transparently:
@@ -538,23 +538,24 @@ const daemon = await makeThixotropeDaemon({
 ```
 
 Wrap both peers.
-The current remote acknowledgement precedes the hub commit and does not prove durable acceptance;
-a crash in that gap can lose an acknowledged dispatch.
-See the [delivery requirements and gaps](designs/README.md#connection-failure-and-delivery-responsibility).
+Version 2 records incoming payloads before acknowledging acceptance, and retains outgoing messages
+until the receiving hop accepts responsibility.
+Invocation acceptance does not settle its result promise; later settlements use the same delivery
+machinery and survive disconnects.
+See the [layered delivery contract](designs/message-delivery.md).
 
+With the daemon's `resumption` adapter, both originator and acceptor sessions recover across restart.
+Their atomic session records contain inboxes, outboxes, watermarks, and pending handshake state.
+The daemon rebinds the transport to the existing hub session and drains accepted inbox work, even
+before the peer reconnects.
+A successor must retain the same reachable network identity and state directory.
 
-On the daemon side the sessions are also durable across **daemon
-restarts**: unacknowledged outbound frames persist per resume token,
-the session's state proper is its hub rows, and a resumed session
-reports the hub's committed receive watermark — the peer retransmits
-exactly what the hub has not absorbed, and the hub drops the overlap
-(exactly once).
-A successor process pins the same port; the peer's netlayer reconnects
-and resumes; the daemon rebinds the duct to the same hub session — no
-handshake, no re-seating, no worker wakes.
-Live remote references then keep working as if nothing happened —
-including calls issued while the daemon was down, which buffer in the
-peer's netlayer and complete against the successor.
+Peers advertise `restart` or `process` acceptance durability.
+Clients without a persistence adapter supply only the latter; their process exit can discard state.
+Version 1 receipt-only peers and stored sessions require explicit migration or retirement and are
+not silently treated as version 2 durable sessions.
+Resume tokens are bearer capabilities: use a confidential, authenticated base transport in production.
+The TCP testing transport in the example is suitable only for controlled tests.
 
 Known limits of the prototype: retransmit buffers are unbounded until
 acked; parked sessions are kept indefinitely (no session GC); and

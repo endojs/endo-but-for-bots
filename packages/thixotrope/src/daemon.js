@@ -180,6 +180,7 @@ const buildDaemon = async ({
         // hub frames toward a momentarily-detached worker session must
         // queue, never break.
         durable: true,
+        requireAcceptance: true,
       });
       if (workerStore.getMeta().failure !== undefined)
         hub.retireSession(workerId);
@@ -316,6 +317,8 @@ const buildDaemon = async ({
       // peer that is gone is gone.
       durable:
         sessionKey.startsWith('peer:') || sessionKey.startsWith('handoff:'),
+      requireAcceptance:
+        connection.netlayer.getResumeToken?.(connection) !== undefined,
       // A bad frame from beyond the process boundary aborts the
       // session and drops the connection.
       remote: true,
@@ -347,6 +350,36 @@ const buildDaemon = async ({
     // reset in a successor process and inherit the persisted hub
     // tables of a previous process's connection.
     return `conn:${randomHex128()}`;
+  };
+
+  /**
+   * @param {any} connection
+   * @param {Record<string, any>} update
+   */
+  const saveHandshake = (connection, update) => {
+    const token = netlayerRef.netlayer?.getResumeToken?.(connection);
+    if (token === undefined) return;
+    const sessionStore = store.provideSessionStore(token);
+    sessionStore.setMeta({ ...sessionStore.getMeta(), ...update });
+  };
+
+  /**
+   * @param {any} connection
+   * @param {string} sessionKey
+   * @param {any} identity
+   * @param {Record<string, any>} [extra]
+   */
+  const saveIdentity = (connection, sessionKey, identity, extra = {}) => {
+    saveHandshake(connection, {
+      ...extra,
+      hubSessionKey: sessionKey,
+      hubEpoch: hub.getSessionEpoch(sessionKey),
+      identity: {
+        sessionIdB64: encodeBase64(identity.sessionId),
+        peerPublicKeyQB64: encodeBase64(identity.peerPublicKeyQ),
+        selfPrivateKeyB64: encodeBase64(identity.selfPrivateKeyBytes),
+      },
+    });
   };
 
   const captpVersion = '1.0';
@@ -388,22 +421,29 @@ const buildDaemon = async ({
         keyPair,
         new ArrayBuffer(0),
       );
-      connection.write(
-        writeOcapnHandshakeMessage(
-          {
-            type: 'op:start-session',
-            captpVersion,
-            sessionPublicKey: keyPair.publicKey.descriptor,
-            location: myLocation,
-            locationSignature,
-          },
-          codec,
-        ),
+      const request = writeOcapnHandshakeMessage(
+        {
+          type: 'op:start-session',
+          captpVersion,
+          sessionPublicKey: keyPair.publicKey.descriptor,
+          location: myLocation,
+          locationSignature,
+        },
+        codec,
       );
+      saveHandshake(connection, {
+        hubSessionKey: sessionKey,
+        hubEpoch: hub.getSessionEpoch(sessionKey),
+        pendingPrivateKeyB64: encodeBase64(privateKeyBytes),
+        handshakeRequest: encodeBase64(request),
+      });
+      connection.write(request);
     } catch (error) {
       dialingSessions.delete(sessionKey);
       logError('handoff dial failed:', error);
-      hub.retireSession(sessionKey);
+      // A committed withdrawal remains an obligation. Local admission or
+      // storage failure does not prove that its destination is retired.
+      throw error;
     }
   };
 
@@ -439,23 +479,43 @@ const buildDaemon = async ({
     handleMessageData: (
       /** @type {any} */ connection,
       /** @type {Uint8Array} */ data,
-      /** @type {number | undefined} */ sequenceNumber = undefined,
+      /** @type {number | bigint | undefined} */ sequenceNumber = undefined,
     ) => {
       if (stopped) return;
       const bound = connectionSessions.get(connection);
       if (bound !== undefined) {
+        // The first frame is the handshake, whose intent and identity were
+        // persisted before its effects. Inbox replay must not decode it as
+        // an ordinary OCapN message after restoration already bound the hub.
+        if (sequenceNumber !== undefined && BigInt(sequenceNumber) === 1n)
+          return;
         bound.deliver(data, sequenceNumber);
         return;
+      }
+      const resumeToken = netlayerRef.netlayer?.getResumeToken?.(connection);
+      if (resumeToken !== undefined) {
+        const saved = store.provideSessionStore(resumeToken).getMeta();
+        if (saved.identity !== undefined) {
+          // Resume a handoff interrupted by an I/O error in this process.
+          // Do not generate a different key after the peer saw our response.
+          resumption.restoreSession(hubHandlers, connection, resumeToken);
+          if (sequenceNumber !== undefined && BigInt(sequenceNumber) === 1n)
+            return;
+          connectionSessions.get(connection)?.deliver(data, sequenceNumber);
+          return;
+        }
       }
       const dial = pendingOutbound.get(connection);
       if (dial !== undefined) {
         // The exporter's reply to our outbound handshake.
-        pendingOutbound.delete(connection);
+        let verified = false;
         try {
           const reader = codec.makeReader(data);
           const message = readOcapnHandshakeMessage(reader);
           message.type === 'op:start-session' ||
             Fail`expected op:start-session, got ${q(message.type)}`;
+          message.captpVersion === captpVersion ||
+            Fail`invalid captp version ${q(message.captpVersion)}`;
           const peerPublicKey = cryptography.makeOcapnPublicKey(
             message.sessionPublicKey.q,
           );
@@ -465,16 +525,22 @@ const buildDaemon = async ({
             peerPublicKey,
             new ArrayBuffer(0),
           );
+          verified = true;
           const sessionId = makeSessionId(
             dial.keyPair.publicKey.id,
             peerPublicKey.id,
           );
-          bindConnectionToHub(connection, dial.sessionKey, {
+          const identity = {
             sessionId,
             peerPublicKeyQ: message.sessionPublicKey.q,
             selfPrivateKeyBytes: dial.privateKeyBytes,
-          });
+          };
+          saveIdentity(connection, dial.sessionKey, identity);
+          bindConnectionToHub(connection, dial.sessionKey, identity);
+          pendingOutbound.delete(connection);
         } catch (error) {
+          if (verified) throw error;
+          pendingOutbound.delete(connection);
           logError('handoff handshake failed:', error);
           dialingSessions.delete(dial.sessionKey);
           hub.retireSession(dial.sessionKey);
@@ -484,6 +550,7 @@ const buildDaemon = async ({
       }
       // Handshake: answer op:start-session with a per-connection
       // identity, then bind the connection to a hub session.
+      let verified = false;
       try {
         const reader = codec.makeReader(data);
         const message = readOcapnHandshakeMessage(reader);
@@ -500,6 +567,7 @@ const buildDaemon = async ({
           peerPublicKey,
           new ArrayBuffer(0),
         );
+        verified = true;
         const { keyPair, privateKeyBytes } =
           cryptography.makeOcapnKeyPairWithPrivateBytes();
         const { location } = netlayerRef.netlayer;
@@ -509,25 +577,31 @@ const buildDaemon = async ({
           new ArrayBuffer(0),
         );
         const sessionId = makeSessionId(keyPair.publicKey.id, peerPublicKey.id);
-        connection.write(
-          writeOcapnHandshakeMessage(
-            {
-              type: 'op:start-session',
-              captpVersion,
-              sessionPublicKey: keyPair.publicKey.descriptor,
-              location,
-              locationSignature,
-            },
-            codec,
-          ),
+        const response = writeOcapnHandshakeMessage(
+          {
+            type: 'op:start-session',
+            captpVersion,
+            sessionPublicKey: keyPair.publicKey.descriptor,
+            location,
+            locationSignature,
+          },
+          codec,
         );
-        bindConnectionToHub(connection, sessionKeyForConnection(connection), {
+        const sessionKey = sessionKeyForConnection(connection);
+        const identity = {
           sessionId,
           peerPublicKeyQ: message.sessionPublicKey.q,
-          // The hub signs gift handoff receives with this session key.
           selfPrivateKeyBytes: privateKeyBytes,
+        };
+        // One document records the response and identity before either can
+        // become observable. A successor completes an interrupted handshake.
+        saveIdentity(connection, sessionKey, identity, {
+          handshakeResponse: encodeBase64(response),
         });
+        connection.write(response);
+        bindConnectionToHub(connection, sessionKey, identity);
       } catch (error) {
+        if (verified) throw error;
         logError('handshake failed:', error);
         connection.write(
           writeOcapnHandshakeMessage(
@@ -573,60 +647,75 @@ const buildDaemon = async ({
   });
 
   /**
-   * The netlayer's session-resumption power: frame-level durability in
-   * the session stores (as before), but restoration just rebinds the
-   * duct to the hub session — the tables are already there.
+   * Each session document atomically owns its incoming and outgoing frames,
+   * watermarks, incarnation, and handshake recovery state. The filesystem
+   * store publishes this document with fsync + rename + directory fsync.
    */
   const resumption = harden({
     isDurableToken: (/** @type {string} */ token) => isSessionToken(token),
-    onHello: (/** @type {string} */ token) => {
-      store.deleteSession(token);
-      store.provideSessionStore(token).setMeta({});
-      // A fresh logical connection under a reused token supersedes any
-      // prior hub session rows for it.
-      hub.retireSession(`peer:${token}`);
-    },
-    loadForResume: (/** @type {string} */ token) => {
-      if (!store.listSessionTokens().includes(token)) {
-        return undefined;
-      }
+    listSessions: () => store.listSessionTokens(),
+    isRetired: (/** @type {string} */ token) =>
+      store.listSessionTokens().includes(token) &&
+      Boolean(store.provideSessionStore(token).getMeta().retired),
+    recordRetirementConfirmed: (/** @type {string} */ token) => {
       const sessionStore = store.provideSessionStore(token);
       const meta = sessionStore.getMeta();
-      if (meta.established === undefined) {
-        return undefined;
-      }
-      const savedFrames = sessionStore.readFrames();
-      const frames = savedFrames.map(({ n, b64 }) => ({
-        n,
-        bytes: decodeBase64(b64),
-      }));
-      const hubDelivery = savedFrames.reduce(
-        (max, frame) => {
-          const sequence = BigInt(frame.hubSequence ?? '0');
-          return sequence > max ? sequence : max;
-        },
-        BigInt(meta.hubDelivery ?? '0'),
-      );
-      // A crash can land between the frame append and the sendSeq
-      // meta write; the frames file is the authority on how far the
-      // sequence actually advanced.
-      const sendSeq = frames.reduce(
-        (max, frame) => Math.max(max, Number(frame.n)),
-        Number(meta.sendSeq ?? 0),
-      );
-      // Report the hub's committed watermark, not the advisory netlayer one.
-      // Recovery still depends on the peer retaining the frame. The current
-      // pre-handler ack can make it discard that frame before the hub commits;
-      // this watermark alone cannot close it (see ../designs/README.md).
-      const recvSeq = Math.min(
-        Number(meta.recvSeq ?? 0),
-        hub.inboundWatermark(`peer:${token}`),
-      );
+      meta.retired || Fail`cannot confirm retirement of a live session`;
+      sessionStore.setMeta({ ...meta, retirementConfirmed: true });
+    },
+    recordPeerDurability: (
+      /** @type {string} */ token,
+      /** @type {'restart' | 'process'} */ scope,
+    ) => {
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      meta.peerDurability === undefined ||
+        meta.peerDurability === scope ||
+        Fail`peer durability changed within a session`;
+      sessionStore.setMeta({ ...meta, peerDurability: scope });
+    },
+    onHello: (
+      /** @type {string} */ token,
+      /** @type {any} */ location = undefined,
+    ) => {
+      !store.listSessionTokens().includes(token) ||
+        Fail`durable session token has already been used`;
+      store.provideSessionStore(token).setMeta({
+        version: 2,
+        isOriginator: location !== undefined,
+        ...(location === undefined ? {} : { location }),
+        recvSeq: '0',
+        sendSeq: '0',
+        ackSeq: '0',
+        processedSeq: '0',
+        hubDelivery: '0',
+        frames: [],
+        inbox: [],
+      });
+    },
+    loadForResume: (/** @type {string} */ token) => {
+      if (!store.listSessionTokens().includes(token)) return undefined;
+      const meta = store.provideSessionStore(token).getMeta();
+      // Receipt-only v1 records cannot establish durable acceptance.
+      if (meta.version !== 2) return undefined;
       return {
-        recvSeq,
-        sendSeq,
-        hubDelivery: String(hubDelivery),
-        frames,
+        recvSeq: meta.recvSeq,
+        sendSeq: meta.sendSeq,
+        ackSeq: meta.ackSeq,
+        hubDelivery: meta.hubDelivery,
+        isOriginator: meta.isOriginator,
+        location: meta.location,
+        peerDurability: meta.peerDurability,
+        retired: Boolean(meta.retired),
+        retirementConfirmed: Boolean(meta.retirementConfirmed),
+        frames: meta.frames.map((/** @type {any} */ frame) => ({
+          n: frame.n,
+          bytes: decodeBase64(frame.b64),
+        })),
+        inbox: meta.inbox.map((/** @type {any} */ frame) => ({
+          n: frame.n,
+          bytes: decodeBase64(frame.b64),
+        })),
       };
     },
     restoreSession: (
@@ -634,59 +723,99 @@ const buildDaemon = async ({
       /** @type {any} */ connection,
       /** @type {string} */ token,
     ) => {
-      // The peer resumed: its hub session rows are the session state.
-      // No handshake, no re-seating; just rebind the duct.
-      bindConnectionToHub(connection, `peer:${token}`);
+      const meta = store.provideSessionStore(token).getMeta();
+      if (meta.retired) return;
+      // A crash can occur after recording the handshake intent but before
+      // the transport accepts its first outgoing frame.
+      const firstFrame = meta.handshakeResponse ?? meta.handshakeRequest;
+      if (meta.sendSeq === '0' && firstFrame !== undefined) {
+        connection.write(decodeBase64(firstFrame));
+      }
+      if (meta.identity !== undefined) {
+        bindConnectionToHub(connection, meta.hubSessionKey, {
+          sessionId: decodeBase64(meta.identity.sessionIdB64),
+          peerPublicKeyQ: decodeBase64(meta.identity.peerPublicKeyQB64),
+          selfPrivateKeyBytes: decodeBase64(meta.identity.selfPrivateKeyB64),
+        });
+        if (meta.hubSessionKey.startsWith('handoff:'))
+          dialingSessions.add(meta.hubSessionKey);
+      } else if (meta.pendingPrivateKeyB64 !== undefined) {
+        const privateKeyBytes = decodeBase64(meta.pendingPrivateKeyB64);
+        pendingOutbound.set(connection, {
+          sessionKey: meta.hubSessionKey,
+          privateKeyBytes,
+          keyPair: cryptography.makeOcapnKeyPairFromPrivateKey(privateKeyBytes),
+        });
+        dialingSessions.add(meta.hubSessionKey);
+      }
     },
     recordOutbound: (
       /** @type {string} */ token,
-      /** @type {number} */ n,
+      /** @type {bigint} */ n,
       /** @type {Uint8Array} */ bytes,
       /** @type {string | undefined} */ hubSequence = undefined,
     ) => {
       const sessionStore = store.provideSessionStore(token);
-      sessionStore.appendFrame({
-        n,
-        b64: encodeBase64(bytes),
-        ...(hubSequence === undefined ? {} : { hubSequence }),
-      });
-      sessionStore.setMeta({
-        ...sessionStore.getMeta(),
-        sendSeq: n,
-        ...(hubSequence === undefined ? {} : { hubDelivery: hubSequence }),
-        established: true,
-      });
-    },
-    recordAck: (/** @type {string} */ token, /** @type {number} */ n) => {
-      const sessionStore = store.provideSessionStore(token);
       const meta = sessionStore.getMeta();
-      let sendSeq = Number(meta.sendSeq ?? 0);
-      let hubDelivery = BigInt(meta.hubDelivery ?? '0');
-      for (const frame of sessionStore.readFrames()) {
-        sendSeq = Math.max(sendSeq, frame.n);
-        const sequence = BigInt(frame.hubSequence ?? '0');
-        if (sequence > hubDelivery) hubDelivery = sequence;
-      }
-      // Retain acceptance before removing its journal evidence, including
-      // recovery from a crash between appendFrame and the metadata write.
+      !meta.retired || Fail`durable session is retired`;
+      n === BigInt(meta.sendSeq) + 1n || Fail`outbound sequence gap`;
       sessionStore.setMeta({
         ...meta,
-        sendSeq,
-        hubDelivery: String(hubDelivery),
+        sendSeq: String(n),
+        ...(hubSequence === undefined ? {} : { hubDelivery: hubSequence }),
+        frames: [...meta.frames, { n: String(n), b64: encodeBase64(bytes) }],
       });
-      sessionStore.truncateFramesUpTo(n);
     },
-    recordInbound: (/** @type {string} */ token, /** @type {number} */ n) => {
+    recordAck: (/** @type {string} */ token, /** @type {bigint} */ n) => {
       const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      n <= BigInt(meta.sendSeq) ||
+        Fail`acknowledgement exceeds issued sequence`;
+      if (n <= BigInt(meta.ackSeq)) return;
       sessionStore.setMeta({
-        ...sessionStore.getMeta(),
-        recvSeq: n,
-        established: true,
+        ...meta,
+        ackSeq: String(n),
+        frames: meta.frames.filter(
+          (/** @type {any} */ frame) => BigInt(frame.n) > n,
+        ),
+      });
+    },
+    recordInbound: (
+      /** @type {string} */ token,
+      /** @type {bigint} */ n,
+      /** @type {Uint8Array} */ bytes,
+    ) => {
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      !meta.retired || Fail`durable session is retired`;
+      if (n <= BigInt(meta.recvSeq)) return;
+      n === BigInt(meta.recvSeq) + 1n || Fail`inbound sequence gap`;
+      sessionStore.setMeta({
+        ...meta,
+        recvSeq: String(n),
+        inbox: [...meta.inbox, { n: String(n), b64: encodeBase64(bytes) }],
+      });
+    },
+    recordProcessed: (/** @type {string} */ token, /** @type {bigint} */ n) => {
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      if (meta.retired || n <= BigInt(meta.processedSeq)) return;
+      n === BigInt(meta.processedSeq) + 1n || Fail`processed sequence gap`;
+      n <= BigInt(meta.recvSeq) || Fail`processing unaccepted frame`;
+      sessionStore.setMeta({
+        ...meta,
+        processedSeq: String(n),
+        inbox: meta.inbox.filter(
+          (/** @type {any} */ frame) => BigInt(frame.n) > n,
+        ),
       });
     },
     onEnd: (/** @type {string} */ token) => {
-      store.deleteSession(token);
-      hub.retireSession(`peer:${token}`);
+      const sessionStore = store.provideSessionStore(token);
+      const meta = sessionStore.getMeta();
+      // Never reuse a retired incarnation after releasing its dedup state.
+      sessionStore.setMeta({ ...meta, retired: true, frames: [], inbox: [] });
+      hub.retireSession(meta.hubSessionKey ?? `peer:${token}`, meta.hubEpoch);
     },
   });
 
@@ -849,6 +978,12 @@ const buildDaemon = async ({
     }),
     resumption,
   });
+  for (const token of store.listSessionTokens()) {
+    const meta = store.provideSessionStore(token).getMeta();
+    if (meta.retired)
+      hub.retireSession(meta.hubSessionKey ?? `peer:${token}`, meta.hubEpoch);
+  }
+  netlayerRef.netlayer.start?.();
   const { location } = netlayerRef.netlayer;
 
   // Gift redemptions interrupted by the previous process's death:

@@ -140,25 +140,43 @@ Application-level code upgrades and automatic runtime migration are not implemen
 ## Remote objects and connections
 
 A durable reference's lifetime is separate from any particular socket.
-The intended ordinary-call contract is to reuse a usable connection or connect lazily when needed.
-A failed connection attempt rejects that call while leaving the reference available for a later call.
-Loss of a reply to a sent call leaves its outcome uncertain.
+Connection acquisition reuses a healthy route or attempts a lazy connection and can fail before an
+application invocation is accepted.
+Once a vat commits a send, the node owns a durable outbox obligation.
+Temporary connection failure leaves that obligation pending; recovery retries the same delivery
+identity until responsibility is transferred or a defined terminal disposition is recorded.
+A socket error alone is not such a disposition.
 
-The current prototype has a different availability policy: `makeDurableNetLayer` hides physical
-socket loss behind automatic reconnection and queued frames.
-It assigns logical-session tokens and per-direction frame numbers and retains unacknowledged output.
-The host supports acceptor-side session recovery across daemon restart; originator-side process
-recovery is not implemented.
-This resumption envelope is Thixotrope-specific, not an OCapN session-resumption standard.
+Unsettled application promises and their listeners survive disconnection.
+Invocation acceptance does not settle the result promise.
+A later settlement is another message that is delivered when connectivity permits.
+Lost delivery confirmation requires recovery of the existing message, not a fresh invocation.
+The intended contract applies to handoffs within a node as well as between nodes.
+Each owner retains recoverable work until the next owner durably accepts responsibility.
 
-There is a known remote acknowledgement gap.
-The remote transport sends `ack` before the hub commits the incoming dispatch and does not journal
-the incoming payload at that point.
-If the peer discards its acknowledged frame and the host crashes before handler commit, the frame
-may be lost.
-Reporting the hub's earlier committed watermark on resume cannot recover an already discarded copy.
-The local journal/outbox guarantees therefore do not establish end-to-end durable acceptance for
-this remote path.
+`makeDurableNetLayer` implements this transfer with a versioned envelope, decimal sequence numbers,
+and separate accepted and processed watermarks.
+The receiver records the payload in its durable inbox before acknowledging acceptance.
+Hub dispatch commits routing changes and onward outboxes before inbox reclamation.
+Lost acknowledgements trigger retransmission and repeated acceptance receipts, without a new logical
+invocation.
+Both originator and acceptor session records recover across daemon restart, including pending
+handshake identity and output.
+Ordinary socket loss preserves references, listeners, and delivery obligations.
+
+Peers advertise whether acceptance survives restart or only the current process.
+A peer without a persistence adapter supplies the weaker process-lifetime contract explicitly.
+The protocol refuses an acceptance-profile change within an incarnation and rejects receipt-only
+version 1 envelopes; old version 1 session records are not automatically migrated.
+This resumption envelope is Thixotrope-specific, not an OCapN standard.
+Resume tokens are bearer capabilities and require a confidential, authenticated base transport in
+production; the TCP testing transport does not supply those properties.
+
+Retirement persists a tombstone, completes hub cleanup across restart, and answers later reconnects
+with a terminal disposition if the original close notification was lost.
+Temporary unavailability cannot retire a session.
+Storage publication uses synchronous file and directory flushes, but process-crash tests do not
+establish hardware power-loss behavior.
 
 ## Host resources and persistence boundaries
 

@@ -122,7 +122,7 @@ test.serial('a resumed session continues without a handshake', async t => {
   const [token] = store.listSessionTokens();
   const metaPath = join(statePath, 'sessions', token, 'meta.json');
   const before = JSON.parse(readFileSync(metaPath, 'utf8'));
-  t.true(before.established, 'the session recorded its frame watermarks');
+  t.is(before.version, 2, 'the session records durable acceptance');
   t.true(Number(before.recvSeq) > 0);
 
   await daemon1.shutdown();
