@@ -13494,6 +13494,10 @@ impl Interp {
             && self.async_run_stack.is_empty()
             && self.async_gen_run_stack.is_empty()
             && self.array_iterator_proxy_get_context.is_none()
+            && self.pending_new_target.is_none()
+            && self.resume_status == ResumeStatus::NoStatus
+            && !self.eval_direct
+            && !self.direct_eval_hoist
             && self.exception.kind == Kind::Undefined
             && !self.id_space_exhausted
             && !self.side_refs.is_poisoned()
@@ -14332,6 +14336,10 @@ impl Interp {
             self.result = Slot::undefined();
             self.locals.clear();
             self.id_map.clear();
+            self.pending_new_target = None;
+            self.resume_status = ResumeStatus::NoStatus;
+            self.eval_direct = false;
+            self.direct_eval_hoist = false;
         }
         self.last_crank_completed = completed;
         // `active_segment` identifies only the buffer of the dispatch in
@@ -61747,6 +61755,123 @@ mod tests {
     }
 
     #[test]
+    fn hidden_control_latches_independently_refuse_quiescence() {
+        let mut m = Interp::new();
+        assert!(m.is_quiescent());
+        for status in [ResumeStatus::Return, ResumeStatus::Throw] {
+            m.resume_status = status;
+            assert!(!m.is_quiescent());
+        }
+        m.resume_status = ResumeStatus::NoStatus;
+        m.eval_direct = true;
+        assert!(!m.is_quiescent());
+        m.eval_direct = false;
+        m.direct_eval_hoist = true;
+        assert!(!m.is_quiescent());
+        m.direct_eval_hoist = false;
+        assert!(m.is_quiescent());
+    }
+
+    #[test]
+    fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
+        use crate::opcode::instruction_len;
+        use crate::value::SlotIndex;
+        let cases = [
+            ("StepLimit", "function f(){ while(true){} }", "f()", None),
+            ("MeterAbort", "function f(){ while(true){} }", "f()", None),
+            ("NotImplemented", "", "eval('0')", None),
+            ("Refused", "", "String.raw({raw:{length:16777217}})", None),
+            (
+                "EngineInvariant",
+                "",
+                "0",
+                Some(Opcode::XS_CODE_CLASS as u8),
+            ),
+            ("StackOverflow", "function f(){ return f(); }", "f()", None),
+            ("Decode", "", "0", Some(255)),
+        ];
+        for (kind, prefix, argument, replacement) in cases {
+            let source = format!("{prefix} class A {{}} class B extends A {{ constructor() {{ super({argument}); }} }} new B();");
+            let (mut code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
+            if let Some(byte) = replacement {
+                let mut pc = 0;
+                loop {
+                    let size = instruction_len(&code, pc).expect("compiled instruction");
+                    if code[pc] == Opcode::XS_CODE_SUPER as u8 {
+                        code[pc + size] = byte;
+                        break;
+                    }
+                    pc += size;
+                }
+            }
+            let mut m = Interp::new();
+            m.link_intrinsics(&crate::parse_symbols(&symbols));
+            if kind == "MeterAbort" {
+                let mut checks = 0;
+                m.arm_meter(
+                    1,
+                    Box::new(move |_| {
+                        checks += 1;
+                        checks < 10
+                    }),
+                );
+            }
+            let out = m.run_bounded(&code, 100_000);
+            assert!(
+                format!("{:?}", out.halt).starts_with(kind),
+                "{kind}: {:?}",
+                out.halt
+            );
+            let target = m
+                .pending_new_target
+                .unwrap_or_else(|| panic!("{kind}: SUPER must still be armed at the halt"));
+            assert!(
+                m.gc_roots().contains(&target),
+                "{kind}: pending target must be rooted"
+            );
+            assert!(
+                !m.is_quiescent(),
+                "{kind}: halted activation must not persist"
+            );
+            m.collect_garbage();
+            assert!(
+                !m.slots.free_list().contains(&target.0),
+                "{kind}: collection lost the target"
+            );
+            m.reattach_meter_host(Box::new(|_| true));
+            let (next, names) = ironhorse_compile::compile_atoms(
+                "class K { constructor() { this.ok = new.target === K; } } new K().ok",
+            )
+            .unwrap();
+            let next = m
+                .relink_crank(&next, &crate::parse_symbols(&names))
+                .unwrap();
+            let out = m.run(&next);
+            assert!(out.completed, "{kind}: {:?}", out.halt);
+            assert_eq!(
+                out.result, "true",
+                "{kind}: stale new.target reached next crank"
+            );
+            assert!(m.pending_new_target.is_none());
+            assert!(
+                m.is_quiescent(),
+                "{kind}: next crank did not retire activation"
+            );
+        }
+        // Isolate the register from every other root so a redundant reference
+        // from a live class cannot hide a missing GC visit.
+        let mut m = Interp::new();
+        let orphan = m.slots.alloc(Slot::instance(SlotIndex::NULL));
+        m.pending_new_target = Some(orphan);
+        assert!(!m.is_quiescent());
+        m.collect_garbage();
+        assert!(!m.slots.free_list().contains(&orphan.0));
+        m.pending_new_target = None;
+        m.collect_garbage();
+        assert!(m.slots.free_list().contains(&orphan.0));
+    }
+
+    #[test]
     fn internal_transfers_cannot_be_reported_as_host_completions() {
         let mut interp = Interp::new();
         for step in [
@@ -63948,6 +64073,9 @@ impl Interp {
         // reference, so this register is an environment instance's
         // SOLE holder while a `with` body executes.
         slot_roots(&self.env, &mut roots);
+        // SUPER can arm this register before an argument halts. Keep it
+        // alive during inspection/GC until the next run abandons the frame.
+        roots.extend(self.pending_new_target);
         for f in &self.call_stack {
             for s in &f.locals {
                 slot_roots(s, &mut roots);
