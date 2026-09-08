@@ -78,6 +78,8 @@ fn historical_boot_cannot_authorize_migration_even_with_matching_signature() {
     .expect("copy fixture");
     let mut store = SqliteHeapStore::open(&path).unwrap();
     let before = store.manifest().unwrap();
+    let wal = path.with_extension("sqlite-wal");
+    let bytes_before = (std::fs::read(&path).unwrap(), std::fs::read(&wal).ok());
     for expected in [sig(), before.signature.clone()] {
         assert!(matches!(
             migrate_store(&mut store, &expected),
@@ -87,6 +89,11 @@ fn historical_boot_cannot_authorize_migration_even_with_matching_signature() {
             }))
         ));
         assert_eq!(store.manifest().unwrap(), before);
+        assert_eq!(
+            (std::fs::read(&path).unwrap(), std::fs::read(&wal).ok()),
+            bytes_before,
+            "a boot refusal cannot mutate the database or WAL"
+        );
     }
     store.close().unwrap();
 }
