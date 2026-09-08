@@ -27,6 +27,7 @@ import { makeDurableNetLayer } from './durable-netlayer.js';
 import { makeIronhorseEngine } from './ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
+import { makeHttpServices } from './http-services.js';
 import { makeObservableInventory } from './observable-inventory.js';
 import { makeMailbox } from './mailbox.js';
 import { makeFsStore } from './store-fs.js';
@@ -141,6 +142,17 @@ export const serveThixotrope = async (
     requestStop = resolveStop;
   });
   let daemon;
+  /** @type {ReturnType<typeof makeHttpServices> | undefined} */
+  let httpServices;
+  const provideHttpServices = () => {
+    httpServices ??= makeHttpServices({
+      statePath,
+      publish: (handler, secret) => daemon.publish(handler, secret),
+      unpublish: secret => daemon.unpublish(secret),
+      openClient: () => daemon.openEphemeralClient(),
+    });
+    return httpServices;
+  };
   /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
   let peerNetlayer;
   const closePeers = async () => {
@@ -190,6 +202,10 @@ export const serveThixotrope = async (
       engine: measured,
       codec: syrupCodec,
       idleSleepMs,
+      resources: {
+        'http-listener': description =>
+          provideHttpServices().resource(description),
+      },
       makeNetlayer: async ({ handlers, logger, resumption }) => {
         // makeThixotropeDaemon already holds the exclusive engine lease.
         await rm(peerPath, { force: true });
@@ -207,6 +223,7 @@ export const serveThixotrope = async (
         });
       },
     });
+    await provideHttpServices().start();
     const configPath = join(statePath, 'workspace.json');
     let config;
     try {
@@ -350,6 +367,19 @@ export const serveThixotrope = async (
       reachability: () => daemon.inspectReachability(),
       collect: () => daemon.collectVats(),
       inventoryStatus: () => E(inventory).subscriptionCounts(),
+      httpGrant: async (key, port) => {
+        if (requested) throw Error('Supervisor is stopping');
+        if (typeof key !== 'string' || !key.length)
+          throw Error('Expected inventory key');
+        const description = provideHttpServices().allocate(port);
+        const listener = daemon.makeResource('http-listener', description);
+        await workspace.evaluate('(inventory.set(key, listener), true)', {
+          key,
+          listener,
+        });
+        return E(listener).status();
+      },
+      httpServices: () => provideHttpServices().list(),
       invite: async name => {
         const invitation = await E(getMailbox()).invite(name);
         const secret = daemon.publish(invitation);
@@ -451,8 +481,12 @@ export const serveThixotrope = async (
           await closeControl();
         } finally {
           try {
-            await closePeers();
-            await daemon.shutdown();
+            try {
+              await httpServices?.shutdown();
+            } finally {
+              await closePeers();
+              await daemon.shutdown();
+            }
           } finally {
             closeSocket();
             requestStop();
@@ -467,8 +501,12 @@ export const serveThixotrope = async (
       await closeControl();
     } finally {
       closeSocket();
-      await closePeers();
-      await daemon?.crash();
+      try {
+        await httpServices?.shutdown();
+      } finally {
+        await closePeers();
+        await daemon?.crash();
+      }
     }
     throw error;
   }

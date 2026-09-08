@@ -18,6 +18,7 @@ import {
 
 import { makeOcapnHub } from './hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
+import { makeEphemeralHubClient } from './ephemeral-hub-client.js';
 import { derivePipeResumption } from './pipe-network.js';
 import { isSessionToken } from './store-fs.js';
 import { inspectVatReachability } from './vat-reachability.js';
@@ -85,6 +86,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {(value: object, secret?: string) => string} publish
  * @property {(secret: string) => void} unpublish
  * @property {(location: any, secret: string) => Promise<any>} importReference fetch a remote publication through the durable hub session
+ * @property {() => Promise<Awaited<ReturnType<typeof makeEphemeralHubClient>>>} openEphemeralClient open disposable host request/observer session
  * @property {<T = any>(secret: string | Uint8Array) => Promise<T>} lookup the
  *   embedder's in-process route to a publication, through the endpoint.
  *   The daemon cannot know what interface a publication has — the
@@ -272,6 +274,11 @@ const buildDaemon = async ({
   // flowing directly between the hub duct and the client's message
   // handler.
   let stopped = false;
+  let stopping = false;
+  /** @type {Set<Awaited<ReturnType<typeof makeEphemeralHubClient>>>} */
+  const transientClients = new Set();
+  /** @type {Set<Promise<Awaited<ReturnType<typeof makeEphemeralHubClient>>>>} */
+  const openingTransientClients = new Set();
   /** @type {Uint8Array[]} */
   const endpointOutbound = [];
   const endpointConnection = harden({
@@ -1000,6 +1007,19 @@ const buildDaemon = async ({
   }
 
   const stopDaemon = async () => {
+    stopping = true;
+    // A client still being constructed must finish before releasing the lease.
+    await Promise.allSettled([...openingTransientClients]);
+    /** @type {unknown} */
+    let transientFailure;
+    for (const client of transientClients) {
+      try {
+        client.close();
+      } catch (error) {
+        transientFailure ??= error;
+      }
+    }
+    transientClients.clear();
     for (const entry of workers.values()) entry.transport.end();
     try {
       // Drain every transport even when one termination fails. No queued wake
@@ -1010,6 +1030,7 @@ const buildDaemon = async ({
       for (const result of results) {
         if (result.status === 'rejected') throw result.reason;
       }
+      if (transientFailure !== undefined) throw transientFailure;
     } finally {
       stopped = true;
       endpointClient.shutdown();
@@ -1022,6 +1043,12 @@ const buildDaemon = async ({
   // second dispatch, so no future network traffic need wake these workers.
   // Checkpointed sleepers and quarantined workers remain asleep.
   try {
+    // HTTP sockets and other transient host observers do not survive a process.
+    // Cleanup is inside the startup failure guard: persistence refusal must
+    // still stop all transports before releasing exclusive store ownership.
+    for (const key of Object.keys(store.getHubState()?.sessions ?? {})) {
+      if (key.startsWith('transient:')) hub.forgetSession(key);
+    }
     await Promise.all(
       [...workers].map(async ([workerId, entry]) => {
         const workerStore = store.provideWorkerStore(workerId);
@@ -1106,6 +1133,34 @@ const buildDaemon = async ({
     },
     unpublish: secret => hub.unpublish(secret),
     lookup,
+    openEphemeralClient: async () => {
+      if (stopping) throw Error('Daemon is stopping');
+      const opening = makeEphemeralHubClient({
+        codec,
+        hub,
+        sessionKey: `transient:${randomHex128()}`,
+      });
+      openingTransientClients.add(opening);
+      let client;
+      try {
+        client = await opening;
+      } finally {
+        openingTransientClients.delete(opening);
+      }
+      const wrapped = harden({
+        lookup: client.lookup,
+        close: () => {
+          client.close();
+          transientClients.delete(wrapped);
+        },
+      });
+      transientClients.add(wrapped);
+      if (stopping) {
+        wrapped.close();
+        throw Error('Daemon is stopping');
+      }
+      return wrapped;
+    },
     importReference: (remoteLocation, secret) => {
       const key = `handoff:import:${locationToLocationId(remoteLocation)}`;
       hub.prepareRemoteSession(key, remoteLocation);
