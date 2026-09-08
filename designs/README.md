@@ -314,6 +314,7 @@ LLM-agent stack).*
 | [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) | 2026-07-29 | 2026-08-24 | Proposed |
 | [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | In Progress |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | In Progress |
+| [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) | 2026-09-08 | 2026-09-08 | Not Started |
 | [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) | 2026-07-10 | 2026-07-10 | Not Started |
 | [endo-fs-from-git](endo-fs-from-git.md) | 2026-05-28 | 2026-05-28 | In Progress |
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-07-22 | **Complete** (PR #125: `editMessage`, `messageHistory`, `done`; supersedes the retired `streamReply` sketch) |
