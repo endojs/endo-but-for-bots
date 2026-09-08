@@ -23,6 +23,7 @@ import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { makeTimerResource } from '../src/resources.js';
 import { makeFsStore } from '../src/store-fs.js';
 import { makeTestOcapn } from './_util.js';
+import { parkWorkers } from './_park-workers.js';
 
 const COUNTER_SOURCE = `
 (() => {
@@ -367,8 +368,7 @@ test.serial(
       [first.workerId, await first.evaluate(COUNTER_SOURCE)],
       [second.workerId, await second.evaluate(COUNTER_SOURCE)],
     ]);
-    await first.sleep();
-    await second.sleep();
+    await parkWorkers(daemon);
     const [victim, rescued] = daemon.inspectReachability().collectible;
     t.is(daemon.inspectReachability().collectible.length, 2);
     deleting = id => {

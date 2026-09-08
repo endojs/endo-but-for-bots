@@ -2170,6 +2170,20 @@ export const makeOcapnHub = ({
       return facing;
     },
     /**
+     * Record a remote bootstrap route before admitting its first fetch.
+     * Existing attached sessions keep their transport and reference identity.
+     * @param {string} sessionKey
+     * @param {any} location
+     */
+    prepareRemoteSession: (sessionKey, location) => {
+      const session = provideSessionState(sessionKey);
+      if (session.retired) throw Error('Remote session has been retired');
+      session.durable = true;
+      session.dialLocation = location;
+      dirty = true;
+      persist();
+    },
+    /**
      * Publish the reference a session HOLDS at one of the hub's export
      * positions toward it — the natural form for an embedder endpoint
      * that knows its own import positions.

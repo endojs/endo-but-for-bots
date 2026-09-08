@@ -5,7 +5,11 @@ import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
 import { E, Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
-import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
+import {
+  encodeSwissnum,
+  locationToLocationId,
+  swissnumFromBytes,
+} from '@endo/ocapn/client/util';
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
   readOcapnHandshakeMessage,
@@ -80,6 +84,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {(name: string, description?: unknown) => object} makeResource
  * @property {(value: object, secret?: string) => string} publish
  * @property {(secret: string) => void} unpublish
+ * @property {(location: any, secret: string) => Promise<any>} importReference fetch a remote publication through the durable hub session
  * @property {<T = any>(secret: string | Uint8Array) => Promise<T>} lookup the
  *   embedder's in-process route to a publication, through the endpoint.
  *   The daemon cannot know what interface a publication has — the
@@ -1101,6 +1106,17 @@ const buildDaemon = async ({
     },
     unpublish: secret => hub.unpublish(secret),
     lookup,
+    importReference: (remoteLocation, secret) => {
+      const key = `handoff:import:${locationToLocationId(remoteLocation)}`;
+      hub.prepareRemoteSession(key, remoteLocation);
+      const position = hub.introduce(ENDPOINT_SESSION, {
+        session: key,
+        position: 0n,
+      });
+      handoffDialRef.connect(remoteLocation, key);
+      const bootstrap = endpointResumed.provideImport({ type: 'o', position });
+      return E(bootstrap).fetch(encodeSwissnum(secret));
+    },
     inspectReachability,
     collectVats: async ({ keep = [] } = {}) => {
       const candidates = inspectReachability({ keep }).collectible;

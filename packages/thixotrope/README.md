@@ -174,6 +174,52 @@ Unused application vats become eligible for ordinary vat collection.
 This initial version provides installation, not live code upgrades.
 
 
+## Local introductions and capability mail
+
+Each supervisor also listens on `peers.sock`, a private Unix socket.
+This initial transport connects supervisors owned by the same OS user on one machine.
+It checks the destination directory's ownership and permissions before sending a resumption token.
+It is not a transport for connections between machines or mutually untrusted OS users.
+
+Run two supervisors with different private state directories, then use these commands
+(shown as `thix`; from the repository root use `node packages/thixotrope/bin/thix.js`):
+
+```sh
+thix invite ./alice bob
+# Copy the JSON invitation into Bob's command, quoted as one argument:
+thix connect ./bob alice '<invitation JSON>'
+thix contacts ./alice
+thix contacts ./bob
+thix send ./alice bob 'Try this counter' counter
+thix mail ./bob
+```
+
+The last argument to `send` selects one capability from Alice's inventory.
+For example, install the counter example and use `attach` to run
+`E(apps).get('counter').then(counter => { inventory.set('counter', counter); })`.
+Bob's mailbox view supports `r` to refresh, `take <id> <inventory-key>`,
+`discard <id>`, and `q` to disconnect.
+`inbox`, `outbox`, and `contacts` provide the same descriptions as JSON for scripts.
+`take` copies a capability into the inventory; `discard` releases only the mailbox's reference.
+The view never receives the offered capabilities themselves and creates no guest subscriptions.
+
+Contact names are local labels, not claims of authenticated human identity.
+Possession of an invitation permits one reciprocal exchange of inbox capabilities.
+A different receiver cannot redeem the same invitation again.
+`revoke-invite ./alice '<invitation JSON>'` cancels future redemption and removes its publication;
+it does not revoke an already established contact or capabilities previously sent.
+Treat invitations as secrets and share them only with the intended recipient.
+
+The mailbox is a separate persistent guest vat, created on first use.
+Its ordinary Maps retain contacts, offers, and delivery statuses without a special GC policy.
+The workspace holds its owner capability; remote contacts receive only their own submission facet.
+Connect while the destination is online and wait for contact status `ready` before sending.
+Once established, calls use durable sessions: a send while the recipient is offline can remain
+`sending` until reconnect, including after both supervisors restart.
+The guest issues one invocation per send; the node owns delivery retries after admission.
+This does not yet provide a separate application admission API or user-space retry proxy.
+An interrupted introduction command can have an uncertain outcome; inspect `contacts` before retrying.
+
 ## Ironhorse demos and CI tests
 
 Each demo runs two guest vats in separate Ironhorse processes, connected only

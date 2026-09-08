@@ -9,6 +9,7 @@ export default {
     'test/ironhorse/remote-delivery.js',
     'test/ironhorse/reachability.js',
     'test/ironhorse/supervisor.js',
+    'test/ironhorse/mailbox.js',
   ],
   timeout: '3m',
   concurrency: 1,
