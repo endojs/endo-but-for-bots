@@ -19,6 +19,7 @@
     ".": "./src/index.js",
     "./src/asset-server.js": "./src/asset-server.js",
     "./src/asset-server-module.js": "./src/asset-server-module.js",
+    "./src/serve-tree.js": "./src/serve-tree.js",
     "./src/type-guards.js": "./src/type-guards.js",
     "./src/mime.js": "./src/mime.js",
     "./package.json": "./package.json"

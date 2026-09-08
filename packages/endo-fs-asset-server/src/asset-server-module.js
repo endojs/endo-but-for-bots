@@ -1,5 +1,4 @@
 // @ts-check
-/* global globalThis */
 /**
  * Entry point for instantiating a static asset server as a formulated
  * Endo caplet via `host.makeUnconfined`.
