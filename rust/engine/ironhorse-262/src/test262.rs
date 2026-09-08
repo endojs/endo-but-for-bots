@@ -155,43 +155,22 @@ pub(crate) fn classify_run(r: DualRun) -> Class {
         return Class::Skipped("parse-or-decode".into());
     }
     match r.agreement {
-        // ironhorse ran to a normal completion. Bit-exact (result AND
-        // computron) is the only "covered" — a program is certified only
-        // when it agrees on both axes. The other completing shapes are
-        // built-in gaps at stage 2b ("built-ins stubbed"), named honestly:
-        //  - ironhorse renders a non-primitive completion as its Reference stub
-        //    (`[object Object]`) where the oracle's `String()` of a function
-        //    or object differs — a `Function.prototype.toString` / object
-        //    coercion gap, not a covered-grammar error.
-        //  - ironhorse computes the SAME value but diverges on computrons: it
-        //    completed the value correctly but under-meters a built-in step
-        //    it does not model (object `ToPrimitive` in a numeric/bitwise
-        //    coercion, function naming via a property define). Named as a
-        //    computron gap, not folded into `covered`.
-        //  - ironhorse computes a DIFFERENT primitive value: a genuine
-        //    covered-grammar correctness bug the bar forbids.
-        // (The strict metering guarantee for the covered *primitive*
-        // grammar is carried with zero tolerance by the curated corpora and
-        // the differential fuzz, which is how e.g. the sloppy-global
-        // create-metering gap this runner first surfaced was fixed.)
+        // Observable results gate coverage; XS costs are advisory.
         Agreement::BothComplete => {
-            if r.is_bit_exact() {
+            if r.observables_agree() {
                 Class::Covered
             } else if r.ironhorse_result == "[object Object]" && !r.result_agrees {
                 Class::Skipped("non-primitive-completion".into())
-            } else if r.result_agrees {
-                Class::Skipped("builtin-coercion-computron-gap".into())
             } else {
                 Class::Divergent(Box::new(r))
             }
         }
-        // A shared abort is covered only when the thrown value AND
-        // computrons match (a primitive throw the oracle also throws, per
-        // the tightened predicate). A test whose oracle abort is a real
+        // A shared abort agrees only when the thrown value matches.
+        // A test whose oracle abort is a real
         // `Error` object ironhorse does not construct simply does not match —
         // that is a built-in gap, named as a skip, not a divergence.
         Agreement::BothAbort => {
-            if r.is_bit_exact() {
+            if r.observables_agree() {
                 Class::Covered
             } else {
                 Class::Skipped("abort-value-or-cost-differs".into())

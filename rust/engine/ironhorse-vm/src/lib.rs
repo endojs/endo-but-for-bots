@@ -7,8 +7,8 @@
 //! and 32-byte slot value model, a `Vec`-backed slot stack, a
 //! `match`-dispatch interpreter over the arithmetic / logic / bitwise /
 //! comparison / branch / stack opcode subset of the XS `XS_CODE_*` ISA,
-//! the 16.16 fixed-point meter incrementing at XS's points with XS's
-//! weights, and a primordial `Compartment.evaluate` seam.
+//! a frozen 16.16 fixed-point Ironhorse meter with XS-derived weights
+//! (oracle computrons are advisory), and a `Compartment.evaluate` seam.
 //!
 //! The whole crate is `#![forbid(unsafe_code)]` (requirement 2): the
 //! index-arena design removes the need for raw pointers, so the

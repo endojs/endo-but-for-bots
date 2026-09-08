@@ -25,7 +25,6 @@
 /// (design § Metering, "Check points and abort": the abort point is a
 /// release-defined outcome, not a cost-table fact).
 pub use ironhorse_meter::COST_TABLE_VERSION;
-use ironhorse_meter::{CHUNK_ALIGNMENT, CHUNK_HEADER_BYTES};
 
 /// `XS_BIGINT_METERING`.
 pub use ironhorse_meter::BIGINT_METERING;
@@ -252,8 +251,13 @@ impl Meter {
     /// length in the way XS's does.
     #[inline]
     pub fn tick_chunk_new(&mut self, size: u64) {
-        let aligned = (size + CHUNK_ALIGNMENT - 1) & !(CHUNK_ALIGNMENT - 1);
-        self.index += (aligned + CHUNK_HEADER_BYTES) * CHUNK_ALLOCATION_METERING;
+        self.tick_raw(ironhorse_meter::chunk_cost(size));
+    }
+
+    /// Charge a string chunk by UTF-16 code-unit length, including the terminator.
+    #[inline]
+    pub fn tick_string(&mut self, units: u64) {
+        self.tick_raw(ironhorse_meter::string_chunk_cost(units));
     }
 
     /// Accrue `n` raw 16.16-fixed-point units directly. Used for the

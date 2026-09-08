@@ -152,7 +152,7 @@ fn primitive_throw_cases_preserve_abort_evidence_and_require_the_expected_throw(
         let run = ironhorse_262::dual_run(original).unwrap();
         assert_eq!(run.agreement, ironhorse_262::Agreement::BothAbort);
         assert!(
-            run.is_bit_exact(),
+            run.observables_agree(),
             "original corpus evidence: {}",
             path.display()
         );

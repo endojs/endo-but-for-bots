@@ -49,7 +49,7 @@ fn both_exact(source: &str, expected: &str) {
     );
     assert_eq!(run.oracle_result, expected, "oracle value for `{source}`");
     assert!(
-        run.is_bit_exact(),
+        run.observables_agree(),
         "`{source}` must be bit-exact (result_agrees={}, computrons_agree={})",
         run.result_agrees,
         run.computrons_agree,

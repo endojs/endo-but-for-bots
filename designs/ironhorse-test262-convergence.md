@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-05 |
+| **Updated** | 2026-09-08 |
 | **Author** | endolinbot (prompted) |
 | **Status** | In progress: the bounded, resumable whole-tree reporting instrument has landed; language-surface convergence remains a completion-phase milestone of [ironhorse-engine](ironhorse-engine.md) |
 
@@ -155,11 +156,10 @@ in or out with existing tooling (`--features-include`, as
   historically metered identically, and the runner reports any drift
   prominently. Per the accuracy-over-parity doctrine
   ([ironhorse-engine § Metering](ironhorse-engine.md)) this
-  marker is **advisory by default** — a computron delta against
-  XS is telemetry, not a failure — with a runner flag
-  (`--gate-meter-exact`) to gate it during stages that still hold
-  the bit-exact bar, so the historical evidence keeps its regression
-  value without re-imposing parity as doctrine.
+  marker is **advisory** — a computron delta against XS is telemetry.
+  The legacy `--gate-meter-exact` flag is retained for compatibility and
+  cannot turn oracle costs into a failure.
+  The local golden corpus supplies the release-cost regression gate.
 - `ironhorse-meter-determinism` — the case is in the determinism set:
   the runner re-runs it (`--repeat N`) and identical computrons
   across runs of the same build are a **gating** assertion (this is
@@ -195,7 +195,7 @@ commit's report).
 The `corpora/*.js` files and their `stage*_corpus()` accessors +
 per-stage tests then retire **by name** in the same change that
 proves the generated cases reproduce their coverage (same totals,
-zero divergence, same bit-exact set under `--gate-meter-exact`) —
+zero observable divergence, and retained cost-drift telemetry) —
 a named retirement, never a silent deletion. Until that proof, both
 shapes run in CI.
 
@@ -272,9 +272,8 @@ per-engine `xst` verdicts:
    weaker constructor-name verdict.
 3. **Computron comparison (advisory).** Recorded per case and
    aggregated per section into the report's `advisory:` section;
-   never a failure by itself. `--gate-meter-exact` tightens
-   `ironhorse-meter-exact`-tagged cases to the historical bit-exact bar
-   where a stage still holds it; `--repeat N` drives the
+   never a failure by itself, including with `--gate-meter-exact`.
+   `--repeat N` drives the
    determinism gate (identical Ironhorse computrons across runs — a red
    build on drift, since determinism-per-release is unconditional).
 

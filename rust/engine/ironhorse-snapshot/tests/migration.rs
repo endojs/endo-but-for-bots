@@ -221,7 +221,7 @@ impl HeapStore for ForeignCostTableStore {
     }
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
         let mut bytes = self.0.read_small_state()?;
-        let needle = b"ironhorse-meter-1";
+        let needle = ironhorse_vm::COST_TABLE_VERSION.as_bytes();
         let at = bytes
             .windows(needle.len())
             .position(|w| w == needle)

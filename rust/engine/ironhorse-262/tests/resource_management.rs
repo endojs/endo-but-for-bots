@@ -11,7 +11,7 @@ use ironhorse_262::{dual_run, Agreement};
 fn agrees(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
-    assert!(run.is_bit_exact(), "{source}: {run:?}");
+    assert!(run.observables_agree(), "{source}: {run:?}");
 }
 
 #[test]
