@@ -12,7 +12,7 @@ model, and there is no upgrade story on purpose.
 
 The machine speaks the OCapN p2p wire protocol end to end, and the
 daemon is mostly a forwarding and slot-rewriting hub
-(`@endo/ocapn/hub`): workers and remote peers are hub sessions, and
+(`src/hub.js`): workers and remote peers are hub sessions, and
 every message between them is structurally transcoded through
 persisted c-list tables — the daemon reifies no presences, no
 promises, no subscriptions for routed traffic.
@@ -404,7 +404,9 @@ requirement.
 
 ## The hub, and how daemon restarts work
 
-The hub (`@endo/ocapn/hub`) holds only per-session c-lists (position ↔
+Thixotrope owns the hub, its persistence transactions, delivery queues, and session lifecycle.
+OCapN supplies protocol codecs, descriptor helpers, and signature operations.
+The hub (`src/hub.js`) holds only per-session c-lists (position ↔
 reference row), answer routes, and publications — plain JSON tables,
 written through to the store before any frame that names them exists.
 Every message is decoded with the ordinary wire codecs against a

@@ -14,9 +14,9 @@ import test from '@endo/ses-ava/test.js';
 
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
-import { makeOcapnHub } from '@endo/ocapn/hub';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { makeOcapnHub } from '../src/hub.js';
 import { makeDurableWorkerTransport } from '../src/durable-worker-transport.js';
 import { makePipeNetwork } from '../src/pipe-network.js';
 import {

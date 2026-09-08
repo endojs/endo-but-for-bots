@@ -30,6 +30,13 @@ This package provides:
 - **Third-party handoffs**: Cryptographic mechanisms for securely transferring
   object references between peers.
 
+The main entry point also exports descriptor and passable codec factories,
+selector helpers, sturdy-reference construction, and signed handoff descriptors.
+These let a consumer transform protocol frames using its own reference tables.
+Thixotrope owns the persistent comms hub that uses these helpers, including its
+routing state, transactions, delivery queues, and session lifecycle.
+The former `@endo/ocapn/hub` entry point has been removed.
+
 For more information about the protocol, see [ocapn.org][OCapN].
 
 ## Quick start

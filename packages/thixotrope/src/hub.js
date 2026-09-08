@@ -1,20 +1,20 @@
 // @ts-check
+import { Far } from '@endo/far';
 import harden from '@endo/harden';
-import { Far } from '@endo/marshal';
-
 import {
   DescHandoffGiveSigEnvelopeCodec,
+  getSelectorName,
   makeDescCodecs,
   makeHandoffReceiveDescriptor,
   makeHandoffReceiveSigEnvelope,
-} from '../codecs/descriptors.js';
-import { makePassableCodecs } from '../codecs/passable.js';
-import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
-import { getSelectorName, makeSelector } from '../selector.js';
-import { makeSturdyRef } from '../client/sturdyrefs.js';
+  makePassableCodecs,
+  makeSelector,
+  makeSturdyRef,
+} from '@endo/ocapn';
+import { makeOcapnOperationsCodecs } from '@endo/ocapn/operations';
 
 /**
- * An OCapN hub: a comms-vat-style forwarding node that is NOT a
+ * Thixotrope's comms hub: an OCapN forwarding node that is NOT a
  * client. The hub holds no presences, no promises, no locator of live
  * values — only per-session c-lists (position ↔ hub reference row) and
  * answer routes, all plain persistable tables. Every inbound message
