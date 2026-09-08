@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-08 |
+| **Updated** | 2026-09-08 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 
@@ -31,17 +32,30 @@ tools project, not any transport. The three minion.town companions
 OAuth 2.1 deployment. And [endo-claude](endo-claude.md) is the **client** side:
 it names the stdio server (a claude-spawned adapter plus a harness-owned facet
 broker) as an "adapter-implementation prerequisite ... rather than in scope of
-this design." So there is a real, named gap: nobody has specified the stdio MCP
-server itself, the one thing a process spawned as a child of the daemon on the
-same host actually needs, where OAuth is neither available nor meaningful. This
-document fills exactly that prerequisite and composes with the
-[endo-agent-tools](endo-agent-tools.md) MCP-adapter projection rather than
-reinventing it; this document does not re-derive endo-claude's client flags.
+this design."
+
+The gap is narrower than "nobody has specified the stdio server at all."
+[endo-claude](endo-claude.md)'s *Local deployment* and *Multiplexing by guest
+identifier* sections already argue the two-process adapter/broker split, the
+fd-non-inheritance rationale, the "structural absence vs. runtime courtesy"
+framing, formula-id-never-on-the-wire, and per-process (not per-bearer) isolation
+— the same boundary this document restates in § *Scoping*. To keep the two
+documents from drifting, **that document is authoritative for the
+topology-and-rationale argument and this one cites it**; the passages restated
+here (§ *Scoping*, Design Decision 1) are a convenience recap, not a second source
+of truth. What is genuinely net-new here, and the reason for a separate document,
+is the part endo-claude leaves as a bare prerequisite: the **socket-discovery /
+cross-guest confinement analysis** (§ *Scoping* mechanisms 1-2), the request- and
+construction-time **error-code taxonomy** (§ *Fail-closed behavior*), the
+**server half** of catalog pinning and the dispatch check, and the **naming**
+rules. This document composes with the [endo-agent-tools](endo-agent-tools.md)
+MCP-adapter projection rather than reinventing it, and does not re-derive
+endo-claude's client flags.
 
 ## Division of labor with the neighboring designs
 
-The diagram below names five terms the next section defines in full; a one-line
-gloss up front so the boxes read on first pass (define-before-diagram): a
+The diagram below names five terms the next section defines in full. A one-line
+gloss up front, so the boxes read on first pass (define-before-diagram): a
 **guest** is a confined counterparty the Endo daemon grants an attenuated set of
 capabilities to; the **harness** is the arc-item-4 `@endo/claude` caplet that
 spawns and supervises that guest's confined `claude -p`; a **formula id** is
@@ -118,8 +132,11 @@ structural facts rather than a policy check:
   lives in the harness-owned broker and is **never inherited** into the
   claude-spawned process tree. A built-in leaked past `--tools ""` therefore has
   no descriptor on which to speak raw CapTP, and no socket path in reach (the
-  path is additionally hidden by the required `@endo/claude-sandbox` slice, per
-  [endo-claude](endo-claude.md) Design Decision 6; scrubbing `ENDO_SOCK` alone is
+  path is additionally hidden by the required `@endo/claude-sandbox` **slice** —
+  the per-spawn confined filesystem-and-namespace view
+  [endo-claude](endo-claude.md) mounts for one `claude -p` — per its Design
+  Decision 6, the per-spawn slice that keeps the daemon socket path out of the
+  confined view; scrubbing `ENDO_SOCK` alone is
   not the boundary because `whereEndoSock` re-derives the default path from an
   empty env, `packages/where/index.js`).
 - The confined process holds **no formula id and no bearer**. Unlike the HTTP
@@ -132,12 +149,12 @@ structural facts rather than a policy check:
   adapter (that would make the broker per-call, contradicting its one-per-guest
   lifetime below): the **broker owns and listens on** a harness-private endpoint,
   a per-guest **filesystem-path** UDS whose path the harness bakes into the
-  adapter's `--mcp-config` command line, and to which the adapter connects at
+  adapter's `--mcp-config` command line. The adapter connects to that path at
   startup. That path is a *wire to the one broker*, not a guest designator:
   connecting to it reaches only the broker's one pre-resolved facet behind the
   server-side dispatch check, so even a built-in that discovered the path
-  escalates nothing. It lands at the same one-facet boundary the adapter already
-  sits behind. Even arbitrary code execution inside the confined `claude` tree
+  escalates nothing. Such a connection lands at the same one-facet boundary the
+  adapter already sits behind. Even arbitrary code execution inside the confined `claude` tree
   bottoms out at the one guest's pinned catalog.
 
 **Why a sibling guest cannot dial this broker (the socket-discovery boundary).**
@@ -154,43 +171,40 @@ namespace **out** and closes the vector with two concrete, layered mechanisms:
   1. **A filesystem-path socket re-mounted into each per-spawn slice.**
      The broker binds its UDS at a path under a **stable per-guest** directory
      created `0700` and **owned by the harness outside any single spawn's
-     ephemeral tree** (disjoint from `whereEndoSock`, the way
-     [endo-claude](endo-claude.md) Design Decision 7 keeps its per-spawn
-     credential directory disjoint from the daemon socket path). This rests on one
-     lifetime mismatch a careful reader must not miss, resolved by one move:
+     ephemeral tree**. One lifetime mismatch, and the one move that resolves it:
      - **The mismatch.** The `@endo/claude-sandbox` slice is created **per spawn**,
-       not per guest ([endo-claude](endo-claude.md) Design Decisions 6 and 7 render
-       confinement-relevant paths into a fresh
-       `.../endo-claude-spawn/<sessionTag>/` tree "created per spawn" and mount only
-       that tree into the slice). The broker and its socket, by contrast, are **one
-       per guest** and outlive every one of those ephemeral slices (§ *Process
-       lifetime and topology*). So a persistent per-guest socket cannot simply
-       "live inside" a namespace that is torn down and recreated on every spawn.
-     - **The resolution.** The harness **re-mounts the same stable per-guest
-       broker-socket directory into each freshly created per-spawn slice**
-       (structurally the same per-spawn scoped-mount move Design Decision 7 makes
-       for its per-spawn credential *files*), while excluding every *sibling*
-       guest's broker-socket directory and the raw daemon socket path from that
-       slice's view. Note the scope difference: Design Decision 7 mounts a
-       per-spawn credential directory, not a per-guest broker-socket directory, so
-       re-mounting a *per-guest* socket path into each *per-spawn* slice is a
-       **new cross-document obligation** this design places on
-       [endo-claude](endo-claude.md)'s slice construction and on
-       [endo-posix-sandbox](endo-posix-sandbox.md)'s mount plumbing, not plumbing
-       either already specifies. It is carried as such in the Open Questions
-       section below, symmetric with the broker-teardown obligation.
+       not per guest: [endo-claude](endo-claude.md) Design Decisions 6 and 7 render
+       confinement paths into a fresh `.../endo-claude-spawn/<sessionTag>/` tree
+       (`sessionTag` being that document's per-spawn identifier) and mount only that
+       tree. The broker and its socket are **one per guest** and outlive those
+       slices (§ *Process lifetime and topology*), so the socket cannot simply live
+       inside a namespace torn down and recreated on every spawn.
+     - **The resolution.** The harness **re-mounts the one stable per-guest
+       broker-socket directory into each per-spawn slice**, excluding every sibling
+       guest's directory and the raw daemon socket path. Design Decision 7 already
+       makes this scoped-mount move for per-spawn credential *files*; applying it to
+       a longer-lived *per-guest* path is a **new cross-document obligation** on
+       [endo-claude](endo-claude.md)'s slice construction and
+       [endo-posix-sandbox](endo-posix-sandbox.md)'s mount plumbing, carried in the
+       Open Questions section below.
      - **The resulting isolation.** A filesystem-path UDS is reachable only by a
-       process that can traverse to its path. A sibling guest, whose per-spawn
-       slices receive only *its own* broker-socket directory, cannot name, `stat`,
-       or `connect()` to a path absent from its filesystem view, and the address is
-       absent from `/proc/net/unix`'s abstract-socket listing entirely. Cross-guest
-       socket discovery is thus a structural absence, resting on the *same*
-       per-spawn scoped-mount primitive the daemon socket and credential files
-       already rely on rather than on secrecy.
+       process that can traverse to its path. A sibling guest's slices receive only
+       *its own* broker-socket directory, so it cannot `stat` or `connect()` a path
+       absent from its view, and the address never appears in `/proc/net/unix`.
+       Cross-guest discovery is thus a structural absence, resting on the same
+       scoped-mount primitive the daemon socket already relies on, not on secrecy.
   2. **`SO_PEERCRED` peer verification at `accept`.** As defense in depth against
      a misconfigured or shared namespace, the broker reads the connecting peer's
      credentials (`SO_PEERCRED`: pid/uid/gid) at accept and admits only a process
-     belonging to this guest's confined tree. The matching predicate is a single,
+     belonging to this guest's confined tree. Reading `SO_PEERCRED` is itself an
+     implementation obligation, not a given: Node's built-in `net` module exposes
+     no peer-credential API for Unix domain sockets, and this repo carries no
+     native addon, `binding.gyp`, or third-party peer-cred package for it, so the
+     broker needs a **new binding** — a small native addon calling
+     `getsockopt(SO_PEERCRED)`, an FFI shim, or an adopted dependency. Which path
+     is a stated Open Question below, held to the same discipline as this
+     mechanism's per-guest-uid obligation rather than assumed available. The
+     matching predicate is a single,
      deterministic one: a **per-guest uid** the sandbox assigns to every process it
      spawns for this guest (**not** a bare pid). Two independent reasons rule the
      bare-pid match out, so the uid is *the* mechanism, not an interchangeable
@@ -256,6 +270,18 @@ contract.
   `define`). The pinned value is a `harden`ed null-prototype record, never a bare
   `Map` (freezing a `Map` leaves `set`/`delete` reachable on internal slots, so a
   "pinned" `Map` could be re-populated with `evaluate` after pinning).
+- **The pinned catalog is a swappable value, separable from broker identity.**
+  The snapshot is held through a single replaceable slot, structurally distinct
+  from the broker's identity-bound resources (its per-guest socket, assigned uid,
+  and pre-resolved facet connection). Catalog freshness (a time-varying concern)
+  is therefore not complected with broker identity (a one-per-guest,
+  place-oriented resource): refreshing the catalog is an atomic replacement of one
+  hardened value, never a re-derivation of the guest's identity plumbing. The
+  teardown-and-reconstruct default below is thus a lifecycle *policy* the harness
+  chooses, not a coupling forced by welding the snapshot to the broker's
+  construction — which is exactly what lets the deferred capability-gated re-pin
+  (Open Questions) be a later option the structure already permits rather than a
+  workaround.
 - **The dispatch check is the boundary; `--allowedTools` is the belt.** The
   broker **rejects any `tools/call` whose name is not in the pinned snapshot**,
   server-side, so a leak that ignores the client-side `--allowedTools` still
@@ -283,12 +309,11 @@ contract.
   argument's petname through the facet's own fail-closed petstore resolution as a
   **pre-flight call**, and treats a resolution failure as the rejection, rather
   than maintaining a separate authorization table. This keeps a single source of
-  truth for "which capabilities are in scope"; its distinct value over letting the
-  facet fail at dispatch time is only the wire shape below. Its distinct
-  value over relying on the facet alone is a **uniform, reject-only wire shape**:
-  an out-of-scope argument surfaces as the same visible failure the caller can see,
-  never as a narrower success it mistakes for what it asked, regardless of how the
-  underlying facet chooses to fail. (Where [endo-claude](endo-claude.md) Design
+  truth for "which capabilities are in scope"; its distinct value over the facet
+  failing on its own is a **uniform, reject-only wire shape**: an out-of-scope
+  argument surfaces as the same visible failure the caller can see, never as a
+  narrower success it mistakes for what it asked, regardless of how the underlying
+  facet chooses to fail. (Where [endo-claude](endo-claude.md) Design
   Decision 2 describes this same server-side check as one that "rejects **or
   attenuates**" an out-of-scope-argument call, this document's reject-only rule is
   the narrower, authoritative form for the server half of the contract it owns: the
@@ -405,7 +430,9 @@ out of band). `resources` and `prompts` are omitted, as in
   fails, and it returns an MCP JSON-RPC **error** for the in-flight `tools/call`
   (never a fabricated success). The harness observes the failure and settles the
   inference to `{type: 'bridge-down', detail}` ([endo-claude](endo-claude.md)
-  Design Decision 8). The broker **fails closed**: a lost facet connection
+  Design Decision 8, its typed inference outcomes — `bridge-down` for a dropped
+  connection, `facet-threw` for a tool that ran and raised). The broker **fails
+  closed**: a lost facet connection
   serves errors, never an ambient or re-widened surface.
 
 ## Fail-closed behavior
@@ -418,6 +445,28 @@ server that exposes zero tools. Concretely, the broker **refuses to construct**
 - the projection over the resolved facet yields **no** tools; or
 - the catalog is **empty after pruning** (every projected name was unsafe/code-eval).
 
+**Confinement preconditions are checked at construction, not assumed of sibling
+documents.** The § *Scoping* confinement argument rests on two facts the sandbox
+must supply — an exclusively-scoped per-guest broker-socket directory (mechanism
+1) and a per-guest uid for the `SO_PEERCRED` check (mechanism 2). Rather than take
+those on faith from two documents that have not yet adopted them, the broker
+verifies what it can at construction and fails toward a documented posture, so the
+confinement invariant is enforced in code, not merely argued in prose:
+
+- It **refuses to construct** (discriminant `unscoped-socket-dir`) when its
+  broker-socket directory is not present, `0700`, and harness-owned — i.e. when
+  exclusive socket-directory scoping cannot be confirmed. Mechanism 1 is the
+  load-bearing boundary in *every* regime (including the degraded single-uid one),
+  so an unverifiable mechanism 1 is fatal, never degradable.
+- It probes whether a per-guest uid was assigned. When one was, the `SO_PEERCRED`
+  check runs in its strong per-guest form. When none was (a single-uid sandbox),
+  the broker constructs in the **explicitly documented restricted mode** of
+  § *Scoping* mechanism 2 — the credential check degrades to a coarse same-uid gate
+  with mechanism 1 alone load-bearing — and **records that it did so** (a
+  `restricted-mode: single-uid` note on the same stderr channel the § *Naming*
+  collision warning uses), rather than silently assuming a per-guest guarantee it
+  cannot make.
+
 **A discriminated construction throw, matching the request-time shape.** The
 construction throw is not undifferentiated: it carries the same `reason`-style
 discriminant the request-time table below models, so an operator or harness reading
@@ -425,16 +474,24 @@ a construction failure gets the same "why, and what to do about it" clarity a
 request-time failure gives, and can branch on config bug versus attacker-shaped
 guest versus implementation bug. The discriminant values are `invalid-formula-id`
 (not 64-hex or unresolvable), `empty-facet` (the projection yields zero tools),
-`empty-after-prune` (every projected name was unsafe/code-eval), and
-`malformed-catalog` (a projected name that is `__`-containing, dunder/reserved,
-code-eval, internally duplicate, or case-confusable: the well-formedness guard of
-§ *Naming*). The parity with the request-time surface is of **grammar**, not only
-of "there is a discriminant field": both surfaces use compound hyphenated-kebab
-discriminant values (`name-scope`/`argument-scope` at request time; the four values
-above at construction), so a single harness parser reads the same string shape on
-both. This unifies both construction-throw sites (this section's derivation
-refusals and § *Naming*'s well-formedness refusals) under one discriminated failure
-the harness reads exactly as it reads the request-time `data.reason`.
+`empty-after-prune` (every projected name was unsafe/code-eval),
+`unscoped-socket-dir` (the confinement precondition of mechanism 1 could not be
+confirmed at construction, above), and — for the two well-formedness failure
+classes of § *Naming* that the § *Naming* branching goal wants told apart —
+`malformed-name` (a projected name that is structurally invalid, `__`-containing,
+dunder/reserved, or code-eval reaching the guard unpruned: an **implementation bug
+in the projection**) and `catalog-name-conflict` (two projected names that are
+internally duplicate or case-confusable twins: a **naming-hygiene collision**
+within the catalog). These are kept distinct on purpose: collapsing them under one
+value would defeat the discriminant's own stated goal of letting the reader branch
+on why the catalog is bad. The parity with the request-time surface is of
+**grammar**, not only of "there is a discriminant field": both surfaces use
+compound hyphenated-kebab discriminant values (`name-scope`/`argument-scope` at
+request time; the six values above at construction), so a single harness parser
+reads the same string shape on both.
+This unifies both construction-throw sites (this section's derivation refusals and
+§ *Naming*'s well-formedness refusals) under one discriminated failure the harness
+reads exactly as it reads the request-time `data.reason`.
 
 A zero-tool server that "passes confinement by exposing nothing" is the exact
 anti-pattern this rule rejects: confinement must be demonstrated positively (the
@@ -534,8 +591,13 @@ entirely outside this design's change surface. So collision against minion.town'
 prospective reservations is demoted to a **construction-time warning**, not a
 throw. The warning carries the **same discriminated shape** as the construction
 throws above (rather than unstructured stderr text), so the harness can branch on
-it the same way: a `{ warning: 'reserved-name-collision', names: [...] }` record
-naming the colliding tool names, written to stderr where the harness reads it. The
+it the same way: its discriminant lives under the **same `reason` key** every
+construction throw uses — `{ reason: 'reserved-name-collision', level: 'warning',
+names: [...] }` — with the explicit `level: 'warning'` (not a distinct top-level
+key) marking it as advisory rather than fatal, so a single harness parser reads
+the `reason` field identically across throws and this warning and branches on
+`level` for severity. The record names the colliding tool names and is written to
+stderr where the harness reads it. The
 convention is adopted; the foreign reservation list is advisory, not a gate. What
 the server owns and enforces fail-closed is that its own projected names are
 well-formed and internally non-colliding.
@@ -593,7 +655,14 @@ positive-confinement test. An implementation is accepted only when these pass.
   simulated mid-session grant change (`tools.listChanged` stays false, no
   `notifications/tools/list_changed` is emitted).
 
-**Negative confinement (the boundary holds):**
+**Negative confinement (the boundary holds).** Two of the criteria below — the
+cross-guest socket-absence path and the assigned-per-guest-uid `SO_PEERCRED` path
+— depend on obligations [endo-claude](endo-claude.md) and
+[endo-posix-sandbox](endo-posix-sandbox.md) have **not yet adopted** (the
+socket-directory re-mount and the per-guest uid, both carried in Open Questions).
+Those two are buildable only once those siblings land the obligations; the
+same-guest escape-nothing checks, the degraded single-uid fallback, and all the
+request-time criteria are testable today against this design alone.
 
 - **Cross-guest reach is impossible.** Two guests A and B each get a
   broker+adapter pair. A process in A's confined tree cannot reach B's facet:
@@ -617,11 +686,16 @@ positive-confinement test. An implementation is accepted only when these pass.
   attenuated surface returns `-32001` with `data.reason = argument-scope`: a
   visible rejection, never a silently narrowed success.
 - **Fail-closed construction.** Construction throws (claude never spawns) for:
-  an unresolvable or non-64-hex formula id; a facet projecting zero tools; a
-  catalog empty after pruning; and a projected catalog carrying an internally
-  duplicate, case-confusable, `__`-containing, or malformed name. A bare-name
-  collision against minion.town's reserved list produces a **warning**, not a
-  throw, and construction still succeeds.
+  an unresolvable or non-64-hex formula id (`invalid-formula-id`); a facet
+  projecting zero tools (`empty-facet`); a catalog empty after pruning
+  (`empty-after-prune`); a projected catalog carrying a `__`-containing or
+  otherwise malformed name (`malformed-name`); and a projected catalog carrying an
+  internally duplicate or case-confusable name (`catalog-name-conflict`) — the two
+  well-formedness classes asserted as **distinct** discriminant values, not one
+  collapsed `malformed-catalog`. A bare-name collision against minion.town's
+  reserved list produces a **warning** record (`{ reason: 'reserved-name-collision',
+  level: 'warning', names: [...] }`), not a throw, and construction still
+  succeeds.
 - **Fail-closed at request and on broker death.** A malformed frame returns
   `-32700`/`-32600`; an unknown method returns `-32601`; a broker or daemon
   connection drop returns `-32010` `bridge-down` for the in-flight call and never
@@ -653,7 +727,13 @@ positive-confinement test. An implementation is accepted only when these pass.
    broker holds the one attenuated facet connection. A single-process server that
    opened the daemon socket itself would hold the full many-guest endpoint and
    put its connected fd in the confined process's own descriptor table, making
-   one-guest scoping a runtime courtesy rather than a structural absence.
+   one-guest scoping a runtime courtesy rather than a structural absence. The
+   security argument is not the only forcing constraint: stdio's transport is
+   inherently one-server-subprocess-per-client-process (each `claude -p` spawns its
+   own MCP server child; concurrent clients cannot share one stdio pair), while the
+   broker must be long-lived and multiplexed across a guest's concurrent inferences
+   (§ *Process lifetime and topology*) — so the split is also mechanically forced
+   by topology, and does not stand or fall on the fd-narrowing argument alone.
 2. **The formula id scopes the broker at construction and never rides the wire.**
    No bearer, no header, no port, no shared endpoint. The confined process holds
    no designator, so it cannot name, forge, or vary the guest. This is the stdio
@@ -709,6 +789,16 @@ positive-confinement test. An implementation is accepted only when these pass.
   of mechanism 1 is the load-bearing boundary; the Test plan exercises both
   regimes. Resolve which regime a given deployment is in before relying on the
   per-guest peer guarantee.
+- **How does a pure-JS broker read `SO_PEERCRED`?** Mechanism 2 names the peer
+  credential check as load-bearing (strong regime) or a defense-in-depth layer
+  (degraded regime), but Node's `net` module exposes no peer-credential API for
+  Unix domain sockets, and this repo carries no native addon, `binding.gyp`, or
+  third-party peer-cred package. The check therefore needs a **new binding** — a
+  small native addon calling `getsockopt(SO_PEERCRED)` (Linux) / `LOCAL_PEERCRED`
+  (BSD/macOS), an FFI shim, or an adopted dependency. Pick the binding path and its
+  portability surface before the peer-credential check can be implemented; this is
+  a harder, more novel implementation question than either mount-plumbing
+  obligation above, and is held to the same explicit-obligation discipline.
 - **Where does a shared naming manifest live, if the endo side ever wants
   cross-repo enforcement?** The naming convention is today reconciled in
   `kriscendobot/minion.town` (PR #79). This server enforces only its *own*
