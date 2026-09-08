@@ -364,6 +364,7 @@ LLM-agent stack).*
 | [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-09-06 | In Progress |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
 | [ironhorse-known-defects](ironhorse-known-defects.md) | 2026-09-04 | 2026-09-07 | Reference |
+| [ironhorse-engine-trait-research](ironhorse-engine-trait-research.md) | 2026-09-08 | — | Reference |
 | [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-08 | Approved |
 | [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | — | Not Started |
 | [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | — | In Progress |

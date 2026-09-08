@@ -615,7 +615,8 @@ Unified runner) runs identically on both engines, plus the SES
 test suites XS itself is exercised against.
 
 **Status and the realm decision of record (2026-09-06).**
-The deep architecture review (`rust/engine/ARCHITECTURE-REVIEW.md`
+The deep architecture review
+(`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`
 § 3.7, F059) found that the "intrinsics created once per machine
 and referenced per realm" seam this section previously claimed
 for stage 1 does not exist: there is no realm object below
