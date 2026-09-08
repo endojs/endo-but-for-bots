@@ -1219,6 +1219,16 @@ impl Ord for ChunkSlice<'_> {
     }
 }
 
+/// Validate the complete block before either narrowing cast or arena mutation.
+/// The exclusive end must remain below the reserved NULL offset, including for
+/// an empty payload whose returned offset equals that end.
+fn chunk_allocation_fits(header: usize, payload: usize, ceiling: usize) -> bool {
+    header
+        .checked_add(CHUNK_HEADER)
+        .and_then(|off| off.checked_add(payload))
+        .is_some_and(|end| end < ceiling)
+}
+
 #[derive(Default)]
 pub struct ChunkArena {
     bytes: ChunkBytes,
@@ -1481,12 +1491,28 @@ impl ChunkArena {
     /// units (revised 2026-07-06 from CESU-8; resolved question 4), so a byte-
     /// lexicographic compare of two string payloads equals their code-unit
     /// (ECMAScript string) ordering.
+    ///
+    /// Exhausting u32 addressability terminates with the named fatal panic
+    /// `chunk:address-space-exhausted` before any mutation. Like a corrupt
+    /// chunk header, this requires discarding the interrupted interpreter or
+    /// restoring a known-good checkpoint. It is not a catchable guest error
+    /// or a configurable memory policy.
     pub fn alloc(&mut self, data: &[u8]) -> ChunkOffset {
-        // Fault the stored tail extent before appending beside its
-        // bytes: an append lands mid-extent whenever the snapshot
-        // length is not extent-aligned, and that extent's stored
-        // prefix must be real before the extent can ever be read.
+        self.alloc_with_address_ceiling(data, ChunkOffset::NULL.0 as usize)
+    }
+
+    // Private seam for exercising the allocation boundary without a 4 GiB
+    // arena. The public allocator always supplies the representation limit.
+    fn alloc_with_address_ceiling(&mut self, data: &[u8], ceiling: usize) -> ChunkOffset {
         let header = self.len();
+        let ceiling = ceiling.min(ChunkOffset::NULL.0 as usize);
+        assert!(
+            chunk_allocation_fits(header, data.len(), ceiling),
+            "chunk:address-space-exhausted"
+        );
+        // Fault the stored tail extent before appending beside its bytes:
+        // an append can land mid-extent, so its stored prefix must be real.
+        // The addressability guard above must precede even this read.
         if header > 0 {
             self.ensure_range_resident(header - 1, header);
         }
@@ -1841,6 +1867,73 @@ mod dirty_tests {
     //! possibly smaller, extent range.
 
     use super::*;
+
+    #[test]
+    fn chunk_addressability_boundaries_do_not_need_gigabyte_allocations() {
+        let max = u32::MAX as usize;
+        assert!(chunk_allocation_fits(0, 0, max));
+        assert!(chunk_allocation_fits(max - CHUNK_HEADER - 1, 0, max));
+        assert!(!chunk_allocation_fits(max - CHUNK_HEADER, 0, max));
+        assert!(chunk_allocation_fits(0, max - CHUNK_HEADER - 1, max));
+        assert!(!chunk_allocation_fits(0, max - CHUNK_HEADER, max));
+        assert!(!chunk_allocation_fits(0, max, max));
+        assert!(!chunk_allocation_fits(usize::MAX, 0, max));
+        assert!(!chunk_allocation_fits(0, usize::MAX, max));
+        assert!(!chunk_allocation_fits(max, max, max));
+    }
+
+    #[test]
+    fn chunk_addressability_refusal_leaves_arena_untouched() {
+        let mut arena = ChunkArena::new();
+        let first = arena.alloc(b"abc");
+        arena.clear_dirty();
+        // The empty block at offset 11 still fits; offset 12 is reserved by
+        // the simulated representation and must fail before writing a header.
+        let empty = arena.alloc_with_address_ceiling(b"", 12);
+        assert_eq!(empty.0, 11);
+        arena.clear_dirty();
+        let before = arena.bytes_mut().clone();
+        let unbacked = arena.unbacked.clone();
+        let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.alloc_with_address_ceiling(b"x", 12)
+        }))
+        .unwrap_err();
+        assert_eq!(
+            refusal.downcast_ref::<&str>(),
+            Some(&"chunk:address-space-exhausted")
+        );
+        assert_eq!(arena.bytes_mut(), &before);
+        assert!(arena.dirty_extents().is_empty());
+        assert_eq!(arena.unbacked, unbacked);
+        assert_eq!(&*arena.payload(first), b"abc");
+        assert!(arena.payload(empty).is_empty());
+    }
+
+    #[test]
+    fn chunk_addressability_failure_precedes_lazy_tail_fault() {
+        struct MustNotRead;
+        impl PageSource for MustNotRead {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                panic!("unexpected slot fault")
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                panic!("unexpected chunk fault")
+            }
+        }
+        let mut arena = ChunkArena::lazy_from_parts(7, Rc::new(MustNotRead));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.alloc_with_address_ceiling(b"", 11)
+        }))
+        .unwrap_err();
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"chunk:address-space-exhausted")
+        );
+        assert_eq!(arena.len(), 7);
+        assert_eq!(arena.resident_extent_count(), 0);
+        assert!(arena.dirty_extents().is_empty());
+        assert!(arena.unbacked.iter().all(|flag| !flag));
+    }
 
     #[test]
     fn slot_alloc_and_get_mut_mark_their_pages() {
