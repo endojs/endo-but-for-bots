@@ -1450,13 +1450,13 @@ pub struct SmallState {
 }
 
 impl SmallState {
-    /// Serialize: twenty-eight sections, each `u32` length-prefixed, in
+    /// Encode the 32 payloads separately, without framing, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
     /// data views, wrappers, regexps, arguments brands, temporal,
     /// intl, name floor, iterators, dates, function state, proxy state,
     /// accessors, Intl bound functions, private elements, disposable stacks,
-    /// generators
+    /// generators, error frames, promises, async instances, and index properties
     /// (arrays/collections/registry since store schema 7 — the
     /// side-table ledger; the 6→7 migration appends them empty, a
     /// pure 12-byte suffix — errors since schema 9, the typed-array
@@ -1475,8 +1475,8 @@ impl SmallState {
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
-    pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 32] = [
+    pub fn encode_sections(&self) -> [Vec<u8>; 32] {
+        [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1515,9 +1515,13 @@ impl SmallState {
             // 6→7 migration: an older root signed the prefix, and inserting
             // here rather than appending would re-encode bytes it signed.
             crate::image::encode_index_props(&self.index_props),
-        ];
+        ]
+    }
+
+    /// Encode all section payloads with the legacy framing, byte-for-byte.
+    pub fn encode(&self) -> Vec<u8> {
         let mut v = Vec::new();
-        for s in sections {
+        for s in self.encode_sections() {
             v.extend_from_slice(&(s.len() as u32).to_be_bytes());
             v.extend_from_slice(&s);
         }

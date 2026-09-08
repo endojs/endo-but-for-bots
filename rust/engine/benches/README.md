@@ -226,3 +226,31 @@ cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-snapshot --test property_lookup_bench \
   -- --ignored --nocapture --test-threads=1
 ```
+
+## Checkpoint sections (F043, foundation only)
+
+The checkpoint fixture retains arrays of 1000, 10,000, and 50,000 elements and
+times only the checkpoint following a `1 + 1` crank.
+It checks identical raw charges, zero slot/chunk writes, and complete restored-image
+equality outside the timer.
+One warmup and seven measured checkpoints give the median for each size.
+The consecutive-size ceiling is 2.5x; this is a sublinear-growth instrument with
+unequal size steps, rather than the doubling test used by other fixtures.
+
+[results/f043-section-foundation.json](results/f043-section-foundation.json) retains
+paired measurements for the section identity and integrity primitives.
+Both revisions fail at 10,000 and 50,000 elements: **F043 remains open**.
+The active checkpoint still copies, encodes, hashes, and stores the whole small state.
+The primitives preserve legacy framing and do not activate a new store schema.
+The timing differences do not establish an improvement; the largest case is slower.
+This MemoryStore array fixture does not establish SQLite write amplification or
+coverage of all side tables.
+Sectioned backend storage, migration, dirty extraction, and broader fixtures must
+land before claiming the checkpoint fix.
+This known-failing instrument is available explicitly and is not yet a nightly gate.
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-snapshot --test checkpoint_scaling_bench \
+  -- --ignored --nocapture --test-threads=1
+```

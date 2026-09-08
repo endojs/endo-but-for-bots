@@ -1,0 +1,61 @@
+{
+  "finding": "F043",
+  "increment": "Section identity and integrity foundation; active checkpoint path remains unchanged",
+  "status": "Known failing before and after; F043 remains open",
+  "before_revision": "e6c4b96b862275b76505a9b062bd07bf0b89a472",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M3 Max",
+  "fixtures_sha256": {
+    "rust/engine/ironhorse-snapshot/tests/checkpoint_scaling_bench.rs": "a71564d318b83a80dd65f9b54597c15161bd39e3c116188d3782d1f19030a291"
+  },
+  "samples": "Same-host serial release runs, no simultaneous builds or tests. One warmup plus seven measured checkpoints per size; median. Construction, compilation, initial store creation, guest execution, and full restored-image comparison excluded from timer. Raw charge is for each 1 + 1 crank.",
+  "baseline_setup": "Archived the preceding commit and copied the identical fixture into a separate target directory. The archived revision received only a README status correction after extraction; measured code is unchanged. Each revision uses its locked dependencies and the same toolchain.",
+  "command": "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test checkpoint_scaling_bench -- --ignored --nocapture --test-threads=1",
+  "limitations": "MemoryStore array-only checkpoint instrument, not SQLite write-amplification evidence. Both revisions fail the unchanged 2.5x consecutive-size threshold at 10000 and 50000 elements. No speed improvement or statistical significance is claimed; the large case is slower in this run. Sectioned backend storage, schema migration, and dirty extraction remain necessary. Slot/chunk write counts are zero, but unchanged small-state arrays still travel in full.",
+  "measurements": [
+    {
+      "elements": 1000,
+      "before": {
+        "seconds": 0.000396458,
+        "raw": 673048,
+        "stored_small_bytes": 24622
+      },
+      "after": {
+        "seconds": 0.000304292,
+        "raw": 673048,
+        "stored_small_bytes": 24622
+      },
+      "speedup": 1.3028867009319993
+    },
+    {
+      "elements": 10000,
+      "before": {
+        "seconds": 0.003162917,
+        "raw": 673048,
+        "stored_small_bytes": 240622
+      },
+      "after": {
+        "seconds": 0.002908209,
+        "raw": 673048,
+        "stored_small_bytes": 240622
+      },
+      "speedup": 1.0875824261598805
+    },
+    {
+      "elements": 50000,
+      "before": {
+        "seconds": 0.014754541,
+        "raw": 673048,
+        "stored_small_bytes": 1200622
+      },
+      "after": {
+        "seconds": 0.0193355,
+        "raw": 673048,
+        "stored_small_bytes": 1200622
+      },
+      "speedup": 0.763080396162499
+    }
+  ]
+}

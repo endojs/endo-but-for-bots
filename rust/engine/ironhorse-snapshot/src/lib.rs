@@ -59,6 +59,7 @@ pub mod sidetable;
 pub mod slot_codec;
 pub mod store;
 pub mod store_file;
+pub mod store_sections;
 // Backend-parameterized acceptance suites (metamorphic determinism,
 // checkpoint locks) for OTHER crates' backends to instantiate; test
 // support only, hence feature-gated.
