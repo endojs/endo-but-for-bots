@@ -1164,3 +1164,41 @@ test('the backend factory attests the declared attaches at the authority handoff
     { message: /under \/mnt\// },
   );
 });
+
+test('assertContainerMounts validates every entry it counts, and refuses nesting', t => {
+  // A sparse array: `map` would skip the holes and return a list whose
+  // `length` counts entries no check ever saw — and that length is what the
+  // attested table is sized against, so the holes would reach the slice
+  // request as `undefined` mount rows.
+  t.throws(
+    () => assertContainerMounts(new Array(3)),
+    { message: /unknown or missing fields/ },
+    'array holes are entries, not gaps',
+  );
+  // Built rather than written as a sparse literal, which lint forbids.
+  const withHole = new Array(3);
+  withHole[0] = ATTACH_DECLARED;
+  withHole[2] = ATTACH_DECLARED;
+  t.throws(
+    () => assertContainerMounts(withHole),
+    { message: /unknown or missing fields/ },
+    'a hole between well-formed entries is still refused',
+  );
+
+  // Nested destinations are each declared and each attested, but the
+  // attested table has no ordering, so it cannot say which projection the
+  // slice sees at the shadowed path.
+  t.throws(
+    () =>
+      assertContainerMounts([
+        ATTACH_DECLARED,
+        harden({
+          key: 'b2',
+          source: '/host/mounts/claude-attach-b2',
+          destination: `${ATTACH_DECLARED.destination}/inner`,
+          mode: 'ro',
+        }),
+      ]),
+    { message: /nests with/ },
+  );
+});
