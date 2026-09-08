@@ -205,7 +205,7 @@ test.serial(
       { message: /Invalid Unix peer/ },
     );
     const connection = await layer.connect(layer.location);
-    t.throws(() => connection.write(new Uint8Array(1024 * 1024 + 1)), {
+    t.throws(() => connection.write(new Uint8Array()), {
       message: /Invalid Unix frame length/,
     });
     layer.shutdown();
@@ -290,5 +290,40 @@ test.serial(
     t.not(first, second);
     first.end();
     t.false(second.isDestroyed);
+  },
+);
+
+test.serial(
+  'Unix transport reassembles large logical messages and preserves following messages',
+  async t => {
+    t.timeout(10_000);
+    const sender = await setup(t);
+    const receiver = await setup(t);
+    const connection = await sender.layer.connect(receiver.layer.location);
+    const payload = new Uint8Array(2 * 1024 * 1024 + 17);
+    for (let index = 0; index < payload.length; index += 1)
+      payload[index] = index % 251;
+    connection.write(payload);
+    connection.write(new Uint8Array([91]));
+    await receiver.receivedTwo.promise;
+    t.is(receiver.frames.length, 2);
+    t.deepEqual(receiver.frames[0], payload);
+    t.deepEqual(receiver.frames[1], new Uint8Array([91]));
+  },
+);
+
+test.serial(
+  'Unix transport discards a complete continuation fragment on disconnect',
+  async t => {
+    t.timeout(10_000);
+    const { socketPath, frames, closed } = await setup(t);
+    const socket = createConnection(socketPath);
+    t.teardown(() => socket.destroy());
+    await once(socket, 'connect');
+    const fragment = frame([1, 2, 3]);
+    new DataView(fragment.buffer).setUint32(0, 0x8000_0003);
+    socket.end(fragment);
+    await closed.promise;
+    t.deepEqual(frames, []);
   },
 );

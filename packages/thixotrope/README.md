@@ -256,6 +256,9 @@ Each supervisor also listens on `peers.sock`, a private Unix socket.
 This initial transport connects supervisors owned by the same OS user on one machine.
 It checks the destination directory's ownership and permissions before sending a resumption token.
 It is not a transport for connections between machines or mutually untrusted OS users.
+Logical messages are split into Unix fragments of at most one MiB and reassembled before durable acceptance.
+Incomplete messages are discarded on socket loss and retried by the delivery layer.
+This fragment limit does not bound total message or outbox memory.
 
 Run two supervisors with different private state directories, then use these commands
 (shown as `thix`; from the repository root use `node packages/thixotrope/bin/thix.js`):
