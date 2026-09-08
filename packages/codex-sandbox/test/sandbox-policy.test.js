@@ -121,6 +121,7 @@ const fixture = (changes = {}) => {
           toolCodexHomeAccess: 'read-only',
           toolBrokerAccess: 'denied',
           environment: 'credential-and-proxy-free',
+          codexHomeCredentials: 'absent',
           ...changes.runtime,
         });
       },
@@ -134,6 +135,7 @@ const fixture = (changes = {}) => {
         ...identity,
         providerOrigin: 'https://api.example.com',
         accountRef: 'account1',
+        authMode: 'api-key',
         endpoint: 'http://127.0.0.1:1234/',
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
         modelAllowlist: ['model1'],

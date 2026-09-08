@@ -87,6 +87,7 @@ const validLease = () =>
     providerOrigin,
     endpoint: 'http://127.0.0.1:4317/',
     accountRef,
+    authMode: 'api-key',
     expiresAt: '2999-01-01T00:00:00.000Z',
     modelAllowlist: harden(['gpt-test']),
     limits: harden({

@@ -74,7 +74,7 @@ const assertExact = (actual, expected, label) => {
  *
  * @param {{sandbox: any, volumeProvider: any, runtimeVerifier?: any,
  * imageRef: string, imageDigest: string, providerOrigin: string,
- * accountRef: string}} powers
+ * accountRef: string, brokerAuthMode?: 'api-key' | 'oauth'}} powers
  */
 export const makeAttestedCodexSliceFactory = powers => {
   const { imageDigest, imageRef } = powers;
@@ -139,6 +139,7 @@ export const makeAttestedCodexSliceFactory = powers => {
       providerOrigin: powers.providerOrigin,
       accountRef: powers.accountRef,
       ...(spec.model ? { model: spec.model } : {}),
+      ...(powers.brokerAuthMode ? { authMode: powers.brokerAuthMode } : {}),
     });
     const launchArgv = makeBrokerAppServerArgv(lease.endpoint);
     const broker = await E(brokerLease).sandboxEvidence();
@@ -319,6 +320,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           toolCodexHomeAccess: 'read-only',
           toolBrokerAccess: 'denied',
           environment: 'credential-and-proxy-free',
+          codexHomeCredentials: 'absent',
         },
         'runtime evidence',
       );

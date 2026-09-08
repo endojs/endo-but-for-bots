@@ -59,11 +59,12 @@ harden(HOSTED_AGENT_POLICY_V1);
  * Validate the concrete provider lease before it enters a slice.
  *
  * @param {any} lease
- * @param {{ sessionId: string, imageDigest: string, networkNamespaceId: string, providerOrigin: string, accountRef: string, model?: string }} requirements
+ * @param {{ sessionId: string, imageDigest: string, networkNamespaceId: string, providerOrigin: string, accountRef: string, model?: string, authMode?: 'api-key' | 'oauth' }} requirements
  */
 export const assertBrokerLeaseV1 = (lease, requirements) => {
   const keys = [
     'accountRef',
+    'authMode',
     'endpoint',
     'expiresAt',
     'imageDigest',
@@ -96,6 +97,18 @@ export const assertBrokerLeaseV1 = (lease, requirements) => {
     accountRef !== requirements.accountRef
   ) {
     throw makeError(X`broker lease identity does not match the session`);
+  }
+  // How the broker authenticates upstream is a property of the lease, not of
+  // the slice, and the slice never learns it. `subscription` is absent because
+  // no vendor-supported configuration lets the broker hold an individual
+  // subscription credential while the slice holds none; see
+  // ../SUBSCRIPTION-AUTH.md. An operator that requires one mode says so, and a
+  // lease issued in the other is refused rather than quietly downgraded.
+  if (
+    !['api-key', 'oauth'].includes(lease.authMode) ||
+    (requirements.authMode && lease.authMode !== requirements.authMode)
+  ) {
+    throw makeError(X`broker lease authentication mode is not supported`);
   }
   let origin;
   let endpoint;
@@ -424,6 +437,9 @@ harden(assertHostedAgentPolicyV1);
  * @param {string} powers.imageDigest
  * @param {string} powers.providerOrigin operator-approved HTTPS origin
  * @param {string} powers.accountRef operator-selected provider account
+ * @param {'api-key' | 'oauth'} [powers.brokerAuthMode] required upstream
+ * authentication mode; a lease issued in the other mode is refused rather than
+ * silently accepted
  */
 export const makeCodexResourceProvisioner = powers => {
   /^sha256:[0-9a-f]{64}$/.test(powers.imageDigest) ||
@@ -629,6 +645,7 @@ export const makeCodexResourceProvisioner = powers => {
         providerOrigin: powers.providerOrigin,
         accountRef: powers.accountRef,
         ...(spec.model ? { model: spec.model } : {}),
+        ...(powers.brokerAuthMode ? { authMode: powers.brokerAuthMode } : {}),
       });
       await E(auditJournal.writer).append('session-resources-provisioned', {
         sessionId: spec.sessionId,
