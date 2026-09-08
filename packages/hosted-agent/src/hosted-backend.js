@@ -1,6 +1,6 @@
 // @ts-check
 
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { M } from '@endo/patterns';
 
 /** The only Endo authority a hosted backend receives from Floot. */
@@ -57,6 +57,28 @@ export const HostedBackendFactoryInterface = M.interface(
 harden(HostedBackendFactoryInterface);
 
 /**
+ * How a backend carries a conversation between turns, and so what Floot's own
+ * tree must retain (see `@endo/floot/BACKEND-DESIGN.md`):
+ *
+ * - `explicit`: Floot supplies the whole history on every turn.
+ * - `opaque`: the backend keeps the conversation; the tree is display-only.
+ * - `opaque-reconciled`: as `opaque`, with per-turn checkpoints Floot
+ *   acknowledges, so a stopped or failed turn is rolled back on both sides.
+ * - `transcript`: the backend's persisted transcript retains every delivered
+ *   prompt and whatever streamed before a stop or a failure; Floot mirrors
+ *   those into the tree rather than dropping them.
+ *
+ * A closed set: a value neither side knows would silently degrade to the
+ * drop-on-stop behaviour, so the descriptor validator refuses it.
+ */
+export const CONTINUITY_MODES = harden([
+  'explicit',
+  'opaque',
+  'opaque-reconciled',
+  'transcript',
+]);
+
+/**
  * Validate and project the exact capability-free descriptor fields Floot uses
  * for selection and recovery.
  *
@@ -75,8 +97,10 @@ export const assertHostedBackendDescriptor = descriptor => {
     Fail`Hosted backend descriptor has an invalid title`;
   descriptor.kind === 'hosted' ||
     Fail`Hosted backend descriptor must have kind hosted`;
-  (typeof descriptor.continuity === 'string' && descriptor.continuity !== '') ||
-    Fail`Hosted backend descriptor must declare continuity`;
+  CONTINUITY_MODES.includes(descriptor.continuity) ||
+    Fail`Hosted backend descriptor must declare continuity as one of ${q(
+      CONTINUITY_MODES,
+    )}, not ${q(descriptor.continuity)}`;
   (typeof descriptor.toolOwnership === 'string' &&
     descriptor.toolOwnership !== '') ||
     Fail`Hosted backend descriptor must declare tool ownership`;

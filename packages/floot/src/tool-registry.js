@@ -201,6 +201,11 @@ harden(makeEndoToolSet);
  *
  * `accountStatus` is gated the same way, on a read-only account oracle.
  *
+ * `extraTools` are session-scoped tools the factory supplies (a bounded
+ * workspace publisher for a new-project session, say). They join the catalog
+ * like the built-ins, so an API provider's tool loop and a hosted backend's
+ * pinned tool set see exactly the same authority.
+ *
  * @param {any} powers
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability.
@@ -211,9 +216,10 @@ harden(makeEndoToolSet);
  * @param {Set<string>} [options.settledMail]
  * @param {Map<string, any>} [options.extraTools] - Tools the factory builds
  *   for this session beyond the built-ins — the container-mount tools of a
- *   session with a sandbox, say. They enter the same pinned catalog, so a
- *   hosted thread's `toolSetId` covers them and a name that collides with a
- *   built-in is refused rather than shadowing it.
+ *   session with a sandbox, or the bounded workspace publisher of one with a
+ *   git workspace. They enter the same pinned catalog, so a hosted thread's
+ *   `toolSetId` covers them and a name that collides with a built-in is
+ *   refused rather than shadowing it.
  */
 export const makeFlootToolRegistry = (
   powers,

@@ -4,7 +4,11 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { Far } from '@endo/pass-style';
 
-import { UNREPORTED_TOOL_RESULT, runHostedTurn } from '../src/hosted-turn.js';
+import {
+  UNREPORTED_TOOL_RESULT,
+  hostedTurnPartialOf,
+  runHostedTurn,
+} from '../src/hosted-turn.js';
 
 test('hosted turns translate normalized lifecycle events', async t => {
   const output = [];
@@ -40,6 +44,7 @@ test('hosted turns translate normalized lifecycle events', async t => {
     systemPrompt: 'stay scoped',
   });
   t.deepEqual(result, {
+    delivered: true,
     finalContent: 'Done',
     usage: { inputTokens: 8, outputTokens: 3 },
     toolCalls: [{ id: '1', name: 'shell', args: '{}', result: 'ok' }],
@@ -75,6 +80,7 @@ test('a pre-aborted hosted turn never reaches the client', async t => {
   });
   t.is(sends, 0);
   t.deepEqual(result, {
+    delivered: false,
     finalContent: '',
     usage: undefined,
     toolCalls: [],
@@ -99,6 +105,7 @@ test('aborting while send is pending interrupts startup promptly', async t => {
   controller.abort();
   const result = await turnP;
   t.deepEqual(result, {
+    delivered: false,
     finalContent: '',
     usage: undefined,
     toolCalls: [],
@@ -231,7 +238,7 @@ test('reader close failure cannot skip the explicit backend interrupt', async t 
   t.is(interrupts, 1);
 });
 
-test('hosted turn abort is a failed turn', async t => {
+test('hosted turn abort is a failed turn that reports what was delivered', async t => {
   const client = harden({
     send: async () =>
       readerFromIterator(
@@ -246,9 +253,44 @@ test('hosted turn abort is a failed turn', async t => {
     toolCall: () => {},
     toolResult: () => {},
   });
-  await t.throwsAsync(() => runHostedTurn({ client, text: 'go', writer }), {
-    message: 'denied',
+  const refused = await t.throwsAsync(
+    () => runHostedTurn({ client, text: 'go', writer }),
+    { message: 'denied' },
+  );
+  // A leading abort means the backend never took the prompt.
+  t.deepEqual(hostedTurnPartialOf(refused), {
+    delivered: false,
+    finalContent: '',
+    toolCalls: [],
   });
+
+  // A failure after the backend started the turn keeps what streamed: the
+  // prompt was delivered, and a transcript backend retains all of this.
+  const streamed = harden({
+    send: async () =>
+      readerFromIterator(
+        (async function* events() {
+          yield { type: 'phase', phase: 'starting' };
+          yield { type: 'tool-call', id: '1', name: 'shell', args: '{}' };
+          yield { type: 'text-delta', text: 'partial' };
+          yield {
+            type: 'abort',
+            reason: 'claude turn failed: error_max_turns',
+          };
+        })(),
+      ),
+  });
+  const failed = await t.throwsAsync(
+    () => runHostedTurn({ client: streamed, text: 'go', writer }),
+    { message: /error_max_turns/ },
+  );
+  t.deepEqual(hostedTurnPartialOf(failed), {
+    delivered: true,
+    finalContent: 'partial',
+    toolCalls: [{ id: '1', name: 'shell', args: '{}', result: null }],
+  });
+  // Any other error carries no partial: the prompt never reached the backend.
+  t.is(hostedTurnPartialOf(Error('send refused')), undefined);
 });
 
 test('a tool the backend never reported on is settled at turn end', async t => {
