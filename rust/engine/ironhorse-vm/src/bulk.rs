@@ -345,10 +345,35 @@ impl CollKind {
 /// `fxNewChunk(length * 8)` on the exact rehash boundaries XS
 /// crosses. Weak collections have no table (their entries hang off
 /// the key object), so `table_length` is unused for them.
+/// Owned SameValueZero keys. Content keys deliberately do not retain chunk
+/// offsets: this derived index survives chunk compaction and is not a GC root.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CollKey {
+    Empty(u8),
+    Boolean(bool),
+    Number(u64),
+    String(Vec<u8>),
+    BigInt(bool, Vec<u32>),
+    Reference(SlotIndex),
+}
+
+#[derive(Debug, Default)]
+struct CollectionIndex {
+    positions: std::collections::HashMap<std::rc::Rc<CollKey>, usize>,
+    keys: Vec<Option<std::rc::Rc<CollKey>>>,
+    // Snapshot decoding historically admits duplicate keys. Keep subsequent
+    // positions only for that case, preserving first-live lookup on deletion.
+    duplicates: std::collections::HashMap<std::rc::Rc<CollKey>, std::collections::VecDeque<usize>>,
+}
+
 #[derive(Debug)]
 pub(crate) struct CollectionData {
     pub(crate) kind: CollKind,
     entries: Vec<Option<(Slot, Slot)>>,
+    live_count: usize,
+    /// Materialized lazily, including only newly appended entries on each
+    /// lookup. Restoring a collection never faults its content-key chunks.
+    index: std::cell::RefCell<CollectionIndex>,
     pub(crate) table_length: u32,
     /// Bumped by [`Self::clear_entries`] only. A live cursor captures
     /// the generation at creation and dead-ends when it changes —
@@ -367,6 +392,8 @@ impl CollectionData {
         CollectionData {
             kind,
             entries: Vec::new(),
+            live_count: 0,
+            index: std::cell::RefCell::default(),
             table_length,
             generation: 0,
         }
@@ -392,17 +419,45 @@ impl CollectionData {
 
     /// Count of live (non-tombstone) entries — the spec `size`.
     pub(crate) fn live_len(&self) -> usize {
-        self.entries.iter().filter(|entry| entry.is_some()).count()
+        self.live_count
+    }
+
+    pub(crate) fn find(
+        &self,
+        key: &CollKey,
+        mut canonicalize: impl FnMut(&Slot) -> CollKey,
+    ) -> Option<usize> {
+        let mut index = self.index.borrow_mut();
+        for at in index.keys.len()..self.entries.len() {
+            let canonical = self.entries[at].as_ref().map(|(key, _)| {
+                let canonical = std::rc::Rc::new(canonicalize(key));
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    index.positions.entry(canonical.clone())
+                {
+                    entry.insert(at);
+                } else {
+                    index
+                        .duplicates
+                        .entry(canonical.clone())
+                        .or_default()
+                        .push_back(at);
+                }
+                canonical
+            });
+            index.keys.push(canonical);
+        }
+        index.positions.get(key).copied()
     }
 
     pub(crate) fn push_entry(&mut self, key: Slot, value: Slot, refs: &mut SideRefCounts) {
         refs.add_slot(&key);
         refs.add_slot(&value);
         self.entries.push(Some((key, value)));
+        self.live_count += 1;
     }
 
     /// Overwrite the value half of the live entry at physical index
-    /// `at`. The caller found `at` via a live-entry scan, so a
+    /// `at`. The caller found `at` via the key index, so a
     /// tombstone here is a logic error.
     pub(crate) fn set_entry_value(&mut self, at: usize, value: Slot, refs: &mut SideRefCounts) {
         refs.add_slot(&value);
@@ -427,7 +482,46 @@ impl CollectionData {
         let (k, v) = self.entries[at].take().expect("remove_entry on tombstone");
         refs.remove_slot(&k);
         refs.remove_slot(&v);
+        self.live_count -= 1;
+        let index = self.index.get_mut();
+        if let Some(canonical) = index.keys.get_mut(at).and_then(Option::take) {
+            if index.positions.get(&canonical) == Some(&at) {
+                let next = index
+                    .duplicates
+                    .get_mut(&canonical)
+                    .and_then(|rest| rest.pop_front());
+                if let Some(next) = next {
+                    index.positions.insert(canonical.clone(), next);
+                } else {
+                    index.positions.remove(&canonical);
+                }
+            } else if let Some(rest) = index.duplicates.get_mut(&canonical) {
+                rest.retain(|position| *position != at);
+            }
+            if index
+                .duplicates
+                .get(&canonical)
+                .is_some_and(|rest| rest.is_empty())
+            {
+                index.duplicates.remove(&canonical);
+            }
+        }
         if matches!(self.kind, CollKind::WeakMap | CollKind::WeakSet) {
+            // Weak entries are physically removed (there are no cursors).
+            // Shift cached positions with the existing physical-vector shift.
+            if at < index.keys.len() {
+                index.keys.remove(at);
+                for position in index.positions.values_mut().chain(
+                    index
+                        .duplicates
+                        .values_mut()
+                        .flat_map(|rest| rest.iter_mut()),
+                ) {
+                    if *position > at {
+                        *position -= 1;
+                    }
+                }
+            }
             self.entries.remove(at);
         }
         (k, v)
@@ -449,6 +543,8 @@ impl CollectionData {
             refs.remove_slot(v);
         }
         self.entries.clear();
+        self.live_count = 0;
+        *self.index.get_mut() = CollectionIndex::default();
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -493,6 +589,10 @@ impl CollectionData {
                 }
             }
         });
+        self.live_count -= dropped as usize;
+        // Pruning compacts the physical positions. Rebuild lazily at the next
+        // lookup, keeping the collector independent of content-key faults.
+        *self.index.get_mut() = CollectionIndex::default();
         dropped
     }
 
@@ -512,6 +612,106 @@ mod tests {
 
     fn refslot(idx: u32) -> Slot {
         Slot::of(Kind::Reference, Payload::Reference(SlotIndex(idx)))
+    }
+
+    #[test]
+    fn restored_duplicate_keys_keep_first_live_resolution() {
+        for kind in [CollKind::Map, CollKind::WeakMap] {
+            let mut refs = SideRefCounts::new();
+            let mut data = CollectionData::new(kind, 1);
+            let key = CollKey::Reference(SlotIndex(1));
+            for value in 0..3 {
+                data.push_entry(refslot(1), Slot::integer(value), &mut refs);
+            }
+            for value in 0..3 {
+                let at = data.find(&key, |_| key.clone()).unwrap();
+                assert_eq!(data.entries()[at].unwrap().1, Slot::integer(value));
+                data.remove_entry(at, &mut refs);
+            }
+            assert_eq!(data.find(&key, |_| key.clone()), None);
+            assert_eq!(data.live_len(), 0);
+        }
+    }
+
+    #[test]
+    fn weak_delete_shifts_index_frontier_before_unindexed_appends() {
+        let canonical = |key: &Slot| match key.value {
+            Payload::Reference(reference) => CollKey::Reference(reference),
+            _ => unreachable!(),
+        };
+        let mut refs = SideRefCounts::new();
+        let mut data = CollectionData::new(CollKind::WeakMap, 0);
+        data.push_entry(refslot(1), Slot::integer(1), &mut refs);
+        assert_eq!(data.find(&canonical(&refslot(1)), canonical), Some(0));
+        data.push_entry(refslot(2), Slot::integer(2), &mut refs);
+        data.remove_entry(0, &mut refs);
+        data.push_entry(refslot(1), Slot::integer(3), &mut refs);
+        assert_eq!(data.find(&canonical(&refslot(2)), canonical), Some(0));
+        assert_eq!(data.find(&canonical(&refslot(1)), canonical), Some(1));
+    }
+
+    #[test]
+    fn collection_index_tracks_lazy_appends_deletes_clear_and_weak_pruning() {
+        let canonical = |key: &Slot| match key.value {
+            Payload::Reference(reference) => CollKey::Reference(reference),
+            _ => panic!("fixture uses references"),
+        };
+        for kind in [
+            CollKind::Map,
+            CollKind::Set,
+            CollKind::WeakMap,
+            CollKind::WeakSet,
+        ] {
+            let mut refs = SideRefCounts::new();
+            let mut data = CollectionData::new(kind, 1);
+            let calls = std::cell::Cell::new(0);
+            for n in 1..=100 {
+                data.push_entry(refslot(n), Slot::integer(n as i32), &mut refs);
+                assert_eq!(
+                    data.find(&canonical(&refslot(n)), |key| {
+                        calls.set(calls.get() + 1);
+                        canonical(key)
+                    }),
+                    Some((n - 1) as usize)
+                );
+            }
+            assert_eq!(calls.get(), 100, "each stored key is indexed once");
+            data.remove_entry(20, &mut refs);
+            assert_eq!(data.live_len(), 99);
+            assert_eq!(data.find(&canonical(&refslot(21)), canonical), None);
+            let expected = if matches!(kind, CollKind::WeakMap | CollKind::WeakSet) {
+                98
+            } else {
+                99
+            };
+            assert_eq!(
+                data.find(&canonical(&refslot(100)), canonical),
+                Some(expected)
+            );
+            // Delete an entry in the unindexed suffix, then append again.
+            data.push_entry(refslot(101), Slot::undefined(), &mut refs);
+            let last = data.entries().len() - 1;
+            data.remove_entry(last, &mut refs);
+            data.push_entry(refslot(102), Slot::undefined(), &mut refs);
+            assert!(data.find(&canonical(&refslot(102)), canonical).is_some());
+            assert_eq!(data.find(&canonical(&refslot(101)), canonical), None);
+            if matches!(kind, CollKind::WeakMap | CollKind::WeakSet) {
+                let dropped = data.prune_entries(
+                    &mut refs,
+                    |key, _| matches!(key.value, Payload::Reference(SlotIndex(n)) if n % 2 == 0),
+                );
+                assert_eq!(data.live_len(), 100 - dropped as usize);
+                assert_eq!(data.find(&canonical(&refslot(1)), canonical), None);
+                let at = data.find(&canonical(&refslot(100)), canonical).unwrap();
+                assert_eq!(data.entries()[at].unwrap().0, refslot(100));
+            }
+            data.clear_entries(&mut refs);
+            assert_eq!(data.live_len(), 0);
+            assert_eq!(data.generation(), 1);
+            assert_eq!(data.find(&canonical(&refslot(100)), canonical), None);
+            data.push_entry(refslot(100), Slot::undefined(), &mut refs);
+            assert_eq!(data.find(&canonical(&refslot(100)), canonical), Some(0));
+        }
     }
 
     #[test]

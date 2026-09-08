@@ -234,3 +234,67 @@ fn lazy_string_indexing_spans_many_extents() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Separates iterator traversal from object construction, whose named-property
+/// insertion currently has its own quadratic cost. The end-to-end gate above
+/// deliberately retains construction and remains strict about that regression.
+#[test]
+#[ignore = "iterator-phase benchmark: nightly release lane"]
+fn for_in_traversal_scales_after_construction() {
+    assert!(!cfg!(debug_assertions), "benchmark requires --release");
+    let mut previous: Option<(f64, u64)> = None;
+    let mut failures = Vec::new();
+    for n in [2000, 4000, 8000, 16000] {
+        let build = format!("var o = {{}}; for (var i = 0; i < {n}; i++) {{ o['k' + i] = i; }} 0");
+        let hot = "var count = 0; for (var k in o) { count++; } count";
+        let (build_code, symbols) = ironhorse_compile::compile_atoms(&build).unwrap();
+        let mut machine = Interp::new();
+        machine.link_intrinsics(&parse_symbols(&symbols));
+        let build_start = Instant::now();
+        let built = machine.run(&build_code);
+        assert!(built.completed);
+        let mut dispatched_before = built.dispatched;
+        let build_seconds = build_start.elapsed().as_secs_f64();
+        let (hot_code, symbols) = ironhorse_compile::compile_atoms(hot).unwrap();
+        let hot_code = machine
+            .relink_crank(&hot_code, &parse_symbols(&symbols))
+            .unwrap();
+        let mut times = Vec::new();
+        let mut cost = None;
+        for round in 0..8 {
+            let before = machine.meter_index();
+            let start = Instant::now();
+            let outcome = machine.run(&hot_code);
+            let elapsed = start.elapsed().as_secs_f64();
+            assert!(outcome.completed, "{:?}", outcome.halt);
+            assert_eq!(outcome.result, n.to_string());
+            if round > 0 {
+                let current = (
+                    outcome.meter_raw - before,
+                    outcome.dispatched - dispatched_before,
+                );
+                if let Some(old) = cost {
+                    assert_eq!(old, current);
+                }
+                cost = Some(current);
+                times.push(elapsed);
+            }
+            dispatched_before = outcome.dispatched;
+        }
+        times.sort_by(f64::total_cmp);
+        let seconds = times[3];
+        let (raw, dispatched) = cost.unwrap();
+        println!("ITERATION_PHASE for_in n={n} seconds={seconds:.9} build_seconds={build_seconds:.9} raw={raw} dispatched={dispatched}");
+        if let Some((old_time, old_raw)) = previous {
+            let time_ratio = seconds / old_time;
+            let meter_ratio = raw as f64 / old_raw as f64;
+            if time_ratio >= 2.5 || meter_ratio >= 2.5 {
+                failures.push(format!(
+                    "n={n}: time={time_ratio:.3}x meter={meter_ratio:.3}x"
+                ));
+            }
+        }
+        previous = Some((seconds, raw));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -1,0 +1,315 @@
+{
+  "finding": "F045",
+  "increment": "collection index and shared iterator buffers; named-property construction remains quadratic and keeps the end-to-end for-in gate failing",
+  "before_revision": "6a6d3eac40f17657b7498e6be89f06454b6e8b44",
+  "after": "source files in this commit",
+  "toolchain": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M3 Max",
+  "samples": "Serial release runs on the same host. End-to-end: one warmup, seven measured runs, median; construction included. Traversal: construct once (single setup time reported separately), then one warmup and seven measured cranks, median; relinking excluded.",
+  "fixture_sha256": "1d4240ef1ffcb6ee2c808f6b46351cecc04c9b2669ac4e0e565b97ffb4ee065c",
+  "fixture_provenance": "End-to-end fixture unchanged from before_revision. Final traversal fixture copied unchanged to before_revision and rerun on both revisions, including the raw-charge growth assertion.",
+  "commands": [
+    "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench time_and_computrons_scale_together -- --ignored --nocapture --test-threads=1",
+    "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench for_in_traversal -- --ignored --nocapture --test-threads=1"
+  ],
+  "result": "Map insertion and string iteration change from quadratic to linear growth. Isolated for-in traversal changes from failing to passing <2.5x doubling. End-to-end for-in still fails due to named-property construction; its original threshold is unchanged. All recorded charges and traversal dispatch counts are unchanged.",
+  "measurements": [
+    {
+      "suite": "end_to_end",
+      "shape": "char_code_at",
+      "n": 4096,
+      "before": {
+        "seconds": 0.002756041,
+        "computrons": 109616
+      },
+      "after": {
+        "seconds": 0.002620667,
+        "computrons": 109616
+      },
+      "speedup": 1.0516563149763016
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "char_code_at",
+      "n": 8192,
+      "before": {
+        "seconds": 0.00538325,
+        "computrons": 219184
+      },
+      "after": {
+        "seconds": 0.005358833,
+        "computrons": 219184
+      },
+      "speedup": 1.004556402485392
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "char_code_at",
+      "n": 16384,
+      "before": {
+        "seconds": 0.01062625,
+        "computrons": 438320
+      },
+      "after": {
+        "seconds": 0.010564916,
+        "computrons": 438320
+      },
+      "speedup": 1.0058054413305322
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "char_code_at",
+      "n": 32768,
+      "before": {
+        "seconds": 0.02133275,
+        "computrons": 876593
+      },
+      "after": {
+        "seconds": 0.021176541,
+        "computrons": 876593
+      },
+      "speedup": 1.0073765115842102
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "map_set",
+      "n": 1000,
+      "before": {
+        "seconds": 0.001915667,
+        "computrons": 24302
+      },
+      "after": {
+        "seconds": 0.000644667,
+        "computrons": 24302
+      },
+      "speedup": 2.9715605110855683
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "map_set",
+      "n": 2000,
+      "before": {
+        "seconds": 0.006159166,
+        "computrons": 48564
+      },
+      "after": {
+        "seconds": 0.001271416,
+        "computrons": 48564
+      },
+      "speedup": 4.844335764218792
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "map_set",
+      "n": 4000,
+      "before": {
+        "seconds": 0.023073334,
+        "computrons": 97089
+      },
+      "after": {
+        "seconds": 0.002553375,
+        "computrons": 97089
+      },
+      "speedup": 9.03640632496206
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "map_set",
+      "n": 8000,
+      "before": {
+        "seconds": 0.08907,
+        "computrons": 194138
+      },
+      "after": {
+        "seconds": 0.005155084,
+        "computrons": 194138
+      },
+      "speedup": 17.27808897003424
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "for_in",
+      "n": 2000,
+      "before": {
+        "seconds": 0.129054,
+        "computrons": 115124
+      },
+      "after": {
+        "seconds": 0.12724575,
+        "computrons": 115124
+      },
+      "speedup": 1.0142106907303388
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "for_in",
+      "n": 4000,
+      "before": {
+        "seconds": 0.476370625,
+        "computrons": 230158
+      },
+      "after": {
+        "seconds": 0.485920209,
+        "computrons": 230158
+      },
+      "speedup": 0.9803474236651886
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "for_in",
+      "n": 8000,
+      "before": {
+        "seconds": 1.828045709,
+        "computrons": 460227
+      },
+      "after": {
+        "seconds": 1.783844583,
+        "computrons": 460227
+      },
+      "speedup": 1.0247785745581401
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "for_in",
+      "n": 16000,
+      "before": {
+        "seconds": 7.15775875,
+        "computrons": 920363
+      },
+      "after": {
+        "seconds": 7.059624417,
+        "computrons": 920363
+      },
+      "speedup": 1.0139007866712693
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "string_for_of",
+      "n": 16384,
+      "before": {
+        "seconds": 0.016090041,
+        "computrons": 553044
+      },
+      "after": {
+        "seconds": 0.008990791,
+        "computrons": 553044
+      },
+      "speedup": 1.7896135056414948
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "string_for_of",
+      "n": 32768,
+      "before": {
+        "seconds": 0.043917542,
+        "computrons": 1106010
+      },
+      "after": {
+        "seconds": 0.017683584,
+        "computrons": 1106010
+      },
+      "speedup": 2.4835204221044784
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "string_for_of",
+      "n": 65536,
+      "before": {
+        "seconds": 0.137256625,
+        "computrons": 2211942
+      },
+      "after": {
+        "seconds": 0.035364042,
+        "computrons": 2211942
+      },
+      "speedup": 3.881248218175965
+    },
+    {
+      "suite": "end_to_end",
+      "shape": "string_for_of",
+      "n": 131072,
+      "before": {
+        "seconds": 0.51779125,
+        "computrons": 4423807
+      },
+      "after": {
+        "seconds": 0.070765417,
+        "computrons": 4423807
+      },
+      "speedup": 7.317009804379448
+    },
+    {
+      "suite": "traversal",
+      "shape": "for_in",
+      "n": 2000,
+      "before": {
+        "seconds": 0.001721458,
+        "setup_seconds": 0.147225417,
+        "raw_computrons": 4461128480,
+        "dispatched": 66057
+      },
+      "after": {
+        "seconds": 0.001297792,
+        "setup_seconds": 0.125836125,
+        "raw_computrons": 4461128480,
+        "dispatched": 66057
+      },
+      "speedup": 1.3264513882039648
+    },
+    {
+      "suite": "traversal",
+      "shape": "for_in",
+      "n": 4000,
+      "before": {
+        "seconds": 0.004201417,
+        "setup_seconds": 0.472648375,
+        "raw_computrons": 8918088480,
+        "dispatched": 132057
+      },
+      "after": {
+        "seconds": 0.002586584,
+        "setup_seconds": 0.460197958,
+        "raw_computrons": 8918088480,
+        "dispatched": 132057
+      },
+      "speedup": 1.6243110604565714
+    },
+    {
+      "suite": "traversal",
+      "shape": "for_in",
+      "n": 8000,
+      "before": {
+        "seconds": 0.01200375,
+        "setup_seconds": 1.778009583,
+        "raw_computrons": 17832008480,
+        "dispatched": 264057
+      },
+      "after": {
+        "seconds": 0.005118709,
+        "setup_seconds": 1.775591,
+        "raw_computrons": 17832008480,
+        "dispatched": 264057
+      },
+      "speedup": 2.3450737285514767
+    },
+    {
+      "suite": "traversal",
+      "shape": "for_in",
+      "n": 16000,
+      "before": {
+        "seconds": 0.035251125,
+        "setup_seconds": 6.9443885,
+        "raw_computrons": 35659848480,
+        "dispatched": 528057
+      },
+      "after": {
+        "seconds": 0.010414291,
+        "setup_seconds": 7.004436292,
+        "raw_computrons": 35659848480,
+        "dispatched": 528057
+      },
+      "speedup": 3.3848799692653104
+    }
+  ]
+}

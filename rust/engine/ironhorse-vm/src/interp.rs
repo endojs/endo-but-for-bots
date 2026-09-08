@@ -48,7 +48,7 @@ use ironhorse_meter::{
 
 use ironhorse_meter::{string_chunk_cost, PROXY_INTERNAL_METHOD_METERING};
 
-use crate::bulk::{ArrayData, CollKind, CollectionData, SideRefCounts};
+use crate::bulk::{ArrayData, CollKey, CollKind, CollectionData, SideRefCounts};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
 use crate::symbols::{SymbolIds, SymbolName};
@@ -3647,12 +3647,12 @@ struct IterState {
     /// counter and this cursor dead-ends — XS's purge semantics (see
     /// `CollectionData::generation`). Zero for every other kind.
     generation: u32,
-    enum_keys: Vec<(u16, u32)>,
+    enum_keys: std::rc::Rc<Vec<(u16, u32)>>,
     /// For a string iterator (`kind == 4`) or RegExp String Iterator (`kind ==
     /// 9`): the UTF-16BE input. Kind 4 uses `index` as a byte offset; kind 9's
     /// matcher carries its own observable `lastIndex`, leaving `index` for its
     /// two persisted mode bits.
-    str_bytes: Vec<u8>,
+    str_bytes: std::rc::Rc<Vec<u8>>,
 }
 
 /// An Error instance's stringification data (XS's `Error.prototype.toString`
@@ -13227,8 +13227,8 @@ impl Interp {
                 index,
                 done,
                 result: st.result.0,
-                enum_keys: st.enum_keys.clone(),
-                str_bytes: st.str_bytes.clone(),
+                enum_keys: st.enum_keys.as_ref().clone(),
+                str_bytes: st.str_bytes.as_ref().clone(),
             });
         }
         out.sort_unstable_by_key(|r| r.owner);
@@ -13311,8 +13311,8 @@ impl Interp {
                     generation: 0,
                     result: crate::value::SlotIndex(r.result),
                     done: r.done,
-                    enum_keys: r.enum_keys,
-                    str_bytes: r.str_bytes,
+                    enum_keys: std::rc::Rc::new(r.enum_keys),
+                    str_bytes: std::rc::Rc::new(r.str_bytes),
                 },
             );
         }
@@ -26320,8 +26320,8 @@ impl Interp {
                 generation: 0,
                 result: anchor,
                 done: false,
-                enum_keys: Vec::new(),
-                str_bytes: units_to_be16(subject),
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::new(units_to_be16(subject)),
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iterator))
@@ -42538,8 +42538,8 @@ impl Interp {
                 generation: 0,
                 result,
                 done: false,
-                enum_keys: Vec::new(),
-                str_bytes: Vec::new(),
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::default(),
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -42571,8 +42571,8 @@ impl Interp {
                 generation: 0,
                 result,
                 done: false,
-                enum_keys: Vec::new(),
-                str_bytes: bytes,
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::new(bytes),
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -42613,8 +42613,8 @@ impl Interp {
                 generation: coll_generation,
                 result,
                 done: false,
-                enum_keys: Vec::new(),
-                str_bytes: Vec::new(),
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::default(),
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -42692,8 +42692,8 @@ impl Interp {
                 generation: 0,
                 result: next_holder,
                 done: false,
-                enum_keys: Vec::new(),
-                str_bytes: Vec::new(),
+                enum_keys: std::rc::Rc::default(),
+                str_bytes: std::rc::Rc::default(),
             },
         );
         Ok(Slot::of(Kind::Reference, Payload::Reference(wrapper)))
@@ -43209,7 +43209,7 @@ impl Interp {
     fn collection_live_len(&self, inst: crate::value::SlotIndex) -> usize {
         self.collections
             .get(&inst)
-            .map(|c| c.entries().iter().filter(|e| e.is_some()).count())
+            .map(CollectionData::live_len)
             .unwrap_or(0)
     }
 
@@ -44112,8 +44112,8 @@ impl Interp {
                 generation: 0,
                 result,
                 done: false,
-                enum_keys: keys,
-                str_bytes: Vec::new(),
+                enum_keys: std::rc::Rc::new(keys),
+                str_bytes: std::rc::Rc::default(),
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -49759,12 +49759,33 @@ impl Interp {
         }
     }
 
+    /// Canonicalize exactly the equality relation used by collection keys.
+    /// This is host bookkeeping only; it introduces no guest allocations or
+    /// metering changes and holds no arena borrow across another chunk read.
+    fn coll_index_key(&self, key: &Slot) -> CollKey {
+        match key.value {
+            Payload::None => CollKey::Empty(key.kind as u8),
+            Payload::Boolean(value) => CollKey::Boolean(value),
+            Payload::Integer(value) => CollKey::Number((value as f64).to_bits()),
+            Payload::Number(value) => CollKey::Number(if value == 0.0 {
+                0
+            } else {
+                crate::value::canonicalize_nan(value).to_bits()
+            }),
+            Payload::String(off) => CollKey::String(self.chunks.payload(off).to_vec()),
+            Payload::BigInt(off) => {
+                let (negative, magnitude) = self.read_bigint(off);
+                CollKey::BigInt(negative, magnitude)
+            }
+            Payload::Reference(reference) => CollKey::Reference(reference),
+            Payload::At(..) => unreachable!("internal property key in a collection"),
+        }
+    }
+
     /// The index of `key` among `inst`'s entries by SameValueZero, or `None`.
     fn collection_find(&self, inst: crate::value::SlotIndex, key: &Slot) -> Option<usize> {
         let data = self.collections.get(&inst)?;
-        data.entries()
-            .iter()
-            .position(|entry| entry.is_some_and(|(k, _)| self.same_value_zero(&k, key)))
+        data.find(&self.coll_index_key(key), |key| self.coll_index_key(key))
     }
 
     /// Charge the metering of an inserting `fxSetEntry`/`fxSetWeakEntry` new
