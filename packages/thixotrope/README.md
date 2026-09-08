@@ -8,7 +8,8 @@ Ironhorse SQLite heap store rather
 than by explicit formula-based persistence.
 Guests never observe their own suspension, restoration, or the
 daemon's restarts — persistence is orthogonal to the guest programming
-model, and there is no upgrade story on purpose.
+model.
+Application upgrades are not yet implemented; candidate mechanisms are described separately.
 
 The machine speaks the OCapN p2p wire protocol end to end, and the
 daemon is mostly a forwarding and slot-rewriting hub
@@ -37,6 +38,10 @@ embedder's admin route to an existing worker.
 evaluation implies a fresh worker, and the result is the only handle
 returned (the worker persists like any other and shows up in
 `listWorkerIds()`).
+
+The [potential designs](designs/README.md) record the current hypotheses for user-space
+upgrade, delivery responsibility, host-directed vat retirement, and crossing persistence regimes.
+They distinguish intended behavior from current implementation gaps.
 
 ## Local supervisor and workspace
 
@@ -533,6 +538,10 @@ const daemon = await makeThixotropeDaemon({
 ```
 
 Wrap both peers.
+The current remote acknowledgement precedes the hub commit and does not prove durable acceptance;
+a crash in that gap can lose an acknowledged dispatch.
+See the [delivery requirements and gaps](designs/README.md#connection-failure-and-delivery-responsibility).
+
 
 On the daemon side the sessions are also durable across **daemon
 restarts**: unacknowledged outbound frames persist per resume token,
@@ -702,5 +711,5 @@ and idle sleep is available via `idleSleepMs`.
 
 ## Design
 
-See
-[designs/ocapn-orthogonal-persistence.md](../../designs/ocapn-orthogonal-persistence.md).
+See the [main design](../../designs/thixotrope.md) for the current architecture and boundaries.
+The [package designs](designs/README.md) cover potential mechanisms and experiments.

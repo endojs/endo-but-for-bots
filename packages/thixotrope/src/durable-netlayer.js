@@ -547,11 +547,11 @@ export const makeDurableNetLayer = async ({
           }
           bound.recvSeq = n;
           if (bound.durable && resumption) {
-            // The netlayer's watermark is advisory bookkeeping; an
-            // embedder whose message handler keeps its own atomic
-            // watermark (the hub) reports THAT from loadForResume, so
-            // a crash between this record and the handler's commit
-            // just means a harmless retransmit next resume.
+            // The hub reports its committed watermark on resume. This
+            // permits recovery only while the sender still retains the frame:
+            // the ack below precedes handler commit, and no incoming payload
+            // is journaled here. A crash after the peer receives that ack can
+            // lose the dispatch. See ../designs/README.md.
             resumption.recordInbound(bound.token, n);
           }
           transportWrite(bound, { t: 'ack', n });

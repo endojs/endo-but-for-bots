@@ -614,10 +614,10 @@ const buildDaemon = async ({
         (max, frame) => Math.max(max, Number(frame.n)),
         Number(meta.sendSeq ?? 0),
       );
-      // Report the HUB's committed watermark, not the netlayer's
-      // advisory one: a crash between the netlayer's record and the
-      // hub's commit then just means the peer retransmits a frame the
-      // hub's own watermark drops — exactly once either way.
+      // Report the hub's committed watermark, not the advisory netlayer one.
+      // Recovery still depends on the peer retaining the frame. The current
+      // pre-handler ack can make it discard that frame before the hub commits;
+      // this watermark alone cannot close it (see ../designs/README.md).
       const recvSeq = Math.min(
         Number(meta.recvSeq ?? 0),
         hub.inboundWatermark(`peer:${token}`),

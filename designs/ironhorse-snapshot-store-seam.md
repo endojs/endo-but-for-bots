@@ -3691,7 +3691,7 @@ and canonical, but wholesale in both directions:
 - **Sleepy workers.** The suspend/resume lifecycle
   ([daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md)) exists
   so idle agents cost nothing; thixotrope's sleepy CapTP workers
-  ([ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md))
+  ([thixotrope](thixotrope.md))
   suspend when quiescent and wake per message.
   Both pay the full-heap round-trip on every sleep/wake cycle, so the
   cost of sleeping grows with accumulated heap state — precisely
@@ -4147,7 +4147,7 @@ dirty flag suffices to start).
 | [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Preserved lifecycle; gains the store-backed suspend/resume mode and per-crank durability checkpoints |
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | Precedent and home for daemon-side rusqlite (bundled, WAL defaults) |
 | [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | The full-close contract the worker-heap database inherits for suspension, backup, and handoff |
-| [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | Primary consumer: sleepy workers whose sleep/wake cost this seam re-prices |
+| [thixotrope](thixotrope.md) | Primary consumer: sleepy workers whose sleep/wake cost this seam re-prices |
 | [daemon-cas-management](daemon-cas-management.md) | The CAS root bookkeeping that store-backed workers replace with file lifecycle; CAS remains the interchange plane |
 
 ## Phased Implementation

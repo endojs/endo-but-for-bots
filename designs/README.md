@@ -66,25 +66,12 @@ authenticated encrypted QUIC connection carrying netstring-framed OCapN
 messages under the `ocapn/netstring/0` ALPN; `@number0/iroh` is optional
 and injectable so CI tests run against an in-memory mock, with a
 real-endpoint integration test gated behind `ENDO_IROH_INTEGRATION=1`),
-[ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) (added
-2026-07-16; a prototype distributed ocap machine, `@endo/thixotrope`: a
-host daemon spins up orthogonally persistent workers — one guest
-Compartment behind an endo-captp endpoint, preserved by engine heap
-snapshots or, in the reference engine, by deterministic
-journal-replay-at-quiescence — and serves published worker exports as
-OCapN sturdy refs from its locator; the host persists its half of
-each worker CapTP session (slot counters and import descriptors via
-`makeCapTPImportExportTables`, an inbound-message journal, bootstrap
-slot and snapshot ref) and resumes sessions across restarts through
-the new `@endo/captp` `provideImport` seam, which re-mints presences
-through `convertSlotToVal` so identity survives; workers are sleepy —
-snapshotted and terminated when idle and quiescent, transparently
-woken by the next message, with guests never observing suspension;
-no upgrade, by design; future work covers the XS engine adapter over
-the daemon-xs-worker-snapshot suspend/resume substrate, durable host
-exports for system resources, and durable OCapN sessions layered on
-ocapn-noise-session-reconnect; prototype and tests landed with the
-design),
+[thixotrope](thixotrope.md) (added 2026-07-16, rewritten 2026-09-08;
+`@endo/thixotrope` is an orthogonally persistent object-capability machine with an OCapN comms hub,
+XS and Ironhorse worker engines, durable guest references and listeners, a persistent workspace,
+application installation, and retention diagnostics.
+The main design describes current architecture and delivery limitations; potential upgrades,
+revocation mechanisms, and persistence-boundary experiments live in the package's designs directory),
 [endor-git-bindings](endor-git-bindings.md) (added 2026-07-15,
 revised 2026-08-14 after the Minion Town Git-remote review;
 a daemon-private, local-only `GitCas` boundary in M11 (Rust Daemon
@@ -428,7 +415,7 @@ LLM-agent stack).*
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | 2026-07-18 | 2026-07-19 | Proposed |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
-| [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | 2026-07-16 | 2026-07-22 | In Progress |
+| [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-08 | In Progress |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
@@ -675,7 +662,7 @@ flowchart TD
         onet --> oiroh
         okey[ocapn-noise-key-only-session-boundary]
         oreconn[ocapn-noise-session-reconnect]
-        oortho[ocapn-orthogonal-persistence<br/><i>IN PROGRESS</i>]
+        oortho[thixotrope<br/><i>IN PROGRESS</i>]
         docapn[daemon-ocapn-external-connectivity<br/><i>IN PROGRESS</i>]
         onet --> otcp --> onoise
         orev --> onoise
@@ -1049,15 +1036,15 @@ finalized.
 | daemon-ocapn-external-connectivity | In Progress | Daemon adopts `@endo/ocapn` for the daemon-to-daemon peer edge; retires the bespoke `EndoNetwork`/`EndoGreeter`/`RemoteControl` CapTP peer stack. Worker, CLI, and web-gateway edges stay CapTP. Satisfies the daemon-integration half of the M4 exit criterion (implementation in-flight: PRs #340, #684, #688, #693) |
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
 | ~~ocapn-iroh-netlayer~~ | **Complete** | iroh 1.0 QUIC netlayer for `@endo/ocapn` (`@endo/ocapn-iroh`): dial-by-EndpointId with discovery/relays, netstring framing under the `ocapn/netstring/0` ALPN, standard `op:start-session`; implemented with the design |
-| ocapn-orthogonal-persistence | In Progress | Phases 1-4 landed and hardened 2026-07-17: `@endo/thixotrope` with resumable sessions at the export-table layer, real XS heap snapshots (`rust/thixotrope-xs-worker` + `makeXsEngine`), sleepy workers with delivered-watermark journals, durable host exports and cross-worker object/promise links, the worker controller, at-most-once host obligations, and post-ultrareview crash hardening. Vat-level GC landed ahead of schedule (collectVats mark-and-sweep, retireWorker with tombstoned links, unpublish, shared-snapshot-ref guard). Doc now also carries the accepted forward plans: Phase 7 name hub + upgrade-by-rebinding (pet-store-style indirection preserving orthogonal purity — no in-place code upgrade, succession + name rebinding instead) and vat-level GC with explicit retirement; Phase 8 resource vats; Phase 9 non-reifying (comms-vat) host adopting the tables records as c-lists. Remaining implementation: Phases 5-9 plus ses lockdown on XS |
+| thixotrope | In Progress | OCapN comms hub owned by Thixotrope; XS and Ironhorse SQLite workers; snapshot/journal recovery; persistent guest objects, answers, and listeners; local supervisor, application installation, observable inventory, and vat retention diagnostics. Remote durable-acceptance and connection-failure contracts remain incomplete. Potential mechanisms are tracked separately in the package designs. |
 
 **Exit criterion:** Two Endo daemons can connect securely over
 OCapN-Noise. Locator format supports node identification via agent
 keypairs.
 
-**Estimated duration (1 dev):** 4-5 weeks (the
-`ocapn-orthogonal-persistence` prototype has landed; its remaining
-XS-engine adapter adds roughly a week)
+**Estimated duration (1 dev):** 4-5 weeks (existing milestone estimate).
+The Thixotrope worker engines are implemented; remaining delivery-contract work has not been
+re-estimated.
 
 ---
 
@@ -1672,7 +1659,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~cbor-frame~~ | — | — | 4 | New `@endo/cbor-frame` package (implemented, PR #288); design merged with syrup framing in PR #86 |
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
-| ocapn-orthogonal-persistence | M | 4-5 days | 4 | Phases 1-4 landed including the XS engine (`rust/thixotrope-xs-worker` on the `xsnap` crate; thixotrope suite green on real XS heap snapshots) and the worker controller; remaining estimate covers ses-lockdown-on-XS and the Phase 5 Noise transport wiring |
+| thixotrope | M | Not re-estimated | 4 | XS and Ironhorse engines, comms hub, supervisor, and application installation are implemented. Remaining delivery-contract work and package experiments need a new estimate; the earlier XS-adapter estimate is obsolete. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |
 | ~~ocapn-iroh-netlayer~~ | M | — | 4 | ✅ Complete (implemented with the design: `@endo/ocapn-iroh`, mock-iroh CI tests plus `ENDO_IROH_INTEGRATION=1`-gated real-endpoint test) |
@@ -1757,7 +1744,7 @@ date of this pass.
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
 | M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
-| M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
+| M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `thixotrope`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
