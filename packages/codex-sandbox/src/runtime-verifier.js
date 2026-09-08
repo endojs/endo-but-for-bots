@@ -82,6 +82,8 @@ if "HOSTNAME" in observed:
     assert hostname==socket.gethostname(), "hostname metadata mismatch"
 assert observed==p["environment"], "environment mismatch: known="+",".join(k for k,v in p["environment"].items() if observed.get(k)!=v)+" unexpected-count="+str(len(set(observed)-set(p["environment"]))) 
 assert run(["codex","--version"],5).strip()=="codex-cli 0.152.0"
+for name in ("auth.json","auth.json.lock"):
+    assert not os.path.exists("/codex-home/"+name), "codex home holds "+name
 with socket.create_connection((p["host"],p["port"]),timeout=2): pass
 created=[]
 try:
@@ -245,6 +247,12 @@ export const makeCodexRuntimeVerifier = ({
             toolCodexHomeAccess: 'read-only',
             toolBrokerAccess: 'denied',
             environment: 'credential-and-proxy-free',
+            // Observed, not assumed: the probe read the session's actual
+            // `CODEX_HOME` and found no `auth.json`. That file is where the
+            // pinned CLI caches a ChatGPT login, so its absence is what
+            // distinguishes a broker-fronted slice from one that was simply
+            // handed the operator's subscription credential.
+            codexHomeCredentials: 'absent',
           });
         } catch (_error) {
           if (proc) {
