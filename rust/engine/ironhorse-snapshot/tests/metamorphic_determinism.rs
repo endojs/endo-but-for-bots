@@ -102,13 +102,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         checkpoint_to_store(&mut session, &sig, &mut store).expect("checkpoint");
     }
 
+    let blob = session
+        .machine()
+        .write_snapshot(&sig)
+        .expect("quiescent machine snapshots");
     assert_eq!(
-        hex_sha256(
-            &session
-                .machine()
-                .write_snapshot(&sig)
-                .expect("quiescent machine snapshots")
-        ),
+        hex_sha256(&blob),
         // Re-pinned 2026-08-26 (llm rebase): the boot heap changed on BOTH
         // sides — the deferred pass chained native instances to
         // %Function.prototype% (the detached-.call fix), and the llm

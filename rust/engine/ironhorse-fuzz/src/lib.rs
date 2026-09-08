@@ -1797,11 +1797,41 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
 /// (a bare [`differential_check`] runs without symbols, where `arr.length`
 /// would be read as an ordinary numeric-id property and diverge).
 pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
+    differential_check_symbols_mode(source, false)
+}
+
+/// Version-2 builtin families retain oracle semantics checks and independently
+/// require identical armed/unarmed outcomes and raw costs. Their work schedule
+/// intentionally differs from XS; frozen version-2 costs live in VM and corpus
+/// regression tests. Unaffected families still use the XS-exact checker.
+pub fn differential_check_meter_v2(source: &str) -> Result<(), Divergence> {
+    differential_check_symbols_mode(source, true)
+}
+
+fn differential_check_symbols_mode(source: &str, version_two: bool) -> Result<(), Divergence> {
     let oracle = match xs_oracle::run(source) {
         Some(o) => o,
         None => return Ok(()),
     };
     let ironhorse = ironhorse_vm::run_program_with_symbols(&oracle.bytecode, &oracle.symbols);
+    if version_two {
+        let mut armed = ironhorse_vm::Interp::new();
+        armed.link_intrinsics(&ironhorse_vm::parse_symbols(&oracle.symbols));
+        armed.arm_meter(1, Box::new(|_| true));
+        let outcome = armed.run(&oracle.bytecode).host_coerced();
+        if outcome.completed != ironhorse.completed
+            || outcome.halt != ironhorse.halt
+            || outcome.result != ironhorse.result
+            || outcome.meter_raw != ironhorse.meter_raw
+        {
+            return Err(Divergence {
+                source: source.into(),
+                detail: format!(
+                    "version-2 armed/unarmed disagreement: armed={outcome:?} unarmed={ironhorse:?}"
+                ),
+            });
+        }
+    }
     if let Some(verdict) = halt_precheck(source, &ironhorse.halt) {
         return verdict;
     }
@@ -1834,7 +1864,7 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
                 ),
             });
         }
-        if oracle.computrons != ironhorse.computrons {
+        if !version_two && oracle.computrons != ironhorse.computrons {
             return Err(Divergence {
                 source: source.to_string(),
                 detail: format!(
@@ -2417,6 +2447,7 @@ mod tests {
     /// `.source` accessor), already covered by that fix (larger buffer + honest
     /// skip on overflow): the exact finding input must check clean, not diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_a136f9038a1001fb_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // d3bc62680a221ff9518c4aad6b03787bded65b75091e3b1dd34b1451e7a5835c).
@@ -2429,7 +2460,7 @@ mod tests {
             "finding program is a RegExp.source: {}",
             prog
         );
-        match differential_check_with_symbols(&prog) {
+        match differential_check_meter_v2(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding a136f9038a1001fb must not diverge: {:?}", d),
         }
@@ -2446,6 +2477,7 @@ mod tests {
     /// `493390fc03979205`, already covered by that finding's causal fix (larger
     /// buffer + honest skip on overflow). The exact input must check clean.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_ab889c8f6184c60d_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // e31b5a31b37ce02cba6b665098b0d9844e248e95e89f252910a4ec2660412e07).
@@ -2458,7 +2490,7 @@ mod tests {
             "finding program is a RegExp.source: {}",
             prog
         );
-        match differential_check_with_symbols(&prog) {
+        match differential_check_meter_v2(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding ab889c8f6184c60d must not diverge: {:?}", d),
         }
@@ -2473,6 +2505,7 @@ mod tests {
     /// oracle fix from same-class finding `493390fc03979205` (larger buffer
     /// plus an honest skip on overflow) must keep this distinct input clean.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_2276f4edebdcb3bb_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 4f0d6ca037b3a7536fa8e0595f92fd251fbd6aa459d916652f87a3e9f7ad111e).
@@ -2482,7 +2515,7 @@ mod tests {
             program.ends_with(".source"),
             "finding program must exercise RegExp.source"
         );
-        match differential_check_with_symbols(&program) {
+        match differential_check_meter_v2(&program) {
             Ok(()) => {}
             Err(divergence) => {
                 panic!("finding 2276f4edebdcb3bb must not diverge: {divergence:?}")
@@ -2499,6 +2532,7 @@ mod tests {
     /// oracle fix from same-class finding `493390fc03979205` (larger buffer
     /// plus an honest skip on overflow) must keep this distinct input clean.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_6f0b586a80019097_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 7637ee2cbd7ed3fbb4ceb06ff0e8fc37f4e64308a503b6f8bb388e2fbf965497).
@@ -2508,7 +2542,7 @@ mod tests {
             program.ends_with(".source"),
             "finding program must exercise RegExp.source"
         );
-        match differential_check_with_symbols(&program) {
+        match differential_check_meter_v2(&program) {
             Ok(()) => {}
             Err(divergence) => {
                 panic!("finding 6f0b586a80019097 must not diverge: {divergence:?}")
@@ -2542,6 +2576,7 @@ mod tests {
     /// (larger buffer + honest skip on overflow) the exact finding input must
     /// check clean, not diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_493390fc03979205_long_regexp_tostring_agrees() {
         // The exact minimized fuzz input (sha256
         // 450a95b7db1bd744fc94f63a2842714b4e8bf996f97d589fb8aeef172dabbcf7).
@@ -2554,7 +2589,7 @@ mod tests {
             "finding program is a RegExp.toString(): {}",
             prog
         );
-        match differential_check_with_symbols(&prog) {
+        match differential_check_meter_v2(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 493390fc03979205 must not diverge: {:?}", d),
         }
@@ -2571,6 +2606,7 @@ mod tests {
     /// (larger buffer + honest skip on overflow): the exact finding input must
     /// check clean, not diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_3ea435c58b4c588e_regexp_tostring_agrees() {
         // The exact minimized fuzz input (sha256
         // 9df4e2b4ff1278d84c09d3caad69d47b90401dae21573f6d581a7085716e1638).
@@ -2583,7 +2619,7 @@ mod tests {
             "finding program is a RegExp.toString(): {}",
             prog
         );
-        match differential_check_with_symbols(&prog) {
+        match differential_check_meter_v2(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 3ea435c58b4c588e must not diverge: {:?}", d),
         }
@@ -2601,6 +2637,7 @@ mod tests {
     /// honest skip on overflow): the exact finding input must check clean, not
     /// diverge.
     #[test]
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
     fn finding_91afec2d990bc402_regexp_source_agrees() {
         // The exact minimized fuzz input (sha256
         // 1e9756cef3b0a9372ae74719ccae857a781982d0e8f656b3b506555534670419).
@@ -2618,7 +2655,7 @@ mod tests {
             "finding program overflows the old buffer: {}",
             prog.len()
         );
-        match differential_check_with_symbols(&prog) {
+        match differential_check_meter_v2(&prog) {
             Ok(()) => {}
             Err(d) => panic!("finding 91afec2d990bc402 must not diverge: {:?}", d),
         }
@@ -2963,12 +3000,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_json_structured_programs_agree_bit_exact() {
-        // The stage-3b json-metering surface — structured JSON.stringify over
-        // objects and arrays built recursively from primitives — is bit-exact
-        // (serialized value AND computron). Sweep a spread of seeds over the
-        // recursive generator and assert zero divergence, reaching both the
-        // object and array node shapes and depth beyond a single level.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_json_structured_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let (mut object, mut array, mut nested) = (false, false, false);
         let mut distinct = std::collections::BTreeSet::new();
@@ -2990,7 +3025,7 @@ mod tests {
                 || prog.contains("[[")
                 || prog.contains("[{")
                 || prog.contains("{") && prog.contains("[");
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v2(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b json-metering differential divergence on {:?}: {:?}",
@@ -3014,11 +3049,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_json_parse_programs_agree_bit_exact() {
-        // The stage-3b json-metering parse surface — JSON.parse over well-formed
-        // JSON built recursively from primitives, arrays, and objects — is
-        // bit-exact (result AND computron). Sweep a spread of seeds, reaching
-        // primitive, array, and object shapes and depth beyond one level.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_json_parse_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let (mut prim, mut array, mut object) = (false, false, false);
         let mut distinct = std::collections::BTreeSet::new();
@@ -3037,7 +3071,7 @@ mod tests {
             object |= prog.contains('{');
             array |= prog.contains('[');
             prim |= !prog.contains('{') && !prog.contains('[');
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v2(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b json-parse differential divergence on {:?}: {:?}",
@@ -3111,12 +3145,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_regexp_surface_programs_agree_bit_exact() {
-        // The stage-3b xsre-integration surface (child 9/9): a whole-program
-        // `new RegExp(pat, flags).exec/test/…(subj)` over the covered grammar is
-        // bit-exact (result AND computron) end-to-end against the pin — the
-        // construction metering, the exec/test result shaping, and the accessor
-        // getters. Sweep a spread of seeds, reaching every observed operation.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_regexp_surface_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut skipped = 0;
         let (mut execd, mut tested, mut sourced, mut flagged, mut stringed) =
@@ -3142,7 +3174,7 @@ mod tests {
             // The differential check skips an out-of-subset pattern honestly
             // (ironhorse halts `Unsupported`, `differential_check` returns Ok
             // without comparing); count coverage by the checks that ran.
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v2(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b regexp-surface differential divergence on {:?}: {:?}",
@@ -3205,12 +3237,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3_reentrant_programs_agree_bit_exact() {
-        // forEach drives a user callback per element through run_callback; the
-        // callback body's opcodes are metered by the nested dispatch and the
-        // per-element fxCallThisItem overhead is a calibrated constant, so the
-        // whole thing is bit-exact (result AND computron). Sweep a spread of
-        // seeds over the three callback shapes and a range of lengths.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3_reentrant_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut shapes = [false; 3];
         let mut distinct = std::collections::BTreeSet::new();
@@ -3233,7 +3263,7 @@ mod tests {
             } else {
                 shapes[0] = true;
             }
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v2(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!("stage-3 re-entrant differential divergence: {:?}", d),
             }
@@ -3393,14 +3423,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_fundamentals_followup_programs_agree_bit_exact() {
-        // The stage-3b fundamentals-followup grammar — a function's
-        // `.length`/`.name`, `Function.prototype.bind` (create + call),
-        // `apply` with a dense array, `Symbol.prototype.toString`/
-        // `String(symbol)`/`Symbol.for`/`keyFor`, and `AggregateError` — every
-        // generated program bit-exact (result AND computron) vs XS. Rides
-        // the symbol-linking differential check (the built-ins + property
-        // names are program symbols).
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_fundamentals_followup_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut saw_length = false;
         let mut saw_name = false;
@@ -3432,7 +3458,7 @@ mod tests {
                 || prog.contains(".forEach(cf.bind(")
                 || prog.contains(".filter(cf.bind(")
                 || prog.contains(".reduce(cf.bind(");
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v2(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b fundamentals-followup differential divergence on {:?}: {:?}",
@@ -3456,11 +3482,10 @@ mod tests {
     }
 
     #[test]
-    fn generated_stage3b_object_statics_programs_agree_bit_exact() {
-        // The object-statics + intern-table arm: hasOwnProperty / Object.keys /
-        // getOwnPropertyDescriptor over random small ordinary objects, present
-        // and absent keys (novel + pre-interned default), all bit-exact (result
-        // AND computron) under the full symbol-linking differential check.
+    // W2 changes this family's work costs; check oracle semantics and raw determinism.
+    fn generated_stage3b_object_statics_programs_agree_meter_v2() {
+        // Sweep the original seeds and coverage shapes against XS semantics.
+        // Version 2 independently checks armed/unarmed outcomes and raw costs.
         let mut checked = 0;
         let mut saw_has = false;
         let mut saw_keys = false;
@@ -3489,7 +3514,7 @@ mod tests {
             saw_computed |= prog.contains("var k=");
             saw_defprop |= prog.contains("Object.defineProperty(");
             saw_in |= prog.contains(" in o");
-            match differential_check_with_symbols(&prog) {
+            match differential_check_meter_v2(&prog) {
                 Ok(()) => checked += 1,
                 Err(d) => panic!(
                     "stage-3b object-statics differential divergence on {:?}: {:?}",

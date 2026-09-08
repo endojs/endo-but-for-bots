@@ -148,8 +148,11 @@ var o={};Object.defineProperty(o,'constructor',d);o.constructor=1;'done'";
 /// was.
 #[test]
 fn long_bound_chains_complete() {
-    agrees("var f=function(){return 1};for(var i=0;i<20000;i++){f=f.bind(null)}f()");
-    agrees("var f=function(){return 1};for(var i=0;i<20000;i++){f=f.bind(null)}typeof f");
+    // Every bind prepends to its saved name: 20,000 levels now exceed the
+    // 256 MiB chunk ceiling. 2,000 remain far beyond the 128 heavy-frame
+    // native budget, so recursive invocation would still fail this test.
+    agrees("var f=function(){return 1};for(var i=0;i<2000;i++){f=f.bind(null)}f()");
+    agrees("var f=function(){return 1};for(var i=0;i<2000;i++){f=f.bind(null)}typeof f");
 }
 
 /// The fold has to preserve argument order, the bound receiver, and the shallow

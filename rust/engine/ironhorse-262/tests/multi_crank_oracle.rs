@@ -10,6 +10,8 @@
 //! Retained defining-crank bytecode now extends the scope to function
 //! and closure calls created by earlier cranks.
 
+mod w2_meter_support;
+
 use ironhorse_262::{dual_run_cranks, Agreement};
 
 /// Every crank completes on both engines, agrees on the result, and
@@ -20,6 +22,16 @@ fn agrees(cranks: &[&str]) {
     for (i, run) in runs.iter().enumerate() {
         assert_eq!(run.agreement, Agreement::BothComplete, "crank {i}: {run:?}");
         assert!(run.observables_agree(), "crank {i}: {run:?}");
+    }
+}
+
+fn agrees_v2(cranks: &[&str]) {
+    let runs = dual_run_cranks(cranks).expect("the XS oracle machine must start");
+    assert_eq!(runs.len(), cranks.len());
+    for run in runs {
+        assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+        assert!(run.result_agrees, "{run:?}");
+        w2_meter_support::assert_raw(&run.source, run.ironhorse_meter_raw);
     }
 }
 
@@ -79,11 +91,11 @@ fn retained_function_and_closure_call_across_cranks() {
 
 #[test]
 fn retained_function_call_and_apply_across_cranks() {
-    agrees(&[
+    agrees_v2(&[
         "var f = function (a, b) { return this.k + a + b; }; var o = { k: 10 }; 0",
         "f.call(o, 2, 3)",
     ]);
-    agrees(&[
+    agrees_v2(&[
         "var f = function (a, b) { return this.k + a + b; }; var o = { k: 10 }; 0",
         "f.apply(o, [4, 5])",
     ]);

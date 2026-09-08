@@ -34074,10 +34074,30 @@ impl Interp {
         // the host stack, so it is charged at the heavy class and bounded by
         // [`NATIVE_DEPTH_LIMIT`].
         self.with_native_frame(HEAVY_FRAME_COST, |vm| {
-            vm.call_native_method_inner(m, base, argc, code)
+            // These accessors can recursively Set their own copied descriptor.
+            // Keep the large dispatch frame out of that forwarding cycle.
+            if matches!(
+                m,
+                NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter
+            ) {
+                vm.cost.on_builtin(m);
+                let this = vm.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+                let arg0 = vm
+                    .stack
+                    .get(base + 4)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let result = vm.iterator_prototype_setter(code, m, this, arg0)?;
+                vm.stack.truncate(base);
+                vm.push(result);
+                Ok(())
+            } else {
+                vm.call_native_method_inner(m, base, argc, code)
+            }
         })
     }
 
+    #[inline(never)]
     fn call_native_method_inner(
         &mut self,
         m: NativeMethod,
@@ -37939,7 +37959,7 @@ impl Interp {
             }
             NativeMethod::IteratorToStringTagGetter => self.new_string_metered(b"Iterator"),
             NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter => {
-                self.iterator_prototype_setter(code, m, this, arg0)?
+                unreachable!("Iterator setters dispatch in the small wrapper")
             }
             NativeMethod::IteratorHelper(op @ 5..=10) => {
                 self.iterator_terminal_helper(code, op, this, base, argc)?

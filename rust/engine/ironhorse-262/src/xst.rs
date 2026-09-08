@@ -420,11 +420,46 @@ struct Eval {
 /// frontmatter (the negative/positive split). Shared by the synchronous
 /// [`evaluate`] path and the async path ([`run_async_case`]), which supplies
 /// its own dual-run so it can additionally read the completion latch.
+// Proprietary corpus cases may pin an engine-versioned raw total rather than
+// XS computrons: ironhorse-meter-2-raw-N. Keep semantics and strict-mode rules
+// identical, and reject malformed/conflicting pins when the gate is enabled.
+fn is_exact_meter_feature(feature: &str) -> bool {
+    feature.starts_with("ironhorse-meter-") && feature != "ironhorse-meter-determinism"
+}
+
 fn verdict_for(cfg: &Config, run: &DualRun, fm: &Frontmatter, meter_exact_gate: bool) -> Verdict {
-    match &fm.negative {
+    let pins: Vec<_> = fm
+        .features
+        .iter()
+        .filter(|feature| {
+            is_exact_meter_feature(feature) && feature.as_str() != "ironhorse-meter-exact"
+        })
+        .collect();
+    let outcome = match &fm.negative {
         Some(neg) => evaluate_negative(cfg, run, neg),
-        None => evaluate_positive(cfg, run, meter_exact_gate),
+        None => evaluate_positive(cfg, run, meter_exact_gate && pins.is_empty()),
+    };
+    if meter_exact_gate && !pins.is_empty() {
+        if pins.len() != 1
+            || fm.features.iter().any(|f| f == "ironhorse-meter-exact")
+            || ironhorse_vm::meter::COST_TABLE_VERSION != "ironhorse-meter-2"
+        {
+            return Verdict::Fail("invalid or incompatible version-2 meter pin".into());
+        }
+        let Some(expected) = pins[0]
+            .strip_prefix("ironhorse-meter-2-raw-")
+            .and_then(|n| n.parse::<u64>().ok())
+        else {
+            return Verdict::Fail("invalid version-2 raw meter pin".into());
+        };
+        if matches!(outcome, Verdict::Covered) && run.ironhorse_meter_raw != expected {
+            return Verdict::Fail(format!(
+                "version-2 meter violation: expected={expected} actual={} raw",
+                run.ironhorse_meter_raw
+            ));
+        }
     }
+    outcome
 }
 
 /// Evaluate one assembled sloppy source against the oracle differential.
@@ -1329,7 +1364,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // source file, not test262's synthetic second (`"use strict"`) variant.
     // Preserve that byte/meter identity contract while official test262 files
     // continue to execute every mode selected by their flags.
-    if fm.features.iter().any(|f| f == "ironhorse-meter-exact") {
+    if fm.features.iter().any(|f| is_exact_meter_feature(f)) {
         if only_strict {
             return preskip("structural:only-strict-meter-exact");
         }
@@ -1355,7 +1390,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     }
 
     let meter_exact_gate =
-        cfg.gate_meter_exact && fm.features.iter().any(|f| f == "ironhorse-meter-exact");
+        cfg.gate_meter_exact && fm.features.iter().any(|f| is_exact_meter_feature(f));
 
     // `async`-flagged case: assemble with the `$DONE` prelude, run the dual-run
     // (both engines drain the promise job queue — the fxRunLoop-equivalent —
@@ -2279,7 +2314,7 @@ fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time:
     if fm
         .features
         .iter()
-        .any(|feature| feature == "ironhorse-meter-exact")
+        .any(|feature| is_exact_meter_feature(feature))
     {
         if only_strict {
             return true;
@@ -3509,6 +3544,56 @@ mod tests {
             (calls == 1).then(|| baseline.clone())
         }));
         assert_eq!(calls, 2, "missing final run must fail");
+    }
+
+    #[test]
+    fn version_two_meter_pins_preserve_semantics_and_fail_closed() {
+        let cfg = Config::default();
+        let mut run = synthetic_abort(Halt::Return, "");
+        run.agreement = Agreement::BothComplete;
+        run.result_agrees = true;
+        run.ironhorse_meter_raw = 42;
+        let mut fm = Frontmatter {
+            features: vec!["ironhorse-meter-2-raw-42".into()],
+            ..Frontmatter::default()
+        };
+        assert!(matches!(
+            verdict_for(&cfg, &run, &fm, true),
+            Verdict::Covered
+        ));
+        run.result_agrees = false;
+        assert!(matches!(
+            verdict_for(&cfg, &run, &fm, true),
+            Verdict::Fail(_)
+        ));
+        run.result_agrees = true;
+        for tags in [
+            vec!["ironhorse-meter-2-raw-0"],
+            vec!["ironhorse-meter-2-raw-nope"],
+            vec!["ironhorse-meter-2-raw-18446744073709551616"],
+            vec!["ironhorse-meter-3-raw-42"],
+            vec!["ironhorse-meter-2-raw-42", "ironhorse-meter-2-raw-42"],
+            vec!["ironhorse-meter-exact", "ironhorse-meter-2-raw-42"],
+        ] {
+            fm.features = tags.into_iter().map(str::to_owned).collect();
+            assert!(
+                matches!(verdict_for(&cfg, &run, &fm, true), Verdict::Fail(_)),
+                "{:?}",
+                fm.features
+            );
+        }
+        fm.features = vec!["ironhorse-meter-2-raw-0".into()];
+        run.ironhorse_meter_raw = 0;
+        assert!(matches!(
+            verdict_for(&cfg, &run, &fm, true),
+            Verdict::Covered
+        ));
+        run.agreement = Agreement::OracleOnlyComplete;
+        run.ironhorse_halt = Halt::HeapExhausted;
+        assert!(!matches!(
+            verdict_for(&cfg, &run, &fm, true),
+            Verdict::Covered
+        ));
     }
 
     /// A `DualRun` in a shared-abort shape for exercising the negative
