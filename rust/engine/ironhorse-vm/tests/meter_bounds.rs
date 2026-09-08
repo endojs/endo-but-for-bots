@@ -190,3 +190,14 @@ fn caught_late_json_failure_retains_admitted_work() {
         );
     }
 }
+
+#[test]
+fn version_two_scratch_collection_costs_are_frozen() {
+    let (code, names) = compile("new Uint8Array([3,1,2]).sort().join(',')");
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&names);
+    let out = vm.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "1,2,3");
+    assert_eq!(out.meter_raw, 3_395_480);
+}

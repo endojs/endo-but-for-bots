@@ -13868,6 +13868,17 @@ impl Interp {
         Self::reserved_vec(capacity)
     }
 
+    /// Admit new element-wise scratch work, charged once before collecting it.
+    /// Unlike `reserve_scratch`, the caller has no existing prepaid loop cost.
+    fn reserve_work_scratch<T>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
+        self.admit_scratch::<T>(capacity)?;
+        let raw = (capacity as u64)
+            .checked_mul(crate::meter::BUILTIN_METERING)
+            .ok_or(Step::Host(Halt::MeterAbort))?;
+        self.charge_and_check(raw)?;
+        Self::reserved_vec(capacity)
+    }
+
     fn admit_scratch<T>(&mut self, capacity: usize) -> Result<(), Step> {
         let bytes = capacity
             .checked_mul(std::mem::size_of::<T>())
@@ -26924,7 +26935,7 @@ impl Interp {
                 position as usize
             };
 
-            let mut captures = Vec::with_capacity(captures_count as usize);
+            let mut captures = self.reserve_work_scratch(captures_count as usize)?;
             for capture_number in 1..=captures_count {
                 let id = self.array_generic_index_id(capture_number);
                 let capture = self.mop_get(code, result_inst, id, result)?;
@@ -47399,9 +47410,9 @@ impl Interp {
             })));
         }
 
-        let mut values = Vec::with_capacity(length as usize);
+        self.charge_and_check(length * crate::meter::BUILTIN_METERING)?;
+        let mut values = self.reserve_scratch(length as usize)?;
         for index in 0..length {
-            self.meter.tick_builtin_some(1);
             if copying || self.array_generic_has(code, inst, index)? {
                 values.push(self.array_generic_get(code, inst, index)?);
             }
@@ -48073,7 +48084,7 @@ impl Interp {
         if custom && !self.is_callable_value(compare) {
             return Err(self.catchable_type_error_msg("compare: not a function".into()));
         }
-        let mut values = Vec::with_capacity(typed_array.length as usize);
+        let mut values = self.reserve_work_scratch(typed_array.length as usize)?;
         for index in 0..typed_array.length {
             values.push(if typed_array.kind <= 1 {
                 self.typed_array_element_get_bigint(typed_array, index)
@@ -48465,7 +48476,7 @@ impl Interp {
                             // Different element types convert source values. Read
                             // the complete list first so overlapping views behave
                             // as if the source bytes were cloned.
-                            let mut values = Vec::with_capacity(src.length as usize);
+                            let mut values = self.reserve_work_scratch(src.length as usize)?;
                             for i in 0..src.length {
                                 let value = if src.kind <= 1 {
                                     self.typed_array_element_get_bigint(src, i)
