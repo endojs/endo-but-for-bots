@@ -16,6 +16,7 @@
 mod common;
 
 use common::TempDir;
+use ironhorse_snapshot::store::HeapStoreCommit;
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,

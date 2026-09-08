@@ -7,6 +7,7 @@ mod common;
 mod migration_fixtures;
 
 use common::TempDir;
+use ironhorse_snapshot::store::HeapStoreCommit;
 use migration_fixtures::{FIXTURE_CRANKS, FIXTURE_RESULTS};
 
 use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store};
@@ -239,9 +240,9 @@ impl HeapStore for ForeignCostTableStore {
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.0.page_edges()
     }
-    fn commit(
+    fn commit_verified(
         &mut self,
-        _batch: &ironhorse_snapshot::store::CheckpointBatch,
+        _verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
     ) -> Result<(), StoreError> {
         panic!("migration must not commit to a store it cannot resume");
     }
@@ -358,11 +359,11 @@ impl HeapStore for NoOpMigrationStore {
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.0.page_edges()
     }
-    fn commit(
+    fn commit_verified(
         &mut self,
-        batch: &ironhorse_snapshot::store::CheckpointBatch,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
     ) -> Result<(), StoreError> {
-        self.0.commit(batch)
+        self.0.commit_verified(verify)
     }
     // The lie: reports success, persists nothing.
     fn replace_manifest_for_migration(
@@ -516,11 +517,11 @@ impl HeapStore for CyclingMigrationStore {
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.inner.page_edges()
     }
-    fn commit(
+    fn commit_verified(
         &mut self,
-        batch: &ironhorse_snapshot::store::CheckpointBatch,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
     ) -> Result<(), StoreError> {
-        self.inner.commit(batch)
+        self.inner.commit_verified(verify)
     }
     fn replace_manifest_for_migration(
         &mut self,

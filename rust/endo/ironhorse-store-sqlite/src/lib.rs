@@ -32,11 +32,12 @@
 //! layout); SQLite's C is the same bundled `rusqlite` the daemon
 //! already compiles.
 
+use ironhorse_snapshot::store::HeapStoreCommit;
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
-    apply_batch, check_succession, chunk_extent_count, free_seg_count, leaf_hash, slot_page_count,
-    CheckpointBatch, HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_FREE, LEAF_PAGE,
+    chunk_extent_count, free_seg_count, leaf_hash, slot_page_count,
+    HeapStore, StoreError, StoreManifest, LEAF_EXT, LEAF_FREE, LEAF_PAGE,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -862,7 +863,7 @@ impl HeapStore for SqliteHeapStore {
         Ok(out)
     }
 
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+    fn commit_verified(&mut self, verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>) -> Result<(), StoreError> {
         // Take the ledger cache up front: every early return below
         // drops it (the [`RootLedger`] drop-on-failure discipline —
         // rusqlite rolls the transaction back on drop, and a rolled-
@@ -880,49 +881,10 @@ impl HeapStore for SqliteHeapStore {
         let new_cache: ironhorse_snapshot::store::RootLedger;
         {
             let stored = Self::stored_manifest(&tx)?;
-            check_succession(stored.as_ref(), batch)?;
-            let pages = slot_page_count(batch.manifest.slot_count);
-            let exts = chunk_extent_count(batch.manifest.chunk_len);
-
-            // The shared per-commit verification — all of it inside
-            // this transaction, the same snapshot the succession
-            // check read, and all BEFORE any table mutation (wave-3
-            // reorder: a refused batch leaves the tables untouched by
-            // construction, so the transaction rollback is the
-            // backstop for I/O failures in the mutation stage below,
-            // not the mechanism a refusal depends on). Two paths
-            // (V6-c): FAST — a live ledger from the previous commit
-            // runs the identical [`check_batch`] admission gauntlet
-            // against its cached widths, then advances the class
-            // trees O(dirty · log n) and refuses a batch whose root
-            // disagrees, with no per-leaf SELECT at all; SLOW (first
-            // commit after open or after any failure) — read every
-            // prior leaf and summary and run [`apply_batch`]'s full
-            // recombination, then seed the ledger from the applied
-            // vectors. The prior leaves are read PER KIND with
-            // contiguity enforced, like the trait readers: the review
-            // found an unfiltered `ORDER BY kind, idx` here silently
-            // folding kind-2 free leaves into the extent vector
-            // (masked only by resize bounds), and no gap detection.
-            new_cache = if let Some(mut ledger) = cache {
-                ironhorse_snapshot::store::check_batch(
-                    stored.as_ref().map(|m| (m, ledger.widths())),
-                    batch,
-                )?;
-                let root = ledger.apply(
-                    &batch.manifest,
-                    &batch.small,
-                    &batch.slot_pages,
-                    &batch.chunk_extents,
-                    &batch.free_segs,
-                    &batch.page_edges,
-                )?;
-                if root != batch.manifest.root {
-                    return Err(StoreError::BaselineMismatch {
-                        expected: root,
-                        found: batch.manifest.root.clone(),
-                    });
-                }
+            // The common verifier runs inside this writer transaction. Reuse
+            // the last committed ledger for O(dirty * log n) updates; rebuild
+            // its metadata only after open or a failed commit.
+            let ledger = if let Some(ledger) = cache {
                 ledger
             } else {
                 let read_kind = |kind: i64,
@@ -949,9 +911,9 @@ impl HeapStore for SqliteHeapStore {
                     }
                     Ok(out)
                 };
-                let mut prior_pages = read_kind(0, "slot page leaf")?;
-                let mut prior_exts = read_kind(1, "chunk extent leaf")?;
-                let mut prior_frees = read_kind(2, "free segment leaf")?;
+                let prior_pages = read_kind(0, "slot page leaf")?;
+                let prior_exts = read_kind(1, "chunk extent leaf")?;
+                let prior_frees = read_kind(2, "free segment leaf")?;
                 let mut prior_edges: Vec<Vec<u32>> = Vec::new();
                 {
                     let mut stmt = tx
@@ -978,22 +940,16 @@ impl HeapStore for SqliteHeapStore {
                         );
                     }
                 }
-                apply_batch(
-                    &mut prior_pages,
-                    &mut prior_exts,
-                    &mut prior_frees,
-                    &mut prior_edges,
-                    stored.as_ref(),
-                    batch,
-                )?;
-                ironhorse_snapshot::store::RootLedger::build(
-                    &batch.small,
-                    prior_pages,
-                    prior_exts,
-                    prior_frees,
-                    &prior_edges,
-                )
+
+                let small: Vec<u8> = if stored.is_some() {
+                    tx.query_row("SELECT bytes FROM small_state WHERE name = ?1", params![SMALL_NAME], |row| row.get(0)).map_err(sql_err)?
+                } else { Vec::new() };
+                ironhorse_snapshot::store::RootLedger::build(&small, prior_pages, prior_exts, prior_frees, &prior_edges)
             };
+            let (batch, ledger) = verify(stored.as_ref(), ledger)?.into_parts();
+            new_cache = ledger;
+            let pages = slot_page_count(batch.manifest.slot_count);
+            let exts = chunk_extent_count(batch.manifest.chunk_len);
 
             let mut upsert_page = tx
                 .prepare(

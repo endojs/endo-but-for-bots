@@ -11,6 +11,7 @@ use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, resume_from_store, resume_from_store_lazy,
     MachineSnapshot, StoreSession,
 };
+use ironhorse_snapshot::store::HeapStoreCommit;
 use ironhorse_snapshot::store::{
     image_to_batch_unchecked, seal_commit, slot_page_count, store_to_image, CheckpointBatch,
     HeapStore, MemoryStore, StoreError,
@@ -384,8 +385,11 @@ impl HeapStore for InterleavingStore {
     fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
         self.inner.borrow().free_leaf_hashes()
     }
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-        self.inner.borrow_mut().commit(batch)
+    fn commit_verified(
+        &mut self,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), StoreError> {
+        self.inner.borrow_mut().commit_verified(verify)
     }
 }
 
@@ -617,8 +621,11 @@ fn reachability_query_reads_no_row_content() {
         fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
             self.inner.free_leaf_hashes()
         }
-        fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
-            self.inner.commit(batch)
+        fn commit_verified(
+            &mut self,
+            verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+        ) -> Result<(), StoreError> {
+            self.inner.commit_verified(verify)
         }
     }
 
@@ -821,11 +828,14 @@ impl HeapStore for FailOnceStore {
     fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
         self.inner.free_leaf_hashes()
     }
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+    fn commit_verified(
+        &mut self,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), StoreError> {
         if self.fail_next.replace(false) {
             return Err(StoreError::Io("injected commit failure".to_string()));
         }
-        self.inner.commit(batch)
+        self.inner.commit_verified(verify)
     }
 }
 

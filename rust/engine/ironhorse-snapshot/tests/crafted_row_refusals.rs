@@ -7,6 +7,7 @@
 use ironhorse_snapshot::format::SnapshotError;
 use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
+use ironhorse_snapshot::store::HeapStoreCommit;
 use ironhorse_snapshot::store::{
     image_to_batch_unchecked, validate_store, HeapStore, MemoryStore, StoreError,
 };

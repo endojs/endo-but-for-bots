@@ -528,3 +528,15 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         "epoch-3 seal chain"
     );
 }
+
+#[test]
+fn memory_and_file_stores_obey_shared_commit_contract() {
+    use ironhorse_snapshot::store_suite::commit_contract;
+    commit_contract(MemoryStore::new(), |store| store);
+    let dir = common::TempDir::new("shared-commit-contract");
+    let path = dir.join("heap.ihstore");
+    commit_contract(FileStore::open(&path).unwrap(), |store| {
+        drop(store);
+        FileStore::open(&path).unwrap()
+    });
+}

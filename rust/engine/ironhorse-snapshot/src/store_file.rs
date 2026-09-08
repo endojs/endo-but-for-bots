@@ -15,6 +15,13 @@
 //! backend must match (epoch discipline, geometry drop, byte-exact
 //! rows) in `forbid(unsafe_code)` std-only Rust.
 //!
+//! # Writer scope
+//!
+//! This reference backend requires a single writer: callers must serialize
+//! simultaneous commits and migrations on one path. Reopening/reloading detects
+//! stale sequential handles; it is not a cross-process writer lock. Production
+//! multi-writer stores use SQLite's transaction isolation.
+//!
 //! # On-disk layout (`FILE_MAGIC`, all integers big-endian)
 //!
 //! ```text
@@ -36,6 +43,8 @@
 //! directory entry. A missing file is an [`StoreError::Empty`] store,
 //! not an error, so `open` serves both the create and reopen paths.
 
+#[cfg(test)]
+use crate::store::HeapStoreCommit;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -43,7 +52,7 @@ use std::path::PathBuf;
 
 use crate::format::SnapshotError;
 use crate::store::{
-    check_succession, chunk_extent_count, slot_page_count, CheckpointBatch, HeapStore, StoreError,
+    chunk_extent_count, slot_page_count, CommitVerifier, HeapStore, RootLedger, StoreError,
     StoreManifest,
 };
 
@@ -548,7 +557,7 @@ impl HeapStore for FileStore {
             .ok_or(StoreError::Empty)
     }
 
-    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+    fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError> {
         // Reload the durable file: the cached view can be stale if
         // another handle on this path committed (the review's silent
         // ping-pong finding). Both the succession check and the
@@ -563,7 +572,30 @@ impl HeapStore for FileStore {
         } else {
             None
         };
-        check_succession(durable.as_ref().map(|(l, _)| &l.manifest), batch)?;
+        let ledger = match durable.as_ref() {
+            Some((loaded, _)) => RootLedger::build(
+                &loaded.small,
+                loaded.leaf_pages.clone(),
+                loaded.leaf_exts.clone(),
+                loaded.leaf_frees.clone(),
+                &loaded.edges,
+            ),
+            None => RootLedger::build(&[], Vec::new(), Vec::new(), Vec::new(), &[]),
+        };
+        let (batch, ledger) =
+            verify(durable.as_ref().map(|(l, _)| &l.manifest), ledger)?.into_parts();
+        let (leaf_pages, leaf_exts, leaf_frees) = ledger.into_leaf_vectors();
+        let mut edges = durable
+            .as_ref()
+            .map(|(l, _)| l.edges.clone())
+            .unwrap_or_default();
+        edges.resize(
+            slot_page_count(batch.manifest.slot_count) as usize,
+            Vec::new(),
+        );
+        for (page, targets) in &batch.page_edges {
+            edges[*page as usize] = targets.clone();
+        }
 
         let n_pages = slot_page_count(batch.manifest.slot_count);
         let n_exts = chunk_extent_count(batch.manifest.chunk_len);
@@ -633,36 +665,6 @@ impl HeapStore for FileStore {
             }
         }
 
-        // The shared per-commit verification and leaf/summary
-        // maintenance (grown-region presence, row lengths, summary
-        // coupling, root recombination) against the DURABLE prior
-        // state — after source resolution, so a missing grown row
-        // reports its precise MissingRow error rather than a root
-        // mismatch.
-        let mut leaf_pages = durable
-            .as_ref()
-            .map(|(l, _)| l.leaf_pages.clone())
-            .unwrap_or_default();
-        let mut leaf_exts = durable
-            .as_ref()
-            .map(|(l, _)| l.leaf_exts.clone())
-            .unwrap_or_default();
-        let mut leaf_frees = durable
-            .as_ref()
-            .map(|(l, _)| l.leaf_frees.clone())
-            .unwrap_or_default();
-        let mut edges = durable
-            .as_ref()
-            .map(|(l, _)| l.edges.clone())
-            .unwrap_or_default();
-        crate::store::apply_batch(
-            &mut leaf_pages,
-            &mut leaf_exts,
-            &mut leaf_frees,
-            &mut edges,
-            durable.as_ref().map(|(l, _)| &l.manifest),
-            batch,
-        )?;
         let n_free_segs = crate::store::free_seg_count(batch.manifest.free_len) as usize;
         let mut free_segs = durable
             .as_ref()
@@ -815,6 +817,7 @@ mod tests {
     use crate::format::Signature;
     use crate::image::write_machine_unchecked;
     use crate::machine::MachineSnapshot;
+    use crate::store::CheckpointBatch;
     use crate::store::{
         export_to_container, image_to_batch_unchecked, import_from_container, store_to_image,
         validate_store,

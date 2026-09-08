@@ -89,8 +89,8 @@ pub use slot_codec::{decode_slot, decode_slots, encode_slot, encode_slots, SLOT_
 pub use store::{
     check_epoch, chunk_extent_count, chunk_extent_len, export_to_container, image_to_batch,
     import_from_container, slot_page_count, slot_page_len, store_to_image, validate_store,
-    CheckpointBatch, CommitStats, HeapStore, MemoryStore, SmallState, StoreError, StoreManifest,
-    ValidatedStoreState, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE, STORE_SCHEMA_VERSION,
+    CheckpointBatch, CommitStats, HeapStore, HeapStoreCommit, MemoryStore, SmallState, StoreError,
+    StoreManifest, ValidatedStoreState, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE, STORE_SCHEMA_VERSION,
 };
 pub use store_file::{FileStore, FILE_MAGIC};
 

@@ -6,7 +6,8 @@ use ironhorse_snapshot::machine::{
     from_snapshot_bytes, resume_from_cas, resume_from_store, resume_from_store_lazy,
     MachineSnapshot, MachineSnapshotError,
 };
-use ironhorse_snapshot::store::{image_to_batch_unchecked, store_to_image, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::HeapStoreCommit;
+use ironhorse_snapshot::store::{image_to_batch_unchecked, store_to_image, MemoryStore};
 use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_vm::Interp;
 use std::cell::RefCell;

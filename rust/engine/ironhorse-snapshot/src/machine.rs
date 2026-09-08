@@ -55,6 +55,7 @@
 //! meter-continuity tests therefore suspend at crank boundaries with
 //! closures fully resolved, exactly where the contract holds.
 
+use crate::store::HeapStoreCommit;
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
@@ -1877,7 +1878,7 @@ mod tests {
         // sealing machinery run over hostile content.
         let mut store = crate::store::MemoryStore::new();
         let batch = image_to_batch(&image, 1, "");
-        crate::store::HeapStore::commit(&mut store, &batch)
+        crate::store::HeapStoreCommit::commit(&mut store, &batch)
             .expect("the forged batch seals consistently");
         assert!(
             resume_from_store(&store, &sig()).is_err(),
@@ -1909,7 +1910,7 @@ mod tests {
         for checkpoint in [false, true] {
             let mut store = crate::store::MemoryStore::new();
             let batch = image_to_batch(&image, 1, "");
-            crate::store::HeapStore::commit(&mut store, &batch)
+            crate::store::HeapStoreCommit::commit(&mut store, &batch)
                 .expect("consistently sealed hostile store");
             assert!(resume_from_store(&store, &sig()).is_err());
             let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
@@ -1956,7 +1957,7 @@ mod tests {
         image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
         let mut store = crate::store::MemoryStore::new();
         let batch = image_to_batch(&image, 1, "");
-        crate::store::HeapStore::commit(&mut store, &batch)
+        crate::store::HeapStoreCommit::commit(&mut store, &batch)
             .expect("the forged batch seals consistently");
         let mut resumed =
             resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())
@@ -1991,7 +1992,7 @@ mod tests {
         );
         let mut store = crate::store::MemoryStore::new();
         let batch = image_to_batch(&image, 1, "");
-        crate::store::HeapStore::commit(&mut store, &batch)
+        crate::store::HeapStoreCommit::commit(&mut store, &batch)
             .expect("the forged batch seals consistently");
         let mut resumed =
             resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())

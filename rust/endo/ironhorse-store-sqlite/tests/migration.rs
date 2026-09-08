@@ -2,6 +2,7 @@
 
 mod common;
 
+use ironhorse_snapshot::store::HeapStoreCommit;
 use common::TempDir;
 
 use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store};
