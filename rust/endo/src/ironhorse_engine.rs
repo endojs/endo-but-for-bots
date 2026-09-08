@@ -445,21 +445,34 @@ pub mod engine {
         /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to
         /// [`MachineError::MeterAbort`].
         pub fn evaluate(&self, source: &str, strict: bool) -> Result<EvalOutcome, MachineError> {
-            let (bytecode, symbols) = compile_atoms_with(source, strict)
-                .map_err(|e| MachineError::Compile(e.to_string()))?;
-            let comp = self.inner.new_compartment();
-            let outcome = match (self.bounds.check_interval(), self.bounds.crank_limit()) {
-                (Some(interval), Some(limit)) => {
-                    let ceiling = std::rc::Rc::new(std::cell::Cell::new(limit));
-                    comp.evaluate_with_symbols_metered(
-                        &bytecode,
-                        &symbols,
-                        interval,
-                        meter_host(&ceiling),
-                    )
+            let mut interp = ironhorse_vm::Interp::new();
+            if let (Some(interval), Some(limit)) =
+                (self.bounds.check_interval(), self.bounds.crank_limit())
+            {
+                let ceiling = std::rc::Rc::new(std::cell::Cell::new(limit));
+                interp.arm_meter(interval, meter_host(&ceiling));
+            }
+            let compiled = ironhorse_compile::compile_atoms_budgeted(
+                source,
+                ironhorse_compile::Goal::Eval,
+                strict,
+                &mut |raw| interp.charge_compilation(raw),
+            )
+            .map_err(|error| match error {
+                ironhorse_compile::CompileError::Parse(error) => {
+                    MachineError::Compile(error.to_string())
                 }
-                _ => comp.evaluate_with_symbols(&bytecode, &symbols),
-            };
+                ironhorse_compile::CompileError::MeterAbort => refuse(
+                    Halt::MeterAbort,
+                    interp.meter_index() >> 16,
+                    self.bounds.crank_limit(),
+                ),
+            })?;
+            let outcome = self.inner.new_compartment().evaluate_with_symbols_on(
+                interp,
+                &compiled.bytecode,
+                &compiled.symbols,
+            );
             Ok(outcome.into())
         }
 
@@ -888,8 +901,45 @@ pub mod engine {
         pub fn eval(&mut self, source: &str) -> Result<EvalOutcome, MachineError> {
             use ironhorse_snapshot::machine::checkpoint_to_store;
 
-            let (bytecode, symbols) = compile_atoms_with(source, false)
-                .map_err(|e| MachineError::Compile(e.to_string()))?;
+            // Compilation and execution share one crank budget and admission
+            // window. Start it before any source-sized compiler allocation.
+            let (compiled, crank_start_raw, compile_end_raw) = {
+                let session = self.session.as_mut().ok_or_else(|| {
+                    MachineError::Store("machine has no session (a rewind failed)".into())
+                })?;
+                let machine = session.machine_mut();
+                let start = machine.meter_index();
+                if let (Some(interval), Some(limit)) =
+                    (self.meter.check_interval(), self.meter.crank_limit())
+                {
+                    self.crank_ceiling.set((start >> 16).saturating_add(limit));
+                    machine.rearm_meter(interval, meter_host(&self.crank_ceiling));
+                }
+                let result = ironhorse_compile::compile_atoms_budgeted(
+                    source,
+                    ironhorse_compile::Goal::Eval,
+                    false,
+                    &mut |raw| machine.charge_compilation(raw),
+                );
+                (result, start, machine.meter_index())
+            };
+            let compiled = match compiled {
+                Ok(compiled) => compiled,
+                Err(error) => {
+                    self.rewind_to_last_checkpoint()?;
+                    return Err(match error {
+                        ironhorse_compile::CompileError::Parse(error) => {
+                            MachineError::Compile(error.to_string())
+                        }
+                        ironhorse_compile::CompileError::MeterAbort => refuse(
+                            Halt::MeterAbort,
+                            compile_end_raw.saturating_sub(crank_start_raw) >> 16,
+                            self.meter.crank_limit(),
+                        ),
+                    });
+                }
+            };
+            let (bytecode, symbols) = (compiled.bytecode, compiled.symbols);
             let names = ironhorse_vm::parse_symbols(&symbols);
             // The cadence decision (deferred item I), taken up front
             // from replica-visible state: counted in completed cranks,
@@ -946,55 +996,21 @@ pub mod engine {
                 // runtime-intern extension refusal retired with the
                 // id-space unification — interned names live in the
                 // persisted table and symbol keys mint top-down, so
-                // extension aliases nothing). Nothing ran on refusal,
-                // so no rewind is needed and the epoch stands.
+                // extension aliases nothing). A refusal rewinds compilation
+                // charges and any linkage changes to the checkpoint too.
                 let bytecode = if self.linked {
-                    session
-                        .machine_mut()
-                        .relink_crank(&bytecode, &names)
-                        .map_err(|e| {
-                            MachineError::SymbolMismatch(format!(
-                                "this crank's compiled table ({} names) could not be \
-                                 relinked onto the machine's persisted table ({} names): \
-                                 {e:?}",
-                                names.len(),
-                                session.machine().program_symbol_names().len(),
-                            ))
-                        })?
+                    match session.machine_mut().relink_crank(&bytecode, &names) {
+                        Ok(bytecode) => bytecode,
+                        Err(error) => {
+                            let message = format!("this crank's compiled table ({} names) could not be relinked onto the persisted table ({} names): {error:?}", names.len(), session.machine().program_symbol_names().len());
+                            self.rewind_to_last_checkpoint()?;
+                            return Err(MachineError::SymbolMismatch(message));
+                        }
+                    }
                 } else {
                     bytecode
                 };
-                // Grant this crank its budget: the persistent meter is
-                // the machine-lifetime count, so the ceiling is absolute
-                // — where the meter stands now plus the per-crank limit.
-                // Re-pointed every crank, so a crank that was refused
-                // does not shrink the next one's budget, and a resume
-                // mid-history grants exactly what a never-suspended
-                // replica would.
-                //
-                // The check WINDOW is re-based here too (`rearm_meter`:
-                // the next host consultation falls one interval from
-                // the crank's start), the way xsnap resets its meter at
-                // every crank start. Without it the window's phase is
-                // whatever history left it — a store migrated from an
-                // un-armed policy, or armed under another cadence, sits
-                // on a different phase from a natively armed replica —
-                // and a crank spending inside `(limit, limit + interval]`
-                // would be refused on one machine and admitted on the
-                // other (adversarial review). Re-based per crank, whether
-                // a crank is refused is a pure function of its own cost
-                // and the configuration, on every replica whatever its
-                // suspend, rewind, or migration history.
-                let crank_start_raw = session.machine().meter_index();
-                if let (Some(interval), Some(limit)) =
-                    (self.meter.check_interval(), self.meter.crank_limit())
-                {
-                    self.crank_ceiling
-                        .set((crank_start_raw >> 16).saturating_add(limit));
-                    session
-                        .machine_mut()
-                        .rearm_meter(interval, meter_host(&self.crank_ceiling));
-                }
+                // Preserve the compilation baseline and its admission window.
                 let outcome = session.machine_mut().run(&bytecode);
                 if outcome.completed && checkpoint_due {
                     let r = checkpoint_to_store(

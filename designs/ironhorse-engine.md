@@ -396,12 +396,22 @@ release-versioned cost table, not XS's constants:
 | Bytecode dispatch | `mxBreak` metering variant in `xsRun.c` | cost-table entry, per opcode |
 | Built-in operation step | `mxMeterOne`/`mxMeterSome` on the `mx*` operation macros | cost-table entry, per built-in step |
 | Allocation | slot alloc (`XS_SLOT_ALLOCATION_METERING`) / chunk byte (`XS_CHUNK_ALLOCATION_METERING`) | cost-table entry |
-| Parse unit | `fxMeterSome` calls from the parser | cost-table entry |
+| Compilation | source admission, tokens, scope/code/optimizer work | shared frozen entries; incremental host budget |
 
 **Deriving and freezing the cost table.**
 The shipped weights are XS-derived historical estimates, now reified in
 `rust/engine/ironhorse-meter` with a fixed-order table and a pinned SHA-256 digest.
 They have not yet been calibrated against measured Ironhorse wall-clock cost.
+Source compilation now shares the running crank's budget from before the first
+source-sized allocation through serialization.
+`CompiledSource` reports whole and raw front-end costs already charged by its
+incremental callback; `eval` and `Function` must not debit those reports again.
+The Endo fresh and persistent seams start the budget before compilation and
+preserve its baseline and consultation window through execution.
+A compiler budget refusal is a host `MeterAbort`, never a catchable syntax error.
+The compiler contains a private unwind to stop nested infallible coder loops
+immediately and rejects `panic=abort` builds; unrelated panics propagate unchanged.
+
 The [cost-calibration instrumentation](ironhorse-meter-opcode-cost-instrumentation.md)
 is the path to future evidence-based calibration, not evidence already obtained.
 A weight or charging-point change requires a new `ironhorse-meter-N` release and

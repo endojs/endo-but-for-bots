@@ -19,22 +19,49 @@ impl SourceCompiler for Compiler {
         &self,
         source: &str,
         strict: bool,
+        charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<CompiledSource, SourceCompileError> {
-        ironhorse_compile::compile_atoms_with(source, strict)
-            .map(|(bytecode, symbols)| CompiledSource { bytecode, symbols })
-            .map_err(|e| match e.kind {
-                ironhorse_compile::ParseErrorKind::Unsupported => {
-                    SourceCompileError::Unsupported(e.to_string())
-                }
-                _ => SourceCompileError::Syntax(e.message),
-            })
+        match ironhorse_compile::compile_atoms_budgeted(
+            source,
+            ironhorse_compile::Goal::Eval,
+            strict,
+            charge,
+        ) {
+            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                bytecode: compiled.bytecode,
+                symbols: compiled.symbols,
+                parse_meter_raw: compiled.parse_meter_raw,
+                parse_computrons: compiled.parse_computrons,
+            }),
+            Err(ironhorse_compile::CompileError::MeterAbort) => {
+                Err(ironhorse_vm::SourceCompileError::MeterAbort)
+            }
+            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Unsupported => Err(
+                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
+                ),
+                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
+            },
+        }
     }
 }
 
 fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String, String> {
-    let (code, symbols) = ironhorse_compile::compile_atoms(source).map_err(|e| e.to_string())?;
-    let names = parse_symbols(&symbols);
     let m = session.machine_mut();
+    let ceiling = (m.meter_index() >> 16).saturating_add(budget);
+    m.rearm_meter(
+        1000.min(budget.max(1)),
+        Box::new(move |spent| spent <= ceiling),
+    );
+    let compiled = ironhorse_compile::compile_atoms_budgeted(
+        source,
+        ironhorse_compile::Goal::Script,
+        false,
+        &mut |raw| m.charge_compilation(raw),
+    )
+    .map_err(|error| format!("compile: {error:?}"))?;
+    let (code, symbols) = (compiled.bytecode, compiled.symbols);
+    let names = parse_symbols(&symbols);
     m.set_source_compiler(Rc::new(Compiler));
     let code = if m.program_symbol_names().is_empty() {
         m.link_intrinsics(&names);
@@ -43,8 +70,6 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
         m.relink_crank(&code, &names)
             .map_err(|e| format!("relink: {e:?}"))?
     };
-    let ceiling = (m.meter_index() >> 16).saturating_add(budget);
-    m.rearm_meter(1000, Box::new(move |spent| spent <= ceiling));
     let outcome = m.run(&code);
     if !outcome.completed {
         return Err(format!("guest crank halted: {:?}", outcome.halt));

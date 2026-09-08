@@ -1,0 +1,16 @@
+# ironhorse-meter-3 source, lexical whole, compilation raw, compilation whole
+1 + 2 * 3	8	2564096	39
+(a, b) => a + b	13	3788800	57
+if (x) { y } else { z }	17	3735552	57
+for (var i = 0; i < 10; i = i + 1) { s = s + i }	37	6012928	91
+function f(a, b, c) { return a * b + c }	28	5570560	85
+var o = { a: 1, b: [2, 3], c: { d: 4 } }; o.a + o.c.d	48	7405568	113
+`t${a}e${b}mplate`	12	3244032	49
+class C extends B { m() { return super.m() + 1 } }	32	8138752	124
+try { f() } catch (e) { g(e) } finally { h() }	34	7163904	109
+switch (n) { case 1: a(); break; default: b() }	32	5279744	80
+label: while (true) { if (q) break label; continue label }	32	5132288	78
+let [x, ...rest] = arr; let { p, q: r } = obj;	33	10833920	165
+async function a() { await p; for await (const v of s) {} }	35	11345920	173
+function* gen() { yield 1; yield* other() }	26	9474048	144
+"use strict"; const k = 1; k;	17	3297280	50

@@ -20,10 +20,29 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
         &self,
         source: &str,
         strict: bool,
+        charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_with(source, strict) {
-            Ok((bytecode, symbols)) => Ok(ironhorse_vm::CompiledSource { bytecode, symbols }),
-            Err(_) => Err(ironhorse_vm::SourceCompileError::Syntax(String::new())),
+        match ironhorse_compile::compile_atoms_budgeted(
+            source,
+            ironhorse_compile::Goal::Eval,
+            strict,
+            charge,
+        ) {
+            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                bytecode: compiled.bytecode,
+                symbols: compiled.symbols,
+                parse_meter_raw: compiled.parse_meter_raw,
+                parse_computrons: compiled.parse_computrons,
+            }),
+            Err(ironhorse_compile::CompileError::MeterAbort) => {
+                Err(ironhorse_vm::SourceCompileError::MeterAbort)
+            }
+            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Unsupported => Err(
+                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
+                ),
+                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
+            },
         }
     }
 }

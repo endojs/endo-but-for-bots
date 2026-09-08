@@ -46,7 +46,7 @@ fn item_token(item: &Item) -> Option<Token> {
     }
 }
 
-impl Parser {
+impl Parser<'_> {
     // ================= entry points =================
 
     /// Parse a whole **Script** (`fxProgram`), returning the `Program`

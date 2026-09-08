@@ -229,17 +229,19 @@ struct SymEntry {
 /// buckets in index order and, within a bucket, most-recent-first (prepend
 /// order), numbering only the `usage` symbols — exactly `fxParserCode`'s
 /// symbol-table walk. That order leaks into every symbol operand's bytes.
-struct SymbolTable {
+struct SymbolTable<'a> {
+    meter: crate::meter::ParseMeter<'a>,
     /// Interned symbols in insertion (chronological) order.
     entries: Vec<SymEntry>,
     index: HashMap<Vec<u8>, usize>,
 }
 
-impl SymbolTable {
+impl<'a> SymbolTable<'a> {
     /// A table pre-seeded with the built-in symbols, matching XS's
     /// `fxInitializeParser`.
-    fn seeded() -> SymbolTable {
+    fn seeded(meter: crate::meter::ParseMeter<'a>) -> SymbolTable<'a> {
         let mut t = SymbolTable {
+            meter,
             entries: Vec::new(),
             index: HashMap::new(),
         };
@@ -265,6 +267,7 @@ impl SymbolTable {
     fn intern(&mut self, name: impl Into<SymbolName>) -> usize {
         let name = name.into();
         let s = name.as_bytes();
+        self.meter.work(s.len());
         if let Some(&i) = self.index.get(s) {
             return i;
         }
@@ -397,7 +400,8 @@ struct Target {
 /// The coder — XS's `txCoder`. Holds the record list, the target arena,
 /// the running stack/scope counters, and the program/eval flags the node
 /// emitters branch on.
-pub struct Coder<'a> {
+pub struct Coder<'a, 'm> {
+    meter: crate::meter::ParseMeter<'m>,
     codes: Vec<Code>,
     targets: Vec<Target>,
     stack_level: i32,
@@ -418,7 +422,7 @@ pub struct Coder<'a> {
     /// places it. `None` outside a chain.
     chain_target: Option<usize>,
     /// The atom table (`parser->symbolTable`), seeded with the built-ins.
-    symbols: SymbolTable,
+    symbols: SymbolTable<'m>,
     tree: &'a ScopeTree,
     /// The frame slot each declaration was assigned during scope coding
     /// (XS writes `node->index` in `fxScopeCodingBlock`/`Eval`; a resolved
@@ -487,9 +491,10 @@ pub struct Coder<'a> {
     depth: u32,
 }
 
-impl<'a> Coder<'a> {
-    fn new(tree: &'a ScopeTree) -> Coder<'a> {
+impl<'a, 'm> Coder<'a, 'm> {
+    fn new(tree: &'a ScopeTree, meter: crate::meter::ParseMeter<'m>) -> Coder<'a, 'm> {
         Coder {
+            meter: meter.clone(),
             codes: Vec::new(),
             targets: Vec::new(),
             stack_level: 0,
@@ -504,7 +509,7 @@ impl<'a> Coder<'a> {
             first_continue_target: None,
             return_target: None,
             chain_target: None,
-            symbols: SymbolTable::seeded(),
+            symbols: SymbolTable::seeded(meter),
             tree,
             decl_index: HashMap::new(),
             defined: std::collections::HashSet::new(),
@@ -594,6 +599,7 @@ impl<'a> Coder<'a> {
     /// numeric/computed property keys, some declaration positions) are a
     /// named edge for the declaration/object slices.
     fn intern_tree(&mut self, item: &Item) {
+        self.meter.work(1);
         match item {
             Item::Symbol(s) => {
                 self.symbols.intern(s);
@@ -648,6 +654,7 @@ impl<'a> Coder<'a> {
     // ---- fxCoderAdd* constructors -----------------------------------
 
     fn add(&mut self, delta: i32, payload: Payload, id: i32) {
+        self.meter.work(1);
         self.stack_level += delta;
         let stack_level = self.stack_level;
         self.codes.push(Code {
@@ -1079,36 +1086,81 @@ pub fn compile_atoms_goal(
     goal: Goal,
     strict: bool,
 ) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
-    if goal == Goal::Module {
-        return compile_module_atoms(source);
+    compile_goal_metered(source, goal, strict, crate::meter::ParseMeter::new())
+}
+
+fn compile_goal_metered(
+    source: &str,
+    goal: Goal,
+    strict: bool,
+    meter: crate::meter::ParseMeter<'_>,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    let module = goal == Goal::Module;
+    let mut parser =
+        crate::parser::Parser::with_meter(source, strict || module, module, meter.clone())?;
+    let mut root = if module {
+        parser.parse_module()?
+    } else {
+        parser.parse_program(strict)?
+    };
+    // Script and Eval share the XS eval frame shape; the goal controls hoists.
+    if !module {
+        if let Item::Node(n) = &mut root {
+            n.flags |= crate::ast::flags::EVAL;
+        }
     }
-    let mut parser = crate::parser::Parser::new(source, strict, false)?;
-    let mut root = parser.parse_program(strict)?;
-    // The oracle shim compiles the Script goal with `mxProgramFlag |
-    // mxEvalFlag`, so the program node carries `mxEvalFlag`. The scoper
-    // reads it to build an `Eval` (not `Program`) top scope — an eval
-    // program's lexicals are plain locals, whereas `fxScopeBound` marks
-    // every *program*-scope declaration `closure|useClosure`. Both goals
-    // share this frame shape; `Goal::Script` additionally tells the scoper
-    // and coder to hoist a *strict* program's `var`/function declarations
-    // through `EVAL_ENVIRONMENT` (see [`Goal`]).
-    if let Item::Node(n) = &mut root {
-        n.flags |= crate::ast::flags::EVAL;
-    }
-    let tree = crate::scoper::run_goal(&root, goal)?;
-    let mut coder = Coder::new(&tree);
-    // Intern the program's symbols in lex order before coding so the atom
-    // table's bucket lists match XS's.
+    let tree = crate::scoper::run_goal_metered(&root, goal, meter.clone())?;
+    let mut coder = Coder::new(&tree, meter);
     coder.intern_tree(&root);
-    // The oracle shim compiles the *script* goal as an eval program
-    // (`fxParseScript(..., mxProgramFlag | mxEvalFlag)`), so the program
-    // header is coded through `fxScopeCodingEval`.
-    coder.eval_flag = true;
-    coder.code_program(node_of(&root));
-    if let Some(e) = coder.error.take() {
-        return Err(e);
+    if module {
+        coder.code_module(node_of(&root));
+    } else {
+        coder.eval_flag = true;
+        coder.code_program(node_of(&root));
+    }
+    if let Some(error) = coder.error.take() {
+        return Err(error);
     }
     Ok(coder.serialize_atoms())
+}
+
+/// A compiled unit and its complete front-end cost (all raw deltas were already
+/// submitted to the budget callback; reporting this cost must not debit twice).
+pub struct CompiledAtoms {
+    pub bytecode: Vec<u8>,
+    pub symbols: Vec<u8>,
+    pub parse_meter_raw: u64,
+    pub parse_computrons: u64,
+}
+
+/// Budget refusal is a host stop, never a guest SyntaxError.
+#[derive(Debug)]
+pub enum CompileError {
+    Parse(crate::parser::ParseError),
+    MeterAbort,
+}
+
+/// Compile under an incremental raw-cost admission callback. False stops all
+/// phases immediately, including optimizer inner scans. Incurred costs remain
+/// charged on syntax errors and refusal. Non-meter panics propagate unchanged.
+/// Requires panic unwinding; this crate rejects panic=abort builds.
+pub fn compile_atoms_budgeted(
+    source: &str,
+    goal: Goal,
+    strict: bool,
+    charge: &mut dyn FnMut(u64) -> bool,
+) -> Result<CompiledAtoms, CompileError> {
+    crate::meter::budgeted(charge, |meter| {
+        let (bytecode, symbols) = compile_goal_metered(source, goal, strict, meter.clone())
+            .map_err(CompileError::Parse)?;
+        Ok(CompiledAtoms {
+            bytecode,
+            symbols,
+            parse_meter_raw: meter.raw(),
+            parse_computrons: meter.computrons(),
+        })
+    })
+    .map_err(|()| CompileError::MeterAbort)?
 }
 
 fn node_of(item: &Item) -> &Node {
@@ -1132,24 +1184,12 @@ pub fn compile_module(source: &str) -> Result<Vec<u8>, crate::parser::ParseError
 /// [`compile_atoms`], byte-identical to
 /// `xs_oracle::compile_module(source).symbols` whenever the bytecode is.
 pub fn compile_module_atoms(source: &str) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
-    // The module goal is strict and allows top-level await (the parser's
-    // `module` flag), mirroring the oracle shim's fxParserTree module branch
-    // (`mxStrictFlag | mxAsyncFlag`).
-    let mut parser = crate::parser::Parser::new(source, true, true)?;
-    let root = parser.parse_module()?;
-    let tree = crate::scoper::run_goal(&root, Goal::Module)?;
-    let mut coder = Coder::new(&tree);
-    coder.intern_tree(&root);
-    coder.code_module(node_of(&root));
-    if let Some(e) = coder.error.take() {
-        return Err(e);
-    }
-    Ok(coder.serialize_atoms())
+    compile_atoms_goal(source, Goal::Module, true)
 }
 
 // ============================ node dispatch ============================
 
-impl Coder<'_> {
+impl Coder<'_, '_> {
     /// `fxNodeDispatchCode` for one child slot. A real node dispatches by
     /// kind; the other `Item` shapes never appear where an expression/
     /// statement is expected in the ported surface.
@@ -1162,6 +1202,7 @@ impl Coder<'_> {
     }
 
     fn code_node(&mut self, node: &Node) {
+        self.meter.work(1);
         // The parser refuses to build a tree deeper than
         // [`crate::ast::TREE_DEPTH_LIMIT`] and the scoper re-checks it before
         // coding starts; this backstop keeps the coder's own recursion bounded
@@ -1226,7 +1267,7 @@ impl Coder<'_> {
                     Value::BigInt(b) => b,
                     _ => panic!("BigInt node without bigint value"),
                 };
-                let bytes = bigint_limbs_le(&lit.digits, lit.radix as u32);
+                let bytes = bigint_limbs_le(&lit.digits, lit.radix as u32, &self.meter);
                 self.add_bigint(1, XS_CODE_BIGINT_1, bytes);
             }
             // unary (`fxUnaryExpressionNodeCode`): operand then op, delta 0
@@ -5789,7 +5830,7 @@ impl Coder<'_> {
 
 // ======================= three-pass serializer =========================
 
-impl Coder<'_> {
+impl Coder<'_, '_> {
     /// `fxCoderOptimize` — the four peephole rewrites XS runs before
     /// sizing, in order. Ported faithfully over the record `Vec`
     /// (`Payload::Target` records are XS's `XS_NO_CODE` placeholders).
@@ -5802,11 +5843,13 @@ impl Coder<'_> {
         // `END*` becomes that `END*` inline (replaced in place).
         let mut i = 0;
         while i < self.codes.len() {
+            self.meter.work(1);
             if self.codes[i].id == XS_CODE_BRANCH_1 {
                 if let Payload::Branch { tid } = self.codes[i].payload {
                     if let Some(p) = self.target_pos(tid) {
                         let mut j = p + 1;
                         while j < self.codes.len() && skippable(self.codes[j].id) {
+                            self.meter.work(1);
                             j += 1;
                         }
                         if j < self.codes.len() && is_end(self.codes[j].id) {
@@ -5825,12 +5868,15 @@ impl Coder<'_> {
         // is dropped — the frame teardown at `END*` subsumes it.
         let mut i = 0;
         while i < self.codes.len() {
+            self.meter.work(1);
             if self.codes[i].id == XS_CODE_UNWIND_1 {
                 let mut j = i + 1;
                 while j < self.codes.len() && skippable(self.codes[j].id) {
+                    self.meter.work(1);
                     j += 1;
                 }
                 if j < self.codes.len() && is_end(self.codes[j].id) {
+                    self.meter.work(self.codes.len() - i);
                     self.codes.remove(i);
                     continue;
                 }
@@ -5842,12 +5888,15 @@ impl Coder<'_> {
         // (over placeholders) by the same `END*` is dropped.
         let mut i = 0;
         while i < self.codes.len() {
+            self.meter.work(1);
             if is_end(self.codes[i].id) {
                 let mut j = i + 1;
                 while j < self.codes.len() && self.codes[j].id == XS_NO_CODE {
+                    self.meter.work(1);
                     j += 1;
                 }
                 if j < self.codes.len() && self.codes[j].id == self.codes[i].id {
+                    self.meter.work(self.codes.len() - i);
                     self.codes.remove(i);
                     continue;
                 }
@@ -5859,12 +5908,14 @@ impl Coder<'_> {
         // immediately following record is dropped.
         let mut i = 0;
         while i < self.codes.len() {
+            self.meter.work(1);
             if self.codes[i].id == XS_CODE_BRANCH_1 {
                 if let Payload::Branch { tid } = self.codes[i].payload {
                     if let Some(Payload::Target { tid: ntid }) =
                         self.codes.get(i + 1).map(|c| c.payload.clone())
                     {
                         if ntid == tid {
+                            self.meter.work(self.codes.len() - i);
                             self.codes.remove(i);
                             continue;
                         }
@@ -5877,6 +5928,7 @@ impl Coder<'_> {
 
     /// The record index of a placed target (`Payload::Target { tid }`).
     fn target_pos(&self, tid: usize) -> Option<usize> {
+        self.meter.work(self.codes.len());
         self.codes
             .iter()
             .position(|c| matches!(c.payload, Payload::Target { tid: t } if t == tid))
@@ -5892,6 +5944,8 @@ impl Coder<'_> {
     /// oracle's atom.
     fn serialize_atoms(&mut self) -> (Vec<u8>, Vec<u8>) {
         self.optimize();
+        self.meter.work(self.codes.len().saturating_mul(3));
+        self.meter.work(self.symbols.entries.len());
 
         // ---- pass 1: size with branches assumed widest, accrue delta --
         let mut size: i32 = 0;
@@ -6317,9 +6371,10 @@ const ID_SIZE: i32 = 2;
 /// `size * 4`. The parse path (decimal `fxBigIntParse`, or the shift-based
 /// hex/octal/binary parsers) all converge on the same canonical limbs, so
 /// a radix-accumulate reproduces `data` exactly. Returns the limb bytes.
-fn bigint_limbs_le(digits: &str, radix: u32) -> Vec<u8> {
+fn bigint_limbs_le(digits: &str, radix: u32, meter: &crate::ParseMeter<'_>) -> Vec<u8> {
     let mut limbs: Vec<u32> = vec![0];
     for ch in digits.chars() {
+        meter.work(limbs.len());
         let d = ch.to_digit(radix).expect("bigint digit in radix") as u64;
         // limbs = limbs * radix + d  (base 2^32, little-endian)
         let mut carry = d;
@@ -6336,6 +6391,7 @@ fn bigint_limbs_le(digits: &str, radix: u32) -> Vec<u8> {
     while limbs.len() > 1 && *limbs.last().unwrap() == 0 {
         limbs.pop();
     }
+    meter.work(limbs.len().saturating_mul(4));
     let mut bytes = Vec::with_capacity(limbs.len() * 4);
     for l in limbs {
         bytes.extend_from_slice(&l.to_le_bytes());
@@ -6531,5 +6587,64 @@ fn binary_code(token: Token) -> i32 {
         Token::Instanceof => XS_CODE_INSTANCEOF,
         Token::In => XS_CODE_IN,
         _ => unreachable!("not a binary op: {:?}", token),
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn bigint_conversion_stops_inside_the_growing_limb_scan() {
+        let digits = "9".repeat(100_000);
+        let mut scans = 0;
+        let mut largest = 0;
+        let result = crate::meter::budgeted(
+            &mut |raw| {
+                scans += 1;
+                largest = largest.max(raw);
+                scans < 1000
+            },
+            |meter| bigint_limbs_le(&digits, 10, &meter),
+        );
+        assert!(result.is_err());
+        assert_eq!(scans, 1000);
+        assert!(largest > 100 * ironhorse_meter::COMPILE_WORK_METERING);
+    }
+
+    #[test]
+    fn optimizer_inner_scan_stops_at_its_budget() {
+        let mut parser = crate::Parser::new("", false, false).unwrap();
+        let root = parser.parse_program(false).unwrap();
+        let tree = crate::scoper::run(&root).unwrap();
+        let mut admitted = 0;
+        // Pass 1 visits every record. The next 100 visits enter the nested
+        // pass-2 scan, before its first removal or the quadratic remainder.
+        let result = crate::meter::budgeted(
+            &mut |_| {
+                admitted += 1;
+                admitted < 10_101
+            },
+            |meter| {
+                let mut coder = Coder::new(&tree, crate::ParseMeter::new());
+                coder.codes = vec![
+                    Code {
+                        id: XS_CODE_UNWIND_1,
+                        stack_level: 0,
+                        payload: Payload::Byte
+                    };
+                    10_000
+                ];
+                coder.codes.push(Code {
+                    id: XS_CODE_END,
+                    stack_level: 0,
+                    payload: Payload::Byte,
+                });
+                coder.meter = meter;
+                coder.optimize();
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(admitted, 10_101);
     }
 }

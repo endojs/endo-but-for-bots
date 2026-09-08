@@ -6,6 +6,14 @@ Oracle computron comparisons, including the legacy `--gate-meter-exact` flag,
 are advisory; result agreement and the release's local golden costs are gates.
 `ironhorse-meter-2` unifies string allocation prices in UTF-16 code units and
 charges Proxy frames, descriptor slots, keys, and invariant work.
+`ironhorse-meter-3` additionally accounts for source bytes, tokens, and compiler
+work, including growing BigInt limbs and optimizer scans and record moves.
+Compilation uses the same incremental host budget as execution; a refusal is an
+uncatchable meter stop, and successful cost reporting never debits twice.
+The compiler requires `panic=unwind` to contain its private budget-stop unwind;
+`panic=abort` builds fail at compile time rather than aborting on normal refusal.
+Non-meter panics remain panics.
+The raw cost table is an XS-derived estimate, not a claim of measured CPU calibration.
 
 The oracle-locked transliteration of XS to Rust described in
 [`designs/ironhorse-engine.md`](../../designs/ironhorse-engine.md).

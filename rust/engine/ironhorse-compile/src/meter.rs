@@ -1,47 +1,99 @@
-//! Compilation uses the same frozen XS-derived release table as the VM.
-//! Oracle computrons are advisory. Every scanned token (including EOF)
-//! charges the shared parse-token weight; golden pairs pin that accounting.
+//! One frozen compilation counter shared by every front-end phase.
+//! Charges are raw 16.16 deltas, including failed compilation work.
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
-/// The frozen parse-meter release this table belongs to. Bump the suffix
-/// (and re-freeze the constants) only at a deliberate release boundary.
 pub use ironhorse_meter::COST_TABLE_VERSION as PARSE_METER_RELEASE;
-
-/// Cost charged per token the lexer produces, in 16.16 fixed point.
-/// ironhorse's own constant (advisory calibration; see module doc).
 pub use ironhorse_meter::PARSE_TOKEN_METERING;
 
-/// A monotone parse-cost counter in 16.16 fixed point. Bumped once per
-/// scanned token; never reset mid-parse (a fresh [`ParseMeter::new`] per
-/// compilation is the reset).
-#[derive(Debug, Default, Clone)]
-pub struct ParseMeter {
-    index: u64,
+struct State<'a> {
+    index: Cell<u64>,
+    charge: RefCell<Option<&'a mut dyn FnMut(u64) -> bool>>,
 }
 
-impl ParseMeter {
-    /// A zeroed meter for one compilation.
-    #[inline]
+/// A monotone compilation counter. Clones share the same compilation's cost.
+/// Public constructors are unlimited; callback-bearing meters are confined to
+/// `budgeted`, so the private refusal unwind cannot escape into a lexer caller.
+#[derive(Clone)]
+pub struct ParseMeter<'a> {
+    state: Rc<State<'a>>,
+}
+
+impl std::fmt::Debug for ParseMeter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParseMeter")
+            .field("index", &self.raw())
+            .finish()
+    }
+}
+
+impl Default for ParseMeter<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> ParseMeter<'a> {
+    /// An unlimited zeroed counter.
     pub fn new() -> Self {
-        ParseMeter { index: 0 }
+        Self {
+            state: Rc::new(State {
+                index: Cell::new(0),
+                charge: RefCell::new(None),
+            }),
+        }
     }
 
-    /// Charge one token. Called by the lexer for every token it emits,
-    /// including [`crate::token::Token::Eof`].
-    #[inline]
-    pub fn charge_token(&mut self) {
-        self.index = self.index.saturating_add(PARSE_TOKEN_METERING);
+    pub(crate) fn charge(&self, raw: u64) {
+        self.state.index.set(self.raw().saturating_add(raw));
+        // Take the callback out before calling user code. No RefCell borrow
+        // survives the callback or a refusal unwind.
+        let callback = self.state.charge.borrow_mut().take();
+        if let Some(callback) = callback {
+            let admitted = callback(raw);
+            *self.state.charge.borrow_mut() = Some(callback);
+            if !admitted {
+                std::panic::resume_unwind(Box::new(Refused));
+            }
+        }
     }
 
-    /// The raw 16.16 fixed-point index (for diagnostics / telemetry).
-    #[inline]
+    pub(crate) fn work(&self, units: usize) {
+        self.charge((units as u64).saturating_mul(ironhorse_meter::COMPILE_WORK_METERING));
+    }
+
+    /// Charge a scanned token, including EOF.
+    pub fn charge_token(&self) {
+        self.charge(PARSE_TOKEN_METERING);
+    }
+    /// Raw 16.16 cost, including all phases that shared this meter.
     pub fn raw(&self) -> u64 {
-        self.index
+        self.state.index.get()
     }
-
-    /// Whole computrons spent so far (`index >> 16`), the host-visible
-    /// figure, mirroring how XS surfaces `meterIndex`.
-    #[inline]
+    /// Whole computrons.
     pub fn computrons(&self) -> u64 {
-        self.index >> 16
+        self.raw() >> 16
+    }
+}
+
+// The infallible coder has deeply nested loops. This private unwind stops them
+// immediately without invoking the panic hook. Any future internal panic
+// catcher MUST rethrow it. Only this boundary may translate it into an error.
+struct Refused;
+
+pub(crate) fn budgeted<'a, T>(
+    charge: &'a mut dyn FnMut(u64) -> bool,
+    run: impl FnOnce(ParseMeter<'a>) -> T,
+) -> Result<T, ()> {
+    let meter = ParseMeter {
+        state: Rc::new(State {
+            index: Cell::new(0),
+            charge: RefCell::new(Some(charge)),
+        }),
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(meter))) {
+        Ok(value) => Ok(value),
+        Err(payload) if payload.is::<Refused>() => Err(()),
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }

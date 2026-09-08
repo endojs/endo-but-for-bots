@@ -63,6 +63,10 @@ use crate::value::{
 /// top-level program; the [`Interp`] eval bridge relinks its symbol ids
 /// into the host realm's symbol table before running it.
 pub struct CompiledSource {
+    /// Complete front-end raw 16.16 cost, already charged through the callback.
+    pub parse_meter_raw: u64,
+    /// Whole front-end computrons, for reporting only.
+    pub parse_computrons: u64,
     /// The program bytecode, as the XS compiler emits it.
     pub bytecode: Vec<u8>,
     /// The `symbols` atom (`SYMB` payload): the compiler's program-local
@@ -77,6 +81,8 @@ pub struct CompiledSource {
 /// compiler-coverage gap (an unported-but-valid construct), surfaced as
 /// [`Halt::NotImplemented`] rather than a mis-executed result.
 pub enum SourceCompileError {
+    /// Host refused compilation work. This stop cannot be caught by guest JS.
+    MeterAbort,
     /// A genuine early (parse/early) error: the source is not a valid
     /// Script. The bridge throws a catchable realm `SyntaxError`.
     Syntax(String),
@@ -98,7 +104,9 @@ pub enum SourceCompileError {
 /// replacement for the former `eval:string-source` source-text boundary.
 pub trait SourceCompiler {
     /// Compile `source` as a **Script** goal for same-realm execution,
-    /// returning its bytecode and `symbols` atom. `strict` requests the
+    /// returning its bytecode and `symbols` atom. `charge` admits incremental
+    /// raw 16.16 work before doing it; false must return `MeterAbort` immediately.
+    /// `strict` requests the
     /// strict-mode Script parse (the `Function` constructor and a strict
     /// caller's direct eval); an indirect eval of ordinary source is sloppy.
     /// The source itself may still opt into strict via a `"use strict"`
@@ -107,6 +115,7 @@ pub trait SourceCompiler {
         &self,
         source: &str,
         strict: bool,
+        charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<CompiledSource, SourceCompileError>;
 }
 
@@ -9980,8 +9989,11 @@ impl Interp {
             Some(compiler) => compiler.clone(),
             None => return Err(Step::Host(Halt::NotImplemented("eval:no-compiler"))),
         };
-        let compiled = match compiler.compile_source(source, strict) {
+        let compiled = match compiler
+            .compile_source(source, strict, &mut |raw| self.charge_compilation(raw))
+        {
             Ok(compiled) => compiled,
+            Err(SourceCompileError::MeterAbort) => return Err(Step::Host(Halt::MeterAbort)),
             Err(SourceCompileError::Syntax(message)) => {
                 return Err(self.catchable_syntax_error_with_message(message))
             }
@@ -13516,6 +13528,14 @@ impl Interp {
             None if self.meter.is_armed() => MeterCheck::Abort,
             None => MeterCheck::Continue,
         }
+    }
+
+    /// Admit a raw 16.16 compilation charge on this interpreter's meter.
+    /// Source compilers must stop immediately on false. Costs already charged
+    /// here must not be charged again from `CompiledSource` reporting fields.
+    pub fn charge_compilation(&mut self, raw: u64) -> bool {
+        self.meter.tick_raw(raw);
+        self.check_meter() == MeterCheck::Continue
     }
 
     /// Whether the meter is armed (`interval != 0`) — the state a

@@ -51,29 +51,35 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
         &self,
         source: &str,
         strict: bool,
+        charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        let source = source.to_string();
-        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            ironhorse_compile::compile_atoms_with(&source, strict)
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms_budgeted(
+                source,
+                ironhorse_compile::Goal::Eval,
+                strict,
+                charge,
+            )
         }));
-        match compiled {
-            Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource { bytecode, symbols }),
-            Ok(Err(e)) => {
-                match e.kind {
-                    ironhorse_compile::parser::ParseErrorKind::Unsupported => {
-                        Err(ironhorse_vm::SourceCompileError::Unsupported(e.to_string()))
-                    }
-                    // Carry the bare diagnostic (`e.message`, no `line N:`
-                    // prefix) so the bridge's realm-local `SyntaxError` renders
-                    // with XS's exact wording — the pinned oracle's thrown
-                    // `String(exception)` is `SyntaxError: <message>`, and the
-                    // differential harness compares the whole string.
-                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
-                }
+        let result = result.map_err(|payload| {
+            ironhorse_vm::SourceCompileError::Unsupported(panic_message(payload.as_ref()))
+        })?;
+        match result {
+            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                bytecode: compiled.bytecode,
+                symbols: compiled.symbols,
+                parse_meter_raw: compiled.parse_meter_raw,
+                parse_computrons: compiled.parse_computrons,
+            }),
+            Err(ironhorse_compile::CompileError::MeterAbort) => {
+                Err(ironhorse_vm::SourceCompileError::MeterAbort)
             }
-            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
-                panic_message(payload.as_ref()),
-            )),
+            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Unsupported => Err(
+                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
+                ),
+                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
+            },
         }
     }
 }
@@ -1075,7 +1081,7 @@ mod tests {
         }
         use ironhorse_vm::SourceCompiler;
         assert!(IronhorseSourceCompiler
-            .compile_source(r#"({"\uD800": 1})"#, false)
+            .compile_source(r#"({"\uD800": 1})"#, false, &mut |_| true)
             .is_ok());
     }
 
