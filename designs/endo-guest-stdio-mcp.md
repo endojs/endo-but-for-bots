@@ -21,11 +21,11 @@ colliding with the reconciled reserved names.
 
 ### Why this is its own document, not an extension of an existing one
 
-Every neighbouring design describes the **HTTP-plus-bearer** surface and stops
+Every neighboring design describes the **HTTP-plus-bearer** surface and stops
 short of stdio. [endo-gateway-mcp](endo-gateway-mcp.md) Design Decision 6 puts
-stdio explicitly **out of scope** ("Streamable HTTP only; no stdio"), terminating
-JSON-RPC over a listening port authenticated by an `Authorization: Bearer`
-header. [daemon-agent-tools](daemon-agent-tools.md) owns the *capabilities* the
+stdio explicitly **out of scope** ("Streamable HTTP only; no stdio"); that surface
+terminates JSON-RPC over a listening port authenticated by an `Authorization:
+Bearer` header. [daemon-agent-tools](daemon-agent-tools.md) owns the *capabilities* the
 tools project, not any transport. The three minion.town companions
 (`mcp-daemon-guest-tools`, `mcp-endo-guest`, `mcp-oauth`) are the browser-facing
 OAuth 2.1 deployment. And [endo-claude](endo-claude.md) is the **client** side:
@@ -36,14 +36,15 @@ server itself, the one thing a process spawned as a child of the daemon on the
 same host actually needs, where OAuth is neither available nor meaningful. This
 document fills exactly that prerequisite and composes with the
 [endo-agent-tools](endo-agent-tools.md) MCP-adapter projection rather than
-reinventing it; it does not re-derive endo-claude's client flags.
+reinventing it; this document does not re-derive endo-claude's client flags.
 
-## Division of labor with the neighbouring designs
+## Division of labor with the neighboring designs
 
 ```mermaid
 flowchart LR
   subgraph claude["@endo/claude (arc item 4): the client + harness"]
     HARNESS["harness: spawns broker, then claude -p<br/>generates --allowedTools + --mcp-config"]
+    CLAUDE["claude -p (confined): MCP client<br/>spawns the adapter named in --mcp-config"]
   end
   subgraph thisdoc["THIS design: the stdio MCP server"]
     ADAPTER["stdio adapter (claude-spawned)<br/>MCP over stdio; holds no facet fd"]
@@ -53,9 +54,10 @@ flowchart LR
     ADP["MCP adapter: ToolRecord -> MCP Tool<br/>tools/call -> E(facet).method"]
   end
   DAEMON["Endo daemon (guest facets)"]
-  HARNESS -->|spawns| BROKER
-  HARNESS -->|spawns, names ADAPTER in --mcp-config| ADAPTER
-  ADAPTER -->|MCP over harness-private channel| BROKER
+  HARNESS -->|"1. spawns (per guest)"| BROKER
+  HARNESS -->|"2. spawns with --mcp-config"| CLAUDE
+  CLAUDE -->|"3. spawns as its MCP stdio server"| ADAPTER
+  ADAPTER -->|"MCP over a harness-private channel to its one broker"| BROKER
   BROKER -->|uses| ADP
   BROKER -->|"CapTP over UDS (attenuated, one facet)"| DAEMON
 ```
@@ -74,6 +76,13 @@ check, the fail-closed rules, and the naming.
 
 This is the centerpiece. The server must speak for exactly one guest, and a
 compromised or confused Claude must not be able to reach a different guest.
+
+A **formula id** here is Endo's stable 64-hex identifier for the *formula* (the
+persistent recipe) that instantiated a guest — content-derived and not something
+the guest can mint or vary to name a different guest — and a **facet** is the
+attenuated capability handle the daemon hands out for one guest's daemon-side
+object surface (defined in full by the linked [endo-claude](endo-claude.md) and
+[daemon-agent-tools](daemon-agent-tools.md)).
 
 **The server is told which guest once, at construction, out of band from the
 client.** The formula id never travels on the MCP wire and is never accepted from
@@ -104,11 +113,18 @@ structural facts rather than a policy check:
   endpoint (a routing designator complected with a secret), the stdio server
   carries **no endpoint, no port, no header, no shared surface**. There is
   nothing to steal, replay, or point at a different id.
-- The adapter can reach **only its one broker** (a harness-private channel: a
-  socketpair the harness holds, or the adapter's own spawned-child pipes), and
-  the broker holds **only its one pre-resolved facet**. Even arbitrary code
-  execution inside the confined `claude` tree bottoms out at the one guest's
-  pinned catalog.
+- The adapter can reach **only its one broker**, and the broker holds **only its
+  one pre-resolved facet**. The channel between them is not spawned by the
+  adapter (that would make the broker per-call, contradicting its one-per-guest
+  lifetime below): the **broker owns and listens on** a harness-private endpoint —
+  a per-guest abstract/short-lived UDS whose address the harness bakes into the
+  adapter's `--mcp-config` command line, and to which the adapter connects at
+  startup. That address is a *wire to the one broker*, not a guest designator:
+  connecting to it reaches only the broker's one pre-resolved facet behind the
+  server-side dispatch check, so even a built-in that discovered the address
+  escalates nothing — it lands at the same one-facet boundary the adapter already
+  sits behind. Even arbitrary code execution inside the confined `claude` tree
+  bottoms out at the one guest's pinned catalog.
 
 This is the "isolation is per-process, not per-bearer" model
 [endo-claude](endo-claude.md) names: many guests means many broker+adapter pairs,
@@ -129,27 +145,37 @@ the **server-side dispatch check**. This document owns the server half of that
 contract.
 
 - **One snapshot, pruned before pinning.** At construction the broker takes one
-  `tools/list` from the projection over the resolved facet, then prunes, in the
-  snapshot itself before it is pinned: any name containing `__`, any
+  `tools/list` from the projection over the resolved facet, then prunes — in the
+  snapshot itself, before it is pinned — any name containing `__`, any
   dunder/reserved-property name (`__proto__`, `constructor`, `prototype`,
   `__getMethodNames__`), and any code-evaluation name (`evaluate`, `eval`,
   `define`). The pinned value is a `harden`ed null-prototype record, never a bare
   `Map` (freezing a `Map` leaves `set`/`delete` reachable on internal slots, so a
   "pinned" `Map` could be re-populated with `evaluate` after pinning).
-- **The dispatch check is the boundary, `--allowedTools` is the belt.** The
+- **The dispatch check is the boundary; `--allowedTools` is the belt.** The
   broker **rejects any `tools/call` whose name is not in the pinned snapshot**,
   server-side, so a leak that ignores the client-side `--allowedTools` still
   cannot reach a withheld or code-eval tool. Withholding a tool is *pruning its
   name from the pinned snapshot*, not subtracting it from the client flag.
-- **Arguments, not only names.** Pruning code-eval *names* does not withhold
-  code-eval *reach*: surviving petname-designating tools (`lookup`, `list`,
-  `move`, `copy`, `remove`) resolve arbitrary petname paths, and
+- **Arguments, not only names (the argument-scope check).** Pruning code-eval
+  *names* does not withhold code-eval *reach*: surviving petname-designating tools
+  (`lookup`, `list`, `move`, `copy`, `remove`) resolve arbitrary **petname** paths
+  — a petname being a guest-local nickname bound to a capability in that guest's
+  own name table — and
   `executeTool(name, args)` never constrains `args`. So the broker additionally
-  **rejects or attenuates** a `tools/call` whose *arguments* designate a
-  petname/path outside the facet's own attenuated surface. A name-only prune is
-  otherwise cosmetic.
-- **Projection source.** The membership set is "the bridge's own catalog" against
-  whichever surface is live: the static Lal tool set today
+  runs a named **argument-scope check**: it **rejects** — never silently narrows —
+  a `tools/call` whose *arguments* designate a petname/path outside the facet's
+  own attenuated surface, returning the same visible JSON-RPC error a name-level
+  rejection returns. Reject-only, not attenuate, so an out-of-scope request is
+  always a visible failure and never a narrower success the caller mistakes for
+  what it asked. This check is explicitly a **per-call policy** check, distinct
+  from the cross-guest boundary of § *Scoping by formula identifier* (which is
+  purely structural and needs no policy check): the structural facts confine every
+  call to the *one* facet, and the argument-scope check is the fail-closed policy
+  that confines a call *within* that one facet's attenuated surface. A name-only
+  prune is otherwise cosmetic.
+- **Projection source.** The membership set is the broker's own pinned catalog
+  against whichever surface is live: the static Lal tool set today
   ([endo-gateway-mcp](endo-gateway-mcp.md) *Tool catalog*), or the capability-
   scoped [daemon-agent-tools](daemon-agent-tools.md) surface once it composes in
   via the projection's `extra` seam. The server does not invent a derivation; it
@@ -223,7 +249,7 @@ out of band). `resources` and `prompts` are omitted, as in
   other call multiplexed on the same guest's broker. Per-call cancel scoping is
   the broker's `sessionTag`-keyed cancel token ([endo-claude](endo-claude.md)
   *Pooling subscriptions*): a `tools/call` is refused iff its own `sessionTag`
-  token is cancelled, so cancelling call A never blocks call B on the same
+  token is canceled, so canceling call A never blocks call B on the same
   broker.
 - **the broker dies** (or its daemon connection drops): the adapter's forward
   fails, and it returns an MCP JSON-RPC **error** for the in-flight `tools/call`
@@ -249,6 +275,27 @@ guest's real tools invoke), not by an empty surface. This mirrors
 positive-confinement test. At **request** time the same posture holds: an unknown
 `tools/call` name is a JSON-RPC error, a malformed frame is an error, and the
 server never falls back to an unscoped surface on any error path.
+
+**Distinct wire-visible error shapes per failure class.** So the model can tell
+"you're not allowed to call this" from "the backend just died" — a distinction
+that decides whether to retry, rephrase, or give up — each request-time failure
+class carries its own JSON-RPC error, not one undifferentiated error, and the
+adapter is a pass-through that relays the broker's classification without
+collapsing it:
+
+| Failure class | JSON-RPC error | Retry? |
+|---|---|---|
+| Malformed frame / not valid JSON-RPC | `-32700` parse error / `-32600` invalid request | client bug — fix and resend |
+| Unknown method (not `tools/list`/`tools/call`) | `-32601` method not found | no |
+| Policy rejection — name or arguments outside the pinned catalog / facet scope (the dispatch check, incl. the argument-scope check) | application code `-32001` `tool-not-permitted`, `data.reason` = `name` \| `argument-scope` | no — the surface will not widen |
+| Broker or daemon connection down (the harness-side `bridge-down`) | application code `-32010` `bridge-down`, `data.detail` mirroring the harness's `{type: 'bridge-down', detail}` | transient — the harness may respawn on the next call |
+
+The `-3200x`/`-3201x` application codes sit in JSON-RPC's implementation-defined
+server-error range and are the wire counterpart of the harness-side typed
+outcomes, so the two consumers (the MCP client and the harness) see the same
+failure at matching specificity rather than one typed and one opaque. A policy
+rejection is never reported as a transport error and `bridge-down` is never
+reported as a policy rejection, so neither is mistaken for the other.
 
 ## Naming
 
@@ -276,7 +323,8 @@ obligations follow.
 its convention are the shared source of truth reconciled in
 `kriscendobot/minion.town` PR
 [#79](https://github.com/kriscendobot/minion.town/pull/79) (implementing the
-convention approved in PR #77): interface-native camelCase spellings, no
+convention approved in PR
+[#77](https://github.com/kriscendobot/minion.town/pull/77)): interface-native camelCase spellings, no
 transport/category prefixes, and a **load-time guard** that rejects duplicates,
 case-confusable twins (`readtext` beside `readText`), and malformed names. It
 reserves `submit`, `invite`, `cancelInvite`, `request`, `identify`,
@@ -296,14 +344,24 @@ or depend on the minion.town-side manifest) is an open question below.
 The **projection** is the `@endo/agent-tools` MCP adapter (the declared stub at
 `packages/agent-tools/src/adapters/mcp.js`); implementing it is the
 adapter-implementation prerequisite [endo-claude](endo-claude.md) already names.
-The **stdio server host** (the adapter's MCP framing loop, spawned as the
-`--mcp-config` command) is a thin `bin` over that adapter, the natural home of the
-"standalone MCP" host [endo-agent-tools](endo-agent-tools.md) already describes
-(`makeCompartmentEvaluate` "is the host for ... the standalone MCP demo"). The
-**broker** (formula-id resolution, facet attenuation, catalog pinning, dispatch
-check, the harness-private channel) holds the daemon connection and the ambient
-powers, so it sits on the harness side that already holds those powers: the
-`@endo/claude` caplet instantiates it. The precise split of the broker's logic
+The **stdio server host** (the claude-spawned adapter, spawned as the
+`--mcp-config` command) is a thin `bin` that runs **only the MCP framing loop**:
+it decodes a `tools/list`/`tools/call` frame off stdin, forwards it verbatim to
+the broker over the harness-private channel, and writes the reply back to stdout.
+It does **not** hold the facet, the pinned catalog, or the `tools/call ->
+E(facet).method` dispatch — those live entirely in the broker (Design Decision 1),
+so this host process never gains daemon or facet reach even though it is the
+claude-spawned side. That framing-only host is the same shape as the "standalone
+MCP" host [endo-agent-tools](endo-agent-tools.md) describes
+(`makeCompartmentEvaluate` "is the host for ... the standalone MCP demo"), and the
+analogy is apt precisely because that backend, like this framing loop, has "no
+daemon, credentials, or network authority"; the facet-dispatching **projection**
+it runs is invoked *by the broker*, on the broker's side of the channel, never in
+this claude-spawned process. The **broker** (formula-id resolution, facet
+attenuation, catalog pinning, the argument-scope dispatch check, and the projection
+that maps `tools/call -> E(facet).method`, plus the harness-private channel) holds
+the daemon connection and the ambient powers, so it sits on the harness side that
+already holds those powers: the `@endo/claude` caplet instantiates it. The precise split of the broker's logic
 between `@endo/agent-tools` and `@endo/claude` follows the fd-ownership boundary
 (the daemon-connection-holding half is where powers live) and is settled at build
 time; this design fixes the *structure* (two processes, fd never inherited) and
@@ -324,7 +382,7 @@ both implement.
 | [endo-gateway-mcp](endo-gateway-mcp.md) | **Sibling transport.** The HTTP-plus-bearer termination of the same projection; Design Decision 6 defers stdio to a local shim, which is this design. Shares the projection, `initialize` shape, and the `mcp__<server>__<tool>` naming; differs in transport and isolation model (per-bearer on one endpoint there, per-process here). |
 | [daemon-agent-tools](daemon-agent-tools.md) | **Future catalog source.** The capability-scoped tool surface that composes into the projection via `extra`; once live it tightens per-guest scoping (each guest's catalog reflects only its granted capabilities). |
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | **Framing precedent, not the same surface.** Its LF-delimited JSONL framing lesson (split on `\n` only) carries over; but it is a *drive-the-agent* RPC (prompt/steer/abort), not an MCP *tool-call* server, so it is prior art for framing only. |
-| `kriscendobot/minion.town` PR [#79](https://github.com/kriscendobot/minion.town/pull/79) | **Naming source of truth.** The reconciled flat namespace, its load-time collision guard, and the reserved names this server must honor and enforce. |
+| `kriscendobot/minion.town` PR [#79](https://github.com/kriscendobot/minion.town/pull/79) | **Naming source of truth** (a cross-repo dependency, open and unmerged at the time of writing — tracked as external until it lands). The reconciled flat namespace, its load-time collision guard, and the reserved names this server must honor and enforce. |
 
 ## Design Decisions
 
@@ -354,7 +412,11 @@ both implement.
    fixed literal `endo`; tool names come from the minion.town PR #79 reconciled
    manifest with its duplicate / case-confusable / malformed guard; no
    transport/category prefix is ever added (the `mcp__<server>__` namespacing is
-   Claude Code's, not the tool name's).
+   Claude Code's, not the tool name's). What is fixed here is the manifest's
+   **content** — the reconciled names and the guard rules the server must honor;
+   *where* that manifest physically lives so the endo-side server can enforce the
+   guard at its source is left to the open question below, not settled by this
+   decision.
 
 ## Open Questions
 
