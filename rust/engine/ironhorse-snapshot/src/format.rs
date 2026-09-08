@@ -55,6 +55,12 @@ pub const ARRY: FourCc = FourCc(*b"ARRY");
 /// entries. Ironhorse-specific; emitted only when non-empty (see
 /// [`ARRY`]).
 pub const COLL: FourCc = FourCc(*b"COLL");
+/// `IDXP` — an ORDINARY object's integer-indexed properties (ledger
+/// `IndexProps` row): per instance, the sparse index→value map XS keeps in
+/// an internal `XS_ARRAY_KIND` slot. Ironhorse-specific; emitted only when
+/// non-empty (see [`ARRY`]), so a machine that never wrote an index property
+/// on a plain object keeps its exact pre-`IDXP` container bytes.
+pub const IDXP: FourCc = FourCc(*b"IDXP");
 /// `REGY` — the `Symbol.for` registry (ledger `SymbolRegistry` row):
 /// key bytes → descriptor slot, pairwise. Ironhorse-specific; emitted
 /// only when non-empty (see [`ARRY`]). Distinct from `KEYS`/`SYMB`,
@@ -166,9 +172,9 @@ pub const INTL: FourCc = FourCc(*b"INTL");
 /// container from a newer format (the one honest source of new tags)
 /// is already refused by version.
 pub const CANONICAL_ATOM_ORDER: &[FourCc] = &[
-    VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR, ARRY, COLL, REGY, ERRD, ESTK, ABUF,
-    TARR, DVIW, WRAP, REGX, ARGB, TMPR, INTL, ITER, DATE, FUNC, PROX, ACCS, IBFN, PRIV, DISP, GENR,
-    PRMS, ASYN, NFLR,
+    VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR, ARRY, IDXP, COLL, REGY, ERRD, ESTK,
+    ABUF, TARR, DVIW, WRAP, REGX, ARGB, TMPR, INTL, ITER, DATE, FUNC, PROX, ACCS, IBFN, PRIV, DISP,
+    GENR, PRMS, ASYN, NFLR,
 ];
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
@@ -195,11 +201,14 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// elements; version 9 adds disposable stacks; version 10 adds
 /// synchronous generators; version 11 adds error construction frames
 /// (`ESTK`); version 12 adds the promise cluster (`PRMS`); version 13 adds
-/// suspended async-function activations (`ASYN`).
+/// suspended async-function activations (`ASYN`); version 14 adds the
+/// `IDXP` index-property store, which a version-13 reader would skip —
+/// silently dropping every integer-keyed property of every ordinary
+/// object.
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 13;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 14;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

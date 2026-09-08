@@ -806,6 +806,9 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // container decoder target instead.
     .with_side_tables(
         arrays,
+        // The index-property store is left empty here for the same reason the
+        // typed-array family is: this builder does not model it.
+        Vec::new(),
         collections,
         registry,
         errors,

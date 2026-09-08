@@ -306,7 +306,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // W1 installs Error prototype name/message data independently of
         // guest symbol use, with their required non-enumerable attributes.
         // This changes linked heap content; the format is unchanged.
-        "a6ccd4817d71fdf406cf01539c588090defb63ac0a088ad6893154e09be4e9f8",
+        // Re-pinned for format 14 (IDXP, an ordinary object's index-property
+        // store) and schema 25, which appends the matching small-state
+        // section. This vector's machine holds no index property, so the
+        // `IDXP` atom itself is absent (emit-only-when-non-empty); the bytes
+        // move because the `VERS` stamp is 14 and the positional small state
+        // carries one more (empty) section.
+        "790879dbd7f16fac7d5c1f7c1eaaa9af7653e50055114862a663481388f7d403",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -507,7 +513,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // plus schema 24 adding the async-activation small-state section.
         // Re-pinned with the blob for W1's eagerly linked, non-enumerable
         // Error prototype data. Schema and format remain unchanged.
-        "348a430bedb6a41908eaaf7b110b8a276f64abbad38dbae65a115eb0e53ee667",
+        // Re-pinned with the blob for format 14 (`IDXP`) and schema 25,
+        // which appends the index-props small-state section.
+        "b94ca811729a9f744dce065da1e36b5e3e49a21531d89f6103c966967743ee27",
         "epoch-3 seal chain"
     );
 }

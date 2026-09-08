@@ -830,7 +830,20 @@ pub const APPLY_ARRAY_PER_ELEMENT_METERING: u64 = 3 << 14;
 /// Observable reads on an ordinary array-like already carry part of the
 /// dense-array host residual. Arguments objects take the same semantic path
 /// but use a smaller resident-storage frame in XS.
-pub const APPLY_GENERIC_ARRAYLIKE_CREDIT: u64 = 34_240;
+///
+/// Read `34_240` until an ordinary object's index properties moved into the
+/// index store. That is a fixed `-1200` raw per apply-over-ordinary-object,
+/// independent of element count, so like the base above it localizes to this
+/// constant rather than to a per-element term. It was always this value: a
+/// hole-only array-like (`Math.max.apply(null,{length:3})`, which owns no
+/// index property and so is untouched by the store) missed the oracle by the
+/// same 1200 before the store existed. What hid it for an array-like WITH
+/// index properties was the old representation minting a name per index —
+/// `intern_key`'s slot + chunk, ~792 each — which happened to cover the gap
+/// at the two-element shape pinned here and overshot at three. The store
+/// charges XS's real growth instead (`index_prop_set`), so the credit now
+/// carries only its own error, and both shapes are exact.
+pub const APPLY_GENERIC_ARRAYLIKE_CREDIT: u64 = 33_040;
 pub const APPLY_ARGUMENTS_ARRAYLIKE_CREDIT: u64 = 48_576;
 
 /// `Function.prototype.bind` creation (`fx_Function_prototype_bind`): the
@@ -1972,7 +1985,13 @@ struct ProxyData {
 #[derive(Copy, Clone, Debug)]
 struct ArrayIteratorProxyGetContext {
     target: crate::value::SlotIndex,
-    id: u16,
+    /// The property the context is aimed at, by [`ReadKey`] rather than by
+    /// interned id: an ordinary object's index property has no name, so an
+    /// index-keyed read reaches the same target and must charge the same
+    /// residual. Compare through [`Interp::refresh_read_key`], never raw —
+    /// the trap is guest code and may have interned the index's name while it
+    /// ran, which turns the same property from an `Index` into an `Id`.
+    key: ReadKey,
     trap_metering: u64,
     meter_terminal_wrapper: bool,
 }
@@ -1999,7 +2018,7 @@ struct ArrayIteratorProxyGetContext {
 /// the `Id` it refreshes to. Guest code runs between a capture and its use
 /// (a Proxy trap can name an index mid-flight), so refresh at the point of
 /// comparison, not at the point of capture.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 enum ReadKey {
     Id(u16),
     Index(u32),
@@ -3276,7 +3295,7 @@ enum JsonSource {
         end: usize,
     },
     Array(Vec<JsonSource>),
-    Object(Vec<(u16, JsonSource)>),
+    Object(Vec<(ReadKey, JsonSource)>),
 }
 
 /// One string property name retained by `JSON.stringify`.  The id drives the
@@ -4456,6 +4475,15 @@ pub enum RelinkError {
 /// One serialized `arrays` row as [`Interp::arrays_snapshot`] hands it
 /// out: `(owner slot, spec length, items ascending by index)`.
 pub type ArraySnapshot = (u32, u32, Vec<(u32, Slot)>);
+/// One serialized `index_props` row as [`Interp::index_props_snapshot`] hands
+/// it out: `(owner slot, high-water mark, items ascending by index)`.
+///
+/// The middle field is NOT an array `length` — an ordinary object has none,
+/// and nothing bounds the indices. It is the greatest index ever stored plus
+/// one, which only rises, so a row may carry a high-water mark with no items
+/// left under it: that is the tombstone `resident_indexed_limit` reads to keep
+/// the array-iterator cursor domain a since-deleted index opened.
+pub type IndexPropsSnapshot = (u32, u32, Vec<(u32, Slot)>);
 /// One serialized `collections` row: `(owner slot, kind code,
 /// table_length, entries in insertion order)`.
 pub type CollectionSnapshot = (u32, u8, u32, Vec<(Slot, Slot)>);
@@ -4949,6 +4977,29 @@ pub struct Interp {
     /// item value slots (which may be references) are never swept underneath
     /// it (the stage-2 GC roots contract).
     arrays: std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
+    /// An **ordinary** object's integer-indexed properties, stored by index
+    /// rather than by name.
+    ///
+    /// XS keeps these in an internal `XS_ARRAY_KIND` slot hanging off the
+    /// instance: `fxOrdinarySetProperty` (`xsType.c:727`) grows one on the
+    /// first index write, `fxOrdinaryGetProperty` reads it back without ever
+    /// scanning the named chain, and `fxOrdinaryOwnKeys` queues its keys ahead
+    /// of the named ones. No property NAME is involved at any point.
+    ///
+    /// Ironhorse stored them as ordinary named slots instead, which meant
+    /// `intern_key` minted a fresh `u16` per distinct index — so
+    /// `var o = {}; for (var i = 0; i < 70000; i++) o[i] = i;` walked the key
+    /// space into the saturation guard and POISONED the machine, uncatchably
+    /// and unpersistably, from an ordinary loop over an ordinary object. That
+    /// was the root cause under `Object.assign({}, bigArray)`,
+    /// `var {...rest} = bigArray`, and every other shape that CREATES index
+    /// properties on a plain object.
+    ///
+    /// Reuses [`ArrayData`] for its counted mutators, so the item values are
+    /// side-referenced (and therefore GC-live) exactly as an array's are; the
+    /// `length` field is unused here and stays 0, because an ordinary object
+    /// has no array `length` semantics.
+    index_props: std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
     /// The subset of [`Self::arrays`] instances that are **`arguments`
     /// objects** (materialized by `XS_CODE_ARGUMENTS_SLOPPY`/`_STRICT`). XS
     /// stores the mapped/unmapped arguments exotic like an indexed object, and
@@ -6216,6 +6267,7 @@ impl Interp {
             wrapper_data: std::collections::HashMap::new(),
             array_proto: crate::value::SlotIndex::NULL,
             arrays: std::collections::HashMap::new(),
+            index_props: std::collections::HashMap::new(),
             arguments_objects: std::collections::HashSet::new(),
             disposable_stacks: std::collections::HashMap::new(),
             collections: std::collections::HashMap::new(),
@@ -10593,6 +10645,7 @@ impl Interp {
         self.stack_slots()
             .iter()
             .chain(self.arrays.values().flat_map(|a| a.items().values()))
+            .chain(self.index_props.values().flat_map(|a| a.items().values()))
             .chain(
                 self.collections
                     .values()
@@ -13059,6 +13112,30 @@ impl Interp {
         true
     }
 
+    /// Quiescent snapshot of the `index_props` side table (ledger
+    /// `IndexProps` row), owner-ascending, items ascending by index —
+    /// the order the `IDXP` encoding requires so `import ∘ export` stays
+    /// the identity the CAS key rests on.
+    pub fn index_props_snapshot(&self) -> Vec<IndexPropsSnapshot> {
+        let mut out: Vec<IndexPropsSnapshot> = self
+            .index_props
+            .iter()
+            .map(|(owner, props)| {
+                (
+                    owner.0,
+                    props.length,
+                    props
+                        .items()
+                        .iter()
+                        .map(|(index, value)| (*index, *value))
+                        .collect::<Vec<(u32, Slot)>>(),
+                )
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _)| *owner);
+        out
+    }
+
     /// Quiescent snapshot of the `Symbol.for` registry (ledger
     /// `SymbolRegistry` row), ascending by key bytes: `(key bytes,
     /// descriptor slot)`.
@@ -13085,9 +13162,26 @@ impl Interp {
     pub fn restore_bulk_side_tables(
         &mut self,
         arrays: Vec<ArraySnapshot>,
+        index_props: Vec<IndexPropsSnapshot>,
         collections: Vec<CollectionSnapshot>,
         registry: Vec<(Vec<u8>, u32)>,
     ) -> bool {
+        for (owner, high_water, items) in index_props {
+            let owner = crate::value::SlotIndex(owner);
+            for (index, value) in items {
+                // Through the counted accessor, like every other restore
+                // insert, so the side-ref page counts the partial collector
+                // reads are rebuilt in lockstep — but UNMETERED: the guest
+                // paid for this store when it built it.
+                self.index_prop_store(owner, index, value);
+            }
+            // Restore the mark itself, after the inserts (which only raise it
+            // to the greatest index they carry). A row whose items are all
+            // deleted is a pure tombstone — no insert above creates its store,
+            // so it must be created here or the high-water mark is lost.
+            let props = self.index_props.entry(owner).or_default();
+            props.length = props.length.max(high_water);
+        }
         for (owner, length, items) in arrays {
             let mut a = crate::bulk::ArrayData::default();
             a.length = length;
@@ -16807,6 +16901,22 @@ impl Interp {
                                 // `Reflect.deleteProperty` already refused it
                                 // through `mop_delete`, so the two disagreed.
                                 false
+                            } else if let Some((index, item)) = numeric_index.and_then(|index| {
+                                self.index_prop_item(inst, index).map(|item| (index, item))
+                            }) {
+                                // An ordinary object's index property lives in
+                                // the index store; `delete_own_property` walks
+                                // only the slot chain and would report a
+                                // vacuous `true` while leaving it in place —
+                                // the same two-spellings split, since
+                                // `Reflect.deleteProperty` goes through
+                                // `mop_delete` and removed it correctly.
+                                if item.flag & XS_DONT_DELETE_FLAG != 0 {
+                                    false
+                                } else {
+                                    self.index_prop_remove(inst, index);
+                                    true
+                                }
                             } else {
                                 id.is_none_or(|id| self.delete_own_property(inst, id))
                             }
@@ -34780,9 +34890,31 @@ impl Interp {
                     // name, so such a key is an own miss by construction, and
                     // `function_meta_own_descriptor` names only `length`/`name`.
                     match self.to_read_key(code, arg1)? {
-                        ReadKey::Index(_) => {
-                            self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
-                            Slot::undefined()
+                        // An index property of an ordinary object lives in the
+                        // index store, not the slot chain. This arm used to
+                        // answer `undefined` outright, on the reasoning that
+                        // "every own property of an ordinary object lives in
+                        // the slot chain under an interned name" — true until
+                        // the store existed, and the reason
+                        // `Object.getOwnPropertyDescriptor(o, '0')` read
+                        // `undefined` while `Reflect.getOwnPropertyDescriptor`
+                        // answered correctly.
+                        ReadKey::Index(index) => match self.index_prop_descriptor(inst, index) {
+                            Some(descriptor) => {
+                                self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                                self.descriptor_object(descriptor)
+                            }
+                            None => {
+                                self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                                Slot::undefined()
+                            }
+                        },
+                        ReadKey::Id(id) if self.index_prop_descriptor_by_id(inst, id).is_some() => {
+                            let descriptor = self
+                                .index_prop_descriptor_by_id(inst, id)
+                                .expect("checked just above");
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            self.descriptor_object(descriptor)
                         }
                         ReadKey::Id(id) => match self.find_property(inst, id) {
                             Some(p) => {
@@ -40361,6 +40493,9 @@ impl Interp {
         *cost += JSON_PARSE_OBJECT_INSTANCE_METERING;
         let inst = self.slots.alloc(Slot::instance(self.object_proto));
         let mut sources = Vec::new();
+        // Key → its position in `sources`, so a repeated key replaces in O(1).
+        let mut source_positions: std::collections::HashMap<ReadKey, usize> =
+            std::collections::HashMap::new();
         self.json_parse_whitespace(input, pos);
         if *pos < input.len() && input[*pos] == b'}' {
             *pos += 1;
@@ -40394,9 +40529,18 @@ impl Interp {
             // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
             let cesu8_len = Self::regexp_subject_bytes(&key_units).0.len() as u64;
             *cost += (((cesu8_len + 1) + 7) & !7) + 16;
-            // `fxNewName` interns the key: a novel name allocates one key slot
-            // (metered directly by `intern_key`), a known name none.
-            let id = self.intern_key(&key);
+            // A canonical INDEX key goes to the index store; only a real name
+            // is interned. `fxNewName` is not reached for an index in XS
+            // either, and parsing `{"0":…,"1":…}` with 70,000 index keys
+            // minted 70,000 names — so an identity reviver over such an
+            // object poisoned the machine during the PARSE, before any
+            // revival ran.
+            let key_ref = match string_to_index(&key) {
+                Some(index) if self.indexes_by_index(inst) => ReadKey::Index(index),
+                // A novel name allocates one key slot (metered directly by
+                // `intern_key`), a known name none.
+                _ => ReadKey::Id(self.intern_key(&key)),
+            };
             self.json_parse_whitespace(input, pos);
             if *pos >= input.len() || input[*pos] != b':' {
                 return Err(self.catchable_syntax_error());
@@ -40404,12 +40548,23 @@ impl Interp {
             *pos += 1;
             self.json_parse_whitespace(input, pos);
             let (v, source) = self.json_parse_value(input, pos, cost, track_source)?;
-            self.set_own_unmetered(inst, id, v);
+            match key_ref {
+                ReadKey::Id(id) => self.set_own_unmetered(inst, id, v),
+                ReadKey::Index(index) => self.index_prop_set(inst, index, v),
+            }
             if track_source {
-                if let Some((_, prior)) = sources.iter_mut().find(|(key, _)| *key == id) {
-                    *prior = source;
-                } else {
-                    sources.push((id, source));
+                // Positions by key, not a linear scan: JSON allows a repeated
+                // key and the last one wins, but scanning the accumulated list
+                // per key is quadratic. It was unreachable while the parse
+                // exhausted the key space first; with index keys stored by
+                // index, `JSON.parse` of a 70,000-key object with a reviver
+                // completes — and took seventeen minutes doing this scan.
+                match source_positions.get(&key_ref) {
+                    Some(&at) => sources[at].1 = source,
+                    None => {
+                        source_positions.insert(key_ref, sources.len());
+                        sources.push((key_ref, source));
+                    }
                 }
             }
             self.json_parse_whitespace(input, pos);
@@ -40503,25 +40658,42 @@ impl Interp {
                     }
                 } else {
                     let keys = self.json_enumerable_own_string_keys(code, object)?;
-                    for id in keys {
-                        let child_source = match source.as_ref() {
-                            Some(JsonSource::Object(children)) => children
-                                .iter()
-                                .find_map(|(key, child)| (*key == id).then(|| child.clone())),
+                    // Index the retained sources ONCE. Scanning them per key
+                    // is quadratic in the object's size, and measurably so:
+                    // reviving a 70,000-key object spent seventeen minutes
+                    // here while the parse that produced it took under a
+                    // second. Key order here is `[[OwnPropertyKeys]]` order
+                    // and the sources are in parse order, so this cannot be
+                    // done positionally.
+                    let child_sources: Option<std::collections::HashMap<ReadKey, JsonSource>> =
+                        match source.as_ref() {
+                            Some(JsonSource::Object(children)) => Some(
+                                children
+                                    .iter()
+                                    .map(|(k, child)| (self.refresh_read_key(*k), child.clone()))
+                                    .collect(),
+                            ),
                             _ => None,
                         };
+                    for key in keys {
+                        let child_source = child_sources
+                            .as_ref()
+                            .and_then(|m| m.get(&self.refresh_read_key(key)).cloned());
                         let revived = self.json_internalize_property(
                             code,
                             input,
                             object,
-                            ReadKey::Id(id),
+                            key,
                             child_source,
                             reviver,
                         )?;
+                        // The reviver is guest code and can have named this
+                        // key while it ran.
+                        let key = self.refresh_read_key(key);
                         if revived.kind == Kind::Undefined {
-                            let _ = self.mop_delete(code, object, id)?;
+                            let _ = self.mop_delete_read(code, object, key)?;
                         } else {
-                            self.json_create_data_property(code, object, id, revived)?;
+                            self.json_create_data_property_read(code, object, key, revived)?;
                         }
                     }
                 }
@@ -40539,47 +40711,33 @@ impl Interp {
         &mut self,
         code: &[u8],
         object: crate::value::SlotIndex,
-    ) -> Result<Vec<u16>, Step> {
+    ) -> Result<Vec<ReadKey>, Step> {
         let keys = self.mop_own_keys(code, object)?;
         let mut out = Vec::new();
         for key in keys {
             if key.kind == Kind::Symbol {
                 continue;
             }
-            let id = self.to_property_id(code, key)?;
+            // By INDEX where the key is one: snapshotting the key set is pure
+            // observation, and naming every index of a 70,000-key object to
+            // ask whether it is enumerable exhausted the key space — so an
+            // identity reviver over such an object poisoned the machine even
+            // after the array branch stopped minting.
+            let key = self.to_read_key(code, key)?;
             if self
-                .mop_get_own_property(code, object, id)?
+                .mop_get_own_property_read(code, object, key)?
                 .is_some_and(|descriptor| descriptor.enumerable == Some(true))
             {
-                out.push(id);
+                out.push(key);
             }
         }
         Ok(out)
     }
 
-    /// `CreateDataProperty` for a revived child. A false return is deliberately
-    /// ignored: the abstract operation is not the throwing variant here.
-    fn json_create_data_property(
-        &mut self,
-        code: &[u8],
-        object: crate::value::SlotIndex,
-        id: u16,
-        value: Slot,
-    ) -> Result<(), Step> {
-        let descriptor = OrdinaryDescriptor {
-            value: Some(value),
-            writable: Some(true),
-            enumerable: Some(true),
-            configurable: Some(true),
-            ..OrdinaryDescriptor::default()
-        };
-        let _ = self.mop_define_own_property(code, object, id, descriptor)?;
-        Ok(())
-    }
-
-    /// [`Self::json_create_data_property`] keyed by index, so revising an
-    /// array element back into place needs no name (an array item is reached
-    /// by index).
+    /// `CreateDataProperty` for a revived child, keyed by [`ReadKey`] so
+    /// revising an element back into place needs no name (an index is reached
+    /// by index). A false return is deliberately ignored: the abstract
+    /// operation is not the throwing variant here.
     fn json_create_data_property_read(
         &mut self,
         code: &[u8],
@@ -43049,6 +43207,19 @@ impl Interp {
                     }
                 }
             }
+            // An ordinary object's index properties, ascending, ahead of its
+            // named chain — the enumeration order `fxOrdinaryOwnKeys` gives.
+            if let Some(props) = self.index_props.get(&cur) {
+                for (&index, item) in props.items() {
+                    if item.flag & XS_DONT_ENUM_FLAG != 0 {
+                        continue;
+                    }
+                    let k = (crate::value::XS_NO_ID, index);
+                    if seen.insert(k) {
+                        out.push(k);
+                    }
+                }
+            }
             // Array index keys first (ascending), then string keys.
             if let Some(a) = self.arrays.get(&cur) {
                 // A non-enumerable ITEM is skipped, exactly as the
@@ -43866,8 +44037,23 @@ impl Interp {
             })
             .max()
             .unwrap_or(0);
+        // The index store is a third source of resident indices; without it
+        // this limit understates the array-iterator cursor's domain for an
+        // ordinary object whose elements live there. Its high-water mark is
+        // the floor, exactly as `array.length` is above: that is what retains
+        // the domain a since-deleted index opened.
+        let index_prop_limit = self.index_props.get(&o).map_or(0, |props| {
+            props
+                .items()
+                .keys()
+                .next_back()
+                .and_then(|index| index.checked_add(1))
+                .unwrap_or(props.length)
+                .max(props.length)
+        });
         array_limit
             .max(property_limit)
+            .max(index_prop_limit)
             .max(self.internal_indexed_limit(o))
     }
 
@@ -43931,6 +44117,14 @@ impl Interp {
                     if array.items().contains_key(&(k as u32)) {
                         return true;
                     }
+                }
+                // An ordinary object answers an index out of its index store.
+                // This probe's whole contract is that `false` PROVES nothing
+                // on the chain can answer, so a storage it does not know about
+                // makes it lie: `Array.from({length: 3, 1: 'x'})` read `|x|`
+                // as a hole.
+                if self.index_prop_item(level, k as u32).is_some() {
+                    return true;
                 }
             }
             let prototype = self.instance_prototype(level);
@@ -45283,6 +45477,22 @@ impl Interp {
                     }
                 }
             }
+            // The index store is a third source of present indices. Skipping
+            // it did not merely lose a fast path: this function's `Some(next)`
+            // is a CLAIM that nothing between `start` and `next` is present,
+            // so a missed source makes the caller skip live elements —
+            // `Array.prototype.indexOf.call({length: 2, 0: 'a'}, 'a')` was -1.
+            if let Some(props) = self.index_props.get(&current) {
+                if start <= u64::from(u32::MAX) {
+                    let start = start as u32;
+                    if let Some((&index, _)) = props.items().range(start..).next() {
+                        let index = u64::from(index);
+                        if index < len && next.is_none_or(|found| index < found) {
+                            next = Some(index);
+                        }
+                    }
+                }
+            }
             for property in self.own_property_slots(current) {
                 let id = self.slots.get(property).id;
                 if let Some(index) = self
@@ -45322,6 +45532,16 @@ impl Interp {
             if let Some(array) = self.arrays.get(&current) {
                 let upper = start.min(u64::from(u32::MAX)) as u32;
                 if let Some((&index, _)) = array.items().range(..=upper).next_back() {
+                    let index = u64::from(index);
+                    if previous.is_none_or(|found| index > found) {
+                        previous = Some(index);
+                    }
+                }
+            }
+            // The reverse counterpart's third source, for the same reason.
+            if let Some(props) = self.index_props.get(&current) {
+                let upper = start.min(u64::from(u32::MAX)) as u32;
+                if let Some((&index, _)) = props.items().range(..=upper).next_back() {
                     let index = u64::from(index);
                     if previous.is_none_or(|found| index > found) {
                         previous = Some(index);
@@ -49466,9 +49686,21 @@ impl Interp {
     }
 
     fn string_key_name(&self, id: u16) -> Option<String> {
-        self.symbol_ids
-            .iter()
-            .find_map(|(name, property_id)| (*property_id == id).then(|| name.clone()))
+        // O(1) through the forward table. `append_name_key` assigns
+        // `id = symbol_names.len() + 1` after pushing, so the name for `id`
+        // is `symbol_names[id - 1]`; a symbol key's id comes from the
+        // top-down floor and falls off the end, which is the `None` this
+        // wants anyway.
+        //
+        // This was a linear scan of the whole intern table, on a helper that
+        // every index-name resolution calls. Cheap while only exotic paths
+        // used it; with an ordinary object's index properties resolving
+        // through it, a 70,000-key object turned it quadratic.
+        let name = self.symbol_names.get((id as usize).checked_sub(1)?)?;
+        // The two tables must agree before this is the name: the
+        // exhausted-id-space placeholder inserts into `symbol_ids` without
+        // pushing here, and must not resolve to whatever sits at that index.
+        (self.symbol_ids.get(name) == Some(&id)).then(|| name.clone())
     }
 
     /// Resolve a property key `Slot` (string or symbol) to its interned id for
@@ -49967,6 +50199,30 @@ impl Interp {
         index: u32,
         receiver: Slot,
     ) -> Result<Slot, Step> {
+        // The Array Iterator's residual for a trap already taken, exactly as
+        // `mop_get` charges it for an id-keyed read. An ordinary object's
+        // index property has no name, so this arm — not that one — is where
+        // the iterator's read of one lands.
+        //
+        // The context is only ever installed against a Proxy target, so the
+        // delegation below takes `proxy_get_with_metering` and cannot come
+        // back through the `ReadKey::Index` arm that would re-enter here.
+        if let Some(context) = self
+            .array_iterator_proxy_get_context
+            .filter(|context| context.target == inst)
+            .filter(|context| self.refresh_read_key(context.key) == ReadKey::Index(index))
+        {
+            return self.mop_get_with_proxy_metering(
+                code,
+                inst,
+                ReadKey::Index(index),
+                receiver,
+                context.trap_metering,
+                context.meter_terminal_wrapper,
+                false,
+                true,
+            );
+        }
         let mut cur = inst;
         while !cur.is_null() {
             if self.proxies.contains_key(&cur) {
@@ -49995,6 +50251,12 @@ impl Interp {
                 if unit.kind != Kind::Undefined {
                     return Ok(unit);
                 }
+            }
+            // An ordinary object at this chain level answers from its index
+            // store. Only a data property can live there, so this is the
+            // value, not a descriptor to interpret.
+            if let Some(item) = self.index_prop_item(cur, index) {
+                return Ok(Slot::of(item.kind, item.value));
             }
             cur = self.instance_prototype(cur);
         }
@@ -50064,9 +50326,9 @@ impl Interp {
         {
             return Ok(self.string_exotic_has_own(self.str_len(off), None, Some(index)));
         }
-        // ArrayBuffer, DataView, Function and every ordinary object reach an
-        // index only through the slot chain, which an uninterned name misses.
-        Ok(false)
+        // An ordinary object keeps its index properties BY INDEX, so an
+        // uninterned name misses them but the store does not.
+        Ok(self.index_prop_item(o, index).is_some())
     }
 
     /// `[[HasProperty]]` of an index key the name table has no id for, plus
@@ -50157,7 +50419,7 @@ impl Interp {
                 }));
             }
         }
-        Ok(None)
+        Ok(self.index_prop_descriptor(inst, index))
     }
 
     /// `[[Delete]]` of an index key the name table has no id for —
@@ -50202,7 +50464,14 @@ impl Interp {
                     return Ok(false);
                 }
             }
-            // Nothing else can hold the property, so there is nothing to
+            // An ordinary object's index property lives in the index store.
+            if let Some(item) = vm.index_prop_item(inst, index) {
+                if item.flag & XS_DONT_DELETE_FLAG != 0 {
+                    return Ok(false);
+                }
+                vm.index_prop_remove(inst, index);
+            }
+            // Anything else cannot hold the property, so there is nothing to
             // delete and no own slot to drop.
             Ok(true)
         })
@@ -50350,6 +50619,11 @@ impl Interp {
                 return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
                     vm.ta_index_define(code, ta, f64::from(index), desc)
                 });
+            }
+            if self.indexes_by_index(inst) {
+                if let Some(accepted) = self.index_prop_define(inst, index, desc) {
+                    return Ok(accepted);
+                }
             }
             if self.arrays.contains_key(&inst) {
                 // Not `array_define_own_property`: an index is never `length`
@@ -50614,6 +50888,35 @@ impl Interp {
                 }
                 Ok(())
             } else {
+                // An ordinary object keeps its index properties BY INDEX, the
+                // way XS's `fxOrdinarySetProperty` grows an internal
+                // `XS_ARRAY_KIND` slot rather than naming anything. Naming
+                // them here is what made `o[i] = i` over a loop exhaust the
+                // `u16` key space and poison the machine.
+                if self.indexes_by_index(inst) {
+                    if define {
+                        let descriptor = OrdinaryDescriptor {
+                            value: Some(value),
+                            writable: Some(true),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                            ..OrdinaryDescriptor::default()
+                        };
+                        if self.index_prop_define(inst, index, descriptor).is_some() {
+                            self.meter.tick_builtin();
+                            return Ok(());
+                        }
+                    } else if self
+                        .ordinary_index_set(code, inst, index, value, obj)?
+                        .is_some()
+                    {
+                        return Ok(());
+                    }
+                    // Fall through: the narrow shapes the index store cannot
+                    // answer (an accessor, an existing named slot, a Proxy or
+                    // TypedArray prototype whose behaviour must observe the
+                    // key) resolve a name and take the path below.
+                }
                 let id = self.intern_key(&index.to_string());
                 if define {
                     let descriptor = OrdinaryDescriptor {
@@ -51259,6 +51562,331 @@ impl Interp {
         })
     }
 
+    /// Whether `inst` stores its integer-indexed properties by INDEX, in
+    /// [`Self::index_props`], rather than by name.
+    ///
+    /// True for an object whose `[[Set]]`/`[[DefineOwnProperty]]` is the
+    /// ordinary one. An Array, TypedArray, `arguments` object, String wrapper
+    /// or Proxy all answer an index through their own exotic behaviour and are
+    /// excluded; so, for now, are the remaining side-table shapes that
+    /// `is_ordinary_object` excludes, which keep naming their index expandos.
+    fn indexes_by_index(&self, inst: crate::value::SlotIndex) -> bool {
+        self.is_ordinary_object(inst)
+    }
+
+    /// The value stored at `index` on `inst`, if `inst` keeps index properties
+    /// by index and holds one there.
+    fn index_prop_item(&self, inst: crate::value::SlotIndex, index: u32) -> Option<Slot> {
+        self.index_props
+            .get(&inst)
+            .and_then(|props| props.items().get(&index).copied())
+    }
+
+    /// Store `value` at `index` on `inst`, creating the store on first use —
+    /// XS's `fxOrdinarySetProperty` growing its `XS_ARRAY_KIND` slot.
+    fn index_prop_set(&mut self, inst: crate::value::SlotIndex, index: u32, value: Slot) {
+        // XS's `fxOrdinarySetProperty` (`xsType.c:727`) grows the instance's
+        // `XS_ARRAY_KIND` slot: `fxNewSlot` for the holder on first use, then
+        // `fxSetIndexProperty` → `fxSetIndexSize`, whose cost is the item
+        // chunk's — the same resize `array_item_grow_metering` already models
+        // for an exotic array's items, since it is the same XS function.
+        // Replacing an item in place resizes nothing.
+        if self.index_prop_item(inst, index).is_none() {
+            let props = self.index_props.get(&inst);
+            let present = props.map_or(0, |props| props.items().len() as u64);
+            if props.is_none() {
+                self.meter.tick_slot_alloc();
+            }
+            let grow = self.array_item_grow_metering(present);
+            self.meter.tick_raw(grow);
+        }
+        self.index_prop_store(inst, index, value);
+    }
+
+    /// [`Self::index_prop_set`] without the growth metering — the resume path,
+    /// which rebuilds a store that was already paid for when the guest built
+    /// it. Charging here would make a resumed machine's meter diverge from the
+    /// uninterrupted one it must agree with.
+    fn index_prop_store(&mut self, inst: crate::value::SlotIndex, index: u32, mut value: Slot) {
+        value.id = crate::value::XS_NO_ID;
+        value.next = crate::value::SlotIndex::NULL;
+        let refs = &mut self.side_refs;
+        let props = self.index_props.entry(inst).or_default();
+        props.insert_item(index, value, refs);
+        // `ArrayData::length` is this store's HIGH-WATER mark, not an array
+        // `length` (an ordinary object has none). It only ever rises, so a
+        // deleted index keeps the cursor domain it opened — XS's resident
+        // indexed-array slot does not shrink when an element is deleted, and
+        // `resident_indexed_limit` reads this as the tombstone it documents.
+        props.length = props.length.max(index.saturating_add(1));
+    }
+
+    /// Remove the property at `index`. The store itself STAYS once it has held
+    /// anything: its high-water mark is the tombstone
+    /// [`Self::resident_indexed_limit`] relies on, so an object that no longer
+    /// keeps an index property is deliberately distinguishable from one that
+    /// never did.
+    fn index_prop_remove(&mut self, inst: crate::value::SlotIndex, index: u32) -> Option<Slot> {
+        let refs = &mut self.side_refs;
+        let removed = self
+            .index_props
+            .get_mut(&inst)
+            .and_then(|props| props.remove_item(&index, refs));
+        if self
+            .index_props
+            .get(&inst)
+            .is_some_and(|props| props.items().is_empty() && props.length == 0)
+        {
+            self.index_props.remove(&inst);
+        }
+        removed
+    }
+
+    /// Every index this object holds, ascending — the order
+    /// `fxQueueIndexKeys` produces, which is the order `[[OwnPropertyKeys]]`
+    /// and `for-in` both need.
+    fn index_prop_indices(&self, inst: crate::value::SlotIndex) -> Vec<u32> {
+        self.index_props
+            .get(&inst)
+            .map(|props| props.items().keys().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// The own descriptor of the index property at `index` on `inst`, read out
+    /// of the index store. Item flags carry the attributes exactly as an
+    /// array's items do.
+    fn index_prop_descriptor(
+        &self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Option<OrdinaryDescriptor> {
+        let item = self.index_prop_item(inst, index)?;
+        Some(OrdinaryDescriptor {
+            value: Some(Slot::of(item.kind, item.value)),
+            writable: Some(item.flag & XS_DONT_SET_FLAG == 0),
+            enumerable: Some(item.flag & XS_DONT_ENUM_FLAG == 0),
+            configurable: Some(item.flag & XS_DONT_DELETE_FLAG == 0),
+            ..OrdinaryDescriptor::default()
+        })
+    }
+
+    /// `OrdinarySet(O, ToString(index), V, Receiver)` keyed by INDEX.
+    ///
+    /// The same walk as [`Self::ordinary_set`], reading each level's own
+    /// descriptor by index instead of by name, so a write to a novel index on
+    /// an ordinary object neither needs nor mints a property name.
+    ///
+    /// Returns `Ok(None)` when the walk reaches a prototype whose `[[Set]]` is
+    /// not this algorithm — a Proxy, or a TypedArray answering an integer
+    /// index — because delegating to those requires the key the trap or the
+    /// exotic will be handed. The caller resolves a name for that narrow shape
+    /// and retries by id, which keeps the trap observable at the cost of one
+    /// name.
+    fn ordinary_index_set(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<Option<bool>, Step> {
+        let mut current = inst;
+        loop {
+            let own = self
+                .index_prop_descriptor(current, index)
+                .or_else(|| self.named_index_descriptor(current, index))
+                .or_else(|| self.exotic_index_own_descriptor(current, index));
+            if let Some(descriptor) = own {
+                if descriptor.is_accessor() {
+                    let setter = descriptor.set.unwrap_or_else(Slot::undefined);
+                    if setter.kind == Kind::Undefined {
+                        return Ok(Some(false));
+                    }
+                    self.invoke_setter(code, setter, receiver, value)?;
+                    return Ok(Some(true));
+                }
+                if descriptor.writable == Some(false) {
+                    return Ok(Some(false));
+                }
+                break;
+            }
+            let parent = self.instance_prototype(current);
+            if parent.is_null() {
+                break;
+            }
+            // A Proxy's `set` trap and a TypedArray's integer-indexed
+            // `[[Set]]` are observable behaviour, not a descriptor read, so
+            // they cannot be flattened into this walk.
+            if self.proxies.contains_key(&parent) || self.typed_arrays.contains_key(&parent) {
+                return Ok(None);
+            }
+            current = parent;
+        }
+        let receiver_inst = match receiver.value {
+            Payload::Reference(receiver_inst) if receiver.kind == Kind::Reference => receiver_inst,
+            _ => return Ok(Some(false)),
+        };
+        if receiver_inst != inst || !self.indexes_by_index(receiver_inst) {
+            // A different or non-ordinary receiver completes through the
+            // general path, which knows that receiver's own storage.
+            return Ok(None);
+        }
+        // CreateDataProperty / update, on the receiver.
+        match self.index_prop_item(receiver_inst, index) {
+            Some(existing) => {
+                if existing.flag & XS_DONT_SET_FLAG != 0 {
+                    return Ok(Some(false));
+                }
+                let mut replacement = value;
+                replacement.flag = existing.flag;
+                self.index_prop_set(receiver_inst, index, replacement);
+            }
+            None => {
+                if !self.instance_extensible(receiver_inst) {
+                    return Ok(Some(false));
+                }
+                self.index_prop_set(receiver_inst, index, value);
+            }
+        }
+        Ok(Some(true))
+    }
+
+    /// The index store's descriptor for a property arrived at by NAME.
+    ///
+    /// Guarded on the store existing at all, so an object that has never held
+    /// an index property pays one hash lookup and never the reverse name
+    /// resolution.
+    fn index_prop_descriptor_by_id(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Option<OrdinaryDescriptor> {
+        if !self.index_props.contains_key(&inst) {
+            return None;
+        }
+        let index = string_to_index(&self.string_key_name(id)?)?;
+        self.index_prop_descriptor(inst, index)
+    }
+
+    /// The index this `id` names, when `inst` actually keeps an index store.
+    fn index_prop_index_of_id(&self, inst: crate::value::SlotIndex, id: u16) -> Option<u32> {
+        if !self.index_props.contains_key(&inst) {
+            return None;
+        }
+        let index = string_to_index(&self.string_key_name(id)?)?;
+        self.index_prop_item(inst, index).map(|_| index)
+    }
+
+    /// `ValidateAndApplyPropertyDescriptor` against the index store.
+    ///
+    /// `None` means this store cannot represent the definition and the caller
+    /// must resolve a name: an ACCESSOR (whose getter/setter live in
+    /// `self.accessors`, keyed by `(instance, id)`), or an index that already
+    /// has an ordinary named slot, which stays where it is.
+    fn index_prop_define(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+        descriptor: OrdinaryDescriptor,
+    ) -> Option<bool> {
+        if descriptor.is_accessor() {
+            return None;
+        }
+        if self
+            .index_read_key_id(index)
+            .is_some_and(|id| self.find_property(inst, id).is_some())
+        {
+            return None;
+        }
+        match self.index_prop_item(inst, index) {
+            Some(item) => {
+                let current = self.index_prop_descriptor(inst, index)?;
+                if !self.is_compatible_descriptor(
+                    self.instance_extensible(inst),
+                    &descriptor,
+                    Some(&current),
+                ) {
+                    return Some(false);
+                }
+                let mut flag = item.flag;
+                if let Some(writable) = descriptor.writable {
+                    if writable {
+                        flag &= !XS_DONT_SET_FLAG;
+                    } else {
+                        flag |= XS_DONT_SET_FLAG;
+                    }
+                }
+                if let Some(enumerable) = descriptor.enumerable {
+                    if enumerable {
+                        flag &= !XS_DONT_ENUM_FLAG;
+                    } else {
+                        flag |= XS_DONT_ENUM_FLAG;
+                    }
+                }
+                if let Some(configurable) = descriptor.configurable {
+                    if configurable {
+                        flag &= !XS_DONT_DELETE_FLAG;
+                    } else {
+                        flag |= XS_DONT_DELETE_FLAG;
+                    }
+                }
+                let mut replacement = descriptor
+                    .value
+                    .unwrap_or_else(|| Slot::of(item.kind, item.value));
+                replacement.flag = flag;
+                self.index_prop_set(inst, index, replacement);
+                Some(true)
+            }
+            None => {
+                if !self.instance_extensible(inst) {
+                    return Some(false);
+                }
+                // An absent property takes `false` for every attribute the
+                // descriptor omits.
+                let mut flag = 0u8;
+                if !descriptor.writable.unwrap_or(false) {
+                    flag |= XS_DONT_SET_FLAG;
+                }
+                if !descriptor.enumerable.unwrap_or(false) {
+                    flag |= XS_DONT_ENUM_FLAG;
+                }
+                if !descriptor.configurable.unwrap_or(false) {
+                    flag |= XS_DONT_DELETE_FLAG;
+                }
+                let mut item = descriptor.value.unwrap_or_else(Slot::undefined);
+                item.flag = flag;
+                self.index_prop_set(inst, index, item);
+                Some(true)
+            }
+        }
+    }
+
+    /// The own descriptor for `index` spelled as a NAME, when the name is
+    /// already interned and the object carries an ordinary slot under it.
+    ///
+    /// An index property created before this store existed — or by a
+    /// `defineProperty` that needed a name, such as an accessor — lives in the
+    /// named chain, and both storages have to be consulted.
+    fn named_index_descriptor(
+        &self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Option<OrdinaryDescriptor> {
+        let id = self.index_read_key_id(index)?;
+        self.ordinary_get_own_descriptor(inst, id)
+    }
+
+    /// The own descriptor an EXOTIC receiver synthesizes for `index` — a
+    /// String wrapper's unit, a function's synthetic own names, and so on.
+    fn exotic_index_own_descriptor(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Option<OrdinaryDescriptor> {
+        let id = self.index_read_key_id(index)?;
+        self.exotic_own_descriptor(inst, id)
+    }
+
     fn find_property(
         &self,
         inst: crate::value::SlotIndex,
@@ -51592,11 +52220,16 @@ impl Interp {
     ) -> Option<OrdinaryDescriptor> {
         let property = match self.find_property(inst, id) {
             Some(property) => property,
-            // No ordinary own slot: a function still carries `length`/`name` as
-            // exotic own data properties (so a non-writable set is rejected and
-            // `getOwnPropertyDescriptor` reveals them). `None` for every other
-            // object, preserving ordinary behavior.
-            None => return self.function_meta_own_descriptor(inst, id),
+            // No ordinary own slot. An index property lives in the index
+            // store instead of the named chain, and most callers arrive here
+            // having interned its name (`getOwnPropertyDescriptor(o, '0')`),
+            // so the two storages are bridged here rather than at every
+            // caller.
+            None => {
+                return self
+                    .index_prop_descriptor_by_id(inst, id)
+                    .or_else(|| self.function_meta_own_descriptor(inst, id))
+            }
         };
         let slot = self.slots.get(property);
         let enumerable = Some(slot.flag & XS_DONT_ENUM_FLAG == 0);
@@ -51654,6 +52287,34 @@ impl Interp {
     ) -> bool {
         if descriptor.is_accessor() && descriptor.is_data() {
             return false;
+        }
+        // An index property on an ordinary object belongs in the index store.
+        // Route it there when the store already holds it, or when this object
+        // keeps indexes by index and has no named slot under this name — so a
+        // `defineProperty` spelled by name lands in the same place a plain
+        // write does, rather than creating a second, shadowing storage.
+        if self.find_property(inst, id).is_none() {
+            if let Some(index) = self
+                .string_key_name(id)
+                .as_deref()
+                .and_then(string_to_index)
+                .filter(|_| self.indexes_by_index(inst) || self.index_props.contains_key(&inst))
+            {
+                if let Some(accepted) = self.index_prop_define(inst, index, descriptor) {
+                    return accepted;
+                }
+                // An accessor cannot live in the store, so the property
+                // PROMOTES to a named slot. Carry its current value and
+                // attributes across first: the define below validates against
+                // whatever it finds, and finding nothing would treat a
+                // redefinition as a creation and silently reset `enumerable`
+                // and `configurable` to their absent-property defaults.
+                if let Some(item) = self.index_prop_item(inst, index) {
+                    self.index_prop_remove(inst, index);
+                    let value = Slot::of(item.kind, item.value);
+                    self.set_own_unmetered_with_flag(inst, id, value, item.flag);
+                }
+            }
         }
         // A function's `length`/`name` is synthesized from the `FuncInfo` with no
         // ordinary slot; redefining one must mutate a real slot (the update path
@@ -51935,7 +52596,10 @@ impl Interp {
             }
             let iterator_context_aimed_at_parent = self
                 .array_iterator_proxy_get_context
-                .is_some_and(|context| context.target == parent && context.id == id);
+                .is_some_and(|context| {
+                    context.target == parent
+                        && self.refresh_read_key(context.key) == ReadKey::Id(id)
+                });
             if self.proxies.contains_key(&parent) || iterator_context_aimed_at_parent {
                 return self.mop_get(code, parent, id, receiver);
             }
@@ -53142,14 +53806,45 @@ impl Interp {
                 // index; the value read below must use the same property.
                 let key = self.refresh_read_key(key);
                 let value = self.mop_get_read(code, source_inst, key, from)?;
-                // Writing the TARGET is a create. In this representation an
-                // index on an ordinary object IS a named property, so the
-                // name is minted here — the standing limit that `o[i] = v`
-                // in a loop runs into as well.
+                // Writing the TARGET creates a property — but an ordinary
+                // object's index property is created BY INDEX, so this no
+                // longer has to mint a name. Minting here is what kept
+                // `Object.assign({}, bigArray)` exhausting the key space
+                // after the write opcode itself had stopped.
                 let key = self.refresh_read_key(key);
-                let id = self.read_key_intern(key);
-                if !self.mop_set(code, target_inst, id, value, to)? {
-                    return Err(self.failed_set_error(target_inst, id, "C: xsSet"));
+                match key {
+                    ReadKey::Index(index) if self.indexes_by_index(target_inst) => {
+                        match self.ordinary_index_set(code, target_inst, index, value, to)? {
+                            Some(true) => {}
+                            // Rejected by the index store. Reported BY INDEX:
+                            // the name half of this diagnostic renders as `?`
+                            // for any index-shaped key, so interning one to
+                            // build the message would buy nothing and would
+                            // mint on a throw path a guest can drive in a loop.
+                            Some(false) => {
+                                return Err(self.failed_index_set_error(
+                                    target_inst,
+                                    index,
+                                    "C: xsSet",
+                                ))
+                            }
+                            // The narrow shapes the index walk defers on (an
+                            // accessor, a Proxy or TypedArray prototype whose
+                            // behaviour must observe the key).
+                            None => {
+                                let id = self.read_key_intern(key);
+                                if !self.mop_set(code, target_inst, id, value, to)? {
+                                    return Err(self.failed_set_error(target_inst, id, "C: xsSet"));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let id = self.read_key_intern(key);
+                        if !self.mop_set(code, target_inst, id, value, to)? {
+                            return Err(self.failed_set_error(target_inst, id, "C: xsSet"));
+                        }
+                    }
                 }
             }
         }
@@ -53240,9 +53935,21 @@ impl Interp {
                 _ => return Ok(self.find_property(o, id).is_some()),
             }
         }
-        // Ordinary object: the whole own set lives in the slot chain (an
-        // integer-index-named property on a plain object is an ordinary slot
-        // keyed by the interned name, not a side-table item).
+        // Ordinary object: named properties live in the slot chain, and
+        // integer-indexed ones in the index store.
+        //
+        // Consulting only the chain made this answer depend on whether some
+        // unrelated code had interned the index's NAME: an uninterned key
+        // reaches `uninterned_index_own_present`, which reads the store, while
+        // an interned one arrives here and missed. `'0' in o` was therefore
+        // true or false depending on history, and
+        // `Array.prototype.map.call({length: 2, 0: 'a'}, f)` — whose internals
+        // intern the name — read every element as a hole.
+        if let Some(index) = index {
+            if self.index_prop_item(o, index).is_some() {
+                return Ok(true);
+            }
+        }
         Ok(self.find_property(o, id).is_some())
     }
 
@@ -53376,7 +54083,8 @@ impl Interp {
     ) -> Result<Slot, Step> {
         if let Some(context) = self
             .array_iterator_proxy_get_context
-            .filter(|context| context.target == inst && context.id == id)
+            .filter(|context| context.target == inst)
+            .filter(|context| self.refresh_read_key(context.key) == ReadKey::Id(id))
         {
             return self.mop_get_with_proxy_metering(
                 code,
@@ -53711,6 +54419,45 @@ impl Interp {
         self.internal_error("TypeError", format!("{prefix} {name}: {reason}"))
     }
 
+    /// [`Self::failed_set_error`] for a write the index store itself rejected,
+    /// reported without interning the index's name. The reason walk is the
+    /// same one, over the index-aware descriptor triple
+    /// [`Self::ordinary_index_set`] consults; the name half is `?` because
+    /// [`Self::property_debug_name`] renders every index-shaped key that way,
+    /// so the message is byte-identical to the interned path's.
+    fn failed_index_set_error(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+        prefix: &str,
+    ) -> Step {
+        let mut current = inst;
+        let mut reason = "not extensible";
+        while !current.is_null() {
+            if self.proxies.contains_key(&current) {
+                // A false Proxy set result has different behavior in the
+                // pinned XS C setter; do not fabricate a parity diagnostic.
+                let error = self.internal_error("TypeError", String::new());
+                return self.raise_js(error);
+            }
+            let descriptor = self
+                .index_prop_descriptor(current, index)
+                .or_else(|| self.named_index_descriptor(current, index))
+                .or_else(|| self.exotic_index_own_descriptor(current, index));
+            if let Some(descriptor) = descriptor {
+                if descriptor.is_accessor() {
+                    reason = "no setter";
+                } else if descriptor.writable == Some(false) {
+                    reason = "not writable";
+                }
+                break;
+            }
+            current = self.instance_prototype(current);
+        }
+        let error = self.internal_error("TypeError", format!("{prefix} ?: {reason}"));
+        self.raise_js(error)
+    }
+
     /// XS fxDeleteAll reports a failed native deletion by key identity.
     fn failed_delete_error(&mut self, id: u16) -> Step {
         let name = self.property_debug_name(id);
@@ -53817,6 +54564,18 @@ impl Interp {
             && self.exotic_own_descriptor(inst, id).is_some()
         {
             return Ok(false);
+        }
+        // An index property named here lives in the index store, not the slot
+        // chain, so `delete_own_property` would not find it.
+        if let Some(index) = self.index_prop_index_of_id(inst, id) {
+            if self
+                .index_prop_item(inst, index)
+                .is_some_and(|item| item.flag & XS_DONT_DELETE_FLAG != 0)
+            {
+                return Ok(false);
+            }
+            self.index_prop_remove(inst, index);
+            return Ok(true);
         }
         Ok(self.delete_own_property(inst, id))
     }
@@ -54004,6 +54763,12 @@ impl Interp {
         }
         let ids = self.ordered_own_key_ids(inst);
         let mut out = Vec::with_capacity(ids.len());
+        // Index keys ascending, then the named chain — `fxOrdinaryOwnKeys`
+        // queues the internal index chunk before `fxQueueIDKeys`. These keys
+        // are spelled from the index, so listing them mints nothing.
+        for index in self.index_prop_indices(inst) {
+            out.push(self.read_key_slot(ReadKey::Index(index))?);
+        }
         for id in ids {
             out.push(self.property_key_slot(id)?);
         }
@@ -54447,17 +55212,22 @@ impl Interp {
         // spells its own key, exactly as XS's `fxKeyAt` does for `XS_NO_ID`.
         let key = self.read_key_slot(key_id)?;
         let saved_context = self.array_iterator_proxy_get_context;
-        if let ReadKey::Id(id) = key_id {
-            // The Array Iterator metering context is installed only by the
-            // id-keyed read; the uninterned-index arm always meters zero.
-            if proxy_trap_metering != 0 && self.proxies.contains_key(&target) {
-                self.array_iterator_proxy_get_context = Some(ArrayIteratorProxyGetContext {
-                    target,
-                    id,
-                    trap_metering: proxy_trap_metering,
-                    meter_terminal_wrapper,
-                });
-            }
+        // Installed for an INDEX key as well as an id. It used to be id-only,
+        // on the invariant that "the uninterned-index arm always meters zero"
+        // — true while every ordinary object's index property carried an
+        // interned name, so an Array Iterator read of one arrived here as an
+        // `Id`. With those properties kept by index that read is index-keyed,
+        // and skipping the residual made
+        // `Array.prototype.values.call(new Proxy(new Proxy({length:1,0:7},{}),
+        // {get(t,k,r){return Reflect.get(t,k,r)}}))` cost four computrons less
+        // than the oracle charges.
+        if proxy_trap_metering != 0 && self.proxies.contains_key(&target) {
+            self.array_iterator_proxy_get_context = Some(ArrayIteratorProxyGetContext {
+                target,
+                key: key_id,
+                trap_metering: proxy_trap_metering,
+                meter_terminal_wrapper,
+            });
         }
         let trap_result =
             self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver]);
@@ -63302,6 +64072,7 @@ impl Interp {
             ctor_prototype: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
             wrapper_data: &'a mut std::collections::HashMap<SlotIndex, Slot>,
             arrays: &'a mut std::collections::HashMap<SlotIndex, ArrayData>,
+            index_props: &'a mut std::collections::HashMap<SlotIndex, ArrayData>,
             collections: &'a mut std::collections::HashMap<SlotIndex, CollectionData>,
             array_buffers: &'a mut std::collections::HashMap<SlotIndex, ArrayBufferData>,
             typed_arrays: &'a mut std::collections::HashMap<SlotIndex, TypedArrayData>,
@@ -63488,6 +64259,16 @@ impl Interp {
                     }
                 }
                 if let Some(a) = self.arrays.get(&idx) {
+                    for s in a.items().values() {
+                        s.each_ref_slot(&mut *visit);
+                    }
+                }
+                // An ordinary object's index properties are strong edges
+                // exactly as an array's items are: `o[0] = {}` is the only
+                // reference to that object, and a collector that did not walk
+                // here would sweep it and hand its slot to the next
+                // allocation.
+                if let Some(a) = self.index_props.get(&idx) {
                     for s in a.items().values() {
                         s.each_ref_slot(&mut *visit);
                     }
@@ -63745,6 +64526,11 @@ impl Interp {
                 for a in self.arrays.values_mut() {
                     a.for_each_value_mut_chunk_remap(|s| slot_chunk(s, visit));
                 }
+                // Same for the index store: a string value there holds a
+                // chunk offset the full collector's compaction rewrites.
+                for a in self.index_props.values_mut() {
+                    a.for_each_value_mut_chunk_remap(|s| slot_chunk(s, visit));
+                }
                 for c in self.collections.values_mut() {
                     c.for_each_entry_mut_chunk_remap(|s| slot_chunk(s, visit));
                 }
@@ -63887,6 +64673,7 @@ impl Interp {
             ctor_prototype: &mut self.ctor_prototype,
             wrapper_data: &mut self.wrapper_data,
             arrays: &mut self.arrays,
+            index_props: &mut self.index_props,
             collections: &mut self.collections,
             array_buffers: &mut self.array_buffers,
             typed_arrays: &mut self.typed_arrays,
@@ -64194,6 +64981,13 @@ impl Interp {
             }
             keep
         });
+        self.index_props.retain(|k, a| {
+            let keep = !dead.contains(k);
+            if !keep {
+                a.drop_refs(refs);
+            }
+            keep
+        });
         self.collections.retain(|k, c| {
             let keep = !dead.contains(k);
             if !keep {
@@ -64348,6 +65142,14 @@ impl Interp {
     fn each_side_table_ref(&self, visit: &mut dyn FnMut(crate::value::SlotIndex)) {
         self.each_side_table_ref_tail(visit);
         for a in self.arrays.values() {
+            for s in a.items().values() {
+                s.each_ref_slot(&mut *visit);
+            }
+        }
+        // The index store is a bulk table exactly like `arrays`: the
+        // PARTIAL collector needs these edges too, or freeing a page can
+        // sweep an object reachable only as `o[0]`.
+        for a in self.index_props.values() {
             for s in a.items().values() {
                 s.each_ref_slot(&mut *visit);
             }

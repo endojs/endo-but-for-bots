@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 24;
+pub const STORE_SCHEMA_VERSION: u32 = 25;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1312,6 +1312,9 @@ pub struct SmallState {
     /// checkpoint; dirty-diffed side-table ROWS are the named upgrade
     /// if attached machines carry bulk state wide enough to measure.
     pub arrays: Vec<crate::image::ArrayImage>,
+    /// An ordinary object's index-property store (the `IDXP` encoding),
+    /// appended as a suffix section so older signed prefixes are untouched.
+    pub index_props: Vec<crate::image::IndexPropsImage>,
     /// The collections side table (schema 7; the `COLL` encoding).
     pub collections: Vec<crate::image::CollectionImage>,
     /// The `Symbol.for` registry (schema 7; the `REGY` encoding).
@@ -1387,7 +1390,7 @@ impl SmallState {
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 31] = [
+        let sections: [Vec<u8>; 32] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1422,6 +1425,10 @@ impl SmallState {
             crate::image::encode_error_frames(&self.errors),
             crate::image::encode_promise_cluster(&self.promise_cluster),
             crate::image::encode_async_instances(&self.promise_cluster.async_instances),
+            // Appended as a pure SUFFIX, like every section added since the
+            // 6→7 migration: an older root signed the prefix, and inserting
+            // here rather than appending would re-encode bytes it signed.
+            crate::image::encode_index_props(&self.index_props),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1431,7 +1438,8 @@ impl SmallState {
         v
     }
 
-    /// Decode the twenty-eight sections. Every section length is
+    /// Decode the sections, in the order the encoder appends them. Every
+    /// section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
@@ -1665,15 +1673,21 @@ impl SmallState {
         } else {
             crate::image::decode_async_instances(async_bytes).map_err(StoreError::Snapshot)?
         };
-        // Same exact-consumption rule as the manifest: thirty-one
-        // sections and nothing after them, or the small state fails
-        // closed.
+        let index_props_bytes = section("small state index-props section")?;
+        let index_props = if index_props_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_index_props(index_props_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: every section and
+        // nothing after them, or the small state fails closed.
         if i != p.len() {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                 "small state trailing bytes",
             )));
         }
         Ok(SmallState {
+            index_props,
             stack,
             slot_free,
             keys,
@@ -2067,6 +2081,7 @@ pub fn migrate_store(
             21 => migrate_v21_to_v22(store)?,
             22 => migrate_v22_to_v23(store)?,
             23 => migrate_v23_to_v24(store)?,
+            24 => migrate_v24_to_v25(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2765,6 +2780,46 @@ fn migrate_v23_to_v24(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// Ladder step 24→25: the small state grows the index-props section
+/// (`IDXP`'s encoding), appended as a pure suffix like every section
+/// since the 6→7 migration, so the bytes an older root signed are not
+/// re-encoded. A migrating store holds no index property — the table did
+/// not exist when it was written — so the new section is empty, which
+/// encodes as a four-byte zero length. Same discipline as its
+/// predecessors: verify the old content against its own root before
+/// touching anything, then restamp schema and root together.
+fn migrate_v24_to_v25(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 25;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2898,6 +2953,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         symbols: image.symbols.clone(),
         meter: image.meter.clone(),
         arrays: image.arrays.clone(),
+        index_props: image.index_props.clone(),
         collections: image.collections.clone(),
         registry: image.registry.clone(),
         errors: image.errors.clone(),
@@ -3156,6 +3212,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
     .map_err(StoreError::Snapshot)?;
 
     Ok(MachineImage {
+        index_props: small.index_props.clone(),
         version: manifest.version,
         signature: manifest.signature,
         creation: manifest.creation,
@@ -3858,6 +3915,7 @@ mod tests {
     #[test]
     fn small_state_round_trips() {
         let s = SmallState {
+            index_props: Vec::new(),
             stack: vec![Slot::boolean(true), Slot::integer(-4)],
             slot_free: vec![9, 2, 5],
             keys: vec!["dyn".to_string()],
@@ -3901,6 +3959,7 @@ mod tests {
     #[test]
     fn small_state_truncation_fails_closed() {
         let s = SmallState {
+            index_props: Vec::new(),
             stack: vec![],
             slot_free: vec![],
             keys: vec![],
