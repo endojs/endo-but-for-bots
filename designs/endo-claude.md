@@ -58,7 +58,7 @@ no composition with the local per-guest MCP bridge that has since landed on
 | `packages/claude-sandbox/src/claude-credentials-factory.js` | Admits `subscription` when minting credentials. | Complete for the declared kind extension. |
 | `packages/claude-sandbox/src/claude-credentials-module.js` | Admits `subscription` in the unconfined credential module. | Complete for the declared kind extension. |
 | `packages/claude-sandbox/src/claude-client-module.js` | Explicitly refuses the settings-file-shaped kind on the environment-variable route. | Correct negative branch; it does not provide the positive `apiKeyHelper` route. |
-| `packages/claude-sandbox/test/claude-credentials-factory.test.js` | Covers minting and materializing the new kind. | Pure caplet coverage only. |
+| `packages/claude-sandbox/test/claude-credentials-factory.test.js` | Covers minting and materialising the new kind. | Pure caplet coverage only. |
 | `packages/claude-sandbox/test/claude-client-module.test.js` | Covers refusal by the environment-variable client. | Pure refusal coverage only. |
 | `packages/claude/package.json` | Adds the private package, one public entry, and an opt-in shim bin. | The bin duplicates a bridge that later landed in `claude-sandbox`; reconcile on rebase. |
 | `packages/claude/LICENSE` | Adds the standard package license. | No functional delta. |
@@ -67,7 +67,7 @@ no composition with the local per-guest MCP bridge that has since landed on
 | `packages/claude/index.js` | Exports `make` and all internal construction helpers from the root entry. | The design specifies `make` as the public API. Decide whether the helper exports are intentionally public or keep them internal. |
 | `packages/claude/claude.types.d.ts` | Re-exports the internal declarations. | Matches the package layout. |
 | `packages/claude/src/claude.types.d.ts` | Declares the injected broker, file-preparer, launcher, pool, and result shapes. | Describes seams rather than implemented host effects. |
-| `packages/claude/src/argv.js` | Builds argv with `--bare`, `--strict-mcp-config`, `--setting-sources ""`, `--tools ""`, `--disable-slash-commands`, explicit MCP allows, and no prompt positional; pins 2.1.232. | Joins every allow into one argument and has no `ARG_MAX` preflight, contrary to the 2026-08-31 design revision. Its assertion accepts unrelated extra argv tokens, so only the builder's closed construction, not the exported assertion alone, establishes prompt omission. |
+| `packages/claude/src/argv.js` | Builds argv with `--bare`, `--strict-mcp-config`, `--setting-sources ""`, `--tools ""`, `--disable-slash-commands`, explicit MCP allows, and no prompt positional; pins 2.1.232. | Joins every allow into one argument and has no `ARG_MAX` preflight, contrary to this design, which now specifies space-separated multi-token allow entries and an `ARG_MAX` preflight (§ *Argv length is an operational ceiling*). Its assertion accepts unrelated extra argv tokens, so only the builder's closed construction, not the exported assertion alone, establishes prompt omission. |
 | `packages/claude/src/child-env.js` | Constructs a four-key environment and rejects known credential, proxy, and daemon variables. | The stopgap shim needs `ENDO_CLAUDE_SHIM_OPT_IN` and `ENDO_CLAUDE_BROKER_SOCK`, but neither can reach it through this environment or the generated MCP config. The shipped shim therefore cannot connect in the described path. |
 | `packages/claude/src/credentials-pool.js` | Implements least-recently-used selection, cooling, reject-with-a-tag admission, and idempotent release. | Operator weights are not implemented. `release` always attempts `revoke`, while its unused `failed` option implies an unfinished success/failure distinction. |
 | `packages/claude/src/formula-id.js` | Validates lowercase 64-hex guest formula identifiers. | Matches the design. |
@@ -75,7 +75,7 @@ no composition with the local per-guest MCP bridge that has since landed on
 | `packages/claude/src/results.js` | Builds the nine hardened result variants and normalizes thrown values. | No live stream parser or launcher maps real Claude output and failures into them. |
 | `packages/claude/src/tool-permissions.js` | Prunes names, pins a null-prototype catalog, derives literal `mcp__<server>__<tool>` names, and exposes a membership predicate. | No server in this PR calls `isDispatchable`; argument-level attenuation is also absent. The later `claude-sandbox` MCP bridge now provides the authoritative server boundary. |
 | `packages/claude/src/shim.js` | Implements an opt-in newline-delimited JSON-RPC relay. | It forwards calls without enforcing the pinned catalog itself and is not runnable with the PR's generated environment/config. Prefer the one-guest MCP surface contract below (§ *Interface to the one-guest MCP surface*) over repairing a second bridge. |
-| `packages/claude/src/harness.js` | Implements grant-time formula/catalog setup and a per-guest `infer` exo around injected effects. | `connectBroker`, `prepareSpawnFiles`, and `launch` have no production implementations; the acquired `issued` credential is never passed to the file preparer or materialized; `context` is ignored; child termination, bounds, per-call broker cancellation, server-side dispatch, broker cleanup, and real result parsing are delegated but not supplied. |
+| `packages/claude/src/harness.js` | Implements grant-time formula/catalog setup and a per-guest `infer` exo around injected effects. | `connectBroker`, `prepareSpawnFiles`, and `launch` have no production implementations; the acquired `issued` credential is never passed to the file preparer or materialised; `context` is ignored; child termination, bounds, per-call broker cancellation, server-side dispatch, broker cleanup, and real result parsing are delegated but not supplied. |
 | `packages/claude/test/argv.test.js` | Covers flag presence/value, version mismatch, prompt omission by construction, and comma-joined values. | No real CLI semantics; the comma-join expectation now conflicts with the revised argument-length design. |
 | `packages/claude/test/child-env.test.js` | Property-checks the constructed environment. | Does not start the shim or Claude. |
 | `packages/claude/test/credentials-pool.test.js` | Exercises occupancy, cooling, issue failure, idempotent release, and an `fc.commands` model. | Does not exercise a real credential helper or concurrent Claude process. |
@@ -126,9 +126,11 @@ an observation.
 The caplet is accepted only when one live, version-pinned test demonstrates
 **substitution**, not merely subtraction:
 
-1. Start the one-guest MCP surface (#1206) for one synthetic guest with a
-   `sentinel` tool that records a nonce, plus a second local MCP server and
-   planted user/project settings, `CLAUDE.md`, hook, and skill markers.
+1. Start the one-guest MCP surface (the stdio MCP implementation scoped to one
+   guest, landed on `llm` by PR #1206 and specified below in § *Interface to the
+   one-guest MCP surface*) for one synthetic guest with a `sentinel` tool that
+   records a nonce, plus a second local MCP server and planted user/project
+   settings, `CLAUDE.md`, hook, and skill markers.
 2. Spawn the real CLI with the exact candidate argv, prompt on stdin, a clean
    constructed environment, `--permission-prompts none`, and
    `--no-session-persistence`.
@@ -141,14 +143,20 @@ The caplet is accepted only when one live, version-pinned test demonstrates
 5. Repeat after omitting each core flag in turn and record the expected leak or
    refusal, so the test proves which flags are load-bearing rather than merely
    proving that the full invocation happened to work.
-6. Assert the isolation gate of *Design Decision 6*: `make` with **no**
-   `options.isolation` attestation **refuses to construct** (fails closed rather
-   than launching an unwrapped child against a co-located many-guest daemon), and
-   `make` with each recognized attestation (`separate-uid`, `sandbox-slice`,
-   `co-located-trusted`) constructs and threads that value through to
-   `makeGuestInference`. This step gates the one residual DD6 names as
-   load-bearing (cross-guest escalation on a co-located daemon), so the design's
-   own acceptance test cannot pass while that precondition is silently unenforced.
+6. Assert the isolation gate of *Design Decision 6* (the `options.isolation`
+   attestation: a caller-supplied claim — `separate-uid` / `sandbox-slice` /
+   `co-located-accepted` — that `make` requires at construction and that marks the
+   cross-guest-escalation residual on a co-located daemon; see DD6 for its full
+   contract). `make` with **no** `options.isolation` attestation **refuses to
+   construct** (fails closed rather than launching an unwrapped child against a
+   co-located many-guest daemon), and `make` with each recognized attestation
+   (`separate-uid`, `sandbox-slice`, `co-located-accepted`) constructs and threads
+   that value through to `makeGuestInference`. The assertion checks only that the
+   field is present and recognized, not that the asserted isolation actually holds,
+   so what this step establishes is that the co-located residual is a required,
+   refused-by-default caller-certification rather than a verified-closed property.
+   The design's own acceptance test cannot pass while that certification is
+   silently unenforced.
 
 This exact test is intentionally named here rather than run by this design job.
 Its positive assertion is load-bearing: a zero-tool process is not a successful
@@ -184,7 +192,7 @@ const {
   close,        // ends the guest-level listener and removes per-guest transport
                 // state (the per-spawn socket AND its directory); a call still
                 // in flight under some sessionTag is cancelled first, not raced
-} = await openGuestMcp(toolSet, {
+} = await makeGuestMcp(toolSet, {
   prune,        // predicate applied to the one tools/list snapshot BEFORE it is
                 // pinned, so code-eval and unsafe names (DD2) never enter the
                 // pinned catalog — pruning at the boundary, not at the client
@@ -215,7 +223,7 @@ Current `llm` contains the component pieces in
 aggregate over it — and `packages/claude-sandbox/src/mcp-socket-server.js`
 (`startMcpSocketServer`).
 As landed, `makeMcpBridge` filters tool-name *grammar* only (`pinToolCatalog`'s
-`TOOL_NAME_RE`) and threads no `sessionTag`, so `openGuestMcp` is built over the
+`TOOL_NAME_RE`) and threads no `sessionTag`, so `makeGuestMcp` is built over the
 **lower-level** `makeMcpBridge` seam — not the aggregate — **extended** with the
 `prune`/`attenuateArgs` policy and per-call `sessionTag` cancellation above,
 precisely so those invariants have somewhere to live rather than being subtracted
@@ -237,7 +245,7 @@ remain callable with every Claude built-in denied.
    one-guest MCP surface interface above. Derive the CLI allow-list from the exact
    catalog the server enforces.
 4. Implement the production host effects now represented only by
-   `prepareSpawnFiles` and `launch`: credential materialization/helper, direct
+   `prepareSpawnFiles` and `launch`: credential materialisation/helper, direct
    process spawn, stdin and `stream-json`, deadline/output/turn limits,
    cancellation and process-group termination, cleanup, and result mapping.
 5. Reconcile argv with the selected current CLI: multi-token MCP allow entries,
@@ -273,8 +281,8 @@ MCP tools. See the two companion designs, both in `kriscendobot/minion.town` @
 
 `@endo/claude` runs in the **opposite direction of control**. Instead of an
 external Claude reaching *in* to drive a guest, the guest (or an operator
-provisioning on its behalf) gets Claude as its **inference engine**: a
-host-side, unconfined caplet launches a fresh `claude -p --bare` process whose
+provisioning on its behalf) gets Claude as its **inference engine**: a fresh
+`claude -p --bare` process, launched by a host-side unconfined caplet, whose
 **Claude tool-call surface** is the Model Context Protocol projection of one
 specified guest formula's granted facet, and nothing else.
 This is "the guest thinks with Claude," not "Claude drives a guest from
@@ -541,11 +549,19 @@ exactly as a swallowed prompt would. A `model` outside the pinned set fails clos
 (refuse to spawn); the pinned list is versioned with the CLI pin. (Neither
 caller-supplied argv value is the *only* attacker-controlled input to the running
 inference: every `tools/call` **result** the facet returns re-enters the model's
-context and can steer later in-allow-list calls, which is why *Design Decision 6*
-names the OS slice as the hardening that closes this residual — the influence a
-guest exerts is not only a guest-authored prompt but any `tools/call` **result**
-that returns externally authored bytes — while keeping that slice an optional
-adapter rather than an acceptance-condition prerequisite; see *Design Decision 6*.) On 2.1.232 the prompt
+context and can steer the model into a later **in-allow-list** call — the
+influence a guest exerts is not only a guest-authored prompt but any `tools/call`
+**result** that returns externally authored bytes. This is a **distinct residual**
+from the co-located-daemon escalation *Design Decision 6* names, and the OS slice
+does **not** close it: an in-allow-list call is inside the pinned MCP catalog
+regardless of OS confinement, so moving the daemon socket out of the child's mount
+namespace does nothing about the model's *decision* to make an allowed-but-harmful
+call on attacker-chosen input. *Design Decision 2*'s `attenuateArgs` narrows
+*which* petnames or paths such a call may name, but not the decision to call it;
+this decision-level residual has **no full mitigation named in this document** and
+is owned as an open gap — see § *Open questions*. The `@endo/claude-sandbox` OS
+slice stays an optional adapter rather than an acceptance-condition prerequisite;
+see *Design Decision 6*.) On 2.1.232 the prompt
 is a **bare positional**
 (`claude [options] [prompt]`), and **four** of the flags above (`--mcp-config`,
 `--allowedTools`, `--disallowedTools`, and `--tools`) are **variadic**
@@ -1356,7 +1372,7 @@ context this design leans on; and the `make*` key repo precedent —
 build PR has a named identifier to agree on): `powers` carries the daemon connection
 used to resolve a formula id to a facet and the `ClaudeCredentials` pool;
 `options` carries the `isolation` attestation DD6 requires (`separate-uid` /
-`sandbox-slice` / `co-located-trusted`), and `make` **fails closed** (it refuses
+`sandbox-slice` / `co-located-accepted`), and `make` **fails closed** (it refuses
 to construct absent a recognized value rather than launching an unwrapped child
 against a co-located many-guest daemon). `make`
 returns an `inferenceProvider` exo (host-only and **non-passable**, DD8) whose
@@ -1555,20 +1571,30 @@ remaining, independent axis of who triggers an inference.)
    mount namespace. The constructed environment remains worthwhile defense in
    depth, not an OS sandbox, and does not by itself close this escalation.
    Because that constraint is safety-critical yet exogenous to the tool-surface
-   flags, the harness must not model it as deployment *place* alone; it makes the
-   precondition a **checked value**. `make(powers, context, options)` takes an
-   `options.isolation` attestation with one of three explicit values: `separate-uid`
-   (the caller asserts the child runs under a uid with no route to the daemon
-   socket), `sandbox-slice` (the launch is wrapped by `@endo/claude-sandbox`), or
-   `co-located-trusted` (the caller knowingly accepts the cross-guest residual on a
-   co-located daemon). `make` **fails closed**: absent a recognized attestation it
-   refuses to construct rather than launching an unwrapped child against a
-   co-located many-guest daemon by default, and `makeGuestInference(guestFormulaId)`
-   inherits the attestation the surrounding `make` recorded. The attestation is a
-   value the harness observes and can refuse on, not an unenforced deployment
-   convention; it does not by itself impose OS isolation (only `sandbox-slice` and
-   a caller-supplied `separate-uid` do), but it forces the co-located residual to be
-   an explicit, auditable choice at construction rather than a silent default.
+   flags, the harness must not model it as deployment *place* alone; instead it
+   makes the precondition an **attestation the caller must supply at
+   construction**. `make(powers, context, options)` takes an `options.isolation`
+   attestation with one of three explicit values: `separate-uid` (the caller
+   asserts the child runs under a uid with no route to the daemon socket),
+   `sandbox-slice` (the caller asserts the launch is wrapped by
+   `@endo/claude-sandbox`), or `co-located-accepted` (the caller knowingly accepts
+   the cross-guest residual on a co-located daemon). `make` **fails closed on
+   absence**: with no recognized attestation it refuses to construct rather than
+   launching an unwrapped child against a co-located many-guest daemon by default,
+   and `makeGuestInference(guestFormulaId)` inherits the attestation the
+   surrounding `make` recorded. What the harness enforces is **narrow and must not
+   be overstated**: it checks that the field is *present and one of the recognized
+   values* and refuses otherwise. It does **not** verify the asserted fact —
+   nothing here confirms the child actually runs under a separate uid or actually
+   sits inside a `@endo/claude-sandbox` slice; a false `separate-uid` or a blanket
+   `co-located-accepted` passes the gate. The value therefore does not by itself
+   impose OS isolation (only a truthful `sandbox-slice` or `separate-uid`
+   deployment does); its guarantee is only that the co-located residual is made an
+   **explicit, recorded caller-certification** at construction rather than a silent
+   default, not that the residual is verified closed. (Turning the string into a
+   checked capability — a `sandbox-slice` validated against a slice handle the
+   harness itself holds, say — is a possible future hardening, noted in § *Open
+   questions*.)
 7. **Credential and config files have a specified mode and lifetime.** The
    `--mcp-config` and `--settings` files are created per spawn with exclusive
    creation at mode `0600` inside a per-spawn directory at mode `0700`, then
@@ -1874,6 +1900,41 @@ is accepted, not written in this pass.
   parse error carry?) as the build measures them against the real `claude -p`
   stream-json output — refinement within a settled record, not the record's
   existence.
+- **Is the acceptance boundary permitted to narrow from the § *Prompt*'s
+  conjunction (hermetic OS isolation **and** tool-surface substitution) down to
+  tool-surface substitution alone, with OS confinement sequenced as an optional
+  adapter?** This is the single load-bearing premise change in the current
+  revision (the title itself moved from "confined" to "unconfined"), and § *Status*
+  and *Design Decision 6* both record it as a **proposed** narrowing pending
+  maintainer confirmation, not authority already granted — so it belongs on this
+  canonical decision surface rather than only in the body. Until a dated maintainer
+  decision lands here, OS confinement remains **required** to fully satisfy the
+  § *Prompt*, and no derivative document (the `designs/README.md` roadmap table,
+  its dependency graph) should restate the narrowing as settled without the same
+  hedge. Recommend: confirm the narrowing (delivering and testing tool-surface
+  substitution first, OS slice as defense-in-depth) as the M3 scope.
+- **Should the `options.isolation` attestation stay a caller-supplied claim, or be
+  upgraded to a harness-verified capability?** As specified in DD6, `make` only
+  checks the field is present and one of the recognized values; it cannot verify
+  the child actually runs under a separate uid or inside a `@endo/claude-sandbox`
+  slice, so a false `separate-uid` or a blanket `co-located-accepted` passes the
+  gate. Upgrading `sandbox-slice` to a slice **handle the harness itself holds**
+  (and can therefore verify) would make the attestation an enforced control rather
+  than a recorded certification. Recommend: ship the recorded-certification gate
+  first (it already removes the silent-default failure mode) and treat the
+  verified-handle form as a later hardening once `@endo/claude-sandbox` exposes a
+  passable slice handle.
+- **What mitigates the decision-level tool-result residual?** A `tools/call`
+  **result** the facet returns can steer the model into a later *in-allow-list*
+  call on attacker-chosen input (§ *Argv order is a confinement boundary*). Neither
+  the OS slice (the call is inside the pinned catalog regardless of OS confinement)
+  nor DD2's `attenuateArgs` (which narrows *which* petnames a call may name, not the
+  *decision* to call) closes it, so this threat has no full mitigation named above.
+  Candidate mitigations are confirmation gating or rate limiting on
+  facet-result-triggered calls; which (if any) is in scope for the first milestone
+  is open. Recommend: name it explicitly as an accepted residual for the
+  tool-surface-substitution milestone and revisit gating when the acceptance test
+  measures real facet-result-driven call patterns.
 
 ## Prompt
 
