@@ -50,17 +50,28 @@ other sessions.
   `hostHome: "none"`, `credentialInjection: "broker-only"`, and
   `brokerTransport: "loopback-sidecar"`, and `descendantReaping: true`;
   unknown attestation fields are rejected.
-- The mount table has exactly five entries, all `nosuid,nodev`: a session
+- The mount table has five fixed entries, all `nosuid,nodev`: a session
   workspace `workspace:<sessionId>` at `/workspace`; a credential-free,
   session-durable `codex-state:<sessionId>` volume at `/codex-home`; and bounded
   per-slice tmpfs mounts at `/tmp`, `/run`, and `/scratch`.
+- Beyond those five, the table carries exactly the **runtime attaches** the
+  session spec declares (`containerMounts`), each reported as `attach:<key>`
+  at a destination under `/mnt/` in its declared `ro` or `rw` mode. An attach
+  is a bind of a host mountpoint at which an operator-held bridge serves a
+  capability the session holds over 9P. It is admitted only because the
+  sandbox attestation reads the anchor's own mount table and proves the
+  filesystem the slice sees at that destination is 9P — a projection served
+  by a userspace server — rather than host data. An attach the table carries
+  but the spec did not declare, or the reverse, is an undeclared mount. See
+  `designs/runtime-container-fs-mount.md`.
 - The Codex-state volume survives slice replacement for the same logical
   session so app-server can resume its rollout, but is destroyed at session
   teardown. It must never contain `auth.json` or reusable credentials.
 - Initialization must report Linux/Unix and the exact `/codex-home` path before
   any thread or turn request is accepted.
 - No additional bind, volume, socket, device, secret, or capability mount is
-  permitted by this version of the contract.
+  permitted by this version of the contract. A declared attach is the one
+  bind, and it is proved to be a 9P projection before it is attested.
 - Mount path resolution must resist symlink, hardlink, `..`, and
   mount-replacement races.
 

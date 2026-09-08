@@ -7,6 +7,7 @@ import { M } from '@endo/patterns';
 
 import {
   assertBrokerLeaseV1,
+  assertContainerMounts,
   assertHostedAgentPolicyV1,
   makeCodexResourceProvisioner,
 } from './backend-factory.js';
@@ -115,6 +116,7 @@ export const makeAttestedCodexSliceFactory = powers => {
     (typeof sessionId === 'string' &&
       /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sessionId)) ||
       Fail`Session identity must be a portable name`;
+    const containerMounts = assertContainerMounts(spec.containerMounts);
     const volumes = await E(powers.volumeProvider).describe(
       workspaceMount,
       harden({ sessionId }),
@@ -163,6 +165,7 @@ export const makeAttestedCodexSliceFactory = powers => {
       },
       'broker evidence',
     );
+    /** @type {readonly import('@endo/sandbox/types.js').SlicePolicyMount[]} */
     const mounts = harden([
       {
         role: 'workspace',
@@ -191,6 +194,19 @@ export const makeAttestedCodexSliceFactory = powers => {
         destination: '/scratch',
         sizeBytes: 704n * MiB,
       },
+      // Runtime attaches (designs/runtime-container-fs-mount.md): the
+      // binds the table admits beyond its fixed five, each of a host 9P
+      // mountpoint a bridge minted for a capability the session holds. The
+      // sandbox refuses to attest one unless the anchor's own mount table
+      // shows 9P at the destination, so the slice cannot be handed host
+      // data under an attach's name.
+      ...containerMounts.map(attach => ({
+        role: `attach-${attach.key}`,
+        kind: /** @type {const} */ ('attach'),
+        source: attach.source,
+        destination: attach.destination,
+        mode: attach.mode,
+      })),
     ]);
     const slice = await E(powers.sandbox).make(
       harden({
@@ -239,9 +255,14 @@ export const makeAttestedCodexSliceFactory = powers => {
       const outer = await E(slice).policy();
       const outerMounts = mounts.map(mount => ({
         role: mount.role,
-        source: mount.kind === 'volume' ? `volume:${mount.source}` : 'tmpfs',
+        source:
+          mount.kind === 'volume'
+            ? `volume:${mount.source}`
+            : mount.kind === 'attach'
+              ? `attach:${mount.source}`
+              : 'tmpfs',
         destination: mount.destination,
-        mode: 'rw',
+        mode: mount.kind === 'attach' ? mount.mode : 'rw',
         options: ['nodev', 'nosuid'],
       }));
       assertExact(
@@ -329,13 +350,19 @@ export const makeAttestedCodexSliceFactory = powers => {
           },
           mounts: observedMounts.map(mount => ({
             ...mount,
+            // Hosted policy names durable state by session and an attach by
+            // its key, so the record carries no host path: the bridge's
+            // layout is the host's business, and the key is what a
+            // registrar's records and an audit entry refer to.
             source:
               mount.role === 'workspace' || mount.role === 'codex-state'
                 ? `${mount.role}:${sessionId}`
-                : mount.source,
+                : mount.role.startsWith('attach-')
+                  ? `attach:${mount.role.slice('attach-'.length)}`
+                  : mount.source,
           })),
         }),
-        { sessionId, imageDigest },
+        { sessionId, imageDigest, containerMounts },
       );
       return makeExo(
         'AttestedCodexSlice',
