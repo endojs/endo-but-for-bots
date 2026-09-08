@@ -720,7 +720,7 @@ test('an expiring credential is refreshed and rotated before the turn is dispatc
 test('concurrent turns share one refresh rather than racing the rotation', async t => {
   let release = () => {};
   const held = new Promise(resolve => {
-    release = resolve;
+    release = () => resolve(undefined);
   });
   const lease = setup({
     limits: { ...oauthLimits, maxRequests: 4n, maxCostMicrounits: 100n },
@@ -733,7 +733,7 @@ test('concurrent turns share one refresh rather than racing the rotation', async
   });
   const first = E(lease.endpoint).request(request);
   const second = E(lease.endpoint).request(request);
-  release(undefined);
+  release();
   await Promise.all([first, second]);
   // One exchange, one write-back: a provider that invalidates the old refresh
   // token on use would have revoked the session had both turns exchanged it.
@@ -852,7 +852,7 @@ test('a malformed oauth state is refused rather than sent upstream', async t => 
     oauthState({ accessToken: 'has space' }),
     oauthState({ accessToken: '' }),
     oauthState({ refreshToken: 'has space' }),
-    oauthState({ expiresAt: 'soon' }),
+    oauthState(/** @type {any} */ ({ expiresAt: 'soon' })),
     oauthState({ accountId: '' }),
   ]) {
     const lease = setup({
@@ -957,7 +957,7 @@ test('a read that lost the race is not exchanged over', async t => {
   // redeem the token that read carried: another lease has already spent it.
   let release = () => {};
   const held = new Promise(resolve => {
-    release = resolve;
+    release = () => resolve(undefined);
   });
   const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
   // A second view of the same record whose read resolves late, so one lease
@@ -978,7 +978,7 @@ test('a read that lost the race is not exchanged over', async t => {
   const a = E(first.endpoint).request(request);
   const b = E(second.endpoint).request(request);
   await a;
-  release(undefined);
+  release();
   await b;
   t.deepEqual(
     record.exchanges.map(entry => entry.refreshToken),
