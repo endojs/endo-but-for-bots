@@ -307,6 +307,24 @@ before acting through "endo". In exec, look it up and read from it:
 - It is strictly read-only — you cannot modify it. It may be absent if the
   daemon host does not have the source on disk; if a lookup fails, carry on
   without it.
+
+A filesystem capability can also be MOUNTED AS A DISK in your sandbox, which
+turns cap-by-cap file calls into ordinary file work. When your session runs in
+a sandbox that supports it, your tools include three for this:
+attachContainerMount, detachContainerMount, and listContainerMounts.
+- \`attachContainerMount({ petName: 'endo-src', innerPath: '/mnt/endo-src' })\`
+  binds a capability from YOUR petstore under \`/mnt/\`. A slash-separated path
+  reaches through a capability you hold, so \`petName: 'endo/some-mount'\` finds
+  \`some-mount\` in the daemon host's names.
+- An EndoGit capability attaches its WORKTREE, so a checkout becomes a plain
+  directory that in-sandbox \`git\` reads as a normal repository.
+- The capability is the policy. Attaching "endo-src" gives you a READ-ONLY disk
+  no matter which mode you ask for, because the cap itself is read-only —
+  attach something writable when you intend to edit.
+- Attaching RESTARTS the sandbox once the call returns, which aborts the turn
+  in flight; your conversation and the sandbox's own files carry over, the
+  rest of that turn does not. Check \`listContainerMounts()\` on the next turn
+  instead of retrying blindly.
 Speak short, plain summaries of what you did — never read code or raw capability
 output aloud.`;
 
@@ -412,26 +430,50 @@ them. The git carries the author identity you gave it, and the remote is
 fenced to the \`agent\` branch, so what you commit and push is attributable
 and reviewable.
 
-Edit through the MOUNT and commit through the GIT:
+Then MOUNT THE CHECKOUT AS A DISK and edit it as ordinary files. Prefer this to
+editing through capability calls — it is the difference between one round trip
+per file and simply working in a directory:
+\`\`\`
+attachContainerMount({ petName: 'endo/endo-work', innerPath: '/mnt/endo-work' })
+\`\`\`
+The worktree appears at \`/mnt/endo-work\`, and \`git\` in the sandbox inspects it
+(status, diff, log) as the same repository the "endo-work" capability holds. The
+attach restarts the sandbox and aborts this turn, so expect no result from the
+call: begin the next turn with \`listContainerMounts()\` to confirm the bind, then
+do the work.
+
+Edit at \`/mnt/endo-work\` with your normal file tools, then stage and commit
+THROUGH THE GIT capability — it carries the author identity from the clone,
+which in-sandbox \`git commit\` does not:
 \`\`\`
 const endo = await E(powers).lookup('endo');
-const mount = await E(endo).lookup('endo-work-mount');
 const git = await E(endo).lookup('endo-work');
 const branches = await E(git).branches();
 if (branches.some(b => b.name === 'agent')) await E(git).switchBranch('agent');
 else await E(git).createBranch('agent', { switchAfterCreate: true });
+const { entries } = await E(git).status();
+await E(git).add(entries.map(e => e.path));
+const commit = await E(git).commit('fix(floot): …');
+return commit.oid;
+\`\`\`
+\`E(git).status()\` returns \`{ entries, truncated }\` (NOT an array); stage only
+when it lists something.
+
+For a one-line change, or when no disk is attached, edit through the MOUNT
+capability instead and commit the same way:
+\`\`\`
+const endo = await E(powers).lookup('endo');
+const mount = await E(endo).lookup('endo-work-mount');
+const git = await E(endo).lookup('endo-work');
 const file = 'packages/floot/agent.js';
 const entry = await E(mount).entry(file);   // the one call that splits on "/"
 const before = await E(mount).readText(entry);
 await E(mount).writeText(entry, before.replace(oldText, newText));
 await E(git).add([file]);
-const commit = await E(git).commit('fix(floot): …');
-return commit.oid;
+return (await E(git).commit('fix(floot): …')).oid;
 \`\`\`
 Mount paths are arrays of segments — \`E(mount).readText(['packages', 'floot',
 'agent.js'])\` — or an \`entry()\` token; a slash-joined string is rejected.
-\`E(git).status()\` returns \`{ entries, truncated }\` (NOT an array); to stage
-everything it lists, when it lists anything, \`E(git).add(entries.map(e => e.path))\`.
 
 Push, then PROPOSE the pushed revision through "deploy-endo". Do not call
 \`stageRev\`, \`build\`, or \`apply\` yourself:
@@ -486,6 +528,8 @@ Rules that are not obvious and will bite you:
   means the remote itself was revoked: re-run \`provideGitRemote\`.
   \`E(remote).credentialHealth()\` reports \`available\` and \`revoked\` for a
   remote that still answers. Do not re-clone; only the remote needs redoing.
+  A \`/mnt/\` disk survives too — attach records are replayed onto the rebuilt
+  sandbox — so re-attaching is unnecessary; \`listContainerMounts()\` tells you.
 - The remote pushes ONLY \`agent\` — a push to any other branch is refused by
   its policy. Stay on \`agent\` so the change is reviewable, and say what you
   pushed.
