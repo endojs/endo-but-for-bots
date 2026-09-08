@@ -3467,6 +3467,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
     )
     .map_err(StoreError::Snapshot)?;
 
+    crate::image::check_buffer_chunk_lengths(&small.buffers, &chunks)?;
     Ok(MachineImage {
         index_props: small.index_props.clone(),
         version: manifest.version,

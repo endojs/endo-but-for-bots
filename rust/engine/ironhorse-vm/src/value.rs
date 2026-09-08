@@ -1626,6 +1626,10 @@ impl ChunkArena {
     /// not leave placeholder bytes beside fresh ones.
     #[inline]
     pub fn slice_mut(&mut self, off: ChunkOffset, len: usize) -> &mut [u8] {
+        assert!(
+            len <= self.len_of(off),
+            "mutable chunk slice exceeds allocation"
+        );
         let start = off.0 as usize;
         self.ensure_range_resident(start, start + len);
         self.mark_dirty_range(start, start + len);

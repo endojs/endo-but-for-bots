@@ -3855,6 +3855,34 @@ where
     })
 }
 
+/// Buffer backing lengths agree with their allocation headers. Detached
+/// buffers expose zero length while retaining the original allocation.
+pub(crate) fn check_buffer_chunk_lengths(
+    buffers: &[BufferImage],
+    chunks: &[u8],
+) -> Result<(), SnapshotError> {
+    for buffer in buffers {
+        let start = buffer.data as usize;
+        let header = start
+            .checked_sub(CHUNK_HEADER)
+            .and_then(|offset| chunks.get(offset..start))
+            .ok_or(SnapshotError::Corrupt("buffer chunk header out of bounds"))?;
+        let length = u32::from_le_bytes(header.try_into().unwrap()) as usize;
+        if length > chunks.len().saturating_sub(start)
+            || if buffer.flags & 1 != 0 {
+                buffer.length != 0
+            } else {
+                buffer.length as usize != length
+            }
+        {
+            return Err(SnapshotError::Corrupt(
+                "buffer length disagrees with chunk header",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `SYMB` joined this walk when the symbol-key table became live
 /// state (it was deliberately excluded while nothing consumed the
 /// section on restore — review wave 5): each pair's descriptor is a
@@ -5279,6 +5307,8 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         chunks.len(),
         &slot_free,
     )?;
+
+    check_buffer_chunk_lengths(&buffers, &chunks)?;
 
     // Since version 15, a container must carry every
     // atom the current writer unconditionally emits — omitting one

@@ -11454,6 +11454,16 @@ impl Interp {
             {
                 return false;
             }
+            let stored_length = self.chunks.len_of(data);
+            if stored_length as u64 > chunk_len - data.0 as u64
+                || if flags & 1 != 0 {
+                    *length != 0
+                } else {
+                    *length as usize != stored_length
+                }
+            {
+                return false;
+            }
             let owner = crate::value::SlotIndex(*owner);
             self.array_buffers.insert(
                 owner,
