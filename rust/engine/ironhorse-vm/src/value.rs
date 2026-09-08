@@ -572,6 +572,7 @@ impl Slot {
 /// a kind-checked logic bug, not undefined behavior.
 pub struct SlotArena {
     ceiling: u32,
+    property_index: RefCell<crate::property_index::PropertyIndex>,
     /// The DENSE record storage of an eagerly built machine. `Cell`
     /// (identical layout to `Slot`, zero runtime bookkeeping) is what
     /// lets shared-reference paths write records in
@@ -639,6 +640,7 @@ impl SlotArena {
     pub fn new() -> SlotArena {
         SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
+            property_index: RefCell::default(),
             slots: Vec::new(),
             free: Vec::new(),
             free_marks: Vec::new(),
@@ -671,6 +673,7 @@ impl SlotArena {
         }
         SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
+            property_index: RefCell::default(),
             slots: Vec::new(),
             free,
             free_marks: free_marks.clone(),
@@ -926,6 +929,7 @@ impl SlotArena {
         }
         self.live += 1;
         if let Some(i) = self.free.pop() {
+            self.property_index.get_mut().free(SlotIndex(i));
             // Fault the page first: overwriting one record of a
             // non-resident page and then marking nothing would let a
             // later fault clobber this fresh allocation with store
@@ -958,6 +962,7 @@ impl SlotArena {
     /// Return a slot to the free list.
     pub fn free(&mut self, index: SlotIndex) {
         debug_assert!(!index.is_null());
+        self.property_index.get_mut().free(index);
         self.free.push(index.0);
         self.free_marks[index.0 as usize] = true;
         self.live -= 1;
@@ -977,6 +982,7 @@ impl SlotArena {
     }
     #[inline]
     pub fn get_mut(&mut self, index: SlotIndex) -> &mut Slot {
+        self.property_index.get_mut().will_mutate(index);
         // Fault before handing out `&mut`: a partial overwrite of a
         // non-resident page must not be clobbered by a later fault.
         if self.lazy.is_some() {
@@ -991,6 +997,25 @@ impl SlotArena {
             Some(b) => b.get_mut(index.0 as usize),
             None => self.slots[index.0 as usize].get_mut(),
         }
+    }
+
+    pub(crate) fn find_property(&self, owner: SlotIndex, id: u16) -> Option<SlotIndex> {
+        // Most ordinary accesses hit a very short chain. Answer from the
+        // authoritative records before paying for derived-index bookkeeping.
+        let mut current = self.get(owner).next;
+        for _ in 0..8 {
+            if current.is_null() {
+                return None;
+            }
+            let slot = self.get(current);
+            if slot.id == id {
+                return Some(current);
+            }
+            current = slot.next;
+        }
+        self.property_index
+            .borrow_mut()
+            .find(owner, id, |slot| self.get(slot))
     }
 
     /// Total slot records ever allocated (live + free). The collector
@@ -1062,6 +1087,7 @@ impl SlotArena {
         let mut reclaimed = 0u32;
         for i in 0..self.capacity() {
             if !self.marks[i as usize] && !self.is_free(i) {
+                self.property_index.get_mut().free(SlotIndex(i));
                 self.free.push(i);
                 self.free_marks[i as usize] = true;
                 self.live -= 1;
@@ -1166,6 +1192,7 @@ impl SlotArena {
         }
         SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
+            property_index: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
             free,
             free_marks,

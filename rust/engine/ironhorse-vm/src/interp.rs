@@ -9264,7 +9264,7 @@ impl Interp {
             self.intern_key("then");
         }
         let names = self.symbol_names.clone();
-        self.install_intrinsic_bindings(&names, true, |_| true);
+        self.install_intrinsic_bindings(&names, 0, true, |_| true);
     }
 
     /// Install the global bindings, prototype methods/data, native
@@ -9302,15 +9302,16 @@ impl Interp {
     fn install_intrinsic_bindings(
         &mut self,
         names: &[SymbolName],
+        names_start: usize,
         full: bool,
         keep: impl Fn(u16) -> bool,
     ) {
         let was_installing = self.installing_intrinsics;
         self.installing_intrinsics = true;
-        // Every id in `names` is CONSIDERED by this pass (admitted or
-        // deliberately skipped by `keep`), so the floor for future
-        // partial passes advances to the full table (wave-6 W6-7).
-        self.installed_names_len = names.len();
+        // Consider exactly this suffix, retaining its absolute realm offset.
+        // Names interned during installation remain above the new floor.
+        // Copying/scanning the preceding names per runtime key was quadratic.
+        self.installed_names_len = names_start + names.len();
         for name in names.iter() {
             let Some(&id) = self.symbol_ids.get(name) else {
                 continue;
@@ -10262,8 +10263,10 @@ impl Interp {
         // symbol numbering. Passing eval_names shrank the floor after a
         // short eval and let the next reflective read resurrect deleted
         // intrinsics (including SES's tamed constructors).
-        let realm_names = self.symbol_names.clone();
-        self.install_intrinsic_bindings(&realm_names, false, move |id| (id as usize) > floor);
+        let realm_names = self.symbol_names[floor..].to_vec();
+        self.install_intrinsic_bindings(&realm_names, floor, false, move |id| {
+            (id as usize) > floor
+        });
         // The unit may reference a well-known property name (`length`, `name`,
         // `then`, a RegExp getter, …) the outer program never used; its id is
         // now in the realm table, so refresh the exotic-property id caches that
@@ -10671,8 +10674,8 @@ impl Interp {
             return;
         }
         let floor = self.installed_names_len;
-        let names = self.symbol_names.clone();
-        self.install_intrinsic_bindings(&names, false, move |id| (id as usize) > floor);
+        let names = self.symbol_names[floor..].to_vec();
+        self.install_intrinsic_bindings(&names, floor, false, move |id| (id as usize) > floor);
     }
 
     /// Ensure `inst` exposes every modeled string-named own intrinsic before
@@ -10754,8 +10757,8 @@ impl Interp {
             self.intern_key_unmetered(name);
         }
         if self.symbol_names.len() > floor {
-            let names = self.symbol_names.clone();
-            self.install_intrinsic_bindings(&names, false, move |id| (id as usize) > floor);
+            let names = self.symbol_names[floor..].to_vec();
+            self.install_intrinsic_bindings(&names, floor, false, move |id| (id as usize) > floor);
         }
     }
 
@@ -52944,15 +52947,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
     ) -> Option<crate::value::SlotIndex> {
-        let mut cur = self.slots.get(inst).next;
-        while !cur.is_null() {
-            let s = self.slots.get(cur);
-            if s.id == id {
-                return Some(cur);
-            }
-            cur = s.next;
-        }
-        None
+        self.slots.find_property(inst, id)
     }
 
     /// Whether `inst` is an *ordinary* object — one whose whole own-property
@@ -63539,7 +63534,7 @@ mod tests {
         let mut interp = Interp::new();
         let old_names = vec!["seed".into(), "toString".into(), "valueOf".into()];
         interp.bind_program_symbols(&old_names);
-        interp.install_intrinsic_bindings(&old_names, true, |_| true);
+        interp.install_intrinsic_bindings(&old_names, 0, true, |_| true);
 
         let default_args = interp.new_array_unmetered();
         let custom_proto = interp.new_object();
@@ -63601,7 +63596,7 @@ mod tests {
             "globalThis".into(),
         ];
         interp.bind_program_symbols(&old_names);
-        interp.install_intrinsic_bindings(&old_names, true, |_| true);
+        interp.install_intrinsic_bindings(&old_names, 0, true, |_| true);
 
         for name in ["Date", "Array", "globalThis"] {
             let id = *interp.symbol_ids.get(name).unwrap();
@@ -63719,7 +63714,7 @@ mod tests {
         let mut interp = Interp::new();
         let old_names = vec!["seed".into()];
         interp.bind_program_symbols(&old_names);
-        interp.install_intrinsic_bindings(&old_names, true, |_| true);
+        interp.install_intrinsic_bindings(&old_names, 0, true, |_| true);
         let owners: Vec<_> = (0..12).map(|_| interp.new_array_unmetered()).collect();
         interp.restore_arguments_brands(owners.iter().map(|owner| owner.0).collect());
 

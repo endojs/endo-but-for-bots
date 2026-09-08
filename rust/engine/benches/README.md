@@ -44,8 +44,7 @@ input doublings, with one warmup and seven measured runs per size.
 Every fixture checks its result and deterministic computron count.
 Both raw median elapsed time and computrons must grow by less than 2.5x per doubling.
 Construction is included in these end-to-end workload measurements.
-The remaining F045 quadratic paths intentionally make this gate fail until repaired;
-there is no expected-failure or skip exception for them.
+The F044 and F045 fixes below now pass this gate without changing its thresholds.
 The existing nightly full-test262 workflow runs both instruments in an independent
 job, and uploads their logs and JSON even when a gate fails.
 Ordinary PR CI does not run timing assertions.
@@ -118,17 +117,17 @@ records the before/after data for the collection index, cached live count, and s
 iterator buffers.
 Map insertion and string iteration now pass the existing doubling threshold with
 unchanged computrons.
-The end-to-end for-in fixture still fails: constructing its named-property object
-is quadratic, independent of iterator traversal.
-Its original assertion remains enabled with the same threshold.
+At that revision, the end-to-end for-in fixture still failed because constructing
+its named-property object was quadratic, independent of iterator traversal.
+The follow-up construction fix below closes that remaining gate.
 
 The additional `for_in_traversal_scales_after_construction` fixture measures traversal
 separately and reports the single setup time alongside its traversal median.
 It uses one warmup and seven measured cranks per size, checks raw charges and dispatch
 counts, and requires both traversal time and raw charges to grow by less than 2.5x.
 It fails before the iterator fix and passes afterward.
-This separates evidence for the repaired traversal from the remaining construction
-cost; it does not make the full scaling job green.
+This separates evidence for the repaired traversal from the construction cost
+that the subsequent increment addresses.
 
 ```sh
 cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
@@ -192,5 +191,38 @@ The artifact retains these costs alongside the improvements, with unchanged char
 ```sh
 cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
   -p ironhorse-snapshot --test classification_bench \
+  -- --ignored --nocapture --test-threads=1
+```
+
+
+## Named-property construction and updates (F045, final increment)
+
+[results/f045-property-construction.json](results/f045-property-construction.json)
+records before/after measurements against the preceding commit.
+The original end-to-end for-in gate now passes its unchanged doubling threshold.
+Long named-property chains use a derived arena index, while enumeration continues
+reading the authoritative insertion-order chain.
+Pending intrinsic installation copies and scans only the new name-table suffix;
+its absolute installation floor still protects guest deletions and replacements.
+The install pass retains scans over intrinsic/function metadata, so this change
+makes no universal constant-time claim about realms with growing function populations.
+
+The `property_lookup_bench` control performs 10,000 updates to an existing property
+on objects with 256 through 16,384 names, excluding construction and relinking.
+It reports one setup time and the median of five runs after one warmup.
+Its size gate fails before the fix and passes afterward, with identical raw charges
+and dispatch counts across revisions and sizes.
+Both this control and the original construction gate run nightly.
+At 16,000 properties, end-to-end construction plus for-in improves about 38x;
+10,000 updates on a 16,384-property object improve about 312x.
+Dispatch controls include slowdowns up to 5.3%, while fresh-realm controls stay
+within 1%; the artifact records these alongside the gains without a significance claim.
+The write-path membership vector grows to the highest indexed slot, like the
+arena's existing liveness metadata; it is derived rather than serialized.
+
+
+```sh
+cargo test --manifest-path rust/engine/Cargo.toml --locked --release \
+  -p ironhorse-snapshot --test property_lookup_bench \
   -- --ignored --nocapture --test-threads=1
 ```
