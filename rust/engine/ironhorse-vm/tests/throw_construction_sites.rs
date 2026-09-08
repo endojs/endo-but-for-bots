@@ -64,14 +64,6 @@ fn protocol_aliases(code: &[Token<'_>]) -> Vec<usize> {
     bad
 }
 
-fn engine_tokens<'a, 's>(code: &'a [Token<'s>]) -> &'a [Token<'s>] {
-    let end = token_positions(code, "#[cfg(test)]")
-        .first()
-        .copied()
-        .unwrap_or(code.len());
-    &code[..end]
-}
-
 #[test]
 fn halt_throw_carries_the_thrown_value() {
     let source = code_only(SRC);
@@ -89,7 +81,8 @@ fn halt_throw_carries_the_thrown_value() {
 fn halt_throw_is_constructed_only_where_the_jump_chain_was_unwound() {
     let source = code_only(SRC);
     let code = tokens(&source);
-    let engine = engine_tokens(&code);
+    let production = production_tokens(&code);
+    let engine = production.as_slice();
     assert!(
         protocol_aliases(engine).is_empty(),
         "do not alias Halt/Step or import their variants"
@@ -206,7 +199,7 @@ fn construction_scan_rejects_aliases_and_imported_variants() {
     }
 }
 
-/// Exclude only complete test modules/functions, never production after them.
+/// Exclude complete test modules, functions, and blocks, never production after them.
 /// Any new shape of cfg(test) item needs an explicit scanner update.
 fn production_tokens<'s>(code: &[Token<'s>]) -> Vec<Token<'s>> {
     let mut excluded = vec![false; code.len()];
@@ -219,7 +212,7 @@ fn production_tokens<'s>(code: &[Token<'s>]) -> Vec<Token<'s>> {
             }
         }
         assert!(
-            matches!(code[item].text, "mod" | "fn"),
+            matches!(code[item].text, "mod" | "fn" | "{"),
             "unrecognized cfg(test) item"
         );
         let open = item
@@ -379,6 +372,20 @@ fn second_module_mutations_cannot_create_or_synthesize_throws() {
     assert!(!cross_file_violations(
         "ironhorse-fuzz/src/new.rs",
         &format!("{tests_only} fn bad() {{ Halt::synthetic_throw(\"bad\"); }}")
+    )
+    .is_empty());
+}
+
+#[test]
+fn inline_test_blocks_do_not_hide_later_production_throws() {
+    let source = code_only("fn run() { #[cfg(test)] { if enabled() { probe(); } } } fn raise_js() { Step::Threw { value } }");
+    let production = production_tokens(&tokens(&source));
+    assert_eq!(throw_constructions(&production, "Step::Threw").len(), 1);
+    assert_eq!(token_positions(&production, "probe()").len(), 0);
+    assert_eq!(token_positions(&production, "fn raise_js(").len(), 1);
+    assert!(!cross_file_violations(
+        "ironhorse-fuzz/src/new.rs",
+        "fn run() { #[cfg(test)] { probe(); } Halt::synthetic_throw(\"bad\"); }"
     )
     .is_empty());
 }

@@ -32,8 +32,6 @@
 //! layout); SQLite's C is the same bundled `rusqlite` the daemon
 //! already compiles.
 
-#[cfg(test)]
-use ironhorse_snapshot::store::HeapStoreCommit;
 use std::path::Path;
 
 use ironhorse_snapshot::store::{
@@ -1160,6 +1158,7 @@ mod tests {
     use ironhorse_snapshot::machine::{
         begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
     };
+    use ironhorse_snapshot::store::HeapStoreCommit;
     use ironhorse_snapshot::store::{
         export_to_container, image_to_batch_unchecked, import_from_container, reseal_batch,
         store_to_image, validate_store, STORE_SCHEMA_VERSION,
