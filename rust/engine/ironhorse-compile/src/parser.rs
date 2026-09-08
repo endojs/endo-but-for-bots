@@ -34,6 +34,7 @@ use crate::token_flags::{
     EXPONENTIATION_EXPRESSION, IDENTIFIER_NAME, POSTFIX_EXPRESSION, PREFIX_EXPRESSION,
     RELATIONAL_EXPRESSION, SHIFT_EXPRESSION, UNARY_EXPRESSION,
 };
+use ironhorse_text::SymbolName;
 
 /// A parser error, classified and located as XS's `fxReportParserError`
 /// sites are. Carries the 1-based line and a message mirroring XS's
@@ -143,7 +144,7 @@ fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
                                 && property.flags & flags::SHORTHAND == 0
                                 && matches!(
                                     property.children.first(),
-                                    Some(Item::Symbol(symbol)) if symbol == "__proto__"
+                                    Some(Item::Symbol(symbol)) if SymbolName::from_units(symbol) == "__proto__"
                                 );
                             if is_proto_setter {
                                 if found {
@@ -266,11 +267,11 @@ impl Parser {
         }
     }
 
-    /// The symbol table cannot represent unpaired UTF-16 surrogates yet.
-    /// Refuse before interning a key rather than aliasing it to U+FFFD.
-    fn string_property_name(&self) -> PResult<String> {
-        String::from_utf16(self.cur.string.as_deref().unwrap_or_default())
-            .map_err(|_| self.unsupported_error("key:lone-surrogate"))
+    /// Preserve every UTF-16 code unit in a literal property name.
+    fn string_property_name(&self) -> PResult<SymbolName> {
+        Ok(SymbolName::from_units(
+            self.cur.string.as_deref().unwrap_or_default(),
+        ))
     }
 
     /// Run `f` as one recursion point of `cost` budget units, refusing with
@@ -344,7 +345,9 @@ impl Parser {
     /// `fxIsKeyword` — is the current token an (unescaped) identifier
     /// spelled `word`?
     fn is_keyword(&self, word: &str) -> PResult<bool> {
-        if self.cur.token == Token::Identifier && self.cur.symbol.as_deref() == Some(word) {
+        if self.cur.token == Token::Identifier
+            && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some(word)
+        {
             if self.cur.escaped {
                 return Err(self.error("escaped keyword"));
             }
@@ -368,8 +371,9 @@ impl Parser {
         self.stack.push(Item::Null);
     }
 
-    fn push_symbol(&mut self, symbol: String) {
-        self.stack.push(Item::Symbol(symbol));
+    fn push_symbol(&mut self, symbol: impl Into<SymbolName>) {
+        let symbol = symbol.into();
+        self.stack.push(Item::Symbol(symbol.to_units()));
     }
 
     fn push_integer(&mut self, value: i32, line: u32) {
@@ -559,13 +563,14 @@ impl Parser {
     /// `fxDefineNodeNew(DEFINE, symbol)` + `node->initializer = pop`: pop
     /// the function/value on top and wrap it in a `Define` node keyed by
     /// `symbol`.
-    fn push_define(&mut self, symbol: String, line: u32) {
+    fn push_define(&mut self, symbol: impl Into<SymbolName>, line: u32) {
+        let symbol = symbol.into();
         let init = self.pop();
         self.push(Item::Node(Box::new(Node::new(
             Token::Define,
             line,
             0,
-            vec![Item::Symbol(symbol), init],
+            vec![Item::Symbol(symbol.to_units()), init],
             Value::None,
         ))));
     }
@@ -601,11 +606,11 @@ impl Parser {
 
     /// The symbol of the top-of-stack `Access` node (its `child[0]`), if
     /// any.
-    fn top_access_symbol(&self) -> Option<String> {
+    fn top_access_symbol(&self) -> Option<SymbolName> {
         if let Some(Item::Node(node)) = self.stack.last() {
             if node.token == Token::Access {
                 if let Some(Item::Symbol(s)) = node.children.first() {
-                    return Some(s.clone());
+                    return Some(SymbolName::from_units(s));
                 }
             }
         }
@@ -728,12 +733,13 @@ impl Parser {
 
     /// `fxCheckStrictSymbol` — `arguments`/`eval`/`yield` are invalid
     /// reference names in strict mode; `yield` also in a generator.
-    fn check_strict_symbol(&self, symbol: &str) -> PResult<()> {
+    fn check_strict_symbol(&self, symbol: impl Into<SymbolName>) -> PResult<()> {
+        let symbol = symbol.into();
         if self.flags & flags::STRICT != 0 {
-            match symbol {
-                "arguments" => return Err(self.error("invalid arguments (strict mode)")),
-                "eval" => return Err(self.error("invalid eval (strict mode)")),
-                "yield" => return Err(self.error("invalid yield (strict mode)")),
+            match symbol.as_str() {
+                Some("arguments") => return Err(self.error("invalid arguments (strict mode)")),
+                Some("eval") => return Err(self.error("invalid eval (strict mode)")),
+                Some("yield") => return Err(self.error("invalid yield (strict mode)")),
                 _ => {}
             }
         } else if self.flags & flags::YIELD != 0 && symbol == "yield" {
@@ -1125,7 +1131,12 @@ impl Parser {
                         // enclosing-function synthetic capture-closure fold. The
                         // scoper's `hoist_call` sets the *scope* eval poison; this
                         // sets the *node* flag the scoper never wired.
-                        if self.top_access_symbol().as_deref() == Some("eval") {
+                        if self
+                            .top_access_symbol()
+                            .as_ref()
+                            .and_then(SymbolName::as_str)
+                            == Some("eval")
+                        {
                             self.flags |= flags::EVAL;
                         }
                         self.parameters()?;
@@ -1353,13 +1364,13 @@ impl Parser {
         } else if self.cur.token == Token::Dot {
             self.get_next_token()?;
             if self.cur.token == Token::Identifier
-                && self.cur.symbol.as_deref() == Some("source")
+                && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("source")
                 && !self.cur.escaped
             {
                 return Err(self.unsupported_error("source-phase import"));
             }
             if self.cur.token == Token::Identifier
-                && self.cur.symbol.as_deref() == Some("meta")
+                && self.cur.symbol.as_ref().and_then(SymbolName::as_str) == Some("meta")
                 && !self.cur.escaped
             {
                 self.get_next_token()?;
@@ -1610,8 +1621,8 @@ impl Parser {
     /// `PropertyAt`). The accessor/generator/async lookahead
     /// (`token2`) is recognized so callers can reject the deferred
     /// method forms precisely.
-    fn property_name(&mut self) -> PResult<(Option<String>, Token, Token, Token)> {
-        let mut symbol: Option<String> = None;
+    fn property_name(&mut self) -> PResult<(Option<SymbolName>, Token, Token, Token)> {
+        let mut symbol: Option<SymbolName> = None;
         let mut token1 = Token::NoToken;
         let mut token2 = Token::NoToken;
         let line = self.cur.line;
@@ -1677,7 +1688,7 @@ impl Parser {
             // index ("0", "1", … up to 2^32-2) codes through the
             // integer-index (`PropertyAt`) path, exactly as XS does; a
             // non-canonical string ("01", "1.0", "x") stays a symbol.
-            if let Some(index) = string_key_to_index(&s) {
+            if let Some(index) = s.as_str().and_then(string_key_to_index) {
                 self.push_property_index(index, line);
                 token1 = Token::PropertyAt;
             } else {
@@ -1730,7 +1741,7 @@ impl Parser {
                 self.get_next_token()?;
             } else if self.cur.token == Token::String {
                 let s = self.string_property_name()?;
-                if let Some(index) = string_key_to_index(&s) {
+                if let Some(index) = s.as_str().and_then(string_key_to_index) {
                     self.push_property_index(index, line);
                     token1 = Token::PropertyAt;
                 } else {
@@ -1772,12 +1783,12 @@ impl Parser {
     /// when a symbol was pushed, `None` when an index node was pushed.
     /// Integer tokens are always non-negative from the lexer, so the
     /// symbol branch is the faithful-but-unreached fallback.
-    fn push_property_index_integer(&mut self, value: i32, line: u32) -> Option<String> {
+    fn push_property_index_integer(&mut self, value: i32, line: u32) -> Option<SymbolName> {
         if value >= 0 {
             self.push_property_index(value as u32, line);
             None
         } else {
-            let s = value.to_string();
+            let s = SymbolName::from(value.to_string());
             self.push_symbol(s.clone());
             Some(s)
         }
@@ -1789,14 +1800,14 @@ impl Parser {
     /// at/above 2^32-1) canonicalizes to its `fxNumberToString` symbol
     /// (`Property`). Returns `Some(symbol)` when a symbol was pushed,
     /// `None` when an index node was pushed.
-    fn push_property_index_number(&mut self, value: f64, line: u32) -> Option<String> {
+    fn push_property_index_number(&mut self, value: f64, line: u32) -> Option<SymbolName> {
         if let Some(index) = number_to_index(value) {
             self.push_property_index(index, line);
             None
         } else {
             let s = number_to_ecma_string(value);
             self.push_symbol(s.clone());
-            Some(s)
+            Some(s.into())
         }
     }
 

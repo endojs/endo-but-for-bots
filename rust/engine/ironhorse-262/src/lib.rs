@@ -86,7 +86,7 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
 /// that installs the test262 `$262` host object (the oracle shim exposes the
 /// same `$262.detachArrayBuffer`): a default `Interp` carries no `$262`, so a
 /// production machine never exposes the detach primitive.
-fn interp_with_source_bridge(names: &[String]) -> ironhorse_vm::Interp {
+fn interp_with_source_bridge(names: &[ironhorse_vm::SymbolName]) -> ironhorse_vm::Interp {
     let mut interp = ironhorse_vm::Interp::new();
     interp.install_test262_host();
     interp.link_intrinsics(names);
@@ -1037,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn compiler_seam_lone_surrogate_keys_are_named_noncoverage() {
+    fn compiler_seam_lone_surrogate_keys_are_covered() {
         for (source, expected) in [
             (
                 r#"var o={"\uD800":1,"\uD801":2}; Object.keys(o).length"#,
@@ -1051,19 +1051,13 @@ mod tests {
         ] {
             let run = dual_run_with(source, Compiler::Ironhorse).expect("oracle runs");
             assert_eq!(run.oracle_result, expected, "{source}");
-            assert!(
-                matches!(run.ironhorse_compile, IronhorseCompile::Unsupported(ref message)
-                if message == "line 1: unsupported: key:lone-surrogate")
-            );
-            assert!(run.bytecode.is_empty(), "refused source must never execute");
-            assert_ne!(run.agreement, Agreement::BothComplete);
+            assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+            assert_eq!(run.ironhorse_result, expected, "{source}");
         }
-        use ironhorse_vm::{SourceCompileError, SourceCompiler};
-        assert!(matches!(
-            IronhorseSourceCompiler.compile_source(r#"({"\uD800": 1})"#, false),
-            Err(SourceCompileError::Unsupported(message))
-                if message == "line 1: unsupported: key:lone-surrogate"
-        ));
+        use ironhorse_vm::SourceCompiler;
+        assert!(IronhorseSourceCompiler
+            .compile_source(r#"({"\uD800": 1})"#, false)
+            .is_ok());
     }
 
     /// js-04 helper: a source whose sloppy dual-run must agree with the XS

@@ -128,9 +128,11 @@ fn inspect(bytes: &[u8], signature: &Signature) -> Result<Connection> {
         }
     }
     for (index, name) in image.names.iter().enumerate() {
+        // This read-only inspection column is diagnostic text. Property ids
+        // identify the lossless names retained in the source snapshot.
         tx.execute(
             "INSERT INTO names VALUES (?1, ?2)",
-            params![u32::try_from(index + 1)?, name],
+            params![u32::try_from(index + 1)?, name.to_string()],
         )?;
     }
     for f in &image.function_state.functions {

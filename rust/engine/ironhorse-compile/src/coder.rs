@@ -47,6 +47,7 @@ use crate::ast::{Item, Node, Value};
 use crate::opcodes::*;
 use crate::scoper::{node_key, ScopeTree};
 use crate::token::Token;
+use ironhorse_text::SymbolName;
 use std::collections::HashMap;
 
 /// The payload a code record carries beside its mutable `id`. Mirrors the
@@ -96,24 +97,7 @@ enum Payload {
 /// own trailing `0x00` terminator stays unambiguous. This is the exact
 /// inverse of the engine's `cesu8_to_units` decoder.
 fn units_to_cesu8(units: &[u16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(units.len());
-    for &u in units {
-        let c = u as u32;
-        if c == 0 {
-            out.push(0xC0);
-            out.push(0x80);
-        } else if c < 0x80 {
-            out.push(c as u8);
-        } else if c < 0x800 {
-            out.push(0xC0 | (c >> 6) as u8);
-            out.push(0x80 | (c & 0x3F) as u8);
-        } else {
-            out.push(0xE0 | (c >> 12) as u8);
-            out.push(0x80 | ((c >> 6) & 0x3F) as u8);
-            out.push(0x80 | (c & 0x3F) as u8);
-        }
-    }
-    out
+    SymbolName::from_units(units).into_bytes()
 }
 
 // ============================= atom table ==============================
@@ -228,7 +212,7 @@ const SEED_SYMBOLS: &[&str] = &[
 struct SymEntry {
     /// The interned spelling (kept for the atom-table dump / debugging).
     #[allow(dead_code)]
-    string: String,
+    bytes: Vec<u8>,
     /// `sum % symbolModulo`.
     bucket: u32,
     /// `usage & 1` — set when the symbol is actually emitted in code; only
@@ -248,7 +232,7 @@ struct SymEntry {
 struct SymbolTable {
     /// Interned symbols in insertion (chronological) order.
     entries: Vec<SymEntry>,
-    index: HashMap<String, usize>,
+    index: HashMap<Vec<u8>, usize>,
 }
 
 impl SymbolTable {
@@ -260,7 +244,7 @@ impl SymbolTable {
             index: HashMap::new(),
         };
         for s in SEED_SYMBOLS {
-            t.intern(s);
+            t.intern(*s);
         }
         t
     }
@@ -268,9 +252,9 @@ impl SymbolTable {
     /// `fxNewParserSymbol`'s hash: `sum = (sum << 1) + ch` over the bytes
     /// (C promotes `char`, signed on the pin's platform, to `int`), masked
     /// to 31 bits.
-    fn hash(s: &str) -> u32 {
+    fn hash(s: &[u8]) -> u32 {
         let mut sum: u32 = 0;
-        for &b in s.as_bytes() {
+        for &b in s {
             sum = sum.wrapping_shl(1).wrapping_add((b as i8 as i32) as u32);
         }
         sum & 0x7FFF_FFFF
@@ -278,24 +262,26 @@ impl SymbolTable {
 
     /// Intern `s`, returning its stable index. New symbols get a bucket but
     /// no usage; re-interning returns the existing index.
-    fn intern(&mut self, s: &str) -> usize {
+    fn intern(&mut self, name: impl Into<SymbolName>) -> usize {
+        let name = name.into();
+        let s = name.as_bytes();
         if let Some(&i) = self.index.get(s) {
             return i;
         }
         let bucket = SymbolTable::hash(s) % SYMBOL_MODULO;
         let i = self.entries.len();
         self.entries.push(SymEntry {
-            string: s.to_string(),
+            bytes: s.to_vec(),
             bucket,
             usage: false,
             id: 0,
         });
-        self.index.insert(s.to_string(), i);
+        self.index.insert(s.to_vec(), i);
         i
     }
 
     /// Intern `s` and mark it emitted (`usage |= 1`), returning its index.
-    fn use_symbol(&mut self, s: &str) -> usize {
+    fn use_symbol(&mut self, s: impl Into<SymbolName>) -> usize {
         let i = self.intern(s);
         self.entries[i].usage = true;
         i
@@ -356,7 +342,7 @@ impl SymbolTable {
                     used = used.wrapping_add(1);
                     // The interned spelling verbatim, then the NUL XS's
                     // `symbol->length` includes.
-                    body.extend_from_slice(e.string.as_bytes());
+                    body.extend_from_slice(&e.bytes);
                     body.push(0);
                 }
             }
@@ -401,7 +387,7 @@ struct Target {
     /// The label symbols a break/continue target answers to (XS's
     /// `target->label` `nextLabel` chain). `None` is the anonymous
     /// (loop / `switch`) label; a `Some(name)` is a labeled statement.
-    labels: Vec<Option<String>>,
+    labels: Vec<Option<SymbolName>>,
     /// The next target down the break/continue/return stack.
     next_target: Option<usize>,
     /// For a `try` alias, the original target it forwards to.
@@ -448,7 +434,7 @@ pub struct Coder<'a> {
     /// value is coded, so the name lands in the `CONSTRUCTOR_FUNCTION` /
     /// `FUNCTION` operand). Set by the naming site, consumed by
     /// `code_function`.
-    pending_name: Option<String>,
+    pending_name: Option<SymbolName>,
     /// Staged for the next function value: it is an object/class accessor
     /// (getter/setter). XS marks the function node itself `mxGetterFlag`/
     /// `mxSetterFlag`, but the Rust parser stamps those on the *property*,
@@ -628,7 +614,7 @@ impl<'a> Coder<'a> {
 
     /// `fxCoderAddSymbol` — emit a symbol-operand op, marking the symbol
     /// used so it earns an ID.
-    fn add_symbol(&mut self, delta: i32, id: i32, name: &str) {
+    fn add_symbol(&mut self, delta: i32, id: i32, name: impl Into<SymbolName>) {
         let sym = self.symbols.use_symbol(name);
         self.add(delta, Payload::Symbol { sym }, id);
     }
@@ -642,7 +628,7 @@ impl<'a> Coder<'a> {
     }
 
     /// `fxCoderAddSymbol` for an optional name (anonymous → null symbol).
-    fn add_symbol_opt(&mut self, delta: i32, id: i32, name: Option<&str>) {
+    fn add_symbol_opt(&mut self, delta: i32, id: i32, name: Option<&SymbolName>) {
         match name {
             Some(n) => self.add_symbol(delta, id, n),
             None => self.add_symbol_null(delta, id),
@@ -654,7 +640,7 @@ impl<'a> Coder<'a> {
     /// symbol (the index is tracked separately in [`Coder::decl_index`]),
     /// so this is a symbol op. A slotless (`NEW_TEMPORARY`) declare never
     /// reaches here.
-    fn add_variable(&mut self, delta: i32, id: i32, symbol: Option<&str>, _index: i32) {
+    fn add_variable(&mut self, delta: i32, id: i32, symbol: Option<&SymbolName>, _index: i32) {
         let name = symbol.expect("NEW_LOCAL/NEW_CLOSURE needs a symbol");
         self.add_symbol(delta, id, name);
     }
@@ -810,7 +796,7 @@ impl<'a> Coder<'a> {
     /// absent symbol. An anonymous closure (XS's `symbol->ID == -1`, e.g. an
     /// `instanceInit` slot) still owns a frame slot — it serializes as the
     /// null symbol (`NEW_CLOSURE` with id 0) — but has no name.
-    fn sym_name(s: &Option<crate::scoper::Sym>) -> Option<&str> {
+    fn sym_name(s: &Option<crate::scoper::Sym>) -> Option<&SymbolName> {
         match s {
             Some(crate::scoper::Sym::Named(n)) => Some(n),
             _ => None,
@@ -1846,11 +1832,11 @@ impl Coder<'_> {
         // Descend the label chain to the wrapped statement, collecting the
         // label symbols. XS's collapsed `nextLabel` order is innermost
         // first, so we reverse the outermost-first descent.
-        let mut labels: Vec<Option<String>> = Vec::new();
+        let mut labels: Vec<Option<SymbolName>> = Vec::new();
         let mut cur = node;
         loop {
             labels.push(match &cur.children[0] {
-                Item::Symbol(s) => Some(s.clone()),
+                Item::Symbol(s) => Some(SymbolName::from_units(s)),
                 _ => None,
             });
             match &cur.children[1] {
@@ -1872,7 +1858,7 @@ impl Coder<'_> {
             if let Some(o) = outer {
                 if labels[i + 1..]
                     .iter()
-                    .any(|inner| inner.as_deref() == Some(o.as_str()))
+                    .any(|inner| inner.as_ref() == Some(o))
                 {
                     self.report(node.line, &format!("duplicate label {}", o));
                 }
@@ -1880,8 +1866,8 @@ impl Coder<'_> {
         }
         let mut bt = self.first_break_target;
         while let Some(t) = bt {
-            if let Some(head) = self.targets[t].labels.first().and_then(|o| o.as_deref()) {
-                if labels.iter().any(|l| l.as_deref() == Some(head)) {
+            if let Some(head) = self.targets[t].labels.first().and_then(|o| o.as_ref()) {
+                if labels.iter().any(|l| l.as_ref() == Some(head)) {
                     self.report(node.line, &format!("duplicate label {}", head));
                 }
             }
@@ -2331,7 +2317,7 @@ impl Coder<'_> {
     /// `fxBreakContinueNodeCode`. Child `[symbol-or-null]`.
     fn code_break_continue(&mut self, node: &Node) {
         let symbol = match node.children.first() {
-            Some(Item::Symbol(s)) => Some(s.clone()),
+            Some(Item::Symbol(s)) => Some(SymbolName::from_units(s)),
             _ => None,
         };
         let is_break = node.token == Token::Break;
@@ -2564,17 +2550,17 @@ impl Coder<'_> {
     }
 
     /// The symbol name in an `Item::Symbol` child slot.
-    fn symbol_of(item: &Item) -> &str {
+    fn symbol_of(item: &Item) -> SymbolName {
         match item {
-            Item::Symbol(s) => s.as_str(),
+            Item::Symbol(s) => SymbolName::from_units(s),
             _ => panic!("expected symbol slot"),
         }
     }
 
     /// A name slot that may be `NULL` (an anonymous function/class).
-    fn symbol_opt(item: &Item) -> Option<String> {
+    fn symbol_opt(item: &Item) -> Option<SymbolName> {
         match item {
-            Item::Symbol(s) => Some(s.clone()),
+            Item::Symbol(s) => Some(SymbolName::from_units(s)),
             _ => None,
         }
     }
@@ -2626,7 +2612,7 @@ impl Coder<'_> {
             self.add_index(1, op, index);
             return;
         }
-        let name = Self::symbol_of(&node.children[0]).to_string();
+        let name = Self::symbol_of(&node.children[0]);
         // fxAccessNodeCodeReference (unresolved, evalFlag branch)
         if self.eval_flag {
             self.add_symbol(1, XS_CODE_EVAL_REFERENCE, &name);
@@ -2738,7 +2724,7 @@ impl Coder<'_> {
         if self.resolution_of(node).is_some() {
             return;
         }
-        let name = Self::symbol_of(&node.children[0]).to_string();
+        let name = Self::symbol_of(&node.children[0]);
         if self.eval_flag {
             self.add_symbol(1, XS_CODE_EVAL_REFERENCE, &name);
         } else {
@@ -2753,7 +2739,7 @@ impl Coder<'_> {
     fn code_declare_assign(&mut self, node: &Node) {
         match self.resolution_of(node) {
             None => {
-                let name = Self::symbol_of(&node.children[0]).to_string();
+                let name = Self::symbol_of(&node.children[0]);
                 self.add_symbol(-1, XS_CODE_SET_VARIABLE, &name);
             }
             Some((scope, id)) => {
@@ -2978,7 +2964,7 @@ impl Coder<'_> {
         self.add_index(0, XS_CODE_SET_LOCAL_1, constructor);
         self.add_byte(-3, XS_CODE_CLASS);
         self.add_index(1, XS_CODE_GET_LOCAL_1, constructor);
-        if let Some(n) = name.as_deref() {
+        if let Some(n) = name.as_ref() {
             self.add_symbol(0, XS_CODE_NAME, n);
         }
 
@@ -3016,7 +3002,7 @@ impl Coder<'_> {
                     self.pending_accessor = p.flags & (f::GETTER | f::SETTER) != 0;
                     match p.token {
                         Token::Property => {
-                            let key = Self::symbol_of(&p.children[0]).to_string();
+                            let key = Self::symbol_of(&p.children[0]);
                             self.code(&p.children[1]);
                             self.add_symbol(-2, XS_CODE_NEW_PROPERTY, &key);
                         }
@@ -3179,7 +3165,7 @@ impl Coder<'_> {
         // (`fxScopeGetDeclareNode(functionScope, symbol)` dedups the
         // use-closure). Dedup the brand cap by private name here; each
         // member's `valueAccess` stays a distinct per-member cap.
-        let mut brand_slot: std::collections::HashMap<String, i32> =
+        let mut brand_slot: std::collections::HashMap<SymbolName, i32> =
             std::collections::HashMap::new();
         // The **member-closure** (static / `fi`-less) path builds the capture
         // plan by hand — class-scope declare ids in alias order and each
@@ -3380,7 +3366,7 @@ impl Coder<'_> {
         self.add_byte(1, XS_CODE_THIS);
         match p.token {
             Token::Property => {
-                let key = Self::symbol_of(&p.children[0]).to_string();
+                let key = Self::symbol_of(&p.children[0]);
                 self.code(&p.children[1]);
                 self.add_symbol(-2, XS_CODE_NEW_PROPERTY, &key);
                 let flag = if Self::infers_name(&p.children[1]) {
@@ -3515,7 +3501,7 @@ impl Coder<'_> {
         } else {
             XS_CODE_CONSTRUCTOR_FUNCTION
         };
-        self.add_symbol_opt(1, create_op, name.as_deref());
+        self.add_symbol_opt(1, create_op, name.as_ref());
         self.add_branch(0, XS_CODE_CODE_1, target);
 
         // BEGIN_* with the leading parameter count. A class constructor uses
@@ -4085,14 +4071,14 @@ impl Coder<'_> {
                 Token::PropertyBinding => {
                     if spread {
                         self.add_index(1, XS_CODE_GET_LOCAL_1, object);
-                        let key = Self::symbol_of(&p.children[0]).to_string();
+                        let key = Self::symbol_of(&p.children[0]);
                         self.add_symbol(1, XS_CODE_SYMBOL, &key);
                         self.add_byte(0, XS_CODE_AT);
                         self.add_byte(0, XS_CODE_SWAP);
                         self.add_byte(-1, XS_CODE_POP);
                         c += 1;
                     }
-                    let key = Self::symbol_of(&p.children[0]).to_string();
+                    let key = Self::symbol_of(&p.children[0]);
                     let binding = &p.children[1];
                     self.code_reference(binding, 1);
                     self.add_index(1, XS_CODE_GET_LOCAL_1, object);
@@ -4505,7 +4491,7 @@ impl Coder<'_> {
     fn code_member(&mut self, node: &Node) {
         self.code(&node.children[0]);
         let is_super = self.node_is_super(&node.children[0]);
-        let name = Self::symbol_of(&node.children[1]).to_string();
+        let name = Self::symbol_of(&node.children[1]);
         let op = if is_super {
             XS_CODE_GET_SUPER
         } else {
@@ -4590,7 +4576,7 @@ impl Coder<'_> {
     /// (`fxCallNodeHoist`'s syntactic test).
     fn is_direct_eval(item: &Item) -> bool {
         matches!(item, Item::Node(n) if n.token == Token::Access
-            && matches!(n.children.first(), Some(Item::Symbol(s)) if s == "eval"))
+            && matches!(n.children.first(), Some(Item::Symbol(s)) if SymbolName::from_units(s) == "eval"))
     }
 
     /// `fxObjectNodeCode`, the data-property surface. Children
@@ -4607,7 +4593,7 @@ impl Coder<'_> {
     fn is_proto_property(p: &Node) -> bool {
         p.token == Token::Property
             && p.flags & crate::ast::flags::SHORTHAND == 0
-            && matches!(&p.children[0], Item::Symbol(s) if s == "__proto__")
+            && matches!(&p.children[0], Item::Symbol(s) if SymbolName::from_units(s) == "__proto__")
     }
 
     /// The `NEW_PROPERTY` attribute for an object literal member: a concise
@@ -4673,7 +4659,7 @@ impl Coder<'_> {
                     p.flags & (crate::ast::flags::GETTER | crate::ast::flags::SETTER) != 0;
                 match p.token {
                     Token::Property => {
-                        let key = Self::symbol_of(&p.children[0]).to_string();
+                        let key = Self::symbol_of(&p.children[0]);
                         self.add_index(1, XS_CODE_GET_LOCAL_1, object);
                         self.pending_accessor = is_accessor;
                         self.code(&p.children[1]);
@@ -4835,7 +4821,7 @@ impl Coder<'_> {
                         self.add_byte(1, XS_CODE_FALSE);
                         return;
                     }
-                    let name = Self::symbol_of(&n.children[0]).to_string();
+                    let name = Self::symbol_of(&n.children[0]);
                     if self.eval_flag {
                         self.add_symbol(1, XS_CODE_EVAL_REFERENCE, &name);
                     } else {
@@ -4846,7 +4832,7 @@ impl Coder<'_> {
                 Token::Member => {
                     let is_super = self.node_is_super(&n.children[0]);
                     self.code(&n.children[0]);
-                    let name = Self::symbol_of(&n.children[1]).to_string();
+                    let name = Self::symbol_of(&n.children[1]);
                     self.add_symbol(
                         0,
                         if is_super {
@@ -5063,7 +5049,7 @@ impl Coder<'_> {
             self.add_index(1, op, index);
             return 0;
         }
-        let name = Self::symbol_of(&node.children[0]).to_string();
+        let name = Self::symbol_of(&node.children[0]);
         // unresolved: reference then GET_THIS_VARIABLE
         if self.eval_flag {
             self.add_symbol(1, XS_CODE_EVAL_REFERENCE, &name);
@@ -5081,7 +5067,7 @@ impl Coder<'_> {
     fn code_member_this(&mut self, node: &Node, _flag: i32) -> i32 {
         self.code(&node.children[0]);
         let is_super = self.node_is_super(&node.children[0]);
-        let name = Self::symbol_of(&node.children[1]).to_string();
+        let name = Self::symbol_of(&node.children[1]);
         self.add_byte(1, XS_CODE_DUB);
         self.add_symbol(
             0,
@@ -5240,7 +5226,7 @@ impl Coder<'_> {
     fn code_compound_name(&mut self, node: &Node) {
         if let Item::Node(r) = &node.children[0] {
             if r.token == Token::Access && node_code_name(&node.children[1]) {
-                let name = Self::symbol_of(&r.children[0]).to_string();
+                let name = Self::symbol_of(&r.children[0]);
                 self.add_symbol(0, XS_CODE_NAME, &name);
             }
         }
@@ -5266,7 +5252,7 @@ impl Coder<'_> {
                     if self.resolution_of(n).is_some() {
                         return;
                     }
-                    let name = Self::symbol_of(&n.children[0]).to_string();
+                    let name = Self::symbol_of(&n.children[0]);
                     if self.eval_flag {
                         self.add_symbol(1, XS_CODE_EVAL_REFERENCE, &name);
                     } else {
@@ -5324,13 +5310,13 @@ impl Coder<'_> {
                         };
                         self.add_index(0, op, index);
                     } else {
-                        let name = Self::symbol_of(&n.children[0]).to_string();
+                        let name = Self::symbol_of(&n.children[0]);
                         self.add_symbol(-1, XS_CODE_SET_VARIABLE, &name);
                     }
                 }
                 Token::Member => {
                     let is_super = self.node_is_super(&n.children[0]);
-                    let name = Self::symbol_of(&n.children[1]).to_string();
+                    let name = Self::symbol_of(&n.children[1]);
                     self.add_symbol(
                         -1,
                         if is_super {

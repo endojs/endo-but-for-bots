@@ -20,6 +20,7 @@
 //! pointer-aliasing trick.
 
 use crate::token::Token;
+use ironhorse_text::SymbolName;
 
 /// The parser-flag bits XS stamps onto nodes (`xsScript.h` `enum`). Only
 /// the bits the expression grammar sets are named here; the rest arrive
@@ -140,7 +141,7 @@ pub enum Item {
     /// A real AST node.
     Node(Box<Node>),
     /// A bare symbol (`fxPushSymbol`).
-    Symbol(String),
+    Symbol(Vec<u16>),
     /// A `NULL` placeholder (`fxPushNULL`).
     Null,
     /// A node list (`fxPushNodeList`), its elements in source order.
@@ -410,7 +411,7 @@ fn dump_item(item: &Item, out: &mut String) {
         Item::Null => out.push_str("()"),
         Item::Symbol(s) => {
             out.push_str("#");
-            out.push_str(s);
+            out.push_str(&SymbolName::from_units(s).to_string());
         }
         Item::List(items) => {
             out.push('[');
@@ -488,8 +489,8 @@ pub fn str_to_units(s: &str) -> Vec<u16> {
 }
 
 /// Render UTF-16 code units lossily for diagnostics and directive comparison.
-/// Lone surrogates fold to U+FFFD. Property symbols must instead use the
-/// parser's checked conversion, which refuses unrepresentable keys.
+/// Lone surrogates fold to U+FFFD. Property symbols retain their UTF-16
+/// units and must never use this diagnostic conversion.
 pub fn units_to_string(u: &[u16]) -> String {
     String::from_utf16_lossy(u)
 }

@@ -486,7 +486,10 @@ impl Compartment {
             Ok(seeded) => seeded,
             Err(skip) => return Self::refused(skip),
         };
-        let names = crate::symbols::parse_symbols(symbols);
+        let names = match crate::symbols::parse_symbols_checked(symbols) {
+            Ok(names) => names,
+            Err(halt) => return crate::symbols::decode_refusal(halt),
+        };
         interp.link_intrinsics(&names);
         for (id, value) in seeded {
             interp.define_global_id(id, value);

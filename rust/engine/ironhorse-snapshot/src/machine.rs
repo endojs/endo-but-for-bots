@@ -1773,7 +1773,7 @@ mod tests {
     fn a_consistently_sealed_store_with_out_of_arena_refs_refuses_eager_resume() {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
-        m.link_intrinsics(&["x".to_string()]);
+        m.link_intrinsics(&["x".into()]);
         let mut image = m.snapshot_image(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
@@ -1807,7 +1807,7 @@ mod tests {
     fn a_lazily_resumed_poisoned_store_dies_named_at_the_fault() {
         use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
         let mut m = Interp::new();
-        m.link_intrinsics(&["x".to_string()]);
+        m.link_intrinsics(&["x".into()]);
         let mut image = m.snapshot_image(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())
@@ -1836,7 +1836,7 @@ mod tests {
     fn a_lazily_resumed_store_with_a_poisoned_chunk_offset_dies_named_at_the_fault() {
         use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot};
         let mut m = Interp::new();
-        m.link_intrinsics(&["x".to_string()]);
+        m.link_intrinsics(&["x".into()]);
         let mut image = m.snapshot_image(&sig()).expect("gated image");
         let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
         let k = (0..image.slots.len())

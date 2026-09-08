@@ -22,6 +22,21 @@
 
 use ironhorse_compile::{compile, compile_module, compile_with, opcodes};
 
+#[test]
+fn surrogate_and_astral_property_symbol_bytes() {
+    for source in [
+        r#"var o={"\uD800":1,"\uD801":2,"\uDC00":3,"\uFFFD":4}; Object.keys(o).length"#,
+        r#"var o={"😀":1,"\uD83D\uDE00":2,"\0":3}; o["😀"]"#,
+        r#"var o={get "\uD800"(){return 1},*"\uD801"(){yield 2}}; o["\uD800"]"#,
+        "var 𐐀=1; ({𐐀:𐐀})",
+    ] {
+        let oracle = xs_oracle::run(source).expect("oracle compile");
+        let (code, symbols) = ironhorse_compile::compile_atoms_with(source, false).unwrap();
+        assert_eq!(symbols, oracle.symbols, "symbol atom: {source}");
+        assert_eq!(code, oracle.bytecode, "bytecode: {source}");
+    }
+}
+
 // --------------------------- disassembler ----------------------------
 //
 // A minimal XS-bytecode disassembler for triage. It knows just enough of
@@ -2961,10 +2976,9 @@ fn distinct_nested_labels_accept() {
     ]);
 }
 
-// F016: these valid keys must never enter the compiler's Rust String symbol
-// table with their unpaired code units silently replaced by U+FFFD.
+// F016: every supported property syntax must preserve unpaired code units.
 #[test]
-fn lone_surrogate_property_keys_refuse() {
+fn lone_surrogate_property_keys_compile_in_all_goals() {
     for src in [
         r#"var o={"\uD800":1,"\uD801":2}; Object.keys(o).length"#,
         r#"var o={"\uD800":1}; o["\uD801"]"#,
@@ -2993,14 +3007,11 @@ fn lone_surrogate_property_keys_refuse() {
             oracle.error
         );
         for result in [compile(src), compile_with(src, false), compile_module(src)] {
-            let error = result.expect_err(src);
-            assert_eq!(
-                error.kind,
-                ironhorse_compile::parser::ParseErrorKind::Unsupported,
-                "{src}: {error}"
-            );
-            assert_eq!(error.message, "unsupported: key:lone-surrogate", "{src}");
+            result.unwrap_or_else(|error| panic!("{src}: {error}"));
         }
+        let (code, symbols) = ironhorse_compile::compile_atoms_with(src, false).unwrap();
+        assert_eq!(code, oracle.bytecode, "{src}");
+        assert_eq!(symbols, oracle.symbols, "{src}");
     }
 }
 

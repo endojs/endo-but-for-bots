@@ -59,7 +59,7 @@ pub use module::{
     ModuleSource, ModuleValue, Namespace,
 };
 pub use opcode::{instruction_len, Opcode};
-pub use symbols::parse_symbols;
+pub use symbols::{parse_symbols, parse_symbols_checked, SymbolName};
 pub use value::{
     ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot, SlotArena, SlotIndex,
     CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
@@ -121,7 +121,10 @@ pub fn run_program_bounded(bytecode: &[u8], step_limit: u64) -> RunOutcome {
 /// program-local id→name table ([`parse_symbols`]); binding is unmetered,
 /// matching XS where the global's intrinsics pre-exist the guest run.
 pub fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
-    let names = parse_symbols(symbols);
+    let names = match parse_symbols_checked(symbols) {
+        Ok(names) => names,
+        Err(halt) => return symbols::decode_refusal(halt),
+    };
     let mut interp = Interp::new();
     interp.link_intrinsics(&names);
     interp.run(bytecode).host_coerced()

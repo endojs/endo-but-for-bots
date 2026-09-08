@@ -76,7 +76,7 @@ fn eval_declared_function_value_is_visible_through_the_published_cell() {
     code.extend_from_slice(&[op(Opcode::XS_CODE_WITHOUT), op(Opcode::XS_CODE_END)]);
 
     let mut interp = Interp::new();
-    interp.link_intrinsics(&["Boolean".to_string(), "declared".to_string()]);
+    interp.link_intrinsics(&["Boolean".into(), "declared".into()]);
     let run = interp.run(&code);
     assert_eq!(run.halt, Halt::Return);
     assert_eq!(run.result, "function [\"Boolean\"] (){[native code]}");

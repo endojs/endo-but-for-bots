@@ -214,6 +214,7 @@ name = "ironhorse-compile"
 version = "0.0.1"
 dependencies = [
  "ironhorse-regexp",
+ "ironhorse-text",
  "xs-oracle",
 ]
 
@@ -245,6 +246,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-text"
+version = "0.0.1"
+
+[[package]]
 name = "ironhorse-vm"
 version = "0.0.1"
 dependencies = [
@@ -252,6 +257,7 @@ dependencies = [
  "icu_segmenter",
  "ironhorse-compile",
  "ironhorse-regexp",
+ "ironhorse-text",
 ]
 
 [[package]]

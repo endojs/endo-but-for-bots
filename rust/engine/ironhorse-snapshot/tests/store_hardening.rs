@@ -79,7 +79,7 @@ impl Machine {
         }
     }
 
-    fn image(&self, epoch_names: &[String]) -> MachineImage {
+    fn image(&self, epoch_names: &[ironhorse_vm::SymbolName]) -> MachineImage {
         MachineImage::from_arenas(
             sig(),
             &self.heap.slots,

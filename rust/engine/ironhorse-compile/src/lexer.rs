@@ -21,6 +21,7 @@ use crate::error::{LexError, LexErrorKind};
 use crate::meter::ParseMeter;
 use crate::token::{classify_word, Token};
 use crate::unicode::{is_identifier_first, is_identifier_next};
+use ironhorse_text::SymbolName;
 
 /// The end-of-input sentinel, XS's `(txU4)C_EOF`.
 const EOF: u32 = 0xFFFF_FFFF;
@@ -71,7 +72,7 @@ pub struct Lexeme {
     /// The BigInt literal, for `Bigint`.
     pub bigint: Option<BigIntLiteral>,
     /// The identifier / keyword / private-name text, for word tokens.
-    pub symbol: Option<String>,
+    pub symbol: Option<SymbolName>,
     /// A legacy (non-simple) octal string escape or `\8`/`\9` occurred —
     /// XS's `mxStringLegacyFlag`, a sloppy-mode-only allowance.
     pub legacy_octal: bool,
@@ -1288,12 +1289,12 @@ impl Lexer {
                     }
                 } else {
                     if private {
-                        st.symbol = Some(buf.clone());
+                        st.symbol = Some(buf.clone().into());
                         st.token = Token::PrivateIdentifier;
                     } else {
                         // fxGetNextKeyword: after '.'/'?.' a word is always
                         // an identifier (member name), never a keyword.
-                        st.symbol = Some(buf.clone());
+                        st.symbol = Some(buf.clone().into());
                         if self.prev_token == Token::Dot || self.prev_token == Token::Chain {
                             st.token = Token::Identifier;
                         } else {

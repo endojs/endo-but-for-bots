@@ -38,7 +38,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
     (bytecode, parse_symbols(&symbols))
 }
@@ -72,7 +72,7 @@ struct Baseline {
     final_blob: Vec<u8>,
 }
 
-fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline {
+fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)]) -> Baseline {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
@@ -130,7 +130,9 @@ fn assert_agrees(
 }
 
 /// Variant 2: blob suspend/resume between every crank.
-fn run_blob(compiled: &[(Vec<u8>, Vec<String>)]) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
+fn run_blob(
+    compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)],
+) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
@@ -175,7 +177,7 @@ enum Resume {
 /// chosen resume mode, against a fresh backend from the caller.
 fn run_store<S: HeapStore + 'static>(
     store: S,
-    compiled: &[(Vec<u8>, Vec<String>)],
+    compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)],
     mode: Resume,
 ) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
@@ -280,7 +282,7 @@ fn run_store<S: HeapStore + 'static>(
 /// survivor's.
 fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     store: S,
-    compiled: &[(Vec<u8>, Vec<String>)],
+    compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolName>)],
 ) -> (Vec<CrankResult>, Vec<u64>, Vec<u8>) {
     let store = Rc::new(RefCell::new(store));
     let mut results = Vec::new();
@@ -318,7 +320,8 @@ fn metamorphic<S: HeapStore + 'static>(
     scenario: &str,
     cranks: &[&str],
 ) {
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
     let baseline = run_baseline(scenario, &compiled);
 
     let (r, c, b) = run_blob(&compiled);
@@ -680,7 +683,8 @@ pub fn lazy_working_set_bound<S: HeapStore + 'static>(fresh: impl FnOnce() -> S)
          for (i = 0; i < 3000; i = i + 1) { last = { v: i }; } t = 7;",
         "var last; var i; t + 1",
     ];
-    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
+        cranks.iter().map(|s| compile(s)).collect();
 
     let store = Rc::new(RefCell::new(fresh()));
     let mut m = Interp::new();
@@ -812,7 +816,7 @@ pub fn resume_equals_uninterrupted(store: &mut dyn HeapStore) {
 
 /// Two real-JS cranks with one shared anchored symbol set, compiled
 /// fresh (the checkpoint/resume acceptance fixtures).
-fn real_progs() -> Vec<(Vec<u8>, Vec<String>)> {
+fn real_progs() -> Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> {
     [
         "var a = { n: 1 }; var s = 'seed'; a.n + 1",
         "var a; s = s + '-more'; a.n = a.n + 2; a.n",

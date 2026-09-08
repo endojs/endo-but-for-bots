@@ -14,6 +14,7 @@ name = "ironhorse_compile"
 path = "src/lib.rs"
 
 [dependencies]
+ironhorse-text = { path = "../ironhorse-text" }
 # Compile-time regexp-literal validation. XS's lexer runs `fxCompileRegExp`
 # on every regexp literal (`fxGetNextRegExp`), so a syntactically invalid
 # pattern is a parse-time SyntaxError; ironhorse mirrors that by validating the

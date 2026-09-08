@@ -5,6 +5,7 @@
 use crate::lexer::Lexer;
 use crate::token::Token;
 use crate::{tokenize, LexErrorKind};
+use ironhorse_text::SymbolName;
 
 /// A `&str` as UTF-16 code units — the lexer's cooked/raw string
 /// representation, so a fixture can spell an expected value as text.
@@ -108,9 +109,23 @@ fn escaped_identifier() {
     // `\u{62}` decodes to `b`, with the escaped flag set.
     let toks = tokenize(r"a \u{62}").unwrap();
     assert_eq!(toks[0].token, Token::Identifier);
-    assert_eq!(toks[0].symbol.as_deref(), Some("a"));
+    assert_eq!(
+        toks[0]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("a")
+    );
     assert!(!toks[0].escaped);
-    assert_eq!(toks[1].symbol.as_deref(), Some("b"));
+    assert_eq!(
+        toks[1]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("b")
+    );
     assert!(toks[1].escaped);
     // An escaped keyword still classifies as the keyword (the "escaped
     // keyword" error lives in a later pass, matching XS).
@@ -123,7 +138,14 @@ fn escaped_identifier() {
 fn private_identifier() {
     let toks = tokenize("#field").unwrap();
     assert_eq!(toks[0].token, Token::PrivateIdentifier);
-    assert_eq!(toks[0].symbol.as_deref(), Some("#field"));
+    assert_eq!(
+        toks[0]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("#field")
+    );
 }
 
 #[test]
@@ -132,7 +154,14 @@ fn unicode_identifier_astral() {
     let src = "\u{1D400}x";
     let toks = tokenize(src).unwrap();
     assert_eq!(toks[0].token, Token::Identifier);
-    assert_eq!(toks[0].symbol.as_deref(), Some("\u{1D400}x"));
+    assert_eq!(
+        toks[0]
+            .symbol
+            .as_ref()
+            .and_then(SymbolName::to_text)
+            .as_deref(),
+        Some("\u{1D400}x")
+    );
 }
 
 #[test]

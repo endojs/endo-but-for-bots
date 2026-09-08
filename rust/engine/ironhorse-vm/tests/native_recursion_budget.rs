@@ -31,7 +31,7 @@
 
 use ironhorse_vm::{Halt, Interp, RunOutcome, NATIVE_DEPTH_LIMIT, NATIVE_STACK_BYTES};
 
-fn compile(src: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (b, s) = ironhorse_compile::compile_atoms(src).expect("fixture compiles");
     (b, ironhorse_vm::parse_symbols(&s))
 }

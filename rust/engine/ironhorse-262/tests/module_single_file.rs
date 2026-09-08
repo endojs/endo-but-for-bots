@@ -4,7 +4,7 @@
 
 use ironhorse_vm::{parse_symbols, Halt, Interp};
 
-fn compile_module(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile_module(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) =
         ironhorse_compile::compile_module_atoms(source).expect("module compiles");
     (bytecode, parse_symbols(&symbols))

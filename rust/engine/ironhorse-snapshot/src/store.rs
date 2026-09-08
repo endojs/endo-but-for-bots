@@ -47,11 +47,13 @@
 //! [`crate::store_file::FileStore`].
 
 use crate::format::{Signature, SnapshotError, Version};
+use crate::image::{decode_names, encode_names};
 use crate::image::{
     decode_stack, decode_strings, decode_u32s, encode_stack, encode_strings, encode_u32s,
     CreationParams, MachineImage, MeterImage,
 };
 use crate::slot_codec::{decode_slots, encode_slot, SLOT_RECORD_BYTES};
+use ironhorse_vm::SymbolName;
 use ironhorse_vm::{Slot, COST_TABLE_VERSION};
 
 /// The canonical page/extent geometry, owned by the vm because the
@@ -86,7 +88,9 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 25;
+/// v26: NAME entries use canonical XS CESU-8 instead of UTF-8. Migration
+/// converts the name section and recomputes the root, preserving all ids.
+pub const STORE_SCHEMA_VERSION: u32 = 26;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1303,7 +1307,7 @@ pub struct SmallState {
     pub stack: Vec<Slot>,
     pub slot_free: Vec<u32>,
     pub keys: Vec<String>,
-    pub names: Vec<String>,
+    pub names: Vec<SymbolName>,
     /// The symbol-key id table (see [`crate::image::SymbolKeyImage`]).
     pub symbols: crate::image::SymbolKeyImage,
     pub meter: MeterImage,
@@ -1394,7 +1398,7 @@ impl SmallState {
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
-            encode_strings(&self.names),
+            encode_names(&self.names),
             crate::image::encode_symbol_keys(&self.symbols),
             self.meter.encode(),
             crate::image::encode_arrays(&self.arrays),
@@ -1460,7 +1464,7 @@ impl SmallState {
         let stack = decode_stack(section("small state stack section")?)?;
         let slot_free = decode_u32s(section("small state free-list section")?)?;
         let keys = decode_strings(section("small state keys section")?)?;
-        let names = decode_strings(section("small state names section")?)?;
+        let names = decode_names(section("small state names section")?)?;
         let symbols = crate::image::decode_symbol_keys(section("small state symbols section")?)
             .map_err(StoreError::Snapshot)?;
         let meter = MeterImage::decode(section("small state meter section")?)?;
@@ -2082,6 +2086,7 @@ pub fn migrate_store(
             22 => migrate_v22_to_v23(store)?,
             23 => migrate_v23_to_v24(store)?,
             24 => migrate_v24_to_v25(store)?,
+            25 => migrate_v25_to_v26(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2810,6 +2815,66 @@ fn migrate_v24_to_v25(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let mut new_small = small;
     new_small.extend_from_slice(&[0u8; 4]);
     manifest.store_schema = 25;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
+fn migrate_v25_to_v26(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    // Section 3 is NAME. Preserve every other section byte for byte.
+    let mut cursor = 0usize;
+    let mut new_small = Vec::new();
+    for index in 0..4 {
+        let header = small
+            .get(cursor..cursor + 4)
+            .ok_or(SnapshotError::Corrupt("name migration header"))?;
+        let len = u32::from_be_bytes(header.try_into().unwrap()) as usize;
+        cursor += 4;
+        let end = cursor
+            .checked_add(len)
+            .ok_or(SnapshotError::Corrupt("name migration length"))?;
+        let section = small
+            .get(cursor..end)
+            .ok_or(SnapshotError::Corrupt("name migration body"))?;
+        if index == 3 {
+            let names: Vec<SymbolName> = decode_strings(section)?
+                .into_iter()
+                .map(SymbolName::from)
+                .collect();
+            let encoded = encode_names(&names);
+            new_small.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            new_small.extend_from_slice(&encoded);
+        } else {
+            new_small.extend_from_slice(header);
+            new_small.extend_from_slice(section);
+        }
+        cursor = end;
+    }
+    new_small.extend_from_slice(&small[cursor..]);
+    manifest.store_schema = 26;
     manifest.root = compute_root(
         &leaf_hash(LEAF_SMALL, 0, &new_small),
         &pages,
@@ -3923,7 +3988,7 @@ mod tests {
             stack: vec![Slot::boolean(true), Slot::integer(-4)],
             slot_free: vec![9, 2, 5],
             keys: vec!["dyn".to_string()],
-            names: vec!["Object".to_string(), "x".to_string()],
+            names: vec!["Object".into(), "x".into()],
             symbols: crate::image::SymbolKeyImage {
                 next_id: u16::MAX - 2,
                 pairs: vec![(u16::MAX - 1, 11), (u16::MAX, 22)],

@@ -217,7 +217,10 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // corrupts the STAC atom's framing.
     let stack: Vec<Slot> = Vec::new();
 
-    let names = rand_string_list(&mut c);
+    let names: Vec<ironhorse_vm::SymbolName> = rand_string_list(&mut c)
+        .into_iter()
+        .map(ironhorse_vm::SymbolName::from)
+        .collect();
     let keys = rand_string_list(&mut c);
     // Symbol-key table: generated VALID like the ledger rows below —
     // ids strictly ascending above the counter, descriptors distinct,

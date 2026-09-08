@@ -20,7 +20,7 @@ fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
 
-fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
+fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
     (bytecode, parse_symbols(&symbols))
 }

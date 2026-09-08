@@ -26,6 +26,7 @@ use crate::format::{
 };
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
 use ironhorse_vm::value::canonicalize_nan;
+use ironhorse_vm::SymbolName;
 use ironhorse_vm::{
     dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
     IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, Payload,
@@ -371,7 +372,7 @@ pub struct MachineImage {
     /// `KEYS`: runtime-interned property key names.
     pub keys: Vec<String>,
     /// `NAME`: the program symbol names, id-ordered (`symbol_names`).
-    pub names: Vec<String>,
+    pub names: Vec<SymbolName>,
     /// `SYMB`: the symbol-key property-id table (see [`SymbolKeyImage`]).
     pub symbols: SymbolKeyImage,
     /// `METR`: the metering state (design row 6). A resumed machine
@@ -468,7 +469,7 @@ impl MachineImage {
         slots: &SlotArena,
         chunks: &ChunkArena,
         stack: &[Slot],
-        names: Vec<String>,
+        names: Vec<SymbolName>,
         keys: Vec<String>,
         symbols: SymbolKeyImage,
     ) -> MachineImage {
@@ -757,6 +758,58 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
             .map_err(|_| SnapshotError::Corrupt("string list entry not utf8"))?;
         out.push(s.to_string());
         i = end;
+    }
+    Ok(out)
+}
+
+pub(crate) fn encode_names(list: &[SymbolName]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(list.len() as u32).to_be_bytes());
+    for s in list {
+        let b = s.as_bytes();
+        v.extend_from_slice(&(b.len() as u32).to_be_bytes());
+        v.extend_from_slice(b);
+    }
+    v
+}
+
+pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
+    if p.len() < 4 {
+        return Err(SnapshotError::Corrupt("string list header"));
+    }
+    let count = u32::from_be_bytes([p[0], p[1], p[2], p[3]]) as usize;
+    // Reserve no more than the payload could possibly hold: every entry
+    // carries at least a 4-byte length header, so a valid `count` never
+    // exceeds `p.len() / 4`. Clamping the pre-reservation keeps a malformed
+    // `count` (up to `u32::MAX`) from reserving gigabytes before the
+    // per-entry bounds check below rejects the truncation (fuzz trophy
+    // `malformed_string_count_does_not_over_allocate`).
+    let mut out = Vec::with_capacity(count.min(p.len() / 4));
+    let mut i = 4;
+    for _ in 0..count {
+        if i + 4 > p.len() {
+            return Err(SnapshotError::Corrupt("string list entry header"));
+        }
+        let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
+        i += 4;
+        // checked_add: `len` is attacker-sized (a full u32), so on a
+        // 32-bit usize `i + len` can wrap past the gate and panic at
+        // the slice below instead of returning the structured error
+        // (wave-3 finding; the `i + 4` advances elsewhere cannot wrap
+        // because `i` never exceeds `p.len()`).
+        let end = i
+            .checked_add(len)
+            .ok_or(SnapshotError::Corrupt("string list entry body"))?;
+        if end > p.len() {
+            return Err(SnapshotError::Corrupt("string list entry body"));
+        }
+        let s = SymbolName::from_cesu8(&p[i..end])
+            .ok_or(SnapshotError::Corrupt("name list entry not CESU-8"))?;
+        out.push(s);
+        i = end;
+    }
+    if i != p.len() {
+        return Err(SnapshotError::Corrupt("name list trailing bytes"));
     }
     Ok(out)
 }
@@ -4616,14 +4669,32 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
 /// byte-identical.
 pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     let mut w = AtomWriter::new();
-    w.atom(VERS, &image.version.encode());
+    let mut version = image.version.clone();
+    // Preserve the wire format when rewriting a legacy scalar-only image.
+    // An image containing new non-scalar names must advertise format 15.
+    let legacy_names = (version.format_version < 15)
+        .then(|| {
+            image
+                .names
+                .iter()
+                .map(SymbolName::to_text)
+                .collect::<Option<Vec<_>>>()
+        })
+        .flatten();
+    let names = if let Some(names) = legacy_names {
+        encode_strings(&names)
+    } else {
+        version.format_version = version.format_version.max(15);
+        encode_names(&image.names)
+    };
+    w.atom(VERS, &version.encode());
     w.atom(SIGN, &image.signature.encode());
     w.atom(CREA, &image.creation.encode());
     w.atom(BLOC, &image.chunks);
     w.atom(HEAP, &encode_heap(image));
     w.atom(STAC, &encode_stack(&image.stack));
     w.atom(KEYS, &encode_strings(&image.keys));
-    w.atom(NAME, &encode_strings(&image.names));
+    w.atom(NAME, &names);
     w.atom(SYMB, &encode_symbol_keys(&image.symbols));
     w.atom(METR, &image.meter.encode());
     // Side-table ledger atoms, emitted ONLY when non-empty: a machine
@@ -4832,7 +4903,11 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => Vec::new(),
     };
     let names = match r.find(NAME) {
-        Some(a) => decode_strings(a.payload)?,
+        Some(a) if version.format_version < 15 => decode_strings(a.payload)?
+            .into_iter()
+            .map(SymbolName::from)
+            .collect(),
+        Some(a) => decode_names(a.payload)?,
         None => Vec::new(),
     };
     let symbols = match r.find(SYMB) {
@@ -6678,7 +6753,7 @@ mod tests {
             &slots,
             &chunks,
             &stack,
-            vec!["length".to_string(), "name".to_string()],
+            vec!["length".into(), "name".into()],
             vec!["dynKey".to_string()],
             SymbolKeyImage {
                 next_id: u16::MAX - 2,
@@ -6728,7 +6803,7 @@ mod tests {
             // Empty by the quiescence gate (review finding 5).
             stack: vec![],
             keys: vec!["k1".to_string(), "k2".to_string(), "".to_string()],
-            names: vec!["Object".to_string(), "length".to_string()],
+            names: vec!["Object".into(), "length".into()],
             symbols: SymbolKeyImage {
                 next_id: u16::MAX - 1,
                 pairs: vec![(u16::MAX, 0)],

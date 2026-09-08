@@ -44,6 +44,7 @@
 use crate::bulk::{ArrayData, CollKind, CollectionData, SideRefCounts};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
+use crate::symbols::{SymbolIds, SymbolName};
 use crate::value::{
     canonicalize_nan, number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena,
 };
@@ -4901,7 +4902,7 @@ pub struct Interp {
     /// (`mxID(_message)`), which ironhorse's program-local numbering must relink
     /// against, exactly as the intrinsic constructors relink by name. A name
     /// the program never references has no id (and no read of it occurs).
-    symbol_ids: std::collections::HashMap<String, u16>,
+    symbol_ids: SymbolIds,
     /// XS's boot-time default key names (`gxIDStrings`). A runtime string
     /// property key equal to one of these is already interned in XS's global
     /// symbol table, so re-interning it allocates **no** key slot; a name
@@ -4952,7 +4953,7 @@ pub struct Interp {
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
-    symbol_names: Vec<String>,
+    symbol_names: Vec<SymbolName>,
     /// Per-instance Error metadata (name + message), keyed by the error
     /// instance's slot index. An Error object's completion/abort value
     /// stringifies as `name` (no/empty message) or `name: message` — XS's
@@ -6257,7 +6258,7 @@ impl Interp {
             proto_data: Vec::new(),
             proto_accessors: Vec::new(),
             well_known_symbols: Vec::new(),
-            symbol_ids: std::collections::HashMap::new(),
+            symbol_ids: SymbolIds::default(),
             default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
             next_symbol_key_id: u16::MAX,
             installed_names_len: 0,
@@ -8833,7 +8834,7 @@ impl Interp {
     /// (those properties already round-trip inside the restored arena). It is
     /// the derivation that makes the SymbolTables ledger row's "rebuilt at
     /// restore" claim true, and it keeps the two callers from drifting.
-    fn bind_program_symbols(&mut self, names: &[String]) {
+    fn bind_program_symbols(&mut self, names: &[SymbolName]) {
         self.symbol_names = names.to_vec();
         // String keys interned at runtime APPEND to `symbol_names` (see
         // `intern_key`), so `names` here — a restored NAME row included —
@@ -8900,8 +8901,7 @@ impl Interp {
     /// — so this cannot perturb top-level behavior. Called after the eval
     /// bridge relinks a unit's symbols.
     fn refresh_special_ids_from_symbols(&mut self) {
-        let id_of =
-            |ids: &std::collections::HashMap<String, u16>, want: &str| ids.get(want).copied();
+        let id_of = |ids: &SymbolIds, want: &str| ids.get(want).copied();
         macro_rules! fill {
             ($field:expr, $name:literal) => {
                 if $field.is_none() {
@@ -8943,7 +8943,7 @@ impl Interp {
     /// bound; everything else is left to resolve as an ordinary global (a
     /// `var`/sloppy-global) or to miss. Unmetered: these globals pre-exist
     /// the guest run exactly as XS's do, so no allocation is charged.
-    pub fn link_intrinsics(&mut self, names: &[String]) {
+    pub fn link_intrinsics(&mut self, names: &[SymbolName]) {
         // The program-symbol name↔id tables and every name-keyed lookup-id
         // cache (`length_id`/`name_id`/… and the RegExp id clusters). Split
         // out because it is derived *purely* from `names` — so
@@ -9054,7 +9054,7 @@ impl Interp {
     /// run exactly as XS's realm does.
     fn install_intrinsic_bindings(
         &mut self,
-        names: &[String],
+        names: &[SymbolName],
         full: bool,
         keep: impl Fn(u16) -> bool,
     ) {
@@ -9065,7 +9065,7 @@ impl Interp {
         // partial passes advances to the full table (wave-6 W6-7).
         self.installed_names_len = names.len();
         for name in names.iter() {
-            let Some(&id) = self.symbol_ids.get(name.as_str()) else {
+            let Some(&id) = self.symbol_ids.get(name) else {
                 continue;
             };
             if !keep(id) {
@@ -9076,7 +9076,7 @@ impl Interp {
             {
                 continue;
             }
-            if let Some(&func) = self.intrinsics.get(name.as_str()) {
+            if let Some(&func) = name.as_str().and_then(|name| self.intrinsics.get(name)) {
                 // The global binding is an own property whose value is a
                 // **reference** to the intrinsic function instance, exactly
                 // like any other global property (so `get_variable` /
@@ -9087,7 +9087,7 @@ impl Interp {
                 let property =
                     self.create_global_property(id, (Kind::Reference, Payload::Reference(func)));
                 self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
-            } else if let Some(v) = value_global(name) {
+            } else if let Some(v) = name.as_str().and_then(value_global) {
                 // The primitive value globals `undefined`/`NaN`/`Infinity`
                 // (XS's non-writable realm globals): bound as ordinary global
                 // properties holding the value, so a reference reads it with
@@ -9806,13 +9806,14 @@ impl Interp {
     /// relinks an independently-compiled unit's ids through, so the outer
     /// program and every eval unit share one realm symbol space (rather than
     /// the compiler's per-unit numbering colliding).
-    fn intern_program_symbol(&mut self, name: &str) -> u16 {
-        let id = self.intern_key(name);
+    fn intern_program_symbol(&mut self, name: impl Into<SymbolName>) -> u16 {
+        let name = name.into();
+        let id = self.intern_key(&name);
         let idx = (id as usize).saturating_sub(1);
         if idx >= self.symbol_names.len() {
-            self.symbol_names.resize(idx + 1, String::new());
+            self.symbol_names.resize(idx + 1, SymbolName::default());
         }
-        self.symbol_names[idx] = name.to_string();
+        self.symbol_names[idx] = name;
         id
     }
 
@@ -9831,7 +9832,11 @@ impl Interp {
     /// their `XS_CODE_CODE_*` header (a fixed-size opcode, not a
     /// length-prefixed payload), so this single linear pass rewrites their
     /// ids too. Returns `None` only on a truncated/invalid stream.
-    fn relink_program_symbols(&mut self, code: &[u8], eval_names: &[String]) -> Option<Vec<u8>> {
+    fn relink_program_symbols(
+        &mut self,
+        code: &[u8],
+        eval_names: &[SymbolName],
+    ) -> Option<Vec<u8>> {
         let mut out = code.to_vec();
         let mut pc = 0usize;
         while pc < out.len() {
@@ -9978,7 +9983,8 @@ impl Interp {
                 )))
             }
         };
-        let eval_names = crate::symbols::parse_symbols(&compiled.symbols);
+        let eval_names =
+            crate::symbols::parse_symbols_checked(&compiled.symbols).map_err(Step::Host)?;
         let code = match self.relink_program_symbols(&compiled.bytecode, &eval_names) {
             Some(code) => code,
             None => return Err(Step::Host(Halt::EngineInvariant("eval:relink"))),
@@ -10228,7 +10234,7 @@ impl Interp {
     /// The program symbol name table (the `NAME` atom source), id-ordered
     /// (`symbol_names[id - 1]`), as decoded from the program's XS symbols
     /// atom at [`Self::link_intrinsics`].
-    pub fn program_symbol_names(&self) -> &[String] {
+    pub fn program_symbol_names(&self) -> &[SymbolName] {
         &self.symbol_names
     }
 
@@ -10252,7 +10258,7 @@ impl Interp {
         slots: SlotArena,
         chunks: ChunkArena,
         stack: Vec<Slot>,
-        symbol_names: Vec<String>,
+        symbol_names: Vec<SymbolName>,
         meter: crate::meter::MeterState,
     ) {
         self.slots = slots;
@@ -10320,7 +10326,7 @@ impl Interp {
     pub fn relink_crank(
         &mut self,
         bytecode: &[u8],
-        crank_names: &[String],
+        crank_names: &[SymbolName],
     ) -> Result<Vec<u8>, RelinkError> {
         if crank_names == self.symbol_names.as_slice() {
             let mut remapped = bytecode.to_vec();
@@ -13867,7 +13873,7 @@ impl Interp {
                             if item.kind != Kind::Undefined && item.kind != Kind::Null {
                                 out.push_str(&self.render_at(item, depth)?);
                             }
-                        } else if let Some(id) = self.symbol_ids.get(&i.to_string()).copied() {
+                        } else if let Some(id) = self.symbol_ids.get(i.to_string()).copied() {
                             // A restrictive `defineProperty` descriptor moves
                             // the index out of the compact item table and into
                             // the ordinary property chain. Completion rendering
@@ -15548,7 +15554,7 @@ impl Interp {
                                 != 0 =>
                         {
                             let id = if raw_id == crate::value::XS_NO_ID {
-                                self.intern_key(&index.to_string())
+                                self.intern_key(index.to_string())
                             } else {
                                 raw_id
                             };
@@ -15972,9 +15978,10 @@ impl Interp {
                                     .checked_sub(1)
                                     .and_then(|i| self.symbol_names.get(i).cloned())
                                     .unwrap_or_default();
-                                let name_chunk = self.alloc_str_text(fname.as_bytes());
+                                let name_chunk =
+                                    self.chunks.alloc(&units_to_be16(&fname.to_units()));
                                 if let Some(fi) = self.functions.get_mut(&f) {
-                                    fi.name = fname;
+                                    fi.name = fname.to_string();
                                     fi.name_chunk = name_chunk;
                                 }
                             }
@@ -16215,7 +16222,7 @@ impl Interp {
                             }
                         } else if self.arrays.contains_key(&inst)
                             && !self.arguments_objects.contains(&inst)
-                            && self.string_key_name(id).as_deref() == Some("length")
+                            && self.scalar_key_text(id).as_deref() == Some("length")
                         {
                             // `arr.length = N`: the exotic-array length accessor
                             // setter (`fxArrayLengthSetter` → `fxArraySetLength`).
@@ -16329,7 +16336,7 @@ impl Interp {
                         }
                         Payload::Reference(inst) if self.temporal_instants.contains_key(&inst) => {
                             let ns = self.temporal_instants[&inst].epoch_nanoseconds;
-                            match self.string_key_name(id).as_deref() {
+                            match self.scalar_key_text(id).as_deref() {
                                 Some("epochNanoseconds") => self.temporal_i128_bigint(ns),
                                 Some("epochMilliseconds") => Slot::number((ns / 1_000_000) as f64),
                                 _ => self.instance_get(inst, id),
@@ -16337,7 +16344,7 @@ impl Interp {
                         }
                         Payload::Reference(inst) if self.temporal_durations.contains_key(&inst) => {
                             let d = self.temporal_durations[&inst];
-                            match self.string_key_name(id).as_deref() {
+                            match self.scalar_key_text(id).as_deref() {
                                 Some("years") => Slot::number(d.years as f64),
                                 Some("months") => Slot::number(d.months as f64),
                                 Some("weeks") => Slot::number(d.weeks as f64),
@@ -16355,7 +16362,7 @@ impl Interp {
                         }
                         Payload::Reference(inst) if self.temporal_plains.contains_key(&inst) => {
                             let r = self.temporal_plains[&inst];
-                            let key = self.string_key_name(id);
+                            let key = self.scalar_key_text(id);
                             match key.as_deref() {
                                 Some("year") => Slot::number(r.year as f64),
                                 Some("month") => Slot::number(r.month as f64),
@@ -16415,7 +16422,7 @@ impl Interp {
                         Payload::Reference(inst) if self.temporal_zoneds.contains_key(&inst) => {
                             let rec = self.temporal_zoneds[&inst].clone();
                             let p = zoned_local_datetime(rec.epoch_nanoseconds, rec.offset_ns);
-                            match self.string_key_name(id).as_deref() {
+                            match self.scalar_key_text(id).as_deref() {
                                 Some("year") => Slot::number(p.year as f64),
                                 Some("month") => Slot::number(p.month as f64),
                                 Some("monthCode") => {
@@ -16573,7 +16580,7 @@ impl Interp {
                                     locale.unicode.get("kn").map_or(false, |v| v == "true"),
                                 )
                             } else {
-                                let (recognized, text) = match name.as_str() {
+                                let (recognized, text) = match name.as_str().unwrap_or("") {
                                     "baseName" => (true, Some(locale_base_name(&locale))),
                                     "language" => (true, Some(locale.language)),
                                     "script" => (true, locale.script),
@@ -16768,7 +16775,7 @@ impl Interp {
                                 )
                             } else if self.arrays.contains_key(&inst)
                                 && !self.arguments_objects.contains(&inst)
-                                && self.string_key_name(id).as_deref() == Some("length")
+                                && self.scalar_key_text(id).as_deref() == Some("length")
                             {
                                 false
                             } else {
@@ -16882,7 +16889,7 @@ impl Interp {
                             } else if id.is_some_and(|id| {
                                 self.arrays.contains_key(&inst)
                                     && !self.arguments_objects.contains(&inst)
-                                    && self.string_key_name(id).as_deref() == Some("length")
+                                    && self.scalar_key_text(id).as_deref() == Some("length")
                             }) {
                                 false
                             } else if numeric_index.is_some_and(|index| {
@@ -17219,9 +17226,9 @@ impl Interp {
                             .checked_sub(1)
                             .and_then(|i| self.symbol_names.get(i).cloned())
                             .unwrap_or_default();
-                        let name_chunk = self.alloc_str_text(name.as_bytes());
+                        let name_chunk = self.chunks.alloc(&units_to_be16(&name.to_units()));
                         if let Some(info) = self.functions.get_mut(&f) {
-                            info.name = name;
+                            info.name = name.to_string();
                             info.name_chunk = name_chunk;
                         }
                         self.meter.tick_builtin_some(2);
@@ -18446,7 +18453,7 @@ impl Interp {
                     };
                     let id = match key.value {
                         Payload::At(id, index) if id == crate::value::XS_NO_ID => {
-                            self.intern_key(&index.to_string())
+                            self.intern_key(index.to_string())
                         }
                         Payload::At(id, _) => id,
                         _ => return Step::Host(Halt::EngineInvariant("set_super_at:key")),
@@ -19904,17 +19911,17 @@ impl Interp {
                 .cloned()
                 .unwrap_or_default()
         } else {
-            String::new()
+            SymbolName::default()
         };
         // Intern the `.name` chunk once, unmetered: XS builds the function's
         // `name` string chunk at `fxNewFunctionName` (folded into the measured
         // [`FUNCTION_DEFINE_METERING`] cluster), so a later `f.name` read is a
         // free own-property read — ironhorse mirrors that by pre-interning here.
-        let name_chunk = self.alloc_str_text(fname.as_bytes());
+        let name_chunk = self.chunks.alloc(&units_to_be16(&fname.to_units()));
         self.functions.insert(
             f,
             FuncInfo {
-                name: fname,
+                name: fname.to_string(),
                 name_chunk,
                 ..FuncInfo::default()
             },
@@ -30411,7 +30418,7 @@ impl Interp {
     fn id_name(&self, id: u16) -> String {
         self.symbol_names
             .get((id as usize).saturating_sub(1))
-            .cloned()
+            .map(ToString::to_string)
             .unwrap_or_default()
     }
 
@@ -30669,12 +30676,11 @@ impl Interp {
         // = "bound " + target.name (XS reads the target's own `length`/`name`).
         let target_arity = self.functions.get(&target).map(|fi| fi.arity).unwrap_or(0);
         let bound_len = target_arity.saturating_sub(nbound);
-        let target_name = self
-            .functions
-            .get(&target)
-            .map(|fi| fi.name.clone())
-            .unwrap_or_default();
-        let bound_name = format!("bound {}", target_name);
+        let mut bound_units: Vec<u16> = "bound ".encode_utf16().collect();
+        if let Some(info) = self.functions.get(&target) {
+            bound_units.extend(self.str_units(info.name_chunk));
+        }
+        let bound_name = SymbolName::from_units(&bound_units).to_string();
         // The bound-function creation cluster (instance + CODE/HOME + the three
         // internal property slots + the length/name properties). When there
         // are bound arguments, XS additionally builds an Array for them
@@ -30687,7 +30693,7 @@ impl Interp {
         };
         self.meter.tick_raw(BIND_CREATE_METERING + args_meter);
         let inst = self.slots.alloc(Slot::instance(self.function_proto));
-        let name_chunk = self.alloc_str_text(bound_name.as_bytes());
+        let name_chunk = self.chunks.alloc(&units_to_be16(&bound_units));
         // Register in `functions` (native/method None) so `.length`/`.name`
         // read back the bound values through the ordinary GET_PROPERTY arm.
         self.functions.insert(
@@ -34483,14 +34489,17 @@ impl Interp {
                     Payload::Reference(r) => self
                         .functions
                         .get(&r)
-                        .map(|fi| fi.name.clone())
+                        .map(|fi| self.str_units(fi.name_chunk))
                         .unwrap_or_default(),
-                    _ => String::new(),
+                    _ => Vec::new(),
                 };
                 self.meter.tick_raw(METHOD_FUNCTION_TOSTRING_METERING);
-                let s = format!("function [\"{}\"] (){{[native code]}}", name);
-                self.meter.tick_chunk_new(s.len() as u64);
-                let off = self.alloc_str_text(s.as_bytes());
+                let mut units: Vec<u16> = "function [\"".encode_utf16().collect();
+                units.extend(name);
+                units.extend("\"] (){[native code]}".encode_utf16());
+                self.meter
+                    .tick_chunk_new(SymbolName::from_units(&units).as_bytes().len() as u64);
+                let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Error.prototype.toString`: `name` / `name: message`.
@@ -35104,6 +35113,7 @@ impl Interp {
                     || self.data_views.contains_key(&target)
                     || self.wrapper_data.contains_key(&target)
                     || self.regexps.contains_key(&target)
+                    || self.proxies.contains_key(&target)
                 {
                     let key = self
                         .stack
@@ -35227,20 +35237,22 @@ impl Interp {
                         },
                         Kind::String => {
                             let key = match arg1.value {
-                                Payload::String(off) => self.str_text(off),
+                                Payload::String(off) => {
+                                    SymbolName::from_units(&self.str_units(off))
+                                }
                                 _ => {
                                     return Err(Step::Host(Halt::NotImplemented(
                                         "defineProperty:non-string-key",
                                     )))
                                 }
                             };
-                            if string_to_index(&key).is_some() {
+                            if key.as_str().and_then(string_to_index).is_some() {
                                 return Err(Step::Host(Halt::NotImplemented(
                                     "defineProperty:index-key",
                                 )));
                             }
                             if !self.symbol_ids.contains_key(&key)
-                                && self.default_keys.contains(key.as_str())
+                                && key.as_str().is_some_and(|s| self.default_keys.contains(s))
                             {
                                 return Err(Step::Host(Halt::NotImplemented(
                                     "defineProperty:ambiguous-default-key",
@@ -40520,17 +40532,7 @@ impl Interp {
                 return Err(self.catchable_syntax_error());
             }
             let key_units = self.json_parse_string_units(input, pos)?;
-            let key = match String::from_utf16(&key_units) {
-                Ok(k) => k,
-                // The VM's intern table is still scalar-text keyed. Preserve
-                // the broader JSON value behavior but refuse a lone-surrogate
-                // object key rather than replacing it with U+FFFD.
-                Err(_) => {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "JSON.parse:lone-surrogate-key",
-                    )))
-                }
-            };
+            let key = SymbolName::from_units(&key_units);
             *cost += JSON_PARSE_OBJECT_KEY_METERING;
             // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
             let cesu8_len = Self::regexp_subject_bytes(&key_units).0.len() as u64;
@@ -40541,7 +40543,7 @@ impl Interp {
             // minted 70,000 names — so an identity reviver over such an
             // object poisoned the machine during the PARSE, before any
             // revival ran.
-            let key_ref = match string_to_index(&key) {
+            let key_ref = match key.as_str().and_then(string_to_index) {
                 Some(index) if self.indexes_by_index(inst) => ReadKey::Index(index),
                 // A novel name allocates one key slot (metered directly by
                 // `intern_key`), a known name none.
@@ -42807,7 +42809,7 @@ impl Interp {
         // the `property` coercion, `repr` is the SameValue-distinguishing key
         // identity (symbol descriptor vs string text) used to match buckets.
         let mut buckets: Vec<(Slot, Vec<Slot>)> = Vec::new();
-        let mut reprs: Vec<String> = Vec::new();
+        let mut reprs: Vec<(Option<u16>, Vec<u16>)> = Vec::new();
         let mut index: i32 = 0;
 
         // A closure would need `&mut self`, so record inline. `record` buckets
@@ -42954,20 +42956,14 @@ impl Interp {
         Ok(self.to_string_slot_metered(prim))
     }
 
-    /// A SameValue-distinguishing string identity for a property-key slot (a
-    /// Symbol or a String): symbols carry a `\0sym<id>` sentinel that no string
-    /// text can collide with; strings carry their own text.
-    fn property_key_repr(&mut self, key: Slot) -> String {
-        match key.kind {
-            Kind::Symbol => match key.value {
-                Payload::Reference(desc) => format!("\0sym{}", self.intern_symbol_key(desc)),
-                _ => "\0sym".to_string(),
-            },
-            Kind::String => match key.value {
-                Payload::String(off) => self.str_text(off),
-                _ => String::new(),
-            },
-            _ => String::new(),
+    /// Disjoint identities for string and symbol property keys.
+    fn property_key_repr(&mut self, key: Slot) -> (Option<u16>, Vec<u16>) {
+        match key.value {
+            Payload::Reference(desc) if key.kind == Kind::Symbol => {
+                (Some(self.intern_symbol_key(desc)), Vec::new())
+            }
+            Payload::String(off) if key.kind == Kind::String => (None, self.str_units(off)),
+            _ => unreachable!("ToPropertyKey must produce a string or symbol"),
         }
     }
 
@@ -43027,14 +43023,14 @@ impl Interp {
                 }
                 Kind::String => {
                     let s = match key.value {
-                        Payload::String(off) => self.str_text(off),
+                        Payload::String(off) => SymbolName::from_units(&self.str_units(off)),
                         _ => {
                             return Err(Step::Host(Halt::EngineInvariant(
                                 "group-by:invalid-string-key",
                             )))
                         }
                     };
-                    if let Some(idx) = string_to_index(&s) {
+                    if let Some(idx) = s.as_str().and_then(string_to_index) {
                         Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx))
                     } else {
                         let id = self.intern_key(&s);
@@ -43443,9 +43439,10 @@ impl Interp {
                         .get(id as usize - 1)
                         .cloned()
                         .unwrap_or_default()
-                        .into_bytes()
+                        .as_bytes()
+                        .to_vec()
                 };
-                let off = self.alloc_str_text(&bytes);
+                let off = self.chunks.alloc(&units_to_be16(&cesu8_to_units(&bytes)));
                 (
                     Slot::of(Kind::String, Payload::String(off)),
                     false,
@@ -43917,7 +43914,7 @@ impl Interp {
                 Some(id) => ReadKey::Id(id),
                 None => ReadKey::Index(index),
             },
-            Err(_) => ReadKey::Id(self.intern_key(&k.to_string())),
+            Err(_) => ReadKey::Id(self.intern_key(k.to_string())),
         }
     }
 
@@ -44036,7 +44033,7 @@ impl Interp {
             .into_iter()
             .filter_map(|property| {
                 let id = self.slots.get(property).id;
-                self.string_key_name(id)
+                self.scalar_key_text(id)
                     .as_deref()
                     .and_then(string_to_index)
                     .and_then(|index| index.checked_add(1))
@@ -44094,7 +44091,7 @@ impl Interp {
     /// dynamically, so `HasProperty` is `false` and `Get` is `undefined`
     /// without consulting anything further.
     fn array_generic_index_answerable(&mut self, o: crate::value::SlotIndex, k: u64) -> bool {
-        if self.symbol_ids.contains_key(&k.to_string()) {
+        if self.symbol_ids.contains_key(k.to_string()) {
             return true;
         }
         let mut level = o;
@@ -45502,7 +45499,7 @@ impl Interp {
             for property in self.own_property_slots(current) {
                 let id = self.slots.get(property).id;
                 if let Some(index) = self
-                    .string_key_name(id)
+                    .scalar_key_text(id)
                     .and_then(|name| string_to_array_like_index(&name))
                 {
                     if index >= start && index < len && next.map_or(true, |found| index < found) {
@@ -45557,7 +45554,7 @@ impl Interp {
             for property in self.own_property_slots(current) {
                 let id = self.slots.get(property).id;
                 if let Some(index) = self
-                    .string_key_name(id)
+                    .scalar_key_text(id)
                     .and_then(|name| string_to_array_like_index(&name))
                 {
                     if index <= start && previous.is_none_or(|found| index > found) {
@@ -48099,7 +48096,7 @@ impl Interp {
         if self.is_symbol_key_id(id) {
             return None;
         }
-        let name = self.string_key_name(id)?;
+        let name = self.scalar_key_text(id)?;
         canonical_numeric_index_string(&name)
     }
 
@@ -49458,17 +49455,20 @@ impl Interp {
     /// * A genuinely-novel name allocates one key slot (`fxFindKey` →
     ///   `fxNewSlot`), metered as one slot allocation (`XS_SLOT_ALLOCATION_
     ///   METERING`), exactly as XS charges when the name misses the table.
-    fn intern_key(&mut self, name: &str) -> u16 {
-        if let Some(&id) = self.symbol_ids.get(name) {
+    fn intern_key(&mut self, name: impl Into<SymbolName>) -> u16 {
+        let name = name.into();
+        if let Some(&id) = self.symbol_ids.get(&name) {
             return id;
         }
-        let id = self.append_name_key(name);
-        if !self.default_keys.contains(name) {
+        let id = self.append_name_key(&name);
+        if !name.as_str().is_some_and(|s| self.default_keys.contains(s)) {
             // A name absent from XS's boot key table misses `nameTable`, so
             // `fxNewNameX` calls `fxFindKey` → `fxNewSlot`: one metered slot.
             self.meter.tick_slot_alloc();
         }
-        self.materialize_runtime_global(id, name);
+        if let Some(text) = name.as_str() {
+            self.materialize_runtime_global(id, text);
+        }
         id
     }
 
@@ -49479,7 +49479,8 @@ impl Interp {
     /// persistence refusal. Saturates at the symbol-key floor when the two id
     /// spaces meet (the exhaustion hazard documented on
     /// [`Self::next_symbol_key_id`]).
-    fn append_name_key(&mut self, name: &str) -> u16 {
+    fn append_name_key(&mut self, name: impl Into<SymbolName>) -> u16 {
+        let name = name.into();
         let next = self.symbol_names.len().saturating_add(1);
         if next >= self.next_symbol_key_id as usize {
             // The id spaces met: poison the machine and hand the CURRENT
@@ -49489,12 +49490,12 @@ impl Interp {
             // the alias is never guest-observable or persisted.
             self.id_space_exhausted = true;
             let id = self.next_symbol_key_id;
-            self.symbol_ids.insert(name.to_string(), id);
+            self.symbol_ids.insert(&name, id);
             return id;
         }
         let id = next as u16;
-        self.symbol_names.push(name.to_string());
-        self.symbol_ids.insert(name.to_string(), id);
+        self.symbol_names.push(name.clone());
+        self.symbol_ids.insert(&name, id);
         // Keep the name-keyed special-id caches in lockstep with the
         // table: a restore re-derives them from the FULL persisted
         // table (`bind_program_symbols`), so a live machine that
@@ -49516,11 +49517,12 @@ impl Interp {
     /// array-index walk). Returns the existing id if the name is already
     /// interned, so a program that also names the key keeps the compiler's atom
     /// id.
-    fn intern_key_unmetered(&mut self, name: &str) -> u16 {
-        if let Some(&id) = self.symbol_ids.get(name) {
+    fn intern_key_unmetered(&mut self, name: impl Into<SymbolName>) -> u16 {
+        let name = name.into();
+        if let Some(&id) = self.symbol_ids.get(&name) {
             return id;
         }
-        self.append_name_key(name)
+        self.append_name_key(&name)
     }
 
     /// The program-local property **id** a symbol value is keyed under (XS's
@@ -49691,7 +49693,9 @@ impl Interp {
         !self.symbol_key_ids.is_empty() && self.symbol_key_ids.values().any(|&v| v == id)
     }
 
-    fn string_key_name(&self, id: u16) -> Option<String> {
+    /// Scalar-only dispatch for array indices and built-in names.
+    /// Guest-visible keys must use `property_key_slot` instead.
+    fn scalar_key_text(&self, id: u16) -> Option<String> {
         // O(1) through the forward table. `append_name_key` assigns
         // `id = symbol_names.len() + 1` after pushing, so the name for `id`
         // is `symbol_names[id - 1]`; a symbol key's id comes from the
@@ -49706,7 +49710,9 @@ impl Interp {
         // The two tables must agree before this is the name: the
         // exhausted-id-space placeholder inserts into `symbol_ids` without
         // pushing here, and must not resolve to whatever sits at that index.
-        (self.symbol_ids.get(name) == Some(&id)).then(|| name.clone())
+        (self.symbol_ids.get(name) == Some(&id))
+            .then(|| name.to_text())
+            .flatten()
     }
 
     /// Resolve a property key `Slot` (string or symbol) to its interned id for
@@ -49729,12 +49735,12 @@ impl Interp {
             },
             Kind::String => {
                 let s = match key.value {
-                    Payload::String(off) => self.str_text(off),
+                    Payload::String(off) => SymbolName::from_units(&self.str_units(off)),
                     _ => return None,
                 };
                 if gate_default
                     && !self.symbol_ids.contains_key(&s)
-                    && self.default_keys.contains(s.as_str())
+                    && s.as_str().is_some_and(|s| self.default_keys.contains(s))
                 {
                     return None;
                 }
@@ -49834,11 +49840,11 @@ impl Interp {
             },
             Kind::String => {
                 let content = match key.value {
-                    Payload::String(off) => self.str_text(off).into_bytes(),
+                    Payload::String(off) => SymbolName::from_units(&self.str_units(off)),
                     _ => return None,
                 };
-                let s = String::from_utf8_lossy(&content).into_owned();
-                if let Some(idx) = string_to_index(&s) {
+                let s = content;
+                if let Some(idx) = s.as_str().and_then(string_to_index) {
                     // An index-valued string routes to the item; XS meters the
                     // `fxStringToIndex` success two extra code units.
                     self.meter.tick_code_n(2);
@@ -50054,7 +50060,7 @@ impl Interp {
     /// `(XS_NO_ID, index)` straight to `mxBehaviorGetProperty`, so the dropped
     /// `tick_slot_alloc` is also the metering-faithful answer.
     fn index_read_key_id(&self, index: u32) -> Option<u16> {
-        self.symbol_ids.get(&index.to_string()).copied()
+        self.symbol_ids.get(index.to_string()).copied()
     }
 
     /// Re-resolve a [`ReadKey`] that was captured earlier in the same
@@ -50087,7 +50093,7 @@ impl Interp {
         match key {
             ReadKey::Index(_) => true,
             ReadKey::Id(id) => self
-                .string_key_name(id)
+                .scalar_key_text(id)
                 .is_some_and(|name| string_to_index(&name).is_some()),
         }
     }
@@ -50103,7 +50109,7 @@ impl Interp {
     fn read_key_intern(&mut self, key: ReadKey) -> u16 {
         match key {
             ReadKey::Id(id) => id,
-            ReadKey::Index(index) => self.intern_key_unmetered(&index.to_string()),
+            ReadKey::Index(index) => self.intern_key_unmetered(index.to_string()),
         }
     }
 
@@ -50138,7 +50144,7 @@ impl Interp {
             };
         }
         let name = match property_key.value {
-            Payload::String(offset) => self.str_text(offset),
+            Payload::String(offset) => SymbolName::from_units(&self.str_units(offset)),
             _ => {
                 return Err(Step::Host(Halt::EngineInvariant(
                     "to_read_key:non-string-key",
@@ -50147,7 +50153,7 @@ impl Interp {
         };
         // A canonical array-index string is what XS's `fxAt` turns into
         // `(XS_NO_ID, index)`; uninterned, it stays an index here too.
-        if let Some(index) = string_to_index(&name) {
+        if let Some(index) = name.as_str().and_then(string_to_index) {
             if let Some(id) = self.index_read_key_id(index) {
                 return Ok(ReadKey::Id(id));
             }
@@ -50671,7 +50677,7 @@ impl Interp {
                 }
             }
         }
-        let id = self.intern_key_unmetered(&index.to_string());
+        let id = self.intern_key_unmetered(index.to_string());
         self.mop_define_own_property(code, inst, id, desc)
     }
 
@@ -50789,7 +50795,7 @@ impl Interp {
             // `p[k] = v` (or a computed define) routes through the proxy's
             // `[[Set]]`/`[[DefineOwnProperty]]` trap.
             let key_id = if id == crate::value::XS_NO_ID {
-                self.intern_key(&index.to_string())
+                self.intern_key(index.to_string())
             } else {
                 id
             };
@@ -50824,7 +50830,7 @@ impl Interp {
                 return self.ta_indexed_element_set(code, ta, n, value);
             }
             let id = if id == crate::value::XS_NO_ID {
-                self.intern_key(&index.to_string())
+                self.intern_key(index.to_string())
             } else {
                 id
             };
@@ -50850,7 +50856,7 @@ impl Interp {
                 // Compact writes do not materialize a property name in XS.
                 // Look up an existing name only: interning every literal index
                 // charged a name-slot allocation and shifted exact metering.
-                let key_id = self.symbol_ids.get(&index.to_string()).copied();
+                let key_id = self.symbol_ids.get(index.to_string()).copied();
                 if let Some(key_id) = key_id.filter(|id| self.find_property(inst, *id).is_some()) {
                     if define {
                         let descriptor = OrdinaryDescriptor {
@@ -50923,7 +50929,7 @@ impl Interp {
                     // TypedArray prototype whose behaviour must observe the
                     // key) resolve a name and take the path below.
                 }
-                let id = self.intern_key(&index.to_string());
+                let id = self.intern_key(index.to_string());
                 if define {
                     let descriptor = OrdinaryDescriptor {
                         value: Some(value),
@@ -50941,7 +50947,7 @@ impl Interp {
             }
         } else if self.arrays.contains_key(&inst)
             && !self.arguments_objects.contains(&inst)
-            && self.string_key_name(id).as_deref() == Some("length")
+            && self.scalar_key_text(id).as_deref() == Some("length")
         {
             // `ArraySetLength` is also the `DefineProperty` algorithm and
             // therefore permits the same value on a non-writable length.
@@ -51171,7 +51177,7 @@ impl Interp {
                 .into_iter()
                 .filter_map(|property| {
                     let id = self.slots.get(property).id;
-                    self.string_key_name(id)
+                    self.scalar_key_text(id)
                         .and_then(|name| string_to_index(&name))
                         .filter(|index| *index >= new_len)
                         .map(|index| (index, Some(id)))
@@ -51506,7 +51512,7 @@ impl Interp {
     fn array_index_promotion_id(&mut self, id: Option<u16>, index: u32) -> u16 {
         match id {
             Some(id) => id,
-            None => self.intern_key_unmetered(&index.to_string()),
+            None => self.intern_key_unmetered(index.to_string()),
         }
     }
 
@@ -51520,7 +51526,7 @@ impl Interp {
         id: u16,
         descriptor: OrdinaryDescriptor,
     ) -> Result<bool, Step> {
-        let name = self.string_key_name(id);
+        let name = self.scalar_key_text(id);
         if name.as_deref() == Some("length") && !self.arguments_objects.contains(&inst) {
             return self.array_define_length(code, inst, descriptor);
         }
@@ -51770,7 +51776,7 @@ impl Interp {
         if !self.index_props.contains_key(&inst) {
             return None;
         }
-        let index = string_to_index(&self.string_key_name(id)?)?;
+        let index = string_to_index(&self.scalar_key_text(id)?)?;
         self.index_prop_descriptor(inst, index)
     }
 
@@ -51779,7 +51785,7 @@ impl Interp {
         if !self.index_props.contains_key(&inst) {
             return None;
         }
-        let index = string_to_index(&self.string_key_name(id)?)?;
+        let index = string_to_index(&self.scalar_key_text(id)?)?;
         self.index_prop_item(inst, index).map(|_| index)
     }
 
@@ -52301,7 +52307,7 @@ impl Interp {
         // write does, rather than creating a second, shadowing storage.
         if self.find_property(inst, id).is_none() {
             if let Some(index) = self
-                .string_key_name(id)
+                .scalar_key_text(id)
                 .as_deref()
                 .and_then(string_to_index)
                 .filter(|_| self.indexes_by_index(inst) || self.index_props.contains_key(&inst))
@@ -52679,7 +52685,7 @@ impl Interp {
             let typed_array_element = self.typed_arrays.contains_key(&parent)
                 && !self.is_symbol_key_id(id)
                 && self
-                    .string_key_name(id)
+                    .scalar_key_text(id)
                     .and_then(|name| canonical_numeric_index_string(&name))
                     .is_some();
             if self.proxies.contains_key(&parent) || typed_array_element {
@@ -53762,7 +53768,7 @@ impl Interp {
                 let len = self.str_len(off);
                 match key {
                     ReadKey::Id(id) => {
-                        let name = self.string_key_name(id);
+                        let name = self.scalar_key_text(id);
                         let index = name.as_deref().and_then(string_to_index);
                         self.string_exotic_has_own(len, name.as_deref(), index)
                     }
@@ -53878,7 +53884,7 @@ impl Interp {
         // The key's string name (a symbol key resolves to `None` — never an
         // exotic index / `length` / `name`), and the canonical integer index it
         // names, if any.
-        let name = self.string_key_name(id);
+        let name = self.scalar_key_text(id);
         let index = name.as_deref().and_then(string_to_index);
         // A TypedArray's integer-indexed exotic `[[GetOwnProperty]]` projected
         // to presence: a canonical numeric index is own iff it is a valid
@@ -54267,7 +54273,7 @@ impl Interp {
             ..
         }) = self.wrapper_data.get(&inst).copied()
         {
-            let name = self.string_key_name(id);
+            let name = self.scalar_key_text(id);
             if name.as_deref() == Some("length") {
                 return Some(OrdinaryDescriptor {
                     value: Some(Slot::integer(self.str_len(off) as i32)),
@@ -54291,7 +54297,7 @@ impl Interp {
             }
         }
         let fi = self.functions.get(&inst)?;
-        if self.string_key_name(id).as_deref() == Some("length") {
+        if self.scalar_key_text(id).as_deref() == Some("length") {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::integer(fi.arity as i32)),
                 writable: Some(false),
@@ -54333,7 +54339,7 @@ impl Interp {
         id: u16,
     ) -> Option<OrdinaryDescriptor> {
         let a = self.arrays.get(&inst)?;
-        if self.string_key_name(id).as_deref() == Some("length")
+        if self.scalar_key_text(id).as_deref() == Some("length")
             && !self.arguments_objects.contains(&inst)
         {
             return Some(OrdinaryDescriptor {
@@ -54344,7 +54350,7 @@ impl Interp {
                 ..OrdinaryDescriptor::default()
             });
         }
-        let idx = self.string_key_name(id).and_then(|n| string_to_index(&n))?;
+        let idx = self.scalar_key_text(id).and_then(|n| string_to_index(&n))?;
         let s = a.items().get(&idx).copied()?;
         let value = self.array_item_value(inst, s);
         Some(OrdinaryDescriptor {
@@ -54360,7 +54366,7 @@ impl Interp {
     /// XS fxIDToString (xsSymbol.c), used by native property diagnostics.
     /// Index keys carry XS_NO_ID in XS, and therefore print `?`, not the index.
     fn property_debug_name(&self, id: u16) -> String {
-        let name = if let Some(name) = self.string_key_name(id) {
+        let name = if let Some(name) = self.scalar_key_text(id) {
             if string_to_index(&name).is_some() {
                 "?".to_string()
             } else {
@@ -54498,7 +54504,7 @@ impl Interp {
             let numeric_index = if self.is_symbol_key_id(id) {
                 None
             } else {
-                self.string_key_name(id)
+                self.scalar_key_text(id)
                     .and_then(|name| canonical_numeric_index_string(&name))
             };
             if let Some(index) = numeric_index {
@@ -54542,7 +54548,7 @@ impl Interp {
             }
         }
         if self.arrays.contains_key(&inst) {
-            let name = self.string_key_name(id);
+            let name = self.scalar_key_text(id);
             if name.as_deref() == Some("length") && !self.arguments_objects.contains(&inst) {
                 return Ok(false);
             }
@@ -54614,7 +54620,7 @@ impl Interp {
             let mut idxs: Vec<u32> = self.arrays[&inst].items().keys().copied().collect();
             let ordinary_ids = self.ordered_own_key_ids(inst);
             idxs.extend(ordinary_ids.iter().filter_map(|id| {
-                self.string_key_name(*id)
+                self.scalar_key_text(*id)
                     .and_then(|name| string_to_index(&name))
             }));
             idxs.sort_unstable();
@@ -54634,7 +54640,7 @@ impl Interp {
             for id in ordinary_ids {
                 if (!is_arguments && id == length_id)
                     || self
-                        .string_key_name(id)
+                        .scalar_key_text(id)
                         .is_some_and(|name| string_to_index(&name).is_some())
                 {
                     continue;
@@ -54658,7 +54664,7 @@ impl Interp {
             }
             for id in self.ordered_own_key_ids(inst) {
                 if self
-                    .string_key_name(id)
+                    .scalar_key_text(id)
                     .is_some_and(|name| string_to_index(&name).is_some())
                 {
                     continue;
@@ -54697,7 +54703,7 @@ impl Interp {
             let mut index_expandos: Vec<(u32, u16)> = ordinary_ids
                 .iter()
                 .filter_map(|&id| {
-                    let index = string_to_index(&self.string_key_name(id)?)?;
+                    let index = string_to_index(&self.scalar_key_text(id)?)?;
                     (index as usize >= units).then_some((index, id))
                 })
                 .collect();
@@ -54712,7 +54718,7 @@ impl Interp {
                 // as a unit and out of range as its own key.
                 if id == length_id
                     || self
-                        .string_key_name(id)
+                        .scalar_key_text(id)
                         .is_some_and(|name| string_to_index(&name).is_some())
                 {
                     continue;
@@ -54734,7 +54740,7 @@ impl Interp {
             for &id in &ordinary_ids {
                 if !self.is_symbol_key_id(id)
                     && self
-                        .string_key_name(id)
+                        .scalar_key_text(id)
                         .is_some_and(|name| string_to_index(&name).is_some())
                 {
                     out.push(self.property_key_slot(id)?);
@@ -54758,7 +54764,7 @@ impl Interp {
                     || intrinsic_ids.contains(&id)
                     || (!self.is_symbol_key_id(id)
                         && self
-                            .string_key_name(id)
+                            .scalar_key_text(id)
                             .is_some_and(|name| string_to_index(&name).is_some()))
                 {
                     continue;
@@ -54794,7 +54800,7 @@ impl Interp {
             if self.is_symbol_key_id(*id) {
                 (2u8, 0u32)
             } else {
-                self.string_key_name(*id)
+                self.scalar_key_text(*id)
                     .and_then(|name| string_to_index(&name))
                     .map(|index| (0u8, index))
                     .unwrap_or((1u8, 0))
@@ -55883,7 +55889,7 @@ impl Interp {
     fn to_property_id(&mut self, code: &[u8], key: Slot) -> Result<u16, Step> {
         if let Payload::At(id, index) = key.value {
             return Ok(if id == crate::value::XS_NO_ID {
-                self.intern_key(&index.to_string())
+                self.intern_key(index.to_string())
             } else {
                 id
             });
@@ -55901,7 +55907,7 @@ impl Interp {
             };
         }
         let name = match property_key.value {
-            Payload::String(offset) => self.str_text(offset),
+            Payload::String(offset) => SymbolName::from_units(&self.str_units(offset)),
             // `to_property_key` returns a string or a symbol; anything else
             // is a port invariant break.
             _ => {
@@ -55937,7 +55943,7 @@ impl Interp {
             .ok_or(Step::Host(Halt::EngineInvariant(
                 "ordinary-ownKeys:unknown-key",
             )))?;
-        let offset = self.alloc_str_text(name.as_bytes());
+        let offset = self.chunks.alloc(&units_to_be16(&name.to_units()));
         Ok(Slot::of(Kind::String, Payload::String(offset)))
     }
 
@@ -56069,7 +56075,7 @@ impl Interp {
         let deleted_index_limit = self
             .is_ordinary_object(inst)
             .then(|| {
-                self.string_key_name(id)
+                self.scalar_key_text(id)
                     .as_deref()
                     .and_then(string_to_index)
             })
@@ -61834,11 +61840,7 @@ mod tests {
     #[test]
     fn marker_free_restore_installs_join_and_migrates_arguments_layout() {
         let mut interp = Interp::new();
-        let old_names = vec![
-            "seed".to_string(),
-            "toString".to_string(),
-            "valueOf".to_string(),
-        ];
+        let old_names = vec!["seed".into(), "toString".into(), "valueOf".into()];
         interp.bind_program_symbols(&old_names);
         interp.install_intrinsic_bindings(&old_names, true, |_| true);
 
@@ -61857,7 +61859,7 @@ mod tests {
 
         interp.migrate_restored_layout();
 
-        let join_id = interp.symbol_ids["join"];
+        let join_id = *interp.symbol_ids.get("join").unwrap();
         let join = interp
             .ordinary_get_own_descriptor(interp.array_proto, join_id)
             .and_then(|descriptor| descriptor.value)
@@ -61895,24 +61897,24 @@ mod tests {
     fn marker_free_restore_migrates_only_untouched_standard_global_descriptors() {
         let mut interp = Interp::new();
         let old_names = vec![
-            "Date".to_string(),
-            "Array".to_string(),
-            "Number".to_string(),
-            "Object".to_string(),
-            "globalThis".to_string(),
+            "Date".into(),
+            "Array".into(),
+            "Number".into(),
+            "Object".into(),
+            "globalThis".into(),
         ];
         interp.bind_program_symbols(&old_names);
         interp.install_intrinsic_bindings(&old_names, true, |_| true);
 
         for name in ["Date", "Array", "globalThis"] {
-            let id = interp.symbol_ids[name];
+            let id = *interp.symbol_ids.get(name).unwrap();
             let property = interp.global_props[&id];
             interp.slots.get_mut(property).flag = 0;
         }
-        let number_id = interp.symbol_ids["Number"];
+        let number_id = *interp.symbol_ids.get("Number").unwrap();
         let number_property = interp.global_props[&number_id];
         interp.slots.get_mut(number_property).flag = XS_DONT_SET_FLAG;
-        let object_id = interp.symbol_ids["Object"];
+        let object_id = *interp.symbol_ids.get("Object").unwrap();
         let object_property = interp.global_props[&object_id];
         interp.slots.get_mut(object_property).flag = 0;
         interp.slots.get_mut(object_property).kind = Kind::Integer;
@@ -61921,7 +61923,7 @@ mod tests {
         interp.migrate_restored_layout();
 
         for name in ["Date", "Array", "globalThis"] {
-            let id = interp.symbol_ids[name];
+            let id = *interp.symbol_ids.get(name).unwrap();
             let property = interp.global_props[&id];
             assert_eq!(
                 interp.slots.get(property).flag,
@@ -61945,8 +61947,8 @@ mod tests {
     #[test]
     fn current_restore_preserves_guest_join_and_arguments_edits() {
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["seed".to_string()]);
-        let join_id = interp.symbol_ids["join"];
+        interp.link_intrinsics(&["seed".into()]);
+        let join_id = *interp.symbol_ids.get("join").unwrap();
         assert!(interp.delete_own_property(interp.array_proto, join_id));
 
         let args = interp.new_array_unmetered();
@@ -61979,12 +61981,12 @@ mod tests {
     #[test]
     fn marker_free_current_layout_preserves_guest_arguments_edits() {
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["seed".to_string()]);
+        interp.link_intrinsics(&["seed".into()]);
         interp
             .symbol_key_ids
             .remove(&interp.template_cache)
             .expect("simulate an intermediate snapshot before the marker");
-        let join_id = interp.symbol_ids["join"];
+        let join_id = *interp.symbol_ids.get("join").unwrap();
         assert!(interp.delete_own_property(interp.array_proto, join_id));
 
         let args = interp.new_array_unmetered();
@@ -62018,7 +62020,7 @@ mod tests {
     #[test]
     fn legacy_arguments_migration_allocates_properties_in_owner_order() {
         let mut interp = Interp::new();
-        let old_names = vec!["seed".to_string()];
+        let old_names = vec!["seed".into()];
         interp.bind_program_symbols(&old_names);
         interp.install_intrinsic_bindings(&old_names, true, |_| true);
         let owners: Vec<_> = (0..12).map(|_| interp.new_array_unmetered()).collect();
@@ -62074,12 +62076,12 @@ mod tests {
     #[test]
     fn eval_relink_refuses_an_id_beyond_the_unit_table() {
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Object".to_string()]);
+        interp.link_intrinsics(&["Object".into()]);
         // GET_VARIABLE with id 200 in a unit whose table has one name.
         let code = [b(Opcode::XS_CODE_GET_VARIABLE), 200, 0];
         assert!(
             interp
-                .relink_program_symbols(&code, &["only".to_string()])
+                .relink_program_symbols(&code, &["only".into()])
                 .is_none(),
             "an out-of-table id must refuse, not fail open"
         );
@@ -62124,7 +62126,7 @@ mod tests {
         // that makes cross-unit linkage safe.
         let mut interp = Interp::new();
         // Host realm: "Object" -> id 1, "bar" -> id 2.
-        interp.link_intrinsics(&["Object".to_string(), "bar".to_string()]);
+        interp.link_intrinsics(&["Object".into(), "bar".into()]);
 
         let get_var = b(Opcode::XS_CODE_GET_VARIABLE); // size 0 (ID operand)
         let string_1 = b(Opcode::XS_CODE_STRING_1); // size -1 (length-prefixed data)
@@ -62135,7 +62137,7 @@ mod tests {
             string_1, 0x02, get_var, 0x00, // string literal, payload = [get_var, 0]
             get_var, 0x01, 0x00, // GET_VARIABLE id=1 (the unit's "bar")
         ];
-        let eval_names = vec!["bar".to_string()];
+        let eval_names = vec!["bar".into()];
         let relinked = interp
             .relink_program_symbols(&unit, &eval_names)
             .expect("relink walks the buffer");
@@ -62196,7 +62198,7 @@ mod tests {
         // is the identity — every id already resolves to itself, so no byte
         // changes. Guards against the relinker perturbing already-aligned code.
         let mut interp = Interp::new();
-        let names = vec!["Object".to_string(), "foo".to_string(), "bar".to_string()];
+        let names = vec!["Object".into(), "foo".into(), "bar".into()];
         interp.link_intrinsics(&names);
         let get_var = b(Opcode::XS_CODE_GET_VARIABLE);
         let get_prop = b(Opcode::XS_CODE_GET_PROPERTY);
@@ -62492,7 +62494,7 @@ mod tests {
             0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Boolean".to_string()]);
+        interp.link_intrinsics(&["Boolean".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -62511,7 +62513,7 @@ mod tests {
             0x01, 0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Boolean".to_string()]);
+        interp.link_intrinsics(&["Boolean".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -62553,7 +62555,7 @@ mod tests {
             0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Symbol".to_string()]);
+        interp.link_intrinsics(&["Symbol".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -62576,7 +62578,7 @@ mod tests {
             0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Symbol".to_string()]);
+        interp.link_intrinsics(&["Symbol".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed, "the engine's verdict is a completion");
@@ -62612,7 +62614,7 @@ mod tests {
             0x00, 0xab, 0x01, 0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["a".to_string(), "hasOwnProperty".to_string()]);
+        interp.link_intrinsics(&["a".into(), "hasOwnProperty".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -62632,7 +62634,7 @@ mod tests {
             0x67, 0x01, 0x00, 0x70, 0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Object".to_string()]);
+        interp.link_intrinsics(&["Object".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -62651,7 +62653,7 @@ mod tests {
             0x6f, 0x6d, 0x00, 0xab, 0x01, 0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Error".to_string()]);
+        interp.link_intrinsics(&["Error".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -62767,7 +62769,7 @@ mod tests {
             0x70, 0x65, 0x00, 0xab, 0x01, 0xd7, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["TypeError".to_string()]);
+        interp.link_intrinsics(&["TypeError".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt.thrown_rendering(), Some("TypeError: nope"));
         assert!(!out.completed);
@@ -62785,7 +62787,7 @@ mod tests {
             0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0x84, 0xab, 0x00, 0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["Object".to_string()]);
+        interp.link_intrinsics(&["Object".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -62802,7 +62804,7 @@ mod tests {
             0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0xbb, 0xa9,
         ];
         let mut interp = Interp::new();
-        interp.link_intrinsics(&["undefined".to_string()]);
+        interp.link_intrinsics(&["undefined".into()]);
         let out = interp.run(&code);
         assert_eq!(out.halt, Halt::Return);
         assert!(out.completed);
@@ -63615,7 +63617,7 @@ fn bi_cmp(neg_a: bool, a: &[u32], neg_b: bool, b: &[u32]) -> std::cmp::Ordering 
 /// magnitude in base 10 with a leading `-` when negative and non-zero.
 fn bi_to_decimal(neg: bool, mag: &[u32]) -> String {
     if bi_is_zero(mag) {
-        return "0".to_string();
+        return "0".into();
     }
     // Repeated division of the magnitude by 1e9, collecting base-1e9 chunks.
     let mut limbs = mag.to_vec();
@@ -63646,7 +63648,7 @@ fn bi_to_decimal(neg: bool, mag: &[u32]) -> String {
 fn bi_to_radix(negative: bool, magnitude: &[u32], radix: u32) -> String {
     debug_assert!((2..=36).contains(&radix));
     if bi_is_zero(magnitude) {
-        return "0".to_string();
+        return "0".into();
     }
     let mut limbs = magnitude.to_vec();
     let mut digits = Vec::new();
@@ -63670,14 +63672,14 @@ fn bi_to_radix(negative: bool, magnitude: &[u32], radix: u32) -> String {
 pub fn slot_to_ecma_string(s: &Slot) -> String {
     match s.value {
         Payload::None => match s.kind {
-            Kind::Null => "null".to_string(),
-            _ => "undefined".to_string(),
+            Kind::Null => "null".into(),
+            _ => "undefined".into(),
         },
         Payload::Boolean(b) => if b { "true" } else { "false" }.to_string(),
         Payload::Integer(i) => i.to_string(),
         Payload::Number(n) => number_to_ecma_string(n),
         Payload::String(_) => String::new(), // stage-1 strings not produced
-        Payload::Reference(_) => "[object Object]".to_string(),
+        Payload::Reference(_) => "[object Object]".into(),
         Payload::At(..) => String::new(), // a transient computed key, never rendered
         // A BigInt's decimal needs the digit chunk (arena-bound); the
         // arena-aware [`Interp::render`] handles it before falling here.
