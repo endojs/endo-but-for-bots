@@ -66,9 +66,13 @@ export const assertBrokerOAuthState = value => {
     Fail`Invalid broker OAuth state`;
   (typeof expiresAt === 'number' && Number.isFinite(expiresAt)) ||
     Fail`Invalid broker OAuth state`;
+  // ASCII, because the document round-trips through `btoa`/`atob`, which are
+  // Latin-1. A wider account id would decode to mojibake and fail the binding
+  // check for a reason no operator could read off the error.
   (typeof accountId === 'string' &&
     accountId.length > 0 &&
-    accountId.length <= 256) ||
+    accountId.length <= 256 &&
+    /^[\x20-\x7e]+$/.test(accountId)) ||
     Fail`Invalid broker OAuth state`;
   return harden({
     version: /** @type {const} */ ('BrokerOAuthStateV1'),
@@ -79,6 +83,148 @@ export const assertBrokerOAuthState = value => {
   });
 };
 harden(assertBrokerOAuthState);
+
+/**
+ * The refreshing OAuth credential behind one secret record.
+ *
+ * Deliberately not per lease. The refresh token lives in the record, not in a
+ * session, so a single-flight guard that lived on a lease would let two
+ * concurrent sessions over the same account each redeem the same refresh
+ * token — and a provider that invalidates a refresh token on use reads the
+ * second redemption as a replay and revokes the whole grant, killing the
+ * credential the first session just stored. One of these is made per record
+ * and handed to every lease over it, so the guard is where the token is.
+ *
+ * @param {object} powers
+ * @param {{ readBase64(): Promise<string> }} powers.secret - SecretBlob read facet
+ * @param {{ refresh(request: {refreshToken: string, accountId: string}): Promise<unknown> }} powers.refresh
+ * - Token exchange on the broker's own outbound authority, never a lease's.
+ * @param {{ replaceBase64(base64: string): Promise<unknown> }} powers.rotate
+ * - Rotate-only secret capability: `replaceBase64` and nothing else.
+ * @param {string} powers.accountRef - The operator's selected account.
+ * @param {() => number} powers.now - Trusted epoch-millisecond clock
+ * @param {number} [powers.refreshSkewMs] - Refresh this long before expiry.
+ */
+export const makeBrokerOAuthCredential = ({
+  secret,
+  refresh,
+  rotate,
+  accountRef,
+  now,
+  refreshSkewMs = 60_000,
+}) => {
+  (secret && refresh && rotate && typeof now === 'function') ||
+    Fail`Unprovisioned broker OAuth credential`;
+  (typeof accountRef === 'string' &&
+    accountRef.length > 0 &&
+    accountRef.length <= 256) ||
+    Fail`Invalid broker account binding`;
+  (Number.isInteger(refreshSkewMs) &&
+    refreshSkewMs >= 0 &&
+    refreshSkewMs <= 0x7fff_ffff) ||
+    Fail`Invalid broker refresh skew`;
+
+  const read = async () => {
+    const encoded = await E(secret).readBase64();
+    typeof encoded === 'string' || Fail`Invalid credential`;
+    let parsed;
+    try {
+      parsed = JSON.parse(globalThis.atob(encoded));
+    } catch (_error) {
+      Fail`Invalid credential`;
+    }
+    const state = assertBrokerOAuthState(parsed);
+    state.accountId === accountRef || Fail`Broker account binding changed`;
+    return state;
+  };
+
+  /**
+   * Whether the stored credential is the one to replace: near enough to expiry,
+   * or the exact token an upstream has just refused.
+   *
+   * @param {BrokerOAuthState} state
+   * @param {string} [rejected]
+   */
+  const spent = (state, rejected) =>
+    now() + refreshSkewMs >= state.expiresAt ||
+    (rejected !== undefined && state.accessToken === rejected);
+
+  /** @type {Promise<{state: BrokerOAuthState, exchanged: boolean}> | undefined} */
+  let refreshing;
+  /** @param {string} [rejected] */
+  const exchange = rejected => {
+    if (!refreshing) {
+      refreshing = (async () => {
+        await null;
+        // Re-read inside the guard. A caller that lost the race to another
+        // lease, or to an operator's re-grant, is holding a refresh token that
+        // is already spent; exchanging it again is the replay this guard
+        // exists to prevent. Whatever is in the record now wins.
+        const state = await read();
+        if (!spent(state, rejected)) return harden({ state, exchanged: false });
+        const refreshToken =
+          state.refreshToken ?? Fail`Broker credential expired`;
+        const result = await E(refresh).refresh(
+          harden({ refreshToken, accountId: state.accountId }),
+        );
+        (result && typeof result === 'object' && !Array.isArray(result)) ||
+          Fail`Invalid broker OAuth state`;
+        // A response that omits the refresh token means "keep the one you
+        // have" (RFC 6749 section 6), which is how a non-rotating provider
+        // answers. Persisting the response verbatim would drop it and strand
+        // the record at its next expiry with nothing left to exchange.
+        const next = assertBrokerOAuthState(
+          harden({
+            .../** @type {any} */ (result),
+            refreshToken:
+              /** @type {any} */ (result).refreshToken ?? refreshToken,
+          }),
+        );
+        // A refreshed credential that names another account would move the
+        // session's billing and quota to one the lease was never bound to.
+        next.accountId === accountRef || Fail`Broker account binding changed`;
+        // The refreshed credential must not itself be spent. An `expires_in`
+        // duration mistaken for an instant, a badly skewed clock, or a token
+        // lifetime shorter than the operator's skew all produce a state the
+        // very next request would refresh again, indefinitely and silently.
+        !spent(next) || Fail`Broker refresh did not advance expiry`;
+        await E(rotate).replaceBase64(globalThis.btoa(JSON.stringify(next)));
+        return harden({ state: next, exchanged: true });
+      })().then(
+        next => {
+          refreshing = undefined;
+          return next;
+        },
+        error => {
+          refreshing = undefined;
+          throw error;
+        },
+      );
+    }
+    return refreshing;
+  };
+
+  return harden({
+    accountRef,
+    /**
+     * The credential to present now, refreshed if the stored one is spent.
+     *
+     * The read is per call by design: a credential rotated by this broker, by
+     * a concurrent lease, or by an operator is picked up on the next request
+     * with no re-delegation.
+     *
+     * @param {object} [options]
+     * @param {string} [options.rejected] - An access token the upstream has
+     * just refused, so a still-current-looking credential is replaced too.
+     */
+    current: async ({ rejected } = {}) => {
+      const state = await read();
+      if (!spent(state, rejected)) return harden({ state, exchanged: false });
+      return exchange(rejected);
+    },
+  });
+};
+harden(makeBrokerOAuthCredential);
 
 /**
  * A bounded inference capability, not an HTTP listener or sandbox attestation.
@@ -105,14 +251,14 @@ harden(assertBrokerOAuthState);
  * @param {{ request(request: UpstreamRequest): Promise<{status: number, body: string}>, requestStream?(request: UpstreamRequest): Promise<ProviderStream> }} powers.transport
  * @param {() => number} powers.now - Trusted epoch-millisecond clock
  * @param {(event: {event: string, requests: bigint}) => void} [powers.audit]
- * @param {{ refresh(request: {refreshToken: string, accountId: string}): Promise<unknown> }} [powers.refresh]
- * - Token exchange on the broker's own outbound authority, never the lease's.
- * @param {{ replaceBase64(base64: string): Promise<unknown> }} [powers.rotate]
- * - Rotate-only secret capability: `replaceBase64` and nothing else.
+ * @param {ReturnType<typeof makeBrokerOAuthCredential>} [powers.credential]
+ * - The shared refreshing credential for this secret record, required by
+ * `authMode: 'oauth'`. Shared rather than per lease so that concurrent
+ * sessions cannot each redeem the same refresh token.
  */
 export const makeProviderBrokerLease = (
   policy,
-  { secret, transport, now, audit = () => {}, refresh, rotate },
+  { secret, transport, now, audit = () => {}, credential },
 ) => {
   // Copy and validate operator input so later mutation cannot widen authority.
   const {
@@ -157,26 +303,21 @@ export const makeProviderBrokerLease = (
       accountRef.length > 0 &&
       accountRef.length <= 256) ||
     Fail`Invalid broker account binding`;
-  const refreshSkewMs = policy.refreshSkewMs ?? 60_000;
-  (Number.isInteger(refreshSkewMs) &&
-    refreshSkewMs >= 0 &&
-    refreshSkewMs <= 0x7fff_ffff) ||
-    Fail`Invalid broker refresh skew`;
-  // Provisioning, not preference: an OAuth lease that cannot refresh and cannot
-  // write back is an API-key lease with a shorter life, and would fail its
-  // first turn after expiry rather than at admission. Assembling the OAuth half
-  // once, here, also makes its presence the mode: everything below asks whether
-  // there is an `oauth` record rather than re-reading a mode string.
+  // Provisioning, not preference: an OAuth lease with no refreshing credential
+  // is an API-key lease with a shorter life, and would fail its first turn
+  // after expiry rather than at admission. Binding it here also makes its
+  // presence the mode: everything below asks whether there is an `oauth`
+  // record rather than re-reading a mode string.
   if (authMode === 'oauth') {
     credentialHeader === 'bearer' || Fail`Unprovisioned broker OAuth mode`;
+    // The lease's account is the operator's selection; a credential for some
+    // other account is a different session's, not this one's.
+    (credential !== undefined && credential.accountRef === accountRef) ||
+      Fail`Unprovisioned broker OAuth mode`;
   }
   const oauth =
     authMode === 'oauth'
-      ? harden({
-          accountRef: accountRef ?? Fail`Unprovisioned broker OAuth mode`,
-          refresh: refresh ?? Fail`Unprovisioned broker OAuth mode`,
-          rotate: rotate ?? Fail`Unprovisioned broker OAuth mode`,
-        })
+      ? (credential ?? Fail`Unprovisioned broker OAuth mode`)
       : undefined;
   const parsedOrigin = new URL(origin);
   (parsedOrigin.protocol === 'https:' &&
@@ -290,56 +431,6 @@ export const makeProviderBrokerLease = (
         .flatMap(value => [value, globalThis.btoa(value)]),
     );
 
-  /** @type {Promise<BrokerOAuthState> | undefined} */
-  let refreshing;
-  /**
-   * Exchange the refresh token for new OAuth state, write it back through the
-   * rotate-only capability, and hand the result to every caller that arrived
-   * while the exchange was in flight.
-   *
-   * Single-flight matters twice over: a provider that invalidates the old
-   * refresh token on use turns a concurrent second exchange into a revoked
-   * session, and the write-back would otherwise race itself.
-   *
-   * @param {BrokerOAuthState} stale
-   * @param {NonNullable<typeof oauth>} powers
-   */
-  const exchange = (stale, powers) => {
-    if (!refreshing) {
-      refreshing = (async () => {
-        await null;
-        const refreshToken =
-          stale.refreshToken ?? Fail`Broker credential expired`;
-        const next = assertBrokerOAuthState(
-          await E(powers.refresh).refresh(
-            harden({ refreshToken, accountId: stale.accountId }),
-          ),
-        );
-        // A refresh that comes back naming another account would move the
-        // session's billing and quota to an account the lease was never bound
-        // to. The lease's account is the one the operator selected.
-        next.accountId === powers.accountRef ||
-          Fail`Broker account binding changed`;
-        await E(powers.rotate).replaceBase64(
-          globalThis.btoa(JSON.stringify(next)),
-        );
-        return next;
-      })().then(
-        next => {
-          refreshing = undefined;
-          record('refreshed');
-          return next;
-        },
-        error => {
-          refreshing = undefined;
-          record('refresh-failed');
-          throw error;
-        },
-      );
-    }
-    return refreshing;
-  };
-
   /**
    * Read the secret and, in OAuth mode, make sure the credential it carries is
    * good for the request about to be dispatched.
@@ -349,29 +440,28 @@ export const makeProviderBrokerLease = (
    * without re-delegation, and every length derived below is derived from that
    * read rather than cached across it.
    *
-   * @param {boolean} force - Refresh even when the credential looks current,
-   * because the upstream has just rejected it.
+   * @param {string} [rejected] - An access token the upstream has just refused,
+   * so a credential that still looks current is replaced too.
    * @returns {Promise<ResolvedCredential>}
    */
-  const resolveCredential = async force => {
-    const encoded = await E(secret).readBase64();
-    const decoded = decodeSecret(encoded);
+  const resolveCredential = async rejected => {
     if (!oauth) {
+      const encoded = await E(secret).readBase64();
+      const decoded = decodeSecret(encoded);
       /^[\x21-\x7e]+$/.test(decoded) || Fail`Invalid credential`;
       return harden({ credential: decoded, screens: [decoded, encoded] });
     }
-    let parsed;
+    let resolved;
     try {
-      parsed = JSON.parse(decoded);
-    } catch (_error) {
-      Fail`Invalid credential`;
+      resolved = await E(oauth).current(
+        harden(rejected === undefined ? {} : { rejected }),
+      );
+    } catch (error) {
+      record('refresh-failed');
+      throw error;
     }
-    let state = assertBrokerOAuthState(parsed);
-    state.accountId === oauth.accountRef ||
-      Fail`Broker account binding changed`;
-    if (force || now() + refreshSkewMs >= state.expiresAt) {
-      state = await exchange(state, oauth);
-    }
+    if (resolved.exchanged) record('refreshed');
+    const { state } = resolved;
     return harden({
       credential: state.accessToken,
       screens: screensFor([state.accessToken, state.refreshToken ?? '']),
@@ -430,22 +520,35 @@ export const makeProviderBrokerLease = (
     reservedCostMicrounits += maxCostMicrounitsPerRequest;
     record('admitted');
     /**
+     * Every credential this request has handed the upstream, in every form it
+     * could come back as. It accumulates across a refreshed retry rather than
+     * being replaced: the first attempt's token reached the upstream, so a
+     * response screened only against the second one could deliver the first
+     * back to the slice — and after a 403 that first token is often still live.
+     *
+     * @type {string[]}
+     */
+    const exposed = [];
+    /**
      * One attempt at the upstream, with one resolved credential. A refreshed
-     * retry re-enters here, so every length and every echo screen below is
-     * derived from the credential actually being sent.
+     * retry re-enters here, so every length below is derived from the
+     * credentials actually sent rather than cached across the request.
      *
      * @param {ResolvedCredential} resolved
      */
-    const dispatch = async ({ credential, screens }) => {
+    const dispatch = async ({ credential: token, screens }) => {
       await null;
       checkLive();
+      for (const screen of screens) {
+        if (!exposed.includes(screen)) exposed.push(screen);
+      }
       const upstream = harden({
         url: `${origin}${path}`,
         method,
         headers: {
           ...(credentialHeader === 'bearer'
-            ? { authorization: `Bearer ${credential}` }
-            : { 'x-api-key': credential }),
+            ? { authorization: `Bearer ${token}` }
+            : { 'x-api-key': token }),
           ...(anthropicVersion === undefined
             ? {}
             : { 'anthropic-version': anthropicVersion }),
@@ -459,7 +562,7 @@ export const makeProviderBrokerLease = (
         maxResponseBytes,
       });
       /** @param {string} text */
-      const echoes = text => screens.some(screen => text.includes(screen));
+      const echoes = text => exposed.some(screen => text.includes(screen));
       if (streaming) {
         const response = await E(transport).requestStream(upstream);
         const cancel = () => {
@@ -475,7 +578,7 @@ export const makeProviderBrokerLease = (
         let reading = false;
         let ended = false;
         const keep =
-          screens.reduce((longest, screen) => {
+          exposed.reduce((longest, screen) => {
             return screen.length > longest ? screen.length : longest;
           }, 0) - 1;
         const stream = makeExo(
@@ -578,8 +681,9 @@ export const makeProviderBrokerLease = (
     };
     try {
       checkLive();
+      const first = await resolveCredential();
       try {
-        return await dispatch(await resolveCredential(false));
+        return await dispatch(first);
       } catch (error) {
         // One retry, and only for the one failure a refresh can fix. A turn
         // whose token was revoked or rotated elsewhere mid-session recovers
@@ -588,7 +692,10 @@ export const makeProviderBrokerLease = (
         // does so before the first response byte.
         if (!oauth || !isCredentialRejection(error)) throw error;
         record('credential-rejected');
-        return await dispatch(await resolveCredential(true));
+        // Naming the refused token is what lets the shared credential tell
+        // "replace this one" from "another lease already replaced it": it
+        // exchanges only if the record still holds the token that just failed.
+        return await dispatch(await resolveCredential(first.credential));
       }
     } catch (_error) {
       record('failed');

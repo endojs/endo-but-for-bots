@@ -35,7 +35,12 @@ export const SecretRotatorInterface = M.interface('SecretRotator', {
  * @param {{ replaceBase64(base64: string): Promise<unknown> }} admin
  */
 export const makeSecretRotator = admin => {
-  admin || Fail`Secret rotator requires an administration facet`;
+  // Only that it could be a facet at all. Checking for `replaceBase64` here
+  // would reject a CapTP presence, whose methods are not properties to
+  // inspect, and the secret manager is exactly the sort of facet that arrives
+  // that way; the guard on the method below is what refuses a bad payload.
+  (admin && (typeof admin === 'object' || typeof admin === 'function')) ||
+    Fail`Secret rotator requires an administration facet`;
   return makeExo('SecretRotator', SecretRotatorInterface, {
     /** @param {string} base64 */
     async replaceBase64(base64) {

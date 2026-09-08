@@ -93,6 +93,7 @@ test('controlled probe success binds evidence and launches exact bounded preflig
     leaseId: 'lease',
     networkNamespaceId: 'namespace',
     environment: 'credential-and-proxy-free',
+    codexHomeAuthFile: 'absent',
   });
   const { argv, options } = f.call();
   t.deepEqual(argv.slice(0, 3), ['python3', '-I', '-c']);

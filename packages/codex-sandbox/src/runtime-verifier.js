@@ -247,12 +247,18 @@ export const makeCodexRuntimeVerifier = ({
             toolCodexHomeAccess: 'read-only',
             toolBrokerAccess: 'denied',
             environment: 'credential-and-proxy-free',
-            // Observed, not assumed: the probe read the session's actual
-            // `CODEX_HOME` and found no `auth.json`. That file is where the
-            // pinned CLI caches a ChatGPT login, so its absence is what
-            // distinguishes a broker-fronted slice from one that was simply
-            // handed the operator's subscription credential.
-            codexHomeCredentials: 'absent',
+            // Named for exactly what ran: the probe looked in the session's
+            // actual `CODEX_HOME` for `auth.json` and did not find it. That is
+            // where the pinned CLI caches a ChatGPT login under the
+            // file-backed credential store, and it is the file a
+            // subscription-mode deployment would have to place there.
+            //
+            // It is not a claim that the home holds no credential of any kind:
+            // `cli_auth_credentials_store` can name an OS keyring instead, and
+            // `config.toml` can carry an `experimental_bearer_token`. Neither
+            // is probed, and neither is asserted. It is also a preflight, on a
+            // volume the app-server can write, not a standing property.
+            codexHomeAuthFile: 'absent',
           });
         } catch (_error) {
           if (proc) {
