@@ -1,8 +1,7 @@
-//! Store-schema migration locks for synthetic v5 fixtures carrying the current
-//! meter identity. The committed originals are retained and refused. These exercise the
-//! storage ladder under the fixture's own legacy engine signature; ordinary
-//! current callers use `Signature::new`, whose engine-owned boot generation
-//! rejects these pre-current-boot fixtures before machine adoption.
+//! Schema migration under the current boot identity, plus refusal of frozen
+//! historical fixtures that lack a mechanically derived boot fingerprint.
+//! Matching-boot v5 stores are synthesized below without changing the frozen
+//! artifacts: layout migration must never authorize foreign boot metadata.
 
 mod common;
 mod migration_fixtures;
@@ -19,7 +18,7 @@ use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::{Signature, SnapshotError};
 
 fn sig() -> Signature {
-    Signature::decode(b"ironhorse-worker-v1").expect("frozen fixture signature")
+    Signature::new("ironhorse-worker-v1")
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -28,70 +27,43 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-// These are storage-schema fixtures, not evidence that an old engine used
-// today's weights. Explicitly transplant ONLY the identity of a frozen meter;
-// retain counters, heap rows, and legacy schema, and authenticate the new bytes.
-fn synthetic_meter_identity(old: &[u8]) -> Vec<u8> {
-    let n = u32::from_be_bytes(old[24..28].try_into().unwrap()) as usize;
-    assert_eq!(old.len(), 28 + n, "fixture has the legacy name-only record");
-    assert_eq!(&old[28..], b"ironhorse-meter-1");
-    let version = ironhorse_vm::COST_TABLE_VERSION.as_bytes();
-    let mut new = old[..24].to_vec();
-    new.extend_from_slice(&(version.len() as u32).to_be_bytes());
-    new.extend_from_slice(version);
-    new.extend_from_slice(&ironhorse_vm::cost_table::digest());
-    new
+fn current_boot_fixture_image() -> ironhorse_snapshot::image::MachineImage {
+    use ironhorse_snapshot::machine::MachineSnapshot;
+    let mut m = ironhorse_vm::Interp::new();
+    for source in FIXTURE_CRANKS {
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let code = m
+            .relink_crank(&code, &ironhorse_vm::parse_symbols(&symbols))
+            .unwrap();
+        assert!(m.run(&code).completed);
+    }
+    m.snapshot_image(&sig()).unwrap()
 }
 
-fn copy_synthetic_v5_store(path: &std::path::Path) {
-    use ironhorse_snapshot::store::{combine_root, leaf_hash, seal_commit, LEAF_SMALL};
-    std::fs::copy(fixture("store-v5.ihstore"), path).unwrap();
+fn write_matching_boot_v5_fixture(path: &std::path::Path) {
+    use ironhorse_snapshot::store::{combine_root, image_to_batch, leaf_hash, LEAF_SMALL};
+    let image = current_boot_fixture_image();
     let mut store = FileStore::open(path).unwrap();
-    let old = store.read_small_state().unwrap();
-    let mut at = 0;
-    for _ in 0..5 {
-        let n = u32::from_be_bytes(old[at..at + 4].try_into().unwrap()) as usize;
-        at += 4 + n;
-    }
-    let n = u32::from_be_bytes(old[at..at + 4].try_into().unwrap()) as usize;
-    let meter = synthetic_meter_identity(&old[at + 4..at + 4 + n]);
-    let mut small = old[..at].to_vec();
-    small.extend_from_slice(&(meter.len() as u32).to_be_bytes());
-    small.extend_from_slice(&meter);
-    small.extend_from_slice(&old[at + 4 + n..]);
+    store.commit(&image_to_batch(&image, 1, "")).unwrap();
     let mut manifest = store.manifest().unwrap();
-    let (pages, chunks) = store.leaf_hashes().unwrap();
-    let frees = store.free_leaf_hashes().unwrap();
-    let edges = store.page_edges().unwrap();
+    let mut small = store.read_small_state().unwrap();
+    // Schema 5 contains the original six sections. All later fixture state
+    // is boot-derived or empty, so the ladder may append empty new tables.
+    let mut end = 0;
+    for _ in 0..6 {
+        let len = u32::from_be_bytes(small[end..end + 4].try_into().unwrap()) as usize;
+        end += 4 + len;
+    }
+    small.truncate(end);
+    manifest.store_schema = 5;
+    manifest.cranks = 0;
+    let (pages, exts) = store.leaf_hashes().unwrap();
     manifest.root = combine_root(
         &leaf_hash(LEAF_SMALL, 0, &small),
         &pages,
-        &chunks,
-        &frees,
-        &edges,
-    );
-    let page_rows: Vec<_> = (0..pages.len())
-        .map(|i| (i as u32, store.read_slot_page(i as u32).unwrap()))
-        .collect();
-    let chunk_rows: Vec<_> = (0..chunks.len())
-        .map(|i| (i as u32, store.read_chunk_extent(i as u32).unwrap()))
-        .collect();
-    let free_rows: Vec<_> = (0..frees.len())
-        .map(|i| (i as u32, store.read_free_seg(i as u32).unwrap()))
-        .collect();
-    let edge_rows: Vec<_> = edges
-        .into_iter()
-        .enumerate()
-        .map(|(i, row)| (i as u32, row))
-        .collect();
-    manifest.seal = seal_commit(
-        "",
-        &manifest,
-        &small,
-        &page_rows,
-        &chunk_rows,
-        &free_rows,
-        &edge_rows,
+        &exts,
+        &store.free_leaf_hashes().unwrap(),
+        &store.page_edges().unwrap(),
     );
     store
         .replace_manifest_and_small_for_migration(&manifest, &small)
@@ -99,16 +71,29 @@ fn copy_synthetic_v5_store(path: &std::path::Path) {
 }
 
 #[test]
-fn original_name_only_fixture_is_refused_without_restamping() {
-    let dir = TempDir::new("ih-migrate-name-only");
+fn historical_unfingerprinted_store_and_container_refuse_without_migration() {
+    let dir = TempDir::new("ih-migrate-legacy-boot");
     let path = dir.join("store.ihstore");
     std::fs::copy(fixture("store-v5.ihstore"), &path).unwrap();
     let before = std::fs::read(&path).unwrap();
     let mut store = FileStore::open(&path).unwrap();
-    assert!(migrate_store(&mut store, &sig()).is_err());
+    let legacy_sig = store.manifest().unwrap().signature;
+    for expected in [sig(), legacy_sig] {
+        assert!(matches!(
+            migrate_store(&mut store, &expected),
+            Err(StoreError::Snapshot(
+                SnapshotError::BootLayoutMismatch { .. }
+            ))
+        ));
+        let bytes = std::fs::read(fixture("store-v5.container")).unwrap();
+        assert!(matches!(
+            import_from_container(&bytes, &expected, &mut MemoryStore::new()),
+            Err(StoreError::Snapshot(
+                SnapshotError::BootLayoutMismatch { .. }
+            ))
+        ));
+    }
     assert_eq!(std::fs::read(&path).unwrap(), before);
-    let container = std::fs::read(fixture("store-v5.container")).unwrap();
-    assert!(import_from_container(&container, &sig(), &mut MemoryStore::new()).is_err());
 }
 
 /// Resume the migrated store and re-run the fixture's second crank —
@@ -132,7 +117,7 @@ fn assert_resumes_and_reads(store: &mut dyn HeapStore) {
 fn v5_file_store_migrates_in_place_and_keeps_working() {
     let dir = TempDir::new("ih-migrate-file");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
 
     // Open no longer migrates (review wave 4, F2): the caller runs the
     // signature-gated migration explicitly.
@@ -173,7 +158,7 @@ fn v5_resume_without_migrate_fails_needs_migration() {
     // wave 4, F2/F3 — open() no longer hides the migration step).
     let dir = TempDir::new("ih-migrate-needs");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
 
     let store = FileStore::open(&path).expect("open v5 store");
     match resume_from_store(&store, &sig()) {
@@ -190,7 +175,7 @@ fn migrate_refuses_incompatible_signature_without_touching_bytes() {
     // F2/F3).
     let dir = TempDir::new("ih-migrate-sig");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
     let before = std::fs::read(&path).expect("read v5 fixture");
 
     let mut store = FileStore::open(&path).expect("open v5 store");
@@ -268,7 +253,7 @@ impl HeapStore for ForeignCostTableStore {
 fn migrate_refuses_a_foreign_cost_table_before_any_restamp() {
     let dir = TempDir::new("ih-migrate-cost");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
     let before = std::fs::read(&path).expect("read v5 fixture");
     let mut store = ForeignCostTableStore(FileStore::open(&path).expect("open v5 store"));
     match migrate_store(&mut store, &sig()) {
@@ -305,7 +290,7 @@ fn v5_splice_refuses_an_externally_truncated_file() {
     // bounds every offset it reads.)
     let dir = TempDir::new("ih-migrate-truncated");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
 
     // Open loads the full header + directories; the truncation lands
     // after, exactly as an external writer would do it.
@@ -391,7 +376,7 @@ fn ladder_refuses_a_backend_that_does_not_advance() {
     // sighting of the same schema fails closed.
     let dir = TempDir::new("ih-migrate-noprogress");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
 
     // Run under an explicit deadline. AGENTS.md requires one on any test
     // guarding a deadlock or hang, and this is exactly that: WITHOUT the
@@ -437,7 +422,7 @@ fn ladder_refuses_a_backend_that_does_not_advance() {
 fn a_stale_handle_does_not_splice_over_a_store_another_handle_upgraded() {
     let dir = TempDir::new("ih-migrate-stale");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
 
     // The stale handle opens FIRST and caches a v5 header.
     let mut stale = FileStore::open(&path).expect("open v5 store");
@@ -561,7 +546,7 @@ fn ladder_refuses_a_backend_whose_schema_cycles() {
     // regression is a hang, and a hang must fail by name.
     let dir = TempDir::new("ih-migrate-cycle");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
 
     let (tx, rx) = std::sync::mpsc::channel();
     let probe = std::thread::spawn(move || {
@@ -598,7 +583,7 @@ fn ladder_refuses_a_backend_whose_schema_cycles() {
 fn exporting_an_unmigrated_store_names_migration_not_corruption() {
     let dir = TempDir::new("ih-migrate-export");
     let path = dir.join("store.ihstore");
-    copy_synthetic_v5_store(&path);
+    write_matching_boot_v5_fixture(&path);
     let mut store = FileStore::open(&path).expect("open v5 store");
 
     for label in ["store_to_image", "root_hash", "export_to_container"] {
@@ -627,19 +612,9 @@ fn v5_container_imports_and_round_trips_unchanged() {
     // manifest), and re-exporting must reproduce the container
     // byte-for-byte — the v6 bump changed the root formula, not the
     // container format.
-    let container = std::fs::read(fixture("store-v5.container")).expect("read container fixture");
-    let mut writer = ironhorse_snapshot::atom::AtomWriter::new();
-    for atom in ironhorse_snapshot::atom::AtomReader::parse(&container)
-        .unwrap()
-        .atoms()
-    {
-        if atom.tag == ironhorse_snapshot::METR {
-            writer.atom(atom.tag, &synthetic_meter_identity(atom.payload));
-        } else {
-            writer.atom(atom.tag, atom.payload);
-        }
-    }
-    let container = writer.finish();
+    let mut image = current_boot_fixture_image();
+    image.version.format_version = 15;
+    let container = ironhorse_snapshot::image::write_machine(&image);
     let mut store = MemoryStore::new();
     import_from_container(&container, &sig(), &mut store)
         .expect("import synthetic v5-era container");

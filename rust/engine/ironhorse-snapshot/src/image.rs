@@ -4889,6 +4889,8 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
 
     let sign = r.find(SIGN).ok_or(SnapshotError::MissingAtom(SIGN))?;
     let signature = Signature::decode(sign.payload)?;
+    signature.check_boot()?;
+    expected_sig.check_boot()?;
     if !signature.is_compatible_with(expected_sig) {
         return Err(SnapshotError::SignatureMismatch {
             expected: expected_sig.clone(),

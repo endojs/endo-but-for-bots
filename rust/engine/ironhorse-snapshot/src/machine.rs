@@ -242,6 +242,7 @@ impl MachineSnapshot for Interp {
 
     fn snapshot_image(&self, signature: &Signature) -> Result<MachineImage, MachineSnapshotError> {
         self.persist_gate()?;
+        signature.check_boot()?;
         let image = ungated_image(self, signature);
         // The id-space audit (what remains of the wave-4 P1 gate): with
         // string keys living in the NAME table and symbol keys traveling
@@ -1128,6 +1129,7 @@ pub fn checkpoint_to_store(
     signature: &Signature,
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
+    signature.check_boot()?;
     // The wave-4 P1 intern gate stood here — an O(dirty) refusal of any
     // stored runtime-interned property id, because the id→name map did
     // not travel. The id-space unification retired it: string keys live

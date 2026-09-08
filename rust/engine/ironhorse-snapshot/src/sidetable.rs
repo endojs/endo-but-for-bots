@@ -956,6 +956,31 @@ mod tests {
             "regexp_result_ids",
         ];
 
+        // A retained boot-derived field must contribute to the mechanical
+        // compatibility identity. Comments cannot satisfy this source check.
+        let fingerprint = src
+            .split("fn derive_boot_fingerprint(&self)")
+            .nth(1)
+            .expect("boot fingerprint exists")
+            .split("hash.finalize()")
+            .next()
+            .unwrap();
+        let fingerprint = fingerprint
+            .lines()
+            .map(|line| line.split("//").next().unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for field in BOOT_DERIVED {
+            assert!(
+                fingerprint.split("self.").skip(1).any(|tail| {
+                    tail.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .next()
+                        == Some(*field)
+                }),
+                "boot-derived field {field} is absent from the boot fingerprint"
+            );
+        }
+
         let mut accounted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
         for group in [
             LEDGER_ROWS,

@@ -335,81 +335,71 @@ pub enum VersionError {
     UnsupportedEndian(u8),
 }
 
-/// The current boot-object layout generation. Bump this whenever
-/// `Interp::create_intrinsics` changes any boot-derived slot identity or
-/// metadata table. The engine-owned suffix prevents a host from accidentally
-/// reusing its callback signature across an incompatible boot change.
-pub const BOOT_LAYOUT_VERSION: u32 = 21;
-
-const BOOT_LAYOUT_SIGNATURE_KEY: &str = "|ironhorse-boot=";
-
-/// The ENGINE-COMPATIBILITY signature (`SIGN`). Identifies the engine build a
-/// snapshot was written against, and gates adoption fail-closed: a reader
-/// whose signature differs from the snapshot's refuses the read before any
-/// restore runs, exactly as `fxReadSnapshot` does.
-///
-/// It covers two layouts, and a change to EITHER must bump it:
-///
-/// 1. **The host callback table.** Append-only: new host functions are
-///    added at the end and existing indices never change (per
-///    `designs/daemon-xs-worker-snapshot.md` § Callback table binding).
-///    A callback index would otherwise bind to the wrong host function.
-///
-/// 2. **The boot-derived `SlotIndex` layout** — every slot
-///    `create_intrinsics` allocates below `boot_slot_count`. Adoption
-///    boots a fresh machine and then REPLACES its arenas with the
-///    image's, so the boot-derived maps keyed by slot index (`functions`
-///    above all, and every `*_proto` field) survive from the CURRENT
-///    boot rather than being rebuilt from the snapshot. A container
-///    written under a different boot layout would therefore attach this
-///    build's boot metadata to the image's unrelated slots — silently.
-///    Nothing else catches it: `boot_slot_count` is not serialized, and
-///    `VERS` versions the WIRE SCHEMA (the atom set), not the heap the
-///    atoms describe.
-///
-/// [`Signature::new`] appends the engine-owned boot-layout generation to the
-/// host-provided callback-table signature. Store-backed workers and exported
-/// containers are expected to survive daemon replacement and compatible
-/// engine upgrades, so "same build only" is not an acceptable contract; this
-/// makes the cross-build promise checkable without relying on every host to
-/// remember a separate bump. Locked by
-/// `crafted_row_refusals::a_container_from_a_foreign_boot_layout_is_refused`.
+/// Engine compatibility identity: the host's callback-table signature and
+/// the fingerprint derived from this engine's actual intrinsic boot layout.
+/// Both must match before adoption. Legacy string-only signatures decode for
+/// inspection but cannot authorize restoration without a boot fingerprint.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Signature(String);
+pub struct Signature {
+    host: String,
+    boot: Option<[u8; 32]>,
+}
 
 impl Signature {
-    pub fn new(s: impl Into<String>) -> Signature {
-        Signature(format!(
-            "{}{BOOT_LAYOUT_SIGNATURE_KEY}{BOOT_LAYOUT_VERSION}",
-            s.into()
-        ))
-    }
-
-    /// Serialize the `SIGN` payload (the raw signature bytes).
-    pub fn encode(&self) -> Vec<u8> {
-        self.0.as_bytes().to_vec()
-    }
-
-    /// Decode a `SIGN` payload.
-    pub fn decode(payload: &[u8]) -> Result<Signature, SignatureError> {
-        match std::str::from_utf8(payload) {
-            Ok(s) => Ok(Signature(s.to_string())),
-            Err(_) => Err(SignatureError::NotUtf8),
+    pub fn new(host: impl Into<String>) -> Signature {
+        Signature {
+            host: host.into(),
+            boot: Some(ironhorse_vm::Interp::boot_fingerprint()),
         }
     }
 
-    /// Whether a snapshot written under `self` may be read by a machine
-    /// whose current signature is `current`. Equality is required: any
-    /// difference means the callback table changed layout, so indices
-    /// cannot be trusted.
+    /// Serialize the fixed-width boot digest followed by the host bytes.
+    /// Legacy signatures retain their bytes for inspection and authentication.
+    pub fn encode(&self) -> Vec<u8> {
+        let Some(boot) = self.boot else {
+            return self.host.as_bytes().to_vec();
+        };
+        let mut bytes = b"IHB1".to_vec();
+        bytes.extend_from_slice(&boot);
+        bytes.extend_from_slice(self.host.as_bytes());
+        bytes
+    }
+
+    pub fn decode(payload: &[u8]) -> Result<Signature, SignatureError> {
+        let (boot, host) = if payload.starts_with(b"IHB1") {
+            let digest = payload.get(4..36).ok_or(SignatureError::Truncated)?;
+            (Some(digest.try_into().unwrap()), &payload[36..])
+        } else {
+            (None, payload)
+        };
+        let host = std::str::from_utf8(host)
+            .map_err(|_| SignatureError::NotUtf8)?
+            .to_string();
+        Ok(Signature { host, boot })
+    }
+
+    /// Validate against the running engine, even if a caller supplied the
+    /// same forged or legacy signature as both found and expected identities.
+    pub(crate) fn check_boot(&self) -> Result<(), SnapshotError> {
+        let expected = ironhorse_vm::Interp::boot_fingerprint();
+        if self.boot != Some(expected) {
+            return Err(SnapshotError::BootLayoutMismatch {
+                expected,
+                found: self.boot,
+            });
+        }
+        Ok(())
+    }
+
     pub fn is_compatible_with(&self, current: &Signature) -> bool {
-        self == current
+        self == current && self.check_boot().is_ok()
     }
 }
 
 /// A `SIGN` atom that cannot be decoded.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SignatureError {
+    Truncated,
     NotUtf8,
 }
 
@@ -417,6 +407,11 @@ pub enum SignatureError {
 /// framing, version, and signature failures.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SnapshotError {
+    /// The snapshot lacks this engine's mechanically derived boot identity.
+    BootLayoutMismatch {
+        expected: [u8; 32],
+        found: Option<[u8; 32]>,
+    },
     Atom(AtomError),
     Version(VersionError),
     Signature(SignatureError),
@@ -538,11 +533,10 @@ mod tests {
     #[test]
     fn signature_round_trips_and_gates() {
         let s = Signature::new("ironhorse-worker-v1");
-        assert_eq!(
-            s.encode(),
-            b"ironhorse-worker-v1|ironhorse-boot=21",
-            "the engine-owned boot generation travels with every host signature"
-        );
+        let encoded = s.encode();
+        assert_eq!(&encoded[..4], b"IHB1");
+        assert_eq!(&encoded[4..36], &ironhorse_vm::Interp::boot_fingerprint());
+        assert_eq!(&encoded[36..], b"ironhorse-worker-v1");
         assert_eq!(Signature::decode(&s.encode()).unwrap(), s);
         assert!(s.is_compatible_with(&Signature::new("ironhorse-worker-v1")));
         assert!(!s.is_compatible_with(&Signature::new("ironhorse-worker-v2")));

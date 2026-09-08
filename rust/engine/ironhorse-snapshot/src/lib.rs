@@ -54,7 +54,7 @@ pub mod atom;
 pub mod format;
 pub mod image;
 pub mod machine;
-pub mod sha256;
+pub use ironhorse_vm::sha256;
 pub mod sidetable;
 pub mod slot_codec;
 pub mod store;
