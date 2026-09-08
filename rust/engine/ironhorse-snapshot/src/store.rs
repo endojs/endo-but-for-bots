@@ -4524,7 +4524,9 @@ mod tests {
         let mut image = ran_image();
         image.meter.cost_table_digest[0] ^= 1;
         let mut store = MemoryStore::new();
-        store.commit(&image_to_batch(&image, 1, "")).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
         assert!(matches!(
             validate_store(&store, &sig()),
             Err(StoreError::Snapshot(

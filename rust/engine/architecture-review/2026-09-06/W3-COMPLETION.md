@@ -2,6 +2,10 @@
 
 Implemented incrementally on `codex/w3-persistence-gates`, starting from
 `origin/llm` at `a4f74814f`.
+The PR was subsequently rebased onto `372e35418` to integrate W4 meter identity
+and compilation changes.
+Migration fixtures use the current VM for both boot and meter identity, and
+the combined canonical blob and seal vectors were regenerated.
 Every implementation commit received an adversarial subagent review, with fixes
 reviewed again before committing.
 This record covers all seven W3 steps, including the highlighted findings
