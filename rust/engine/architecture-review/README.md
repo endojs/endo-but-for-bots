@@ -25,7 +25,7 @@ git show 97d8de25:rust/engine/ironhorse-vm/src/interp.rs | sed -n '10938,10960p'
 
 | Published | Reviewed commit | Last revised | Scope | Findings | Review |
 |---|---|---|---|---|---|
-| 2026-09-06 | [`97d8de25`](https://github.com/endojs/endo-but-for-bots/commit/97d8de25) | **2026-09-08** against [`c14706d3`](https://github.com/endojs/endo-but-for-bots/commit/c14706d3): 51 fixed, 39 partial, 101 open. Earlier: 2026-09-07 against [`6c1e1d6b`](https://github.com/endojs/endo-but-for-bots/commit/6c1e1d6b) (37 / 32 / 122); 2026-09-06 against [`f109e8f4`](https://github.com/endojs/endo-but-for-bots/commit/f109e8f4) (10 / 11 / 170) | `rust/engine`, plus `rust/endo/ironhorse-store-sqlite` and `rust/endo/src/ironhorse_engine.rs` | 191 verified: 6 critical, 57 high, 73 medium, 55 low | [2026-09-06](2026-09-06/ARCHITECTURE-REVIEW.md) |
+| 2026-09-06 | [`97d8de25`](https://github.com/endojs/endo-but-for-bots/commit/97d8de25) | **2026-09-08** against [`1b130df7`](https://github.com/endojs/endo-but-for-bots/commit/1b130df7): 83 fixed, 47 partial, 61 open. Earlier: 2026-09-08 against [`c14706d3`](https://github.com/endojs/endo-but-for-bots/commit/c14706d3) (51 / 39 / 101); 2026-09-07 against [`6c1e1d6b`](https://github.com/endojs/endo-but-for-bots/commit/6c1e1d6b) (37 / 32 / 122); 2026-09-06 against [`f109e8f4`](https://github.com/endojs/endo-but-for-bots/commit/f109e8f4) (10 / 11 / 170) | `rust/engine`, plus `rust/endo/ironhorse-store-sqlite` and `rust/endo/src/ironhorse_engine.rs` | 191 verified: 6 critical, 57 high, 73 medium, 55 low | [2026-09-06](2026-09-06/ARCHITECTURE-REVIEW.md) |
 
 ## What a review directory contains
 
