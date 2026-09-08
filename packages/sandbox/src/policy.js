@@ -911,6 +911,16 @@ const attestMounts = (policy, state) => {
             `${kernel.fstype} rather than a ${ATTACH_FSTYPE} projection`,
           );
         }
+        // The whole projection, not a subtree of it. A bind whose root is
+        // a subpath carries the same filesystem type and would pass every
+        // other check here while showing the slice a different — possibly
+        // wider — tree than the capability the attach names.
+        if (kernel.root !== '/') {
+          return unproved(
+            `mount ${mount.role}`,
+            `a bind of ${kernel.root} within the projection rather than the whole of it`,
+          );
+        }
         if (kernel.options.includes('ro') !== (mount.mode === 'ro')) {
           return unproved(
             `mount ${mount.role}`,
@@ -931,9 +941,13 @@ const attestMounts = (policy, state) => {
           source: `attach:${mount.source}`,
           destination: mount.destination,
           mode: mount.mode,
+          // From the kernel's per-mount options, not the runtime record
+          // two lines of evidence away: `noexec` is attested here and
+          // required nowhere, so reading it from the runtime would let a
+          // runtime assert a hardening the slice does not have.
           options: harden(
             ATTESTED_MOUNT_OPTIONS.filter(option =>
-              effective.options.includes(option),
+              kernel.options.includes(option),
             ),
           ),
         });

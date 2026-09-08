@@ -1550,7 +1550,7 @@ export const makePodmanDriver = ({
             }),
         ),
       );
-      /** @type {Map<string, { fstype: string, options: readonly string[] } | null>} */
+      /** @type {Map<string, { fstype: string, root: string, options: readonly string[] } | null>} */
       const attachMounts = new Map(
         attachDeclared.map(mount => {
           const kernel = anchorMountTable?.get(mount.destination);
@@ -1558,7 +1558,11 @@ export const makePodmanDriver = ({
             mount.destination,
             kernel === undefined
               ? null
-              : harden({ fstype: kernel.fstype, options: kernel.options }),
+              : harden({
+                  fstype: kernel.fstype,
+                  root: kernel.root,
+                  options: kernel.options,
+                }),
           ];
         }),
       );

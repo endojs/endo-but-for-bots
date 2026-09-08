@@ -359,6 +359,7 @@ const MOUNTINFO = `\
 102 28 0:52 / /mnt/project rw,nosuid,nodev,relatime - 9p endo-fs rw,trans=unix,version=9p2000.L
 103 28 0:52 / /mnt/project ro,nosuid,nodev,relatime - 9p endo-fs rw,trans=unix,version=9p2000.L
 104 28 0:53 / /mnt/with\\040space rw,nosuid,nodev,relatime - 9p endo-fs rw,trans=unix
+105 28 0:54 /sub /mnt/subtree rw,nosuid,nodev,relatime - 9p endo-fs rw,trans=unix
 `;
 
 test('parseMountInfo keys the kernel mount table by mount point, last mount on top', t => {
@@ -366,6 +367,8 @@ test('parseMountInfo keys the kernel mount table by mount point, last mount on t
   t.deepEqual(table.get('/workspace'), {
     fstype: 'xfs',
     source: '/dev/mapper/vol',
+    root: '/',
+    deviceId: '0:47',
     options: ['rw', 'nosuid', 'nodev', 'relatime'],
     superOptions: ['rw', 'prjquota'],
   });
@@ -374,9 +377,16 @@ test('parseMountInfo keys the kernel mount table by mount point, last mount on t
   t.deepEqual(table.get('/mnt/project'), {
     fstype: '9p',
     source: 'endo-fs',
+    root: '/',
+    deviceId: '0:52',
     options: ['ro', 'nosuid', 'nodev', 'relatime'],
     superOptions: ['rw', 'trans=unix', 'version=9p2000.L'],
   });
+  // `root` distinguishes the whole filesystem from a bind of one subtree
+  // of it, and `deviceId` says which filesystem it is. A proof that keeps
+  // neither can only say that something of the right type is at the path.
+  t.is(table.get('/mnt/subtree')?.root, '/sub');
+  t.is(table.get('/mnt/subtree')?.deviceId, '0:54');
   // The kernel escapes the characters that would break its framing.
   t.is(table.get('/mnt/with space')?.fstype, '9p');
   t.is(table.get('/nowhere'), undefined);

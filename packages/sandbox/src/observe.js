@@ -464,7 +464,7 @@ harden(readNetworkNamespaceIdAtPath);
  * @returns {string}
  */
 const unescapeMountInfoField = field =>
-  field.replace(/\\([0-7]{3})/g, (_match, octal) =>
+  field.replace(/\\(040|011|012|134)/g, (_match, octal) =>
     String.fromCharCode(parseInt(octal, 8)),
   );
 
@@ -479,15 +479,22 @@ const unescapeMountInfoField = field =>
  * ones, and the topmost is what a process at that path sees, so the
  * last line wins.
  *
+ * `root` and `deviceId` are kept because an attestation needs more than
+ * the filesystem type: `deviceId` (the `major:minor` of the superblock)
+ * says WHICH filesystem is mounted, and `root` says how much of it —
+ * `/` for the whole tree, a subpath for a bind of one subtree. Without
+ * them a proof can say only that something of the right type is at a
+ * path, which the runtime's own record already claimed.
+ *
  * A line in any other shape throws. This file is evidence for an
  * attestation, and "we could not read this" must fail the proof rather
  * than silently drop a mount from it.
  *
  * @param {string} text
- * @returns {Map<string, { fstype: string, source: string, options: readonly string[], superOptions: readonly string[] }>}
+ * @returns {Map<string, { fstype: string, source: string, root: string, deviceId: string, options: readonly string[], superOptions: readonly string[] }>}
  */
 export const parseMountInfo = text => {
-  /** @type {Map<string, { fstype: string, source: string, options: readonly string[], superOptions: readonly string[] }>} */
+  /** @type {Map<string, { fstype: string, source: string, root: string, deviceId: string, options: readonly string[], superOptions: readonly string[] }>} */
   const table = new Map();
   for (const line of text.split('\n')) {
     if (line.trim() === '') {
@@ -499,12 +506,17 @@ export const parseMountInfo = text => {
     if (separator < 6 || tokens.length < separator + 4) {
       throw makeError(X`unrecognized mountinfo line ${q(line)}`);
     }
+    const deviceId = tokens[2];
+    const root = unescapeMountInfoField(tokens[3]);
     const mountPoint = unescapeMountInfoField(tokens[4]);
     const options = harden(tokens[5].split(','));
     const fstype = unescapeMountInfoField(tokens[separator + 1]);
     const source = unescapeMountInfoField(tokens[separator + 2]);
     const superOptions = harden(tokens[separator + 3].split(','));
-    table.set(mountPoint, harden({ fstype, source, options, superOptions }));
+    table.set(
+      mountPoint,
+      harden({ fstype, source, root, deviceId, options, superOptions }),
+    );
   }
   return table;
 };
