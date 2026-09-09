@@ -10,10 +10,8 @@ Intl bound-function state: owner has no Intl row	Side-table decoding guard; dedi
 Intl bound-function state: unknown kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 STAC not empty at a quiescent boundary	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
-accessor state: bad option tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: getter or setter is not callable	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: id outside the property-key tables	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-accessor state: rows not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 async activation: invalid promise capability or anchor	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async instances: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async reaction: invalid payload	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -33,10 +31,7 @@ container missing an atom its version always writes	Existing corruption guard; d
 data-views side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 deleted-function metadata: id outside the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
 deleted-function metadata: rows not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-disposable stacks: bad boolean byte	Existing corruption guard; dedicated exact-label regression fixture deferred.
 disposable stacks: disposal method is not callable	Existing corruption guard; dedicated exact-label regression fixture deferred.
-disposable stacks: disposed stack retains records	Existing corruption guard; dedicated exact-label regression fixture deferred.
-disposable stacks: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 durable counter regression	Existing corruption guard; dedicated exact-label regression fixture deferred.
 error-frame side table: owner has no error row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 file store chunk extent row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
@@ -105,11 +100,8 @@ name migration header	Existing corruption guard; dedicated exact-label regressio
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 non-canonical machine encoding	Existing corruption guard; dedicated exact-label regression fixture deferred.
 non-canonical small state	Existing corruption guard; dedicated exact-label regression fixture deferred.
-private accessors: bad option tag	Existing corruption guard; dedicated exact-label regression fixture deferred.
 private accessors: getter or setter is not callable	Existing corruption guard; dedicated exact-label regression fixture deferred.
-private accessors: rows not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 private elements: key has both value and accessor rows	Existing corruption guard; dedicated exact-label regression fixture deferred.
-private values: rows not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 promise cluster: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 promise cluster: combinator capability names no function	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 promise cluster: combinator index out of range	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -137,9 +129,6 @@ promise cluster: settled promise retains reactions	Side-table decoding guard; de
 promise cluster: unknown combinator kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 promise cluster: unused reaction payload not zero	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 proxy revoker names no proxy row	Existing corruption guard; dedicated exact-label regression fixture deferred.
-proxy revokers: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-proxy state: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-proxy state: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 proxy state: revoked proxy retains target or handler	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 regexp side table: persisted source does not compile	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 side-table restore: invalid persisted regexp state	Existing corruption guard; dedicated exact-label regression fixture deferred.

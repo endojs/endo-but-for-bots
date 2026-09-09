@@ -8505,3 +8505,240 @@ mod symbol_temporal_refusals {
         );
     }
 }
+
+#[cfg(test)]
+mod object_state_refusals {
+    use super::*;
+    use ironhorse_vm::{
+        AccessorRow, DisposableStackRow, DisposalRecordRow, PrivateAccessorRow,
+        PrivateElementSnapshot, PrivateValueRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
+    };
+
+    #[test]
+    fn proxy_and_revoker_order_and_boolean() {
+        let valid = ProxyStateSnapshot {
+            proxies: vec![
+                ProxyRow {
+                    owner: 2,
+                    target: 4,
+                    handler: 5,
+                    revoked: false,
+                },
+                ProxyRow {
+                    owner: 3,
+                    target: 4,
+                    handler: 5,
+                    revoked: false,
+                },
+            ],
+            revokers: vec![
+                ProxyRevokerRow {
+                    owner: 6,
+                    proxy: 2,
+                    name_chunk: 0,
+                },
+                ProxyRevokerRow {
+                    owner: 7,
+                    proxy: 3,
+                    name_chunk: 0,
+                },
+            ],
+        };
+        let bytes = encode_proxy_state(&valid);
+        assert_eq!(decode_proxy_state(&bytes).unwrap(), valid);
+        for owner in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.proxies[1].owner = owner;
+            assert_eq!(
+                decode_proxy_state(&encode_proxy_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "proxy state: owners not strictly ascending"
+                ))
+            );
+        }
+        for owner in [6, 5] {
+            let mut invalid = valid.clone();
+            invalid.revokers[1].owner = owner;
+            assert_eq!(
+                decode_proxy_state(&encode_proxy_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "proxy revokers: owners not strictly ascending"
+                ))
+            );
+        }
+        for value in [2, 255] {
+            let mut invalid = bytes.clone();
+            invalid[16] = value; // count + owner + target + handler
+            assert_eq!(
+                decode_proxy_state(&invalid),
+                Err(SnapshotError::Corrupt("proxy state: bad boolean byte"))
+            );
+        }
+    }
+
+    #[test]
+    fn public_accessor_tuple_order_and_option_tags() {
+        let first = AccessorRow {
+            owner: 2,
+            id: 3,
+            get: None,
+            set: None,
+        };
+        let mut second = AccessorRow {
+            owner: 2,
+            id: 4,
+            get: None,
+            set: None,
+        };
+        assert!(decode_accessors(&encode_accessors(&[first.clone(), second.clone()])).is_ok());
+        for (owner, id) in [(2, 3), (2, 2), (1, 5)] {
+            second.owner = owner;
+            second.id = id;
+            assert_eq!(
+                decode_accessors(&encode_accessors(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "accessor state: rows not strictly ascending"
+                ))
+            );
+        }
+        let bytes = encode_accessors(&[first]);
+        assert!(decode_accessors(&bytes).is_ok());
+        for offset in [10, 11] {
+            // count, owner, id, then absent get/set tags
+            let mut invalid = bytes.clone();
+            invalid[offset] = 2;
+            assert_eq!(
+                decode_accessors(&invalid),
+                Err(SnapshotError::Corrupt("accessor state: bad option tag"))
+            );
+        }
+    }
+
+    #[test]
+    fn private_element_tuple_order_and_option_tags() {
+        let valid = PrivateElementSnapshot {
+            values: vec![
+                PrivateValueRow {
+                    receiver: 2,
+                    brand: 3,
+                    value: Slot::integer(1),
+                },
+                PrivateValueRow {
+                    receiver: 2,
+                    brand: 4,
+                    value: Slot::integer(2),
+                },
+            ],
+            accessors: vec![
+                PrivateAccessorRow {
+                    receiver: 3,
+                    brand: 3,
+                    get: None,
+                    set: None,
+                },
+                PrivateAccessorRow {
+                    receiver: 3,
+                    brand: 4,
+                    get: None,
+                    set: None,
+                },
+            ],
+        };
+        assert_eq!(
+            decode_private_elements(&encode_private_elements(&valid)).unwrap(),
+            valid
+        );
+        for (receiver, brand) in [(2, 3), (2, 2), (1, 5)] {
+            let mut invalid = valid.clone();
+            invalid.values[1].receiver = receiver;
+            invalid.values[1].brand = brand;
+            assert_eq!(
+                decode_private_elements(&encode_private_elements(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "private values: rows not strictly ascending"
+                ))
+            );
+        }
+        for (receiver, brand) in [(3, 3), (3, 2), (2, 5)] {
+            let mut invalid = valid.clone();
+            invalid.accessors[1].receiver = receiver;
+            invalid.accessors[1].brand = brand;
+            assert_eq!(
+                decode_private_elements(&encode_private_elements(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "private accessors: rows not strictly ascending"
+                ))
+            );
+        }
+        let bytes = encode_private_elements(&PrivateElementSnapshot {
+            values: vec![],
+            accessors: vec![valid.accessors[0].clone()],
+        });
+        assert!(decode_private_elements(&bytes).is_ok());
+        for offset in [16, 17] {
+            // two counts, receiver, brand, absent get/set
+            let mut invalid = bytes.clone();
+            invalid[offset] = 2;
+            assert_eq!(
+                decode_private_elements(&invalid),
+                Err(SnapshotError::Corrupt("private accessors: bad option tag"))
+            );
+        }
+    }
+
+    #[test]
+    fn disposable_stack_order_boolean_and_disposed_records() {
+        let first = DisposableStackRow {
+            owner: 2,
+            disposed: false,
+            asynchronous: false,
+            records: vec![DisposalRecordRow {
+                resource: Slot::undefined(),
+                method: Slot::undefined(),
+                pass_resource: false,
+            }],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_disposable_stacks(&encode_disposable_stacks(&[
+            first.clone(),
+            second.clone()
+        ]))
+        .is_ok());
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_disposable_stacks(&encode_disposable_stacks(&[
+                    first.clone(),
+                    second.clone()
+                ])),
+                Err(SnapshotError::Corrupt(
+                    "disposable stacks: owners not strictly ascending"
+                ))
+            );
+        }
+        let bytes = encode_disposable_stacks(&[first.clone()]);
+        for offset in [8, 9, bytes.len() - 1] {
+            for value in [2, 255] {
+                let mut invalid = bytes.clone();
+                invalid[offset] = value;
+                assert_eq!(
+                    decode_disposable_stacks(&invalid),
+                    Err(SnapshotError::Corrupt(
+                        "disposable stacks: bad boolean byte"
+                    ))
+                );
+            }
+        }
+        let mut disposed = first;
+        disposed.disposed = true;
+        assert_eq!(
+            decode_disposable_stacks(&encode_disposable_stacks(&[disposed.clone()])),
+            Err(SnapshotError::Corrupt(
+                "disposable stacks: disposed stack retains records"
+            ))
+        );
+        disposed.records.clear();
+        assert!(decode_disposable_stacks(&encode_disposable_stacks(&[disposed])).is_ok());
+    }
+}
