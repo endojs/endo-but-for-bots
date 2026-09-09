@@ -2505,38 +2505,7 @@ fn encode_image_batch(
         root: String::new(),
         seal: String::new(),
     };
-    let small = SmallState {
-        stack: image.stack.clone(),
-        slot_free: image.slot_free.clone(),
-        keys: image.keys.clone(),
-        names: image.names.clone(),
-        symbols: image.symbols.clone(),
-        meter: image.meter.clone(),
-        arrays: image.arrays.clone(),
-        index_props: image.index_props.clone(),
-        collections: image.collections.clone(),
-        registry: image.registry.clone(),
-        errors: image.errors.clone(),
-        buffers: image.buffers.clone(),
-        typed_arrays: image.typed_arrays.clone(),
-        data_views: image.data_views.clone(),
-        wrappers: image.wrappers.clone(),
-        regexps: image.regexps.clone(),
-        dates: image.dates.clone(),
-        function_state: image.function_state.clone(),
-        proxy_state: image.proxy_state.clone(),
-        accessors: image.accessors.clone(),
-        intl_bound_functions: image.intl_bound_functions.clone(),
-        private_elements: image.private_elements.clone(),
-        disposable_stacks: image.disposable_stacks.clone(),
-        generators: image.generators.clone(),
-        promise_cluster: image.promise_cluster.clone(),
-        arguments_brands: image.arguments_brands.clone(),
-        temporal: image.temporal.clone(),
-        intl: image.intl.clone(),
-        name_floor: image.name_floor,
-        iterators: image.iterators.clone(),
-    };
+    let small = crate::snapshot_roster::small_from_image(image);
     let small_bytes = small.encode();
     let slot_pages = encode_all_slot_pages(&image.slots);
     let chunk_extents = encode_all_chunk_extents(&image.chunks);
@@ -2740,44 +2709,9 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         );
     }
 
-    let image = MachineImage {
-        index_props: small.index_props.clone(),
-        version: manifest.version,
-        signature: manifest.signature,
-        creation: manifest.creation,
-        chunks,
-        slots,
-        slot_free,
-        slot_live: manifest.slot_live,
-        stack: small.stack,
-        keys: small.keys,
-        names: small.names,
-        symbols: small.symbols,
-        meter: small.meter,
-        arrays: small.arrays,
-        collections: small.collections,
-        registry: small.registry,
-        errors: small.errors,
-        buffers: small.buffers,
-        typed_arrays: small.typed_arrays,
-        data_views: small.data_views,
-        wrappers: small.wrappers,
-        regexps: small.regexps,
-        dates: small.dates,
-        function_state: small.function_state,
-        proxy_state: small.proxy_state,
-        accessors: small.accessors,
-        intl_bound_functions: small.intl_bound_functions,
-        private_elements: small.private_elements,
-        disposable_stacks: small.disposable_stacks,
-        generators: small.generators,
-        promise_cluster: small.promise_cluster,
-        arguments_brands: small.arguments_brands,
-        temporal: small.temporal,
-        intl: small.intl,
-        name_floor: small.name_floor,
-        iterators: small.iterators,
-    };
+    let image = crate::snapshot_roster::image_from_small(
+        small, manifest, chunks, slots, slot_free,
+    );
     crate::image::check_machine_image_bounds(&image)?;
     crate::image::check_buffer_chunk_lengths(&image.buffers, &image.chunks)?;
     Ok(image)
@@ -4583,6 +4517,24 @@ mod tests {
                 Err(SnapshotError::Corrupt("name migration length"))
             );
         }
+    }
+
+    #[test]
+    fn image_transfer_takes_free_list_from_arena_segments() {
+        let image = ran_image();
+        let manifest = image_to_batch_unchecked(&image, 1, "").manifest;
+        let mut small = crate::snapshot_roster::small_from_image(&image);
+        // A retired small-state payload must not override the reconstructed
+        // arena's free-list segments, even if supplied by legacy tooling.
+        small.slot_free = vec![u32::MAX];
+        let rebuilt = crate::snapshot_roster::image_from_small(
+            small,
+            manifest,
+            image.chunks.clone(),
+            image.slots.clone(),
+            image.slot_free.clone(),
+        );
+        assert_eq!(rebuilt, image);
     }
 
     #[test]
