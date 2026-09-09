@@ -29,6 +29,16 @@ const SOURCE: &str = concat!(
     "\n",
     include_str!("../src/interp/natives/regexp.rs"),
     "\n",
+    include_str!("../src/interp/natives/resource.rs"),
+    "\n",
+    include_str!("../src/interp/natives/reflect.rs"),
+    "\n",
+    include_str!("../src/interp/natives/bigint.rs"),
+    "\n",
+    include_str!("../src/interp/natives/number.rs"),
+    "\n",
+    include_str!("../src/interp/natives/string.rs"),
+    "\n",
     include_str!("../src/interp/natives/collection.rs"),
     "\n",
     include_str!("../src/interp/natives/date.rs"),
@@ -112,12 +122,26 @@ fn check_builtin_capacities(source: &str, moved_modules: &[&str]) {
     }
 }
 
+// These coercions were inside the parent call_native..concat_add audit span.
+// The representation routines that follow them in the child were outside it;
+// keep that original boundary while retaining the whole child in SOURCE.
+fn bigint_builtin_coercions(source: &str) -> String {
+    ["to_bigint_low64", "slot_to_bigint_u64"]
+        .map(|name| method_in(source, name))
+        .join("\n")
+}
+
 #[test]
 fn native_builtins_do_not_reserve_raw_guest_capacities() {
     check_builtin_capacities(
         SOURCE,
         &[
             include_str!("../src/interp/natives/regexp.rs"),
+            include_str!("../src/interp/natives/resource.rs"),
+            include_str!("../src/interp/natives/reflect.rs"),
+            &bigint_builtin_coercions(include_str!("../src/interp/natives/bigint.rs")),
+            include_str!("../src/interp/natives/number.rs"),
+            include_str!("../src/interp/natives/string.rs"),
             include_str!("../src/interp/natives/collection.rs"),
             include_str!("../src/interp/natives/date.rs"),
             include_str!("../src/interp/natives/temporal.rs"),
@@ -142,6 +166,104 @@ fn moved_regexp_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
+        assert!(
+            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+        );
+    }
+}
+
+#[test]
+fn moved_resource_methods_cannot_bypass_allocation_admission() {
+    let original = include_str!("../src/interp/natives/resource.rs");
+    let anchor = "impl Interp {";
+    assert!(original.contains(anchor));
+    for allocation in [
+        "let raw = Vec::with_capacity(guest);",
+        "let raw = vec![0; guest];",
+    ] {
+        let injected = format!(
+            "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
+        );
+        let mutated = original.replacen(anchor, &injected, 1);
+        assert!(
+            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+        );
+    }
+}
+
+#[test]
+fn moved_reflect_methods_cannot_bypass_allocation_admission() {
+    let original = include_str!("../src/interp/natives/reflect.rs");
+    let anchor = "impl Interp {";
+    assert!(original.contains(anchor));
+    for allocation in [
+        "let raw = Vec::with_capacity(guest);",
+        "let raw = vec![0; guest];",
+    ] {
+        let injected = format!(
+            "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
+        );
+        let mutated = original.replacen(anchor, &injected, 1);
+        assert!(
+            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+        );
+    }
+}
+
+#[test]
+fn moved_bigint_methods_cannot_bypass_allocation_admission() {
+    let original = code_only(include_str!("../src/interp/natives/bigint.rs"));
+    check_builtin_capacities(SOURCE, &[&bigint_builtin_coercions(&original)]);
+    for name in ["to_bigint_low64", "slot_to_bigint_u64"] {
+        let body = method_in(&original, name);
+        for allocation in [
+            "let raw = Vec::with_capacity(guest);",
+            "let raw = vec![0; guest];",
+        ] {
+            let injected = body.replacen('{', &format!("{{ {allocation}"), 1);
+            let mutated = original.replacen(&body, &injected, 1);
+            assert_ne!(mutated, original);
+            assert!(std::panic::catch_unwind(|| check_builtin_capacities(
+                SOURCE,
+                &[&bigint_builtin_coercions(&mutated)]
+            ))
+            .is_err());
+        }
+    }
+}
+
+#[test]
+fn moved_number_methods_cannot_bypass_allocation_admission() {
+    let original = include_str!("../src/interp/natives/number.rs");
+    let anchor = "impl Interp {";
+    assert!(original.contains(anchor));
+    for allocation in [
+        "let raw = Vec::with_capacity(guest);",
+        "let raw = vec![0; guest];",
+    ] {
+        let injected = format!(
+            "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
+        );
+        let mutated = original.replacen(anchor, &injected, 1);
+        assert!(
+            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+        );
+    }
+}
+
+#[test]
+fn moved_string_methods_cannot_bypass_allocation_admission() {
+    let original = include_str!("../src/interp/natives/string.rs");
+    let anchor = "impl Interp {";
+    assert!(original.contains(anchor));
+    for allocation in [
+        "let raw = Vec::with_capacity(guest);",
+        "let raw = vec![0; guest];",
+    ] {
+        let injected = format!(
+            "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
+        );
+        let mutated = original.replacen(anchor, &injected, 1);
         assert!(
             std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
         );
