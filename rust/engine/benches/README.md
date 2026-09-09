@@ -576,3 +576,16 @@ Dispatch measured 0.980x, slot allocation 1.022x, and full-first, steady full, a
 partial collection at 80,000 slots measured 1.007x, 1.039x, and 0.989x respectively.
 This is one incremental comparison, not statistical equivalence or final acceptance
 of the whole branch's performance.
+
+## Interpreter decomposition: slot visitation increment
+
+[results/1a-slot-roster.json](results/1a-slot-roster.json) retains both measured runs
+for the shared full/partial table walks against parent `9b899a9b0`.
+The fresh pair measured the largest full-first, steady-full, and partial GC cases at
+1.001x, 1.007x, and 0.970x, but four controls exceeded the unchanged 1.25x threshold.
+The candidate repeat measured dispatch at 0.996x and those GC cases at 1.014x,
+0.999x, and 0.990x; it failed the smallest tail-slide control at 1.268x and the
+5,000-slot full-plus-partial control at 1.421x.
+No performance edits occurred between runs, and neither run passed every threshold.
+The results do not establish equivalence or prove that failures are host noise.
+Final whole-branch performance acceptance remains pending.
