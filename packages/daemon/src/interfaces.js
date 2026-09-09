@@ -163,7 +163,9 @@ export const SecretAdminInterface = M.interface('SecretAdmin', {
   getSummary: M.call().returns(M.promise()),
   // `{ ifGeneration }` makes the replacement conditional on the record still
   // being at that generation, so a caller replacing a value it derived from an
-  // earlier read fails rather than overwriting a change it never saw.
+  // earlier read fails rather than overwriting a change it never saw. It
+  // resolves to the generation it committed, which is what a caller staging a
+  // multi-step change pins its next write to.
   //
   // The third argument is load-bearing: two-argument `M.splitRecord` leaves
   // unlisted properties unconstrained, so `{ ifGeneraton: 1n }` would pass the

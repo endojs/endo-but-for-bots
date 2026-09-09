@@ -17,7 +17,8 @@ const SecretBase64Shape = M.string({
 export const SecretRotatorInterface = M.interface('SecretRotator', {
   // The `{ ifGeneration }` precondition travels with the write, because a
   // rotation that cannot be made conditional cannot avoid overwriting a
-  // replacement it never read.
+  // replacement it never read. So does the generation it commits, which is what
+  // a write-ahead protocol pins its second write to.
   //
   // The closed rest is load-bearing, exactly as it is on the secret manager's
   // own guard: two-argument `M.splitRecord` leaves unlisted properties
@@ -41,7 +42,9 @@ export const SecretRotatorInterface = M.interface('SecretRotator', {
  *
  * This is a structural attenuation, not a daemon dependency: anything with a
  * `replaceBase64` method can back it, which is what lets a test drive rotation
- * without a secret manager.
+ * without a secret manager. The backing facet is expected to resolve to the
+ * generation it committed, as `SecretAdmin` does; this passes that through
+ * rather than checking it, so the caller that needs it is the one that says so.
  *
  * @param {{ replaceBase64(base64: string, options?: {ifGeneration?: bigint}): Promise<unknown> }} admin
  */

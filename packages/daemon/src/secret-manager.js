@@ -387,6 +387,14 @@ export const makeSecretManager = ({
                 updated.generation,
                 operationId,
               );
+              // The generation this write committed. A caller staging a
+              // multi-step change — writing a marker, doing something
+              // irreversible, then recording the outcome — needs to pin the
+              // second write to the version the first produced. Re-reading to
+              // learn it reopens the window the pin exists to close, and
+              // computing it as "one more than what I pinned" would hard-code
+              // this increment into every such caller.
+              return updated.generation;
             } catch {
               await audit(
                 secretId,

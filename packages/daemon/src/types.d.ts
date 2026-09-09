@@ -1627,11 +1627,15 @@ export interface SecretAdmin {
    * `ifGeneration` makes the replacement conditional on the record still being
    * at that generation, so a caller replacing a value it derived from an
    * earlier read is refused rather than overwriting a change it never saw.
+   *
+   * Resolves to the generation the replacement committed, so a caller staging
+   * a multi-step change can pin its next write to the version this one
+   * produced without re-reading.
    */
   replaceBase64(
     bytesBase64: string,
     options?: { ifGeneration?: bigint },
-  ): Promise<void>;
+  ): Promise<bigint>;
   setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
   delete(): Promise<void>;

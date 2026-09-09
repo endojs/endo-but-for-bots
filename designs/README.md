@@ -6,8 +6,14 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
+revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
+refreshing OAuth credential with expiry tracking, single-flight exchange, a
+generation-checked write-ahead refresh intent, rotate-only write-back, and
+account binding — together with the sourced finding on which vendor
+subscription modes a proxy may hold a credential for),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
-2026-09-03; a singleton, capability-authorized manager for arbitrary secret
+2026-09-09; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
 individual `SecretBlob` capabilities in the ordinary `secrets` pet store;
 uses existing `lookup` and `marshal` formulas, supports replacement,
@@ -270,7 +276,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-08 | In Progress |
+| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
@@ -307,7 +313,7 @@ LLM-agent stack).*
 | [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md) | 2026-05-21 | 2026-05-21 | In Progress |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
 | [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-09-03 | Not Started |
-| [daemon-secret-manager](daemon-secret-manager.md) | 2026-09-03 | 2026-09-03 | Implemented (local backend) |
+| [daemon-secret-manager](daemon-secret-manager.md) | 2026-09-03 | 2026-09-09 | Implemented (local backend) |
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-05-19 | **Complete** |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-05-19 | Reference |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
@@ -1126,7 +1132,7 @@ from M3's "build the gateway package and ship a self-host story".
 | gateway-oauth-bonding *(gap)* | — | **Design gap.** Bond an OAuth identity (Google, GitHub, Microsoft) to a public-key identity so a user can sign in with an external account. Distinct from [endoclaw-oauth](endoclaw-oauth.md) (agent-side OAuth client, in M7) and [endopi-provider-registry-and-oauth](endopi-provider-registry-and-oauth.md) (LLM-provider OAuth). |
 | gateway-key-recovery *(gap)* | — | **Design gap.** Operator-side bearer-token re-issue conditioned on OAuth-proof-of-identity; narrower than the removed endo-gateway Open Question 1 (Pass-Invariant-Eq), whose material is now folded into [gateway-package](gateway-package.md), and which stays open as the broader follow-up of [daemon-agent-network-identity](daemon-agent-network-identity.md). |
 | gateway-stripe-adapter *(gap)* | — | **Design gap.** Reference adapter for the `verifyPaymentProof` power Phase 8 (PR [#396](https://github.com/endojs/endo-but-for-bots/pull/396)) injected. Webhook signature validation, Stripe-API integration, idempotency, refund handling. May be small enough to live as implementation rather than design, but a short design note pinning the wire shape and failure modes reduces drift risk; recommended as a design file. |
-| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | In Progress | Credential custody for hosted agent sessions: `authMode: 'oauth'` in `@endo/hosted-agent`'s provider broker, with expiry, single-flight refresh, rotate-only write-back, and account binding, plus the sourced finding that **neither vendor permits a proxy to supply a subscription credential**, so both subscription modes stay closed. Answers the "which credential bills this session" half of the metering rows below; distinct from [endoclaw-oauth](endoclaw-oauth.md) (generic agent-side OAuth capability, M7), which it is the bounded inference-only instance of. |
+| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | In Progress | Credential custody for hosted agent sessions: `authMode: 'oauth'` in `@endo/hosted-agent`'s provider broker, with expiry, single-flight refresh, a generation-checked write-ahead refresh intent, rotate-only write-back, and account binding, plus the sourced finding that **neither vendor permits a proxy to supply a subscription credential**, so both subscription modes stay closed. Answers the "which credential bills this session" half of the metering rows below; distinct from [endoclaw-oauth](endoclaw-oauth.md) (generic agent-side OAuth capability, M7), which it is the bounded inference-only instance of. |
 | gateway-resource-classes *(gap, may fold into stripe-adapter)* | — | **Design gap.** Phase 8 (PR #396) names compute (computrons), storage, network, and inference (cogitrons) as the resource classes; the per-class measurement surfaces (what counts as a computron, how cogitrons map to upstream provider tokens, how network bytes are counted across HTTP / WS / OCapN) need per-class spec text. Likely folds into `gateway-stripe-adapter` unless the metering becomes its own work. |
 
 **Exit criterion:** A user signs into a hosted gateway via OAuth,
@@ -1735,7 +1741,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | gateway-oauth-bonding *(gap)* | M | 4-5 days | 5 | Design gap; OAuth-to-formula-id bonding (referenced by M6 P4 slice) |
 | gateway-key-recovery *(gap)* | S-M | 3 days | 5 | Design gap; operator-side bearer-token re-issue (referenced by M6 P4 slice) |
 | gateway-stripe-adapter *(gap)* | S-M | 3 days | 5 | Design gap; reference adapter for `verifyPaymentProof` (referenced by M6 P3 slice) |
-| hosted-agent-broker-oauth | S-M | 3 days | 5 | Broker-side OAuth lifecycle (expiry, single-flight refresh, rotate-only write-back, account binding, one bounded retry) plus the vendor feasibility finding; landed. Remaining effort is the live acceptance matrix against a real upstream, not further design. |
+| hosted-agent-broker-oauth | S-M | 3 days | 5 | Broker-side OAuth lifecycle (expiry, single-flight refresh, write-ahead refresh intent, rotate-only write-back, account binding, one bounded retry) plus the vendor feasibility finding; landed. Remaining effort is the live acceptance matrix against a real upstream, not further design. |
 | endo-gateway-mcp | M | ~2 weeks | 6 | MCP JSON-RPC termination; counted under M6 as the MCP-bridge milestone's own work. Design merged today (PR [#376](https://github.com/endojs/endo-but-for-bots/pull/376)) |
 | familiar-unified-weblet-server | M | 3 days | 7 | Web-server restructuring; design revised in PR #100 |
 | familiar-chat-weblet-hosting | M | 4-5 days | 7 | Iframe hosting, guest profiles (1.2x bump) |
