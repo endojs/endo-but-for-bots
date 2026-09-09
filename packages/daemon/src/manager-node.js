@@ -1,6 +1,6 @@
 // @ts-check
 /* eslint-disable no-await-in-loop */
-/* global process */
+/* global process, setInterval, clearInterval */
 
 // Establish a perimeter:
 // eslint-disable-next-line import/order
@@ -54,6 +54,34 @@ const config = {
 const { pid, kill } = process;
 
 const { cancelled, cancel } = makeCancelKit();
+
+// Orphan watchdog. The daemon is spawned detached and unref'd (see
+// `runEndo` in ../index.js) so it deliberately outlives the short-lived
+// `endo start` invocation — correct for a real daemon, but it means a
+// daemon started by a test leaks as a background process whenever the test
+// runner is killed (an ava timeout, a CI/host reaper's SIGKILL, an OOM)
+// before its `afterEach`/`finally` teardown can run `endo stop`/`endo
+// purge`. A harness opts in by setting ENDO_DAEMON_OWNER_PID to its own
+// process id; we then poll that process and shut down gracefully — exactly
+// as if SIGTERM'd — once it is gone, so no per-test daemon survives its
+// owner even when no teardown hook runs. Left unset in production, this is
+// inert.
+const ownerPid = Number(process.env.ENDO_DAEMON_OWNER_PID);
+if (Number.isInteger(ownerPid) && ownerPid > 0) {
+  const ownerWatch = setInterval(() => {
+    try {
+      // Signal 0 only probes for the process's existence; it delivers no
+      // signal. A throw means the owner is gone.
+      kill(ownerPid, 0);
+    } catch {
+      clearInterval(ownerWatch);
+      cancel(new Error(`Endo daemon owner process ${ownerPid} exited`));
+    }
+  }, 1000);
+  // Never keep the daemon's event loop alive solely for the watchdog.
+  ownerWatch.unref();
+  cancelled.catch(() => clearInterval(ownerWatch));
+}
 
 const networkPowers = makeNetworkPowers({ net, fsp });
 const filePowers = makeFilePowers({ fs, path });
