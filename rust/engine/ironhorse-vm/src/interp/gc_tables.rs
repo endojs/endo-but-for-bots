@@ -371,8 +371,9 @@ macro_rules! define_chunk_walk {
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
           #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    }) => {
+    } external_tables { $($external:tt)* }) => {
         impl Hooks<'_> {
             fn visit_chunks(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
                 $(gc_chunk!(gc_run, self, $field, visit, $chunk);)*
@@ -654,8 +655,9 @@ macro_rules! define_slot_walks {
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
           #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    }) => {
+    } external_tables { $($external:tt)* }) => {
         impl Hooks<'_> {
             fn visit_owner_slots(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex)) {
                 $(gc_slot_table!(gc_run, full, self, $field, idx, visit, $shape, $row);)*
@@ -804,8 +806,9 @@ macro_rules! define_weak_walks {
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
           #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    }) => {
+    } external_tables { $($external:tt)* }) => {
         impl Hooks<'_> {
             fn visit_ephemerons(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex)) {
                 $(gc_weak!(gc_run, trace, self, $field, slots, visit, $weak);)*

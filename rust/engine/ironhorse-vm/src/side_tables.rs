@@ -1,4 +1,4 @@
-//! Shared checkpoint section roster.
+//! Shared checkpoint section roster and inert interpreter table metadata.
 //!
 //! Numeric identities preserve schema 28 framing. Append-only changes require
 //! the snapshot format's migration discipline; reordering is never permitted.
@@ -48,4 +48,20 @@ macro_rules! snapshot_sections {
             IndexProperties = 31,
         }
     };
+}
+
+/// Inert identity and field association exported to snapshot consumers.
+/// These tags describe current ownership; they do not implement persistence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TableDesc {
+    pub variant: &'static str,
+    /// Historical enum discriminant; distinct from public enumeration order.
+    pub discriminant: usize,
+    pub ordinal: usize,
+    /// Coverage tag interpreted by the snapshot crate.
+    pub coverage: &'static str,
+    /// Current owning field, or None for state external to Interp.
+    pub primary_field: Option<&'static str>,
+    /// Existing descriptor display text, which may name satellite fields too.
+    pub field: &'static str,
 }

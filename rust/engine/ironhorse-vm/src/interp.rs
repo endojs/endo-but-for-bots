@@ -43,6 +43,9 @@
 
 #[macro_use]
 mod state;
+
+#[doc(hidden)]
+pub use state::SIDE_TABLES;
 #[doc(hidden)]
 #[macro_use]
 pub mod gc_tables;

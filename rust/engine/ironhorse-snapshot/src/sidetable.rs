@@ -1,6 +1,5 @@
-//! The **side-table completeness ledger** — the bug class this crate is
-//! designed against (job spec item 3; the review ledger's standing
-//! snapshot note).
+//! Side-table persistence coverage, generated from the VM field roster and
+//! checked against independent field and boundary classifications.
 //!
 //! In ironhorse the heap is index arenas, but a machine's reachable state is
 //! *not* wholly in those arenas: dozens of side tables ([`ironhorse_vm`]'s
@@ -11,15 +10,20 @@
 //! misses one of these is the snapshot-shaped version of a missing GC
 //! root: it round-trips fine on trivial heaps and corrupts on real ones.**
 //!
-//! So the set of side tables is made *explicit and exhaustive here*, one
-//! [`SideTable`] variant per table, enumerated against `Interp`'s actual
-//! fields. [`SideTable::descriptor`] is an exhaustive `match`: the
-//! compiler forces a new variant to be described the moment it is added,
-//! and [`SideTable::ALL`] (guarded by [`tests::all_is_exhaustive`]) forces
-//! it into the coverage ledger. Each descriptor records its
-//! [`Coverage`] — whether the writer/reader in [`crate::image`] carries it
-//! yet — so the remaining work is a compile-checked list, never a silent
-//! omission.
+//! The VM roster declares the table identities alongside their owning fields,
+//! with an explicit external entry for module-graph state.
+//! Its metadata-only [`ironhorse_vm::interp_tables`] macro generates
+//! [`SideTable`], [`SideTable::ALL`], and [`SideTable::descriptor`] here.
+//! Snapshot interprets each coverage tag as [`Coverage`]; the VM does not depend
+//! on snapshot types or implement persistence through these declarations.
+//! The tests retain independent checks of historical identities, field coverage,
+//! and the boundary conditions that make excluded state safe to omit.
+//! Generated agreement alone cannot establish that an image carries a table.
+//!
+//! Serialized coverage includes callable proxy, accessor, private-element and
+//! Intl-bound links, as well as suspended async instances.
+//! Unsupported reactions and runtime natives still refuse persistence; coverage
+//! does not waive those gates (see `promise_carry`, `async_carry`, and `persist_gates`).
 //!
 //! # Excluded transients — why "enumerated against `Interp`'s actual
 //! fields" does not mean *every* field
@@ -133,8 +137,8 @@
 //!   a suspended arguments object resumes branded — its completion-value
 //!   render answers `[object Arguments]`, not the array join
 //!   (`language_rows_carry.rs`).
-//! - `side_refs` — the counted-accessor page projection over the two bulk
-//!   rows (`Arrays`/`Collections`); a derived cache the restore path
+//! - `side_refs` — the counted-accessor page projection over the three bulk
+//!   rows (`Arrays`/`IndexProps`/`Collections`); a derived cache the restore path
 //!   rebuilds in lockstep by routing every insert through the counted
 //!   accessors. Its corruption poison latch is transient: quiescence
 //!   requires it clear, so a poisoned machine can never persist and
@@ -186,447 +190,47 @@ pub enum Coverage {
     EmptyAtBoundary,
 }
 
-/// One side table of the machine's reachable state. Enumerated from the
-/// live `ironhorse_vm::interp::Interp` fields (verified against the struct,
-/// not this list — see the module docs).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum SideTable {
-    /// `functions` — user/native function metadata, **including
-    /// `closures`** (the captured frame-cell owner). The headline case:
-    /// closure capture is invisible in the slot arena's shape alone.
-    Functions,
-    /// `bound_functions` — `Function.prototype.bind` target/`this`/args.
-    BoundFunctions,
-    /// `proxies` (+ `proxy_revokers`) — target/handler slots and revoker links.
-    /// Serialized with function metadata available on restore, so resumed guest
-    /// traps remain callable. The proxy carry tests exercise invocation and revoke.
-    Proxies,
-    /// `call_stack` — the suspended `CallerState` activations (scope,
-    /// args, result) of the active call chain. Empty at every
-    /// persistable boundary (`is_quiescent` requires it; the persist
-    /// gates enforce it), so no atom is needed.
-    CallStack,
-    /// `jumps` — the `CatchJump` chain (`the->firstJump`): each entry
-    /// snapshots the value stack, scope, and call frames to restore on a
-    /// throw. A caught-and-pending exception lives here + `exception`.
-    /// Empty at every persistable boundary (quiescence-gated).
-    Jumps,
-    /// `global_props` — the global object's materialized own-property
-    /// slot index by id.
-    GlobalProps,
-    /// `error_data` — per-instance Error name/message, the metadata the
-    /// abort-value render consults. Serialized in the `ERRD` atom /
-    /// small-state errors section (store schema 9), owner-ascending,
-    /// name drawn from the engine's closed error-constructor set.
-    ErrorData,
-    /// `accessors` — per-instance getter/setter slots, serialized with their
-    /// callable function metadata. Boot-seeded accessors are reconstructed and
-    /// reconciled with carried entries during restore.
-    Accessors,
-    /// `wrapper_data` — per-instance primitive-wrapper boxed value.
-    WrapperData,
-    /// `arrays` — exotic array length + item chunk.
-    Arrays,
-    /// `index_props` — an ORDINARY object's integer-indexed properties,
-    /// stored by index rather than by name (XS's internal `XS_ARRAY_KIND`
-    /// slot). Serialized in the `IDXP` atom, mirroring `ARRY`'s discipline:
-    /// owner-ascending rows, item indices strictly ascending, so
-    /// `import ∘ export` stays the identity the CAS key rests on. Unlike
-    /// `ARRY` there is no `length` to bound the indices against — an ordinary
-    /// object has no array `length` semantics.
-    IndexProps,
-    /// `collections` — Map/Set/WeakMap/WeakSet internal slots.
-    Collections,
-    /// `array_buffers` — ArrayBuffer backing-store geometry (the bytes
-    /// live in the chunk arena and travel with `BLOC`). Serialized in
-    /// the `ABUF` atom / small-state buffers section (store schema
-    /// 10), with the `detached_buffers`/`shared_buffers` brand
-    /// satellites folded into per-row flags.
-    ArrayBuffers,
-    /// `typed_arrays` — TypedArray view state + buffer reference.
-    /// Serialized in the `TARR` atom (schema 10); element kind refused
-    /// at decode past the dispatch table, view geometry refused past
-    /// its buffer's length.
-    TypedArrays,
-    /// `data_views` — DataView view state + buffer reference.
-    /// Serialized in the `DVIW` atom (schema 10), same geometry
-    /// discipline as `TypedArrays`.
-    DataViews,
-    /// `iterators` — the built-in iterator cursors (array
-    /// values/keys/entries, for-in enumerators, string iterators,
-    /// Map/Set cursors, and `Iterator.from` generic wrappers). Serialized in
-    /// the `ITER` atom / small-state
-    /// iterators section (store schema 13), owner-ascending, with two
-    /// boundary normalizations that make the row pure data: a
-    /// collection cursor travels as its LIVE-ENTRY ordinal (the `COLL`
-    /// row compacts tombstones, so the ordinal IS the physical index
-    /// in the restored dense table) and `clear()`-staleness folds into
-    /// `done` (restored collections rebuild at generation zero; only
-    /// "retired" is observable). Locks: the `iterator_carry.rs` twins
-    /// — a resumed cursor CONTINUES its walk, straddling a tombstone
-    /// compaction and staying retired across a clear.
-    Iterators,
-
-    /// `promises` — per-instance settlement STATUS/RESULT/THENS.
-    Promises,
-    /// `promise_functions` — bound state for runtime-minted Promise callables:
-    /// resolve/reject pairs, capability executors, and `finally` closures.
-    PromiseFunctions,
-    /// `promise_guards` — the per-pair `[[AlreadyResolved]]` flags.
-    PromiseGuards,
-    /// `promise_jobs` — the queued microtasks. Empty at every
-    /// persistable boundary: the crank model drains the queue before
-    /// completion, `is_quiescent` requires it empty (a HALTED crank
-    /// leaves jobs queued, and the gates refuse exactly that machine),
-    /// so no atom is needed.
-    PromiseJobs,
-    /// `combinators` — the shared `Promise.all`/`allSettled`/`race`/`any`
-    /// element-accumulation state a `ReactionKind::Combine` reaction indexes.
-    Combinators,
-    /// `generators` — per-instance suspended activation + lifecycle state.
-    Generators,
-    /// `gen_run_stack` — generators currently mid-`resume_generator`
-    /// dispatch (the `YIELD` snapshot target stack). Empty at every
-    /// persistable boundary (quiescence-gated) — a SUSPENDED
-    /// generator's state is the `generators` row, not this stack.
-    GenRunStack,
-    /// `async_instances` — per-instance async activation + result promise.
-    AsyncInstances,
-    /// `async_run_stack` — async instances mid-`step_async` dispatch (the
-    /// `AWAIT` snapshot target stack). Empty at every persistable
-    /// boundary (quiescence-gated) — a suspended instance's state is
-    /// the `async_instances` row, not this stack.
-    AsyncRunStack,
-    /// `regexps` — compiled RegExp program + source/flags (note:
-    /// `lastIndex` is an ordinary own property, in the arena).
-    RegExps,
-    /// `temporal_instants` / `temporal_durations` / `temporal_plains` /
-    /// `temporal_zoneds` — immutable Temporal internal-slot records keyed
-    /// by their branded instance slots (the plain/zoned tables arrived
-    /// with the language-completion sweep, 2026-08-26).
-    TemporalRecords,
-    /// `async_generators` + `async_gen_run_stack` — per-instance async
-    /// generator state (suspended frame, request queue, lifecycle) and the
-    /// mid-`step_async_generator` dispatch stack. The language-completion
-    /// sweep's async-generator machinery; per-instance runtime state like
-    /// the carried `Generators`/`AsyncInstances`, but still `Pending` itself.
-    /// (The `async_gen_run_stack` HALF is quiescence-empty like the
-    /// other run stacks; the variant stays `Pending` for the instance
-    /// table it also names.)
-    AsyncGenerators,
-    /// `private_values` + `private_accessors` — class private
-    /// fields/methods and private accessors keyed by (instance, brand).
-    /// Reachable through these maps rather than arena properties; serialized
-    /// in `PRIV`, including callable metadata for private accessors.
-    PrivateElements,
-    /// `disposable_stacks` — `DisposableStack`/`AsyncDisposableStack`
-    /// recorded resources and dispose callbacks. Per-instance runtime
-    /// state, serialized in `DISP` with callback identity and LIFO order.
-    DisposableStacks,
-    /// The nine Intl per-instance record tables (`locales`,
-    /// `collators`, `list_formats`, `plural_rules`, `number_formats`,
-    /// `segmenters`, `segments`, `segment_iterators`,
-    /// `date_time_formats`): resolved-options records keyed by branded
-    /// instance slots — pure numeric/string data. Serialized in the
-    /// `INTL` atom / small-state intl section (store schema 12),
-    /// owner-ascending; a segment iterator's cross-reference must name
-    /// a covering segments row, and its consuming natives are natives
-    /// on rooted boot structure, so a resumed instance WORKS
-    /// (`intl_carry.rs`). The bound-function LINKS split into
-    /// [`SideTable::IntlBoundFunctions`] below.
-    IntlRecords,
-    /// `dates` — per-instance `Date` internal slots (the epoch
-    /// milliseconds, one `f64` keyed by the branded instance slot;
-    /// the llm mainline's Date-core landing, 2026-08-28 rebase).
-    /// Serialized in `DATE`; the date carry tests preserve the epoch value.
-    Dates,
-    /// Intl bound-function links and the matching per-instance format cache.
-    /// Serialized so a guest-held compare/format function retains identity and
-    /// its receiver across restore; the Intl carry tests cover these links.
-    IntlBoundFunctions,
-    /// `code_segments` + `func_segments` — retained defining-crank and
-    /// eval/dynamic-Function bytecode plus each guest function's segment
-    /// index. Carried atomically with function metadata in `FUNC`.
-    Segments,
-    /// `ctor_prototype` — each constructor instance's `.prototype` object.
-    /// The `.prototype` *object* is an arena slot, but the constructor→proto
-    /// link is HashMap-only (never an own-property slot), so it is not
-    /// arena-recoverable; it travels with function metadata in `FUNC`.
-    CtorPrototype,
-    /// `symbol_registry` (+ `symbol_registry_keys`) — the global
-    /// `Symbol.for`/`keyFor` registry.
-    SymbolRegistry,
-    /// `symbol_names` / `symbol_ids` — the program symbol name↔id tables.
-    /// Since the id-space unification (2026-08-26) a runtime-interned
-    /// string key APPENDS to `symbol_names` (its id is its position), so
-    /// the one table covers program and runtime names alike. Only the
-    /// forward `symbol_names` is serialized (the `NAME` atom); the inverse
-    /// `symbol_ids` map and the lookup-id caches are re-derived from it at
-    /// restore.
-    SymbolTables,
-    /// `symbol_key_ids` + `next_symbol_key_id` — the symbol-value
-    /// descriptor slot → property id map minted when a symbol is used as a
-    /// property key (`o[sym]` / `Object.defineProperty(o, sym, …)`), and
-    /// its top-down mint counter (ids descend from `u16::MAX`, so they
-    /// never collide with the growing name table). Both travel in the
-    /// `SYMB` atom, so intern-holding machines retain their property-key identity.
-    SymbolKeyIds,
-    /// `installed_names_len` — the installed-names floor (wave-6
-    /// W6-7): partial install passes re-consider only ids ABOVE it, so
-    /// names interned DURING an install pass (Intl member keys, the
-    /// `format` accessor key) stay lazily installable by a later
-    /// growing relink. Real dynamic state: serialized in the `NFLR`
-    /// atom / small-state name-floor section (store schema 12; emitted
-    /// only when it differs from the table length, the conservative
-    /// default a floor-less restore assumes). Without it a resumed
-    /// machine floored at the full table and could never install such
-    /// a name — the `ListFormat.prototype.format` divergence
-    /// (`intl_carry.rs`).
-    NameFloor,
-    /// The module records/maps (`ironhorse_vm::module::ModuleGraph`): a
-    /// worker that has imported modules carries linked module records and
-    /// namespace objects.
-    Modules,
-    /// Hardened-ness (SES `lockdown`/`harden`/`petrify`, requirement
-    /// 5): which intrinsics and object graphs are frozen. Kept as slot
-    /// FLAGS on the objects themselves — no side table exists — so it
-    /// rides the HEAP atom and a resumed hardened graph stays hardened.
-    HardenState,
-    /// `meter` — the machine's metering state (design row 6): accumulated
-    /// computrons, the check interval/threshold, and the frozen cost-table
-    /// version. **Carried by the `METR` atom** (stage-6 child 3), so a
-    /// resumed machine continues its meter exactly.
-    Meter,
-}
-
-impl SideTable {
-    /// Every side table. **Adding a `SideTable` variant without adding it
-    /// here fails [`tests::all_is_exhaustive`]**; every entry's coverage
-    /// is asserted, so a new table cannot slip in as a silent snapshot
-    /// gap.
-    pub const ALL: &'static [SideTable] = &[
-        SideTable::Functions,
-        SideTable::BoundFunctions,
-        SideTable::Proxies,
-        SideTable::CallStack,
-        SideTable::Jumps,
-        SideTable::GlobalProps,
-        SideTable::ErrorData,
-        SideTable::Accessors,
-        SideTable::WrapperData,
-        SideTable::Arrays,
-        SideTable::IndexProps,
-        SideTable::Collections,
-        SideTable::ArrayBuffers,
-        SideTable::TypedArrays,
-        SideTable::DataViews,
-        SideTable::Iterators,
-        SideTable::Promises,
-        SideTable::PromiseFunctions,
-        SideTable::PromiseGuards,
-        SideTable::PromiseJobs,
-        SideTable::Combinators,
-        SideTable::Generators,
-        SideTable::GenRunStack,
-        SideTable::AsyncInstances,
-        SideTable::AsyncRunStack,
-        SideTable::RegExps,
-        SideTable::TemporalRecords,
-        SideTable::Dates,
-        SideTable::AsyncGenerators,
-        SideTable::PrivateElements,
-        SideTable::DisposableStacks,
-        SideTable::IntlRecords,
-        SideTable::IntlBoundFunctions,
-        SideTable::Segments,
-        SideTable::CtorPrototype,
-        SideTable::SymbolRegistry,
-        SideTable::SymbolTables,
-        SideTable::SymbolKeyIds,
-        SideTable::NameFloor,
-        SideTable::Modules,
-        SideTable::HardenState,
-        SideTable::Meter,
-    ];
-
-    /// The table's `Interp` field name and its current snapshot coverage.
-    /// An **exhaustive** match: the compiler forces every new variant to
-    /// declare a descriptor, which is what makes this a completeness
-    /// ledger rather than a stale comment.
-    pub fn descriptor(self) -> Descriptor {
-        use Coverage::*;
-        let (field, coverage): (&'static str, Coverage) = match self {
-            // The global object's own-property *slots* round-trip inside the
-            // slot arena (linked into `global_obj`'s property chain by
-            // `create_global_property`), but the `global_props` id→slot fast
-            // index that `resolve_get`/`resolve_set` consult is a HashMap, not
-            // arena state, and boot leaves it empty. `restore_snapshot_state`
-            // rebuilds it by walking the restored chain (`rebuild_global_props`),
-            // so a runtime-materialized global (`var x = 5`, or a
-            // `globalThis.x = 1` create, in an earlier crank) resolves after
-            // resume. Regression: `restore_side_tables.rs`
-            // (`runtime_global_survives_suspend_resume`).
-            SideTable::GlobalProps => ("global_props", RebuiltAtRestore),
-            // Guest constructor→prototype links travel atomically with
-            // retained function metadata in `FUNC`.
-            SideTable::CtorPrototype => ("ctor_prototype", Serialized),
-            // Only the forward `symbol_names` is serialized (the `NAME`
-            // atom); the inverse `symbol_ids` map is *derived* from it and
-            // never persisted (`link_intrinsics` computes it at boot).
-            // `restore_snapshot_state` re-derives it via
-            // `bind_program_symbols` from the restored names, so an
-            // earlier-crank global reads back by name — and because a
-            // runtime-interned string key IS a `symbol_names` append, the
-            // same restore covers it. Regression: `restore_side_tables.rs`
-            // (`symbol_tables_rebuilt_at_restore`).
-            SideTable::SymbolTables => (
-                "symbol_names(NAME-serialized)+symbol_ids(derived)",
-                RebuiltAtRestore,
-            ),
-            // Ledger G1 (2026-08-24): the `Symbol.for` registry travels in
-            // the `REGY` atom / small-state registry section (key bytes →
-            // descriptor slot, key-ascending), and restore repopulates the
-            // forward and reverse maps pairwise — `Symbol.for('k')` minted
-            // before a suspend IS the same symbol after a resume
-            // (`resumed_symbol_registry_keeps_symbol_for_identity`).
-            SideTable::SymbolRegistry => ("symbol_registry/symbol_registry_keys", Serialized),
-            // The symbol-key desc→id map (ledger SYMB, 2026-08-26): the
-            // wave-4 P1 id-space hazard, lifted in two halves. String keys
-            // no longer occupy a runtime range at all — a runtime-interned
-            // NAME appends to `symbol_names` and travels with the NAME
-            // row. Symbol keys mint DOWNWARD from `u16::MAX` (no collision
-            // with the growing table) and travel in the SYMB atom /
-            // small-state symbols section: the top-down counter plus every
-            // (id, descriptor slot) pair, id-ascending, restored via
-            // `Interp::restore_symbol_key_table` — so a symbol-keyed
-            // property reads back under the same id after a resume
-            // (`interned_property_keys_round_trip_through_the_store`).
-            // What the persist/adopt paths still refuse — as Corrupt, via
-            // `MachineImage::stored_unregistered_key_id` — is a stored id
-            // outside BOTH tables, which maps to nothing and can only be
-            // crafted or torn bytes.
-            SideTable::SymbolKeyIds => ("symbol_key_ids/next_symbol_key_id", Serialized),
-            // Guest and bound function metadata travel atomically with
-            // retained defining-crank bytecode in `FUNC`.
-            SideTable::Functions => ("functions", Serialized),
-            SideTable::BoundFunctions => ("bound_functions", Serialized),
-            SideTable::Proxies => ("proxies/proxy_revokers", Serialized),
-            SideTable::CallStack => ("call_stack", EmptyAtBoundary),
-            SideTable::Jumps => ("jumps", EmptyAtBoundary),
-            SideTable::ErrorData => ("error_data", Serialized),
-            // One entry class is EXEMPT from the refuse-on-hold gate and
-            // re-derived at restore: an entry that IS a boot
-            // `proto_accessors` seed (the `Intl.NumberFormat` `format`
-            // getter) — its getter is a boot-minted native, so
-            // `Interp::rebuild_boot_accessors` reinstates the pair from
-            // boot structure (the `RebuiltAtRestore` pattern inside a
-            // serialized row). Guest accessors and redefinitions travel
-            // in `ACCS`; the exact boot seed stays omitted. An accessor
-            // referencing a runtime native function from a still-Pending
-            // owner row remains dependency-gated.
-            SideTable::Accessors => ("accessors", Serialized),
-            SideTable::WrapperData => ("wrapper_data", Serialized),
-            // Ledger G1 (2026-08-24): the two BULK tables travel in the
-            // `ARRY`/`COLL` atoms and the schema-7 small-state sections
-            // (owner-ascending, items/entries in table order; values are
-            // ordinary slot records, chunk-remapped with the live table).
-            // Restore routes every insert through the counted accessors,
-            // so the side-ref page counts rebuild in lockstep — the
-            // uninterrupted-vs-resumed twins in
-            // `tests/side_table_ledger.rs` (incl. lazy resume + full
-            // collect under the debug parity net) are the locks.
-            SideTable::Arrays => ("arrays", Serialized),
-            SideTable::IndexProps => ("index_props", Serialized),
-            SideTable::Collections => ("collections", Serialized),
-            SideTable::ArrayBuffers => ("array_buffers", Serialized),
-            SideTable::TypedArrays => ("typed_arrays", Serialized),
-            SideTable::DataViews => ("data_views", Serialized),
-            SideTable::Iterators => ("iterators", Serialized),
-            // The promise cluster (`PRMS`, store schema 23): the four
-            // rows travel and validate as ONE unit because they
-            // cross-reference (a reaction indexes `combinators`, a
-            // resolving function indexes `promise_guards` and names a
-            // `promises` row). The two index arenas are emitted in the
-            // collector's COMPACTED form, so the encoding is canonical
-            // and every entry provably live. Resolving-function
-            // `FuncInfo`s rebuild at restore exactly as
-            // `make_resolving_functions` minted them (the `IBFN`
-            // pattern). Async-instance rows also carry; unsupported reaction
-            // and runtime-native kinds remain subject to the persist gates.
-            // Locks: `promise_carry.rs` and `async_carry.rs` twins plus
-            // `persist_gates.rs` refusal tests.
-            SideTable::Promises => ("promises", Serialized),
-            SideTable::PromiseFunctions => ("promise_functions", Serialized),
-            SideTable::PromiseGuards => ("promise_guards", Serialized),
-            SideTable::PromiseJobs => ("promise_jobs", EmptyAtBoundary),
-            SideTable::Combinators => ("combinators", Serialized),
-            SideTable::Generators => ("generators", Serialized),
-            SideTable::GenRunStack => ("gen_run_stack", EmptyAtBoundary),
-            SideTable::AsyncInstances => ("async_instances", Serialized),
-            SideTable::AsyncRunStack => ("async_run_stack", EmptyAtBoundary),
-            SideTable::RegExps => ("regexps", Serialized),
-            SideTable::TemporalRecords => (
-                "temporal_instants/temporal_durations/temporal_plains/temporal_zoneds",
-                Serialized,
-            ),
-            // Date-instance `[[DateValue]]` records travel as raw IEEE-754
-            // bits in `DATE` (schema 14). `%Date.prototype%` has no Date
-            // brand; restore drops its row when migrating a snapshot written
-            // by the former seeded-prototype representation.
-            SideTable::Dates => ("dates", Serialized),
-            SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
-            SideTable::PrivateElements => ("private_values/private_accessors", Serialized),
-            SideTable::DisposableStacks => ("disposable_stacks", Serialized),
-            // The Intl DATA record tables (`INTL`, store schema 12): nine
-            // resolved-options tables, owner-ascending, restored via
-            // `Interp::restore_intl` with segment geometry and the
-            // iterator cross-reference validated at decode, bounds, and
-            // restore. Locks: the `intl_carry.rs` twins (memory, file,
-            // lazy, blob — a resumed segment iterator CONTINUES its walk).
-            SideTable::IntlRecords => ("locales/collators/…/date_time_formats", Serialized),
-            // Runtime compare/format functions and their owner links
-            // travel in `IBFN`; restore rebuilds their native FuncInfo.
-            SideTable::IntlBoundFunctions => (
-                "collator_compare_functions/number_format_bound_functions",
-                Serialized,
-            ),
-            // Defining-crank and eval segments travel in the same atomic
-            // cluster as their function metadata.
-            SideTable::Segments => ("code_segments/func_segments", Serialized),
-            SideTable::Modules => ("module::ModuleGraph", Pending),
-            // Wave-6 W6-25: the ledger UNDERSTATED this coverage — the
-            // engine keeps hardened-ness purely as slot FLAGS
-            // (`XS_DONT_MARSHALL`/`PATCH`/`MODIFY` on instance heads and
-            // `DELETE`/`SET` on property slots themselves,
-            // `harden_freeze_and_traverse`); there is no side-table field at
-            // all, so the state rides the HEAP atom structurally and a resumed
-            // hardened or petrified graph retains its integrity state.
-            SideTable::HardenState => ("harden slot flags (no side table)", InArena),
-            // The installed-names floor (`NFLR`, store schema 12): the
-            // W6-7 register travels so a resumed machine's partial
-            // install passes re-consider exactly the ids the live one's
-            // would (`intl_carry.rs`, the lazy-install twins).
-            SideTable::NameFloor => ("installed_names_len", Serialized),
-            // The metering state — carried by the METR atom (child 3).
-            SideTable::Meter => ("meter", Serialized),
-        };
-        Descriptor {
-            table: self,
-            field,
-            coverage,
+// The VM exports only selected metadata tokens. Coverage interpretation and
+// descriptor behavior remain here; independent tests below verify the contract.
+macro_rules! define_side_tables {
+    ($($variant:ident, $id:literal, $order:literal, $coverage:ident, $primary:expr, $display:literal;)*) => {
+        /// One logical side table, generated from the VM field inventory.
+        #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+        pub enum SideTable {
+            $(#[doc = $display] $variant = $id,)*
         }
-    }
-
-    /// The tables not yet carried by the snapshot image — the remaining
-    /// work, computed from the ledger so it can never drift from the code.
-    pub fn pending() -> Vec<SideTable> {
-        Self::ALL
-            .iter()
-            .copied()
-            .filter(|t| t.descriptor().coverage == Coverage::Pending)
-            .collect()
-    }
+        impl SideTable {
+            /// Every table in the existing public enumeration order.
+            pub const ALL: &'static [Self] = &{
+                let mut tables = [$(Self::$variant,)*];
+                assert!(tables.len() == ironhorse_vm::SIDE_TABLES.len());
+                let mut i = 0;
+                while i < tables.len() {
+                    tables[i] = match ironhorse_vm::SIDE_TABLES[i].discriminant {
+                        $($id => Self::$variant,)*
+                        _ => panic!("unknown table discriminant"),
+                    };
+                    i += 1;
+                }
+                tables
+            };
+            /// Current snapshot coverage, interpreted from the VM metadata tags.
+            pub fn descriptor(self) -> Descriptor {
+                let (field, coverage) = match self {
+                    $(Self::$variant => ($display, Coverage::$coverage),)*
+                };
+                Descriptor { table: self, field, coverage }
+            }
+            /// Tables not yet carried by the snapshot image.
+            pub fn pending() -> Vec<Self> {
+                Self::ALL.iter().copied()
+                    .filter(|table| table.descriptor().coverage == Coverage::Pending)
+                    .collect()
+            }
+        }
+    };
 }
+ironhorse_vm::interp_tables!(define_side_tables);
 
 /// A side table's completeness descriptor.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -641,15 +245,324 @@ pub struct Descriptor {
 mod tests {
     use super::*;
 
-    /// `ALL` must list every variant exactly once. This is the guard that
-    /// turns "add a field to `Interp`" into "add it to the snapshot
-    /// ledger": a new `SideTable` variant that is not in `ALL` (or is
-    /// duplicated) fails here, and one with no `descriptor` arm fails to
-    /// compile.
+    #[test]
+    fn historical_table_ids_order_and_descriptors_are_preserved() {
+        // Intentional independent contract: enum order and ALL order differed.
+        const EXPECTED: &[(usize, &str, &str, Coverage, Option<&str>)] = &[
+            (
+                0,
+                "Functions",
+                "functions",
+                Coverage::Serialized,
+                Some("functions"),
+            ),
+            (
+                1,
+                "BoundFunctions",
+                "bound_functions",
+                Coverage::Serialized,
+                Some("bound_functions"),
+            ),
+            (
+                2,
+                "Proxies",
+                "proxies/proxy_revokers",
+                Coverage::Serialized,
+                Some("proxies"),
+            ),
+            (
+                3,
+                "CallStack",
+                "call_stack",
+                Coverage::EmptyAtBoundary,
+                Some("call_stack"),
+            ),
+            (
+                4,
+                "Jumps",
+                "jumps",
+                Coverage::EmptyAtBoundary,
+                Some("jumps"),
+            ),
+            (
+                5,
+                "GlobalProps",
+                "global_props",
+                Coverage::RebuiltAtRestore,
+                Some("global_props"),
+            ),
+            (
+                6,
+                "ErrorData",
+                "error_data",
+                Coverage::Serialized,
+                Some("error_data"),
+            ),
+            (
+                7,
+                "Accessors",
+                "accessors",
+                Coverage::Serialized,
+                Some("accessors"),
+            ),
+            (
+                8,
+                "WrapperData",
+                "wrapper_data",
+                Coverage::Serialized,
+                Some("wrapper_data"),
+            ),
+            (9, "Arrays", "arrays", Coverage::Serialized, Some("arrays")),
+            (
+                10,
+                "IndexProps",
+                "index_props",
+                Coverage::Serialized,
+                Some("index_props"),
+            ),
+            (
+                11,
+                "Collections",
+                "collections",
+                Coverage::Serialized,
+                Some("collections"),
+            ),
+            (
+                12,
+                "ArrayBuffers",
+                "array_buffers",
+                Coverage::Serialized,
+                Some("array_buffers"),
+            ),
+            (
+                13,
+                "TypedArrays",
+                "typed_arrays",
+                Coverage::Serialized,
+                Some("typed_arrays"),
+            ),
+            (
+                14,
+                "DataViews",
+                "data_views",
+                Coverage::Serialized,
+                Some("data_views"),
+            ),
+            (
+                15,
+                "Iterators",
+                "iterators",
+                Coverage::Serialized,
+                Some("iterators"),
+            ),
+            (
+                16,
+                "Promises",
+                "promises",
+                Coverage::Serialized,
+                Some("promises"),
+            ),
+            (
+                17,
+                "PromiseFunctions",
+                "promise_functions",
+                Coverage::Serialized,
+                Some("promise_functions"),
+            ),
+            (
+                18,
+                "PromiseGuards",
+                "promise_guards",
+                Coverage::Serialized,
+                Some("promise_guards"),
+            ),
+            (
+                19,
+                "PromiseJobs",
+                "promise_jobs",
+                Coverage::EmptyAtBoundary,
+                Some("promise_jobs"),
+            ),
+            (
+                20,
+                "Combinators",
+                "combinators",
+                Coverage::Serialized,
+                Some("combinators"),
+            ),
+            (
+                21,
+                "Generators",
+                "generators",
+                Coverage::Serialized,
+                Some("generators"),
+            ),
+            (
+                22,
+                "GenRunStack",
+                "gen_run_stack",
+                Coverage::EmptyAtBoundary,
+                Some("gen_run_stack"),
+            ),
+            (
+                23,
+                "AsyncInstances",
+                "async_instances",
+                Coverage::Serialized,
+                Some("async_instances"),
+            ),
+            (
+                24,
+                "AsyncRunStack",
+                "async_run_stack",
+                Coverage::EmptyAtBoundary,
+                Some("async_run_stack"),
+            ),
+            (
+                25,
+                "RegExps",
+                "regexps",
+                Coverage::Serialized,
+                Some("regexps"),
+            ),
+            (
+                26,
+                "TemporalRecords",
+                "temporal_instants/temporal_durations/temporal_plains/temporal_zoneds",
+                Coverage::Serialized,
+                Some("temporal_instants"),
+            ),
+            (31, "Dates", "dates", Coverage::Serialized, Some("dates")),
+            (
+                27,
+                "AsyncGenerators",
+                "async_generators/async_gen_run_stack",
+                Coverage::Pending,
+                Some("async_generators"),
+            ),
+            (
+                28,
+                "PrivateElements",
+                "private_values/private_accessors",
+                Coverage::Serialized,
+                Some("private_values"),
+            ),
+            (
+                29,
+                "DisposableStacks",
+                "disposable_stacks",
+                Coverage::Serialized,
+                Some("disposable_stacks"),
+            ),
+            (
+                30,
+                "IntlRecords",
+                "locales/collators/…/date_time_formats",
+                Coverage::Serialized,
+                Some("locales"),
+            ),
+            (
+                32,
+                "IntlBoundFunctions",
+                "collator_compare_functions/number_format_bound_functions",
+                Coverage::Serialized,
+                Some("collator_compare_functions"),
+            ),
+            (
+                33,
+                "Segments",
+                "code_segments/func_segments",
+                Coverage::Serialized,
+                Some("code_segments"),
+            ),
+            (
+                34,
+                "CtorPrototype",
+                "ctor_prototype",
+                Coverage::Serialized,
+                Some("ctor_prototype"),
+            ),
+            (
+                35,
+                "SymbolRegistry",
+                "symbol_registry/symbol_registry_keys",
+                Coverage::Serialized,
+                Some("symbol_registry"),
+            ),
+            (
+                36,
+                "SymbolTables",
+                "symbol_names(NAME-serialized)+symbol_ids(derived)",
+                Coverage::RebuiltAtRestore,
+                Some("symbol_names"),
+            ),
+            (
+                37,
+                "SymbolKeyIds",
+                "symbol_key_ids/next_symbol_key_id",
+                Coverage::Serialized,
+                Some("symbol_key_ids"),
+            ),
+            (
+                38,
+                "NameFloor",
+                "installed_names_len",
+                Coverage::Serialized,
+                Some("installed_names_len"),
+            ),
+            (
+                39,
+                "Modules",
+                "module::ModuleGraph",
+                Coverage::Pending,
+                None,
+            ),
+            (
+                40,
+                "HardenState",
+                "harden slot flags (no side table)",
+                Coverage::InArena,
+                Some("slots"),
+            ),
+            (41, "Meter", "meter", Coverage::Serialized, Some("meter")),
+        ];
+        assert_eq!(SideTable::ALL.len(), EXPECTED.len());
+        assert_eq!(ironhorse_vm::SIDE_TABLES.len(), EXPECTED.len());
+        for (ordinal, ((table, raw), expected)) in SideTable::ALL
+            .iter()
+            .zip(ironhorse_vm::SIDE_TABLES)
+            .zip(EXPECTED)
+            .enumerate()
+        {
+            let descriptor = table.descriptor();
+            assert_eq!(*table as usize, expected.0);
+            assert_eq!(format!("{table:?}"), expected.1);
+            assert_eq!(descriptor.field, expected.2);
+            assert_eq!(descriptor.coverage, expected.3);
+            assert_eq!(descriptor.table, *table);
+            assert_eq!(raw.variant, expected.1);
+            assert_eq!(raw.discriminant, expected.0);
+            assert_eq!(raw.ordinal, ordinal);
+            assert_eq!(raw.field, expected.2);
+            assert_eq!(raw.coverage, format!("{:?}", expected.3));
+            assert_eq!(raw.primary_field, expected.4);
+            if let Some(field) = raw.primary_field {
+                assert!(ironhorse_vm::interp::INTERP_FIELDS
+                    .iter()
+                    .any(|(name, _)| *name == field));
+            }
+        }
+        assert!(!ironhorse_vm::interp::INTERP_FIELDS
+            .iter()
+            .any(|(name, _)| *name == "Modules"));
+    }
+
+    /// Independent cardinality and uniqueness checks on the generated ledger.
+    /// Field/satellite classification below remains separate from its metadata.
     #[test]
     fn all_is_exhaustive() {
-        // Count of variants, kept beside the enum. Bump when a variant is
-        // added — the assertion below then forces the ALL entry too.
+        // Independent historical count. A deliberate new table must update
+        // this contract and the identity/descriptor fixture above.
         const VARIANT_COUNT: usize = 42;
         assert_eq!(SideTable::ALL.len(), VARIANT_COUNT);
 

@@ -1,15 +1,19 @@
 //! Interpreter field inventory.
 //!
 //! The declaration below generates Interp, its GC hook borrows/pruning, and
-//! chunk-compaction, slot, and ephemeron walks. `gc_chunk(none)` means no walk through that field in
-//! this callback; the independent registry checks every required chunk holder.
+//! chunk-compaction, slot, and ephemeron walks. It also selects inert snapshot
+//! metadata without exporting private VM types. `snapshot_table(none)` means no
+//! primary descriptor for that field, not that the field is absent from snapshots.
+//! `gc_chunk(none)` means no walk
+//! through that field in this callback; the independent registry checks every
+//! required chunk holder.
 //! Field order, visibility, and types stay explicit in the declaration.
 //! `unborrowed` means the field is not passed to GcHooks; it does not claim the
 //! field is slot-free. Root, arena, transient, and derived-state obligations are
 //! still checked by the independent GC and persistence registries.
 
 macro_rules! interp_state {
-    ($consumer:ident $(, $arg:ident)*) => {
+    ($consumer:ident $(, $arg:tt)*) => {
         $consumer! {
             ($($arg),*)
 pub struct Interp {
@@ -17,22 +21,26 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Derived membership; never persisted or traced as a guest root.
     classes: ClassIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     snapshot_baseline_identity: std::rc::Rc<()>,
     #[gc_hook(held, mutable)]
     #[gc_chunk(slot_vec)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     stack: Vec<Slot>,
     #[gc_hook(held, mutable)]
     #[gc_chunk(slot_vec)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program frame's scope slots. `NEW_LOCAL`/`NEW_TEMPORARY`
     /// append (XS's `--mxScope`); a `*_LOCAL` opcode's 1-based index `k`
     /// addresses `locals[k - 1]` (XS's `mxEnvironment - index`).
@@ -41,6 +49,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// `id -> locals index` for the frame's named `var`/`let`/`const`
     /// bindings, so the environment opcodes resolve a name to its scope
     /// slot (XS aliases the frame locals through the environment
@@ -50,6 +59,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The global object instance in the slot arena (§ Value and heap
     /// model). Its `next` chains its property slots; a top-level `var`
     /// hoists onto it (`fxRunEvalEnvironment` — top-level vars are global
@@ -62,6 +72,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(GlobalProps, 5, 5, RebuiltAtRestore, "global_props")]
     /// `id -> property slot index` for the global object's own
     /// properties, the fast index into [`Self::global_obj`]'s property
     /// list. Presence marks that the property has been materialized (so
@@ -74,6 +85,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// True only while dispatching a **direct** `eval` unit's body (set by
     /// [`Self::eval_source`] around the unit's run). The declaration-
     /// instantiation hoist reads it to apply the direct-eval-only conflict
@@ -85,6 +97,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Whether the running unit is an **eval program** (direct *or* indirect;
     /// [`Self::eval_source`] sets it around the unit's run), as opposed to a
     /// top-level Script.
@@ -110,11 +123,13 @@ pub struct Interp {
     #[gc_chunk(slot)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     result: Slot,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Whether the frame runs in strict mode (`BEGIN_STRICT*`). Recorded
     /// for the exception/`this` semantics that observe it; the covered
     /// subset does not yet branch on it.
@@ -123,11 +138,13 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(Meter, 41, 41, Serialized, "meter")]
     meter: Meter,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Cost-calibration histogram recorder (design
     /// `designs/ironhorse-meter-opcode-cost-instrumentation.md`, stage
     /// C1). Zero-sized and a compile-time no-op unless the `cost-calibration`
@@ -140,6 +157,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The host metering callback, installed by [`Interp::arm_meter`].
     /// `None` on a never-armed meter is the default un-metered
     /// interpreter the differential harness uses: the check points then
@@ -154,6 +172,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Dispatch-count ceiling. `u64::MAX` (the default) is unbounded, so
     /// the oracle-differential harness sees exactly the historical
     /// behavior. A finite value — installed by [`Interp::run_bounded`] /
@@ -167,18 +186,21 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(HardenState, 40, 40, InArena, "harden slot flags (no side table)")]
     /// The machine slot heap (design § Value and heap model).
     pub slots: SlotArena,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The machine chunk heap (UTF-16BE strings and later data).
     pub chunks: ChunkArena,
     #[gc_hook(held, mutable)]
     #[gc_chunk(static_strings)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The interned `typeof` result strings (XS's `mxUndefinedString`
     /// &co.), allocated once at construction so `typeof` is dispatch-only.
     static_str: StaticStrings,
@@ -186,6 +208,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Count of bytecode opcodes dispatched, before the invocation
     /// baseline — the raw dispatch count the differential harness reports
     /// for isolating a metering divergence. Distinct from the meter's
@@ -196,6 +219,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Slot count immediately after deterministic boot construction.
     /// Runtime native functions sit above this boundary; boot functions
     /// below it are re-derived at the same indices on restore.
@@ -204,6 +228,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Native-recursion budget consumed so far, in the units of
     /// [`NATIVE_DEPTH_LIMIT`]: every engine function that re-enters guest code
     /// or recurses without a bound of its own over guest-controlled structure
@@ -220,6 +245,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The host-installed source compiler ([`SourceCompiler`]) the runtime
     /// source-execution bridge (`eval` of a string, the `Function`
     /// constructor) drives to compile a source string to bytecode in this
@@ -232,6 +258,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(Segments, 33, 33, Serialized, "code_segments/func_segments")]
     /// Persisted bytecode buffers for units compiled at run time by the
     /// source-execution bridge (a string `eval`, the `Function` constructor).
     /// A function defined inside such a unit may **outlive** the eval call
@@ -245,6 +272,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The segment index the current dispatch loop is running over, or `None`
     /// for the top-level program's external `code` buffer. A function call
     /// whose callee lives in a *different* segment must dispatch over that
@@ -255,6 +283,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// A persisted copy of the top-level program's bytecode (the external
     /// buffer `run` was handed), so a function defined in an eval unit can
     /// call **back** into a top-level function even though the eval runs in a
@@ -267,6 +296,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Which retained [`Self::code_segments`] buffer a guest function's body
     /// lives in. Top-level crank buffers are promoted lazily at their first
     /// function definition; eval/`Function` buffers enter directly.
@@ -275,6 +305,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Set by the `XS_CODE_EVAL` (direct-eval) dispatch site for the duration
     /// of the `eval` native call, so the bridge can tell a **direct** eval
     /// (whose scope is the caller's) from an **indirect** one (whose scope is
@@ -285,6 +316,7 @@ pub struct Interp {
     #[gc_chunk(function_names)]
     #[gc_slots(map, function)]
     #[gc_weak(none)]
+    #[snapshot_table(Functions, 0, 0, Serialized, "functions")]
     /// Side table of user-function metadata (body range + captured
     /// closures), keyed by the function instance's slot index. See
     /// [`FuncInfo`].
@@ -293,6 +325,7 @@ pub struct Interp {
     #[gc_chunk(bound)]
     #[gc_slots(map, bound)]
     #[gc_weak(none)]
+    #[snapshot_table(BoundFunctions, 1, 1, Serialized, "bound_functions")]
     /// Side table of bound-function metadata (`Function.prototype.bind`),
     /// keyed by the bound function's slot index: the target to invoke, the
     /// bound `this`, and the bound leading arguments. A callee found here in
@@ -303,6 +336,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(map, proxy)]
     #[gc_weak(none)]
+    #[snapshot_table(Proxies, 2, 2, Serialized, "proxies/proxy_revokers")]
     /// The `Proxy` exotics' `[[ProxyTarget]]`/`[[ProxyHandler]]` internal slots,
     /// keyed by the proxy instance slot (see [`ProxyData`]). Membership here is
     /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
@@ -312,12 +346,14 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Synchronous recursive-Get context; always `None` at a crank boundary.
     array_iterator_proxy_get_context: Option<ArrayIteratorProxyGetContext>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(map, owner)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Maps a `revoke` function slot (returned by `Proxy.revocable`) to the
     /// proxy instance it revokes (`fx_Proxy_revoke`'s bound `[[RevocableProxy]]`).
     proxy_revokers:
@@ -326,6 +362,7 @@ pub struct Interp {
     #[gc_chunk(callers)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(CallStack, 3, 3, EmptyAtBoundary, "call_stack")]
     /// The saved caller states of the active call chain (design §
     /// Interpreter and dispatch: "frames are stack slots ... fixed offsets
     /// for result/function/this"). The top-level program is the base
@@ -343,6 +380,7 @@ pub struct Interp {
     #[gc_chunk(slot_vec)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The active frame's positional arguments (`mxFrameArgv`), read by
     /// `XS_CODE_ARGUMENT`. Empty in the program frame.
     args: Vec<Slot>,
@@ -350,6 +388,7 @@ pub struct Interp {
     #[gc_chunk(slot)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The active frame's `this` (`mxFrameThis`). Bound by `begin_*`;
     /// the covered subset does not yet branch on it.
     this_val: Slot,
@@ -357,6 +396,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Closure-environment property slots that captured this activation's
     /// still-uninitialized derived-constructor `this`. Nested calls suspend
     /// this list with the activation; `SET_THIS` updates each property in
@@ -366,6 +406,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The active frame's variable-environment head (XS's `mxEnvironment`
     /// register). A `Kind::Reference` names the innermost live `with`/eval
     /// environment instance (a real 2-slot arena object: an
@@ -385,6 +426,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The active frame's function instance (`mxFrameFunction`), whose
     /// [`FuncInfo`] carries the closure environment closure opcodes resolve
     /// against. `NULL` in the program frame.
@@ -393,6 +435,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Whether the active frame is a **constructor** invocation (XS's
     /// `mxFrameHasTarget` — a `new f(...)`). Set when `run` enters a callee
     /// whose `THIS` slot is the uninitialized construct placeholder; drives
@@ -404,6 +447,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The actual `new.target`. It differs from `cur_func` while a derived
     /// constructor is executing its heritage through `super()`.
     target_func: crate::value::SlotIndex,
@@ -411,6 +455,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// One-shot target override installed by `super()` for the following
     /// construct-frame `run`.
     pending_new_target: Option<crate::value::SlotIndex>,
@@ -418,6 +463,7 @@ pub struct Interp {
     #[gc_chunk(slot)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The pending thrown value (XS's `mxException`). `THROW` sets it and
     /// unwinds to the innermost jump; `EXCEPTION` moves it to the stack
     /// (binding the catch parameter) and clears it back to `undefined`;
@@ -427,6 +473,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Running total of slots held by the **suspended** call frames (the
     /// `call_stack` activations): each contributes its
     /// [`FRAME_OVERHEAD_SLOTS`] plus its saved argument and scope slots.
@@ -438,6 +485,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The intrinsic (native) constructors, keyed by name, created once at
     /// construction (an unmetered machine-boot cost, as XS builds its
     /// intrinsics before the guest runs). [`Self::link_intrinsics`] binds
@@ -449,46 +497,55 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     intl_object: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     locale_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     collator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     list_format_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     plural_rules_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     segmenter_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     segments_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     segment_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// `%Segments.prototype%[@@iterator]` and the `%SegmentIterator%`
     /// self-identity, minted at BOOT beside their `async_iterator_identity`
     /// and `string_iterator_method` siblings rather than during
@@ -502,125 +559,149 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     segment_iterator_identity: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     date_time_format_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     number_format_proto: crate::value::SlotIndex,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(IntlRecords, 30, 31, Serialized, "locales/collators/…/date_time_formats")]
     locales: ClassMap<LocaleData>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     collators: ClassMap<CollatorData>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     list_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, ListFormatData>>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     plural_rules: Tracked<std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(map, number_format)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     number_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     segmenters: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmenterData>>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentsData>>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(map, segments)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     segment_iterators:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     date_time_formats:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData>>,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_object: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_instant_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_duration_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_plain_protos: [crate::value::SlotIndex; 6],
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_zoned_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The `Temporal.Now` namespace object (a boot object, not a constructor).
     temporal_now_object: crate::value::SlotIndex,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(TemporalRecords, 26, 26, Serialized, "temporal_instants/temporal_durations/temporal_plains/temporal_zoneds")]
     temporal_instants: ClassMap<TemporalInstantRecord>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_durations: ClassMap<TemporalDurationRecord>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_plains: ClassMap<TemporalPlainRecord>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     temporal_zoneds: ClassMap<TemporalZonedRecord>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(map, owner)]
     #[gc_weak(none)]
+    #[snapshot_table(IntlBoundFunctions, 32, 32, Serialized, "collator_compare_functions/number_format_bound_functions")]
     collator_compare_functions:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[gc_hook(late, map)]
     #[gc_chunk(none)]
     #[gc_slots(map, owner)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The cached `[[BoundFormat]]` functions of `Intl.NumberFormat`, keyed by
     /// the bound function's own slot → the owning NumberFormat instance (the
     /// reverse of [`NumberFormatData::bound_format`]). The `format` accessor
@@ -634,6 +715,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Tombstones for a function's exotic `length`/`name` own data properties
     /// that the guest has `delete`d. XS carries these as real slots that
     /// `delete` unlinks; ironhorse synthesizes them from the [`FuncInfo`]
@@ -649,6 +731,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
     /// of every ordinary object's prototype chain. A boot object; ordinary
     /// objects ([`Self::new_object`]) and constructed `this` instances point
@@ -661,6 +744,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Function.prototype%`: the prototype of every function
     /// instance (native and user), so `f.toString`/`f.call`/… resolve up the
     /// chain. A boot object.
@@ -669,6 +753,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted function identity for the lazily materialized
     /// `%Function.prototype%[Symbol.hasInstance]` property.
     function_has_instance_method: crate::value::SlotIndex,
@@ -676,6 +761,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's inaccessible tagged-template registry object. Generated
     /// site keys are properties on this ordinary object, matching XS's
     /// `mxRealmTemplateCache`; the object itself is a boot root and its
@@ -685,6 +771,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(map, owner)]
     #[gc_weak(none)]
+    #[snapshot_table(CtorPrototype, 34, 34, Serialized, "ctor_prototype")]
     /// Each constructor instance's `.prototype` object, by slot (XS's
     /// `constructor.prototype`): the intrinsics' prototypes (wired at boot)
     /// and every user function's default prototype (wired at
@@ -698,6 +785,7 @@ pub struct Interp {
     #[gc_chunk(slot_values)]
     #[gc_slots(private_pairs, slot)]
     #[gc_weak(none)]
+    #[snapshot_table(PrivateElements, 28, 29, Serialized, "private_values/private_accessors")]
     /// Private elements are keyed by the receiver and the closure cell that
     /// represents the lexically-scoped private name. The cell identity is the
     /// brand; it cannot collide across class evaluations even when the source
@@ -709,6 +797,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(private_pairs, accessor)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     private_accessors: Tracked<
         std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), AccessorData>,
     >,
@@ -716,6 +805,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Native prototype methods to bind at link time: `(prototype instance,
     /// method name, method function)`. Populated once at boot; a method is
     /// installed as an own property of its prototype only when the program
@@ -730,6 +820,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Native prototype **data** properties to bind at link time: `(prototype,
     /// property name, string value)`. Used for the inherited Error prototype
     /// `name`/`message` (so `err.name` resolves up the chain and
@@ -740,6 +831,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Native prototype **accessor** properties to bind at link time:
     /// `(prototype, property key, getter function, optional setter function,
     /// guard name)`. Each installs a real ordinary accessor property with
@@ -773,6 +865,7 @@ pub struct Interp {
     #[gc_chunk(pair_slots)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The well-known symbols (`Symbol.iterator`, `Symbol.hasInstance`, …) as
     /// `(name, symbol value)` — fixed `Kind::Symbol` values created once at
     /// boot and bound as own properties of the `Symbol` constructor at link
@@ -782,6 +875,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program's symbol `name → id` table, built at
     /// [`Self::link_intrinsics`] from the decoded symbols atom (the inverse
     /// of the id→name vector). A native built-in that must set a
@@ -795,6 +889,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// XS's boot-time default key names (`gxIDStrings`). A runtime string
     /// property key equal to one of these is already interned in XS's global
     /// symbol table, so re-interning it allocates **no** key slot; a name
@@ -805,6 +900,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The next id [`Self::intern_symbol_key`] hands out for a symbol used
     /// as a property key, allocated DOWNWARD from `u16::MAX` so the symbol
     /// id space can never collide with the append-only name table growing
@@ -819,6 +915,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(NameFloor, 38, 38, Serialized, "installed_names_len")]
     /// High-water mark of the name table as of the last
     /// `install_intrinsic_bindings` pass. The relink/eval
     /// keep filters admit ids ABOVE this floor: "appended since the last
@@ -830,11 +927,13 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     installing_intrinsics: bool,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Poison latch: the two property-key id spaces met (the name table
     /// growing up collided with [`Self::next_symbol_key_id`] minting
     /// down), so any further intern would alias an existing key. Set by
@@ -850,6 +949,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Lifecycle latch: did the most recent [`Self::run`] leave the
     /// machine at a COMPLETED crank boundary? `true` on a fresh machine
     /// (a restore lands on one, and a linked machine that never ran is
@@ -866,6 +966,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(SymbolTables, 36, 36, RebuiltAtRestore, "symbol_names(NAME-serialized)+symbol_ids(derived)")]
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
@@ -874,6 +975,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(ErrorData, 6, 6, Serialized, "error_data")]
     /// Per-instance Error metadata (name + message), keyed by the error
     /// instance's slot index. An Error object's completion/abort value
     /// stringifies as `name` (no/empty message) or `name: message` — XS's
@@ -885,6 +987,7 @@ pub struct Interp {
     #[gc_chunk(slot_values)]
     #[gc_slots(map, slot)]
     #[gc_weak(none)]
+    #[snapshot_table(WrapperData, 8, 8, Serialized, "wrapper_data")]
     /// Per-instance primitive-wrapper data (`new Boolean`/`Number`/`String`),
     /// keyed by the wrapper instance's slot: the wrapped primitive slot
     /// (XS's `[[BooleanData]]`/`[[NumberData]]`/`[[StringData]]`). A wrapper's
@@ -895,6 +998,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Array.prototype%` (a boot object). Every array literal
     /// and `new Array` instance chains to it, so `arr.push`/`arr.join`/… (the
     /// native methods bound on it) resolve up the prototype chain.
@@ -903,6 +1007,7 @@ pub struct Interp {
     #[gc_chunk(indexed)]
     #[gc_slots(bulk, indexed)]
     #[gc_weak(none)]
+    #[snapshot_table(Arrays, 9, 9, Serialized, "arrays")]
     /// Per-instance array data (XS's exotic array's `XS_ARRAY_KIND` internal
     /// slot: `length` plus the item chunk). Keyed by the array instance's
     /// slot. `length` is the array length semantics of `fxArraySetLength`;
@@ -916,6 +1021,7 @@ pub struct Interp {
     #[gc_chunk(indexed)]
     #[gc_slots(bulk, indexed)]
     #[gc_weak(none)]
+    #[snapshot_table(IndexProps, 10, 10, Serialized, "index_props")]
     /// An **ordinary** object's integer-indexed properties, stored by index
     /// rather than by name.
     ///
@@ -943,6 +1049,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The subset of [`Self::arrays`] instances that are **`arguments`
     /// objects** (materialized by `XS_CODE_ARGUMENTS_SLOPPY`/`_STRICT`). XS
     /// stores the mapped/unmapped arguments exotic like an indexed object, and
@@ -957,6 +1064,7 @@ pub struct Interp {
     #[gc_chunk(disposal)]
     #[gc_slots(map, disposal)]
     #[gc_weak(none)]
+    #[snapshot_table(DisposableStacks, 29, 30, Serialized, "disposable_stacks")]
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
@@ -965,6 +1073,7 @@ pub struct Interp {
     #[gc_chunk(collection)]
     #[gc_slots(bulk, collection)]
     #[gc_weak(collection)]
+    #[snapshot_table(Collections, 11, 11, Serialized, "collections")]
     /// Per-instance Map/Set/WeakMap/WeakSet data (XS's exotic collection
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
@@ -973,6 +1082,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Per-page refcounts for the BULK side tables' references
     /// (arrays' items, collections' entries) — the standing map the
     /// partial collector's page projection reads instead of walking
@@ -983,6 +1093,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Map.prototype%`/`%Set.prototype%`/`%WeakMap.prototype%`/
     /// `%WeakSet.prototype%` (boot objects), so a `new Map()` instance chains
     /// to the right one and its methods resolve.
@@ -991,21 +1102,25 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     set_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     weakmap_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     weakset_proto: crate::value::SlotIndex,
     #[gc_hook(early, map)]
     #[gc_chunk(buffer_data)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(ArrayBuffers, 12, 12, Serialized, "array_buffers")]
     /// Per-instance `ArrayBuffer` backing store (XS's `XS_ARRAY_BUFFER_KIND`
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
@@ -1014,6 +1129,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// ArrayBuffers detached through the test262 host hook. The backing bytes
     /// remain allocated so existing views keep stable identities, while every
     /// operation that performs `ValidateTypedArray` rejects the detached
@@ -1023,6 +1139,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The subset of [`Self::array_buffers`] instances that are
     /// `SharedArrayBuffer`s (XS's `XS_ARRAY_BUFFER_KIND` with the shared flag).
     /// ironhorse is single-agent, so a shared buffer is byte-identical to a
@@ -1033,6 +1150,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%ArrayBuffer.prototype%` (a boot object), so a
     /// `new ArrayBuffer()` instance chains to it and its methods resolve.
     arraybuffer_proto: crate::value::SlotIndex,
@@ -1040,6 +1158,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol id of `byteLength`, resolved at
     /// [`Self::link_intrinsics`] (XS's `mxID(_byteLength)`), so a
     /// `buffer.byteLength` get routes to the buffer byte-length accessor.
@@ -1049,6 +1168,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(map, buffer)]
     #[gc_weak(none)]
+    #[snapshot_table(TypedArrays, 13, 13, Serialized, "typed_arrays")]
     /// Per-instance TypedArray view state (XS's `XS_TYPED_ARRAY_KIND` +
     /// `XS_DATA_VIEW_KIND` internal slots + buffer reference). Keyed by the
     /// view instance's slot, like [`Self::array_buffers`]. See
@@ -1058,6 +1178,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol ids of `byteOffset` and `buffer`, resolved
     /// at [`Self::link_intrinsics`], so a `ta.byteOffset` / `ta.buffer` get
     /// routes to the TypedArray (and DataView) view accessors. `None` when
@@ -1067,11 +1188,13 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     buffer_id: Option<u16>,
     #[gc_hook(early, map)]
     #[gc_chunk(none)]
     #[gc_slots(map, buffer)]
     #[gc_weak(none)]
+    #[snapshot_table(DataViews, 14, 14, Serialized, "data_views")]
     /// Per-instance `DataView` view state (XS's `XS_DATA_VIEW_KIND` internal
     /// slot + buffer reference). Keyed by the view instance's slot. See
     /// [`DataViewData`].
@@ -1080,6 +1203,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%DataView.prototype%` (a boot object), so a
     /// `new DataView()` instance chains to it and its `get*`/`set*` methods
     /// resolve.
@@ -1088,6 +1212,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol id of `size`, resolved at
     /// [`Self::link_intrinsics`] (XS's `mxID(_size)`), so a `map.size`/
     /// `set.size` get routes to the collection size accessor. `None` when the
@@ -1097,6 +1222,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol id of `length`, resolved at
     /// [`Self::link_intrinsics`] (XS's `mxID(_length)`), so an
     /// `arr.length` get/set routes to the array length semantics. `None`
@@ -1106,6 +1232,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol id of `name` (XS's `mxID(_name)`), so a
     /// `f.name` read routes to the function's own `name` property. `None`
     /// when the program never references `name`.
@@ -1114,6 +1241,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Array Iterator.prototype%` (a boot object) — the
     /// prototype of the iterators `arr.values()`/`keys()`/`entries()` and
     /// `arr[Symbol.iterator]()` produce. Carries `next` and a
@@ -1123,32 +1251,38 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     iterator_wrapper_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     map_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     set_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// `%RegExpStringIteratorPrototype%`, inheriting `%Iterator.prototype%`.
     regexp_string_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `Math` namespace object (XS's `mxMathObject`) — a boot
     /// object carrying the `Math.*` functions and the numeric constants
     /// (`Math.PI`, …) as own properties, bound into the global object under
@@ -1159,6 +1293,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%String.prototype%` (a boot object). A **primitive**
     /// string's property/method access boxes to it (XS's `fxCoerceToString`
     /// / `mxStringAccessor` path): `"abc".charCodeAt`/`.slice`/… resolve up
@@ -1169,12 +1304,14 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The intrinsic function installed at `%String.prototype%[Symbol.iterator]`.
     string_iterator_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Number.prototype%` (a boot object) — the box target for a
     /// primitive number's method access (`(42).toString(2)`, …).
     number_proto: crate::value::SlotIndex,
@@ -1182,6 +1319,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Boolean.prototype%` (a boot object) — the box target for a
     /// primitive boolean's method access (`true.toString()`, …).
     boolean_proto: crate::value::SlotIndex,
@@ -1189,6 +1327,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// `%Date.prototype%` and the `[[DateValue]]` side table. A Date instance
     /// remains an ordinary arena object for property/prototype behavior; its
     /// time value is the one non-property internal slot recorded here.
@@ -1197,6 +1336,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted function identity for the lazily materialized
     /// `%Date.prototype%[Symbol.toPrimitive]` property.
     date_to_primitive_method: crate::value::SlotIndex,
@@ -1204,11 +1344,13 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(Dates, 31, 27, Serialized, "dates")]
     dates: Tracked<std::collections::HashMap<crate::value::SlotIndex, f64>>,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
@@ -1216,6 +1358,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted function identity for the lazily materialized
     /// `%Symbol.prototype%[Symbol.toPrimitive]` property.
     symbol_to_primitive_method: crate::value::SlotIndex,
@@ -1223,6 +1366,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%BigInt.prototype%` (a boot object) — the box target for a
     /// primitive bigint's method access (`(42n).toString(2)`, …).
     bigint_proto: crate::value::SlotIndex,
@@ -1230,6 +1374,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(SymbolRegistry, 35, 35, Serialized, "symbol_registry/symbol_registry_keys")]
     /// The global symbol registry (`Symbol.for`/`keyFor`, XS's `symbolTable`):
     /// the registry key → the canonical symbol-description slot that is the
     /// registered symbol's identity, so `Symbol.for(k) === Symbol.for(k)`.
@@ -1238,6 +1383,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(keys, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The reverse of [`Self::symbol_registry`]: a registered symbol's
     /// identity slot → its registry key, so `Symbol.keyFor(sym)` recovers it.
     symbol_registry_keys: std::collections::HashMap<crate::value::SlotIndex, Vec<u8>>,
@@ -1245,6 +1391,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(keys, none)]
     #[gc_weak(symbol_keys)]
+    #[snapshot_table(SymbolKeyIds, 37, 37, Serialized, "symbol_key_ids/next_symbol_key_id")]
     /// A symbol value's descriptor slot → the program-local property **id** it
     /// is interned under when used as a property key (XS's `mxID(symbol)`: a
     /// symbol IS an id there; here a symbol's descriptor-slot identity is
@@ -1261,6 +1408,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(owner_pairs, accessor)]
     #[gc_weak(none)]
+    #[snapshot_table(Accessors, 7, 7, Serialized, "accessors")]
     /// Getter/setter pairs for ordinary accessor properties. The key is the
     /// owner and property id; the owner's normal property chain remains the
     /// source of truth for presence, attributes, and creation order.
@@ -1269,6 +1417,7 @@ pub struct Interp {
     #[gc_chunk(triple_slots)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Native prototype/namespace **numeric** data properties to bind at link
     /// time: `(owner instance, property name, value)`. Used for `Math.PI` &co.
     /// (the `Math` constants) and `Number.MAX_VALUE` &co.; bound only when the
@@ -1278,6 +1427,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(map, iterator)]
     #[gc_weak(none)]
+    #[snapshot_table(Iterators, 15, 15, Serialized, "iterators")]
     /// Per-instance array-iterator state (XS's `fxNewIteratorInstance`
     /// internal slots): the array being iterated, the next index to yield,
     /// the iteration `kind` (0 = values, 1 = keys, 2 = entries), and the
@@ -1288,6 +1438,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol ids of `value`/`done`, resolved at
     /// [`Self::link_intrinsics`], so `next()` sets them on the result object
     /// under the ids the program reads them by.
@@ -1296,11 +1447,13 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     done_id: Option<u16>,
     #[gc_hook(early, map)]
     #[gc_chunk(promise)]
     #[gc_slots(map, promise)]
     #[gc_weak(none)]
+    #[snapshot_table(Promises, 16, 16, Serialized, "promises")]
     /// Per-instance promise settlement state (XS's `XS_PROMISE_KIND` STATUS/
     /// RESULT/THENS internal slots). Keyed by the promise instance's slot,
     /// like [`Self::collections`]. See [`PromiseData`].
@@ -1309,6 +1462,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%Promise.prototype%` (a boot object), so a `new Promise`
     /// instance chains to it and `then`/`catch`/`finally` resolve.
     promise_proto: crate::value::SlotIndex,
@@ -1316,6 +1470,7 @@ pub struct Interp {
     #[gc_chunk(frame)]
     #[gc_slots(map, frame)]
     #[gc_weak(none)]
+    #[snapshot_table(Generators, 21, 21, Serialized, "generators")]
     /// Per-instance generator state (design § generators): the suspended
     /// activation and lifecycle state a generator's `next`/`return`/`throw`
     /// resume. Keyed by the generator instance's slot index, modeled on
@@ -1325,6 +1480,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%GeneratorPrototype%` (a boot object carrying
     /// `next`/`return`/`throw`); a generator function's `.prototype` chains
     /// to it, so a generator instance resolves those methods by the ordinary
@@ -1334,6 +1490,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%GeneratorFunction.prototype%` (XS's
     /// `mxGeneratorFunctionPrototype` — a plain object off `%Function.prototype%`
     /// carrying a `constructor` back-link to `%GeneratorFunction%` and a
@@ -1346,6 +1503,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(GenRunStack, 22, 22, EmptyAtBoundary, "gen_run_stack")]
     /// The stack of generators currently executing on a nested
     /// [`Self::resume_generator`] dispatch (its top is the innermost). The
     /// `YIELD` arm reads the top to snapshot the right instance.
@@ -1354,6 +1512,7 @@ pub struct Interp {
     #[gc_chunk(async_frame)]
     #[gc_slots(map, async_frame)]
     #[gc_weak(none)]
+    #[snapshot_table(AsyncInstances, 23, 23, Serialized, "async_instances")]
     /// Per-instance async-function state (design § async/await;
     /// `ASYNC-AWAIT-HANDOFF.md`): the suspended activation and the result
     /// promise + resolving functions a `START_ASYNC` created, keyed by the
@@ -1364,6 +1523,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%AsyncFunction.prototype%` (XS's `mxAsyncFunctionPrototype`
     /// — a plain object off `%Function.prototype%`). An async function's
     /// instance `[[Prototype]]` chains to it (see [`Self::new_async_function`]).
@@ -1372,6 +1532,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(AsyncRunStack, 24, 24, EmptyAtBoundary, "async_run_stack")]
     /// The stack of async instances currently executing on a nested
     /// [`Self::step_async`] dispatch (its top is the innermost). The `AWAIT`
     /// arm reads the top to snapshot the right instance — the async analog of
@@ -1381,6 +1542,7 @@ pub struct Interp {
     #[gc_chunk(queued_frame)]
     #[gc_slots(map, queued_frame)]
     #[gc_weak(none)]
+    #[snapshot_table(AsyncGenerators, 27, 28, Pending, "async_generators/async_gen_run_stack")]
     /// Async-generator instances combine generator suspension with promise
     /// request queues. Each `.next`/`.return`/`.throw` capability is kept in
     /// FIFO order until the currently executing/awaiting request finishes.
@@ -1389,21 +1551,25 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     async_generator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     async_generator_function_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     async_iterator_identity: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// `%IteratorPrototype%[@@iterator]`. See `segments_iterator_method`
     /// for why this is a boot field rather than a link-time mint.
     iterator_identity: crate::value::SlotIndex,
@@ -1411,11 +1577,13 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     async_gen_run_stack: Vec<AsyncGenRunFrame>,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The resume mode threaded into the `BRANCH_STATUS` epilogue after an
     /// `AWAIT` resume (XS's `the->status`): `NoStatus` (a fulfilled resume —
     /// branch by offset, leaving the resolved value on the stack) or `Throw`
@@ -1428,6 +1596,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(map, promise_owner)]
     #[gc_weak(none)]
+    #[snapshot_table(PromiseFunctions, 17, 17, Serialized, "promise_functions")]
     /// Bound state for runtime-minted Promise host functions. Keyed by the
     /// function instance's slot and consulted in `RUN` when guest code calls a
     /// resolver, capability executor, or `finally` closure it was handed. See
@@ -1437,6 +1606,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(PromiseGuards, 18, 18, Serialized, "promise_guards")]
     /// The per-pair `[[AlreadyResolved]]` guards (XS's boolean slot in each
     /// `fxPushPromiseFunctions` home object). A resolving-function pair shares
     /// one index; the first of resolve/reject to fire trips it, the second is a
@@ -1447,6 +1617,7 @@ pub struct Interp {
     #[gc_chunk(jobs)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(PromiseJobs, 19, 19, EmptyAtBoundary, "promise_jobs")]
     /// The pending promise-job queue (XS's `mxPendingJobs` list): the
     /// microtasks queued by settling a promise with registered reactions,
     /// drained FIFO by [`Self::run_promise_jobs`] after the script settles —
@@ -1457,6 +1628,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(Combinators, 20, 20, Serialized, "combinators")]
     /// The shared state of each in-flight `Promise.all`/`allSettled`/`race`/
     /// `any` call (XS's `remainingElementsCount` cell + the values/errors
     /// Array its element-resolve closures share). Indexed by a
@@ -1467,6 +1639,7 @@ pub struct Interp {
     #[gc_chunk(from_async)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// In-flight `Array.fromAsync` native async state machines. Append-only
     /// within a run; indexed by the [`ReactionKind::FromAsyncNext`]/… payload.
     /// See [`FromAsyncData`].
@@ -1475,6 +1648,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol id of `then` (XS's `mxID(_then)`), resolved
     /// at [`Self::link_intrinsics`], so thenable adoption can probe an
     /// argument's `.then`. `None` when the program never references `then`.
@@ -1485,6 +1659,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol id of `constructor`, resolved at
     /// [`Self::link_intrinsics`]. When present, a user function's default
     /// `.prototype` gets its spec-required own `constructor` back-reference
@@ -1498,6 +1673,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The `%Error.prototype%` `stack` accessor pair awaiting link-time
     /// install: `(error_proto, getter, setter)`. Installed (guarded on the
     /// program naming `Error`, for metering neutrality elsewhere) beside
@@ -1511,6 +1687,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-symbol id of `prototype`, when the program names it —
     /// gates installing a constructor function's own `prototype` property
     /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
@@ -1520,6 +1697,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(RegExps, 25, 25, Serialized, "regexps")]
     /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot): the
     /// compiled program plus the source/flags strings. Keyed by the RegExp
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
@@ -1530,6 +1708,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The realm's `%RegExp.prototype%` (a boot object), so a `new RegExp`
     /// instance (and a `/.../` literal) chains to it and `exec`/`test`/the
     /// accessor getters resolve.
@@ -1538,36 +1717,42 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.replace]` function identity.
     regexp_replace_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.match]` function identity.
     regexp_match_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.matchAll]` function identity.
     regexp_match_all_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.search]` function identity.
     regexp_search_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.split]` function identity.
     regexp_split_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol id of `lastIndex` (XS's `mxID(_lastIndex)`),
     /// resolved at [`Self::link_intrinsics`], so `re.lastIndex` reads/writes
     /// the instance's own last-index property. `None` when unreferenced.
@@ -1576,6 +1761,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol ids of the RegExp accessor getters
     /// (`source`/`flags`/`global`/`ignoreCase`/`multiline`/`dotAll`/`sticky`/
     /// `unicode`/`hasIndices`/`unicodeSets`), so a `re.source` &co. get routes
@@ -1585,6 +1771,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(none)]
     /// The program-local symbol ids of the exec-result array's named slots
     /// (`index`/`input`/`groups`), set on the match array by `exec`. `None`
     /// when unreferenced.
@@ -1593,6 +1780,7 @@ pub struct Interp {
     #[gc_chunk(none)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
+    #[snapshot_table(Jumps, 4, 4, EmptyAtBoundary, "jumps")]
     /// The jump-buffer chain (XS's `the->firstJump`), innermost last.
     /// `CATCH` pushes a [`CatchJump`]; `UNCATCH` pops it; `THROW`/`RETHROW`
     /// unwind to the top entry, restoring the value stack, scope, and call
@@ -1602,6 +1790,9 @@ pub struct Interp {
     /// structural predicate (every `self.jumps` entry is a JS jump,
     /// XS's `jump->flag = 1`; the host is the absence of a jump).
     jumps: Vec<CatchJump>,
+}
+external_tables {
+    Modules, 39, 39, Pending, "module::ModuleGraph";
 }
         }
     };
@@ -1613,8 +1804,9 @@ macro_rules! define_interp_state {
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
           #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    }) => {
+    } external_tables { $($external:tt)* }) => {
         $vis struct $name {
             $($(#[$attr])* $field_vis $field: $ty,)*
         }
@@ -1635,8 +1827,9 @@ macro_rules! select_gc_tables {
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
           #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    }) => {
+    } external_tables { $($external:tt)* }) => {
         select_gc_tables! {
             @scan ($consumer $(, $arg)*) [] [] [];
             $(($phase, $policy, $field, $ty))*
@@ -1674,3 +1867,94 @@ macro_rules! select_gc_tables {
         }
     };
 }
+
+// Select only inert snapshot metadata. Private field types never leave the VM.
+macro_rules! select_snapshot_tables {
+    (($consumer:ident, $dollar:tt) $vis:vis struct $name:ident {
+        $(#[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    } external_tables {
+        $($ext:ident, $ext_id:literal, $ext_order:literal, $ext_coverage:ident, $ext_display:literal;)*
+    }) => {
+        select_snapshot_tables! {
+            @scan ($consumer, $dollar)
+            [$($ext, $ext_id, $ext_order, $ext_coverage, None, $ext_display;)*];
+            $(($field; $($snapshot)*))*
+        }
+    };
+    (@scan ($consumer:ident, $dollar:tt) [$($rows:tt)*];) => {
+        $consumer! { ($dollar) $($rows)* }
+    };
+    (@scan $args:tt $rows:tt; ($field:ident; none) $($rest:tt)*) => {
+        select_snapshot_tables! { @scan $args $rows; $($rest)* }
+    };
+    (@scan $args:tt [$($rows:tt)*];
+     ($field:ident; $variant:ident, $id:literal, $order:literal, $coverage:ident, $display:literal)
+     $($rest:tt)*) => {
+        select_snapshot_tables! {
+            @scan $args
+            [$($rows)* $variant, $id, $order, $coverage, Some(stringify!($field)), $display;];
+            $($rest)*
+        }
+    };
+}
+
+macro_rules! define_snapshot_exports {
+    (($dollar:tt)
+     $($variant:ident, $id:literal, $order:literal, $coverage:ident, $primary:expr, $display:literal;)*) => {
+        /// Invoke a consumer with side-table identities and inert snapshot metadata.
+        /// No private interpreter types or helper macros cross the crate boundary.
+        #[doc(hidden)]
+        #[macro_export]
+        macro_rules! interp_tables {
+            ($dollar consumer:ident) => {
+                $dollar consumer! {
+                    $($variant, $id, $order, $coverage, $primary, $display;)*
+                }
+            };
+        }
+
+        /// Side-table metadata in the historical public enumeration order.
+        /// Coverage tags are interpreted and checked by the snapshot crate.
+        pub const SIDE_TABLES: &[crate::side_tables::TableDesc] = &{
+            let mut rows = [$(crate::side_tables::TableDesc {
+                variant: stringify!($variant),
+                discriminant: $id,
+                ordinal: $order,
+                coverage: stringify!($coverage),
+                primary_field: $primary,
+                field: $display,
+            },)*];
+            let mut i = 0;
+            while i < rows.len() {
+                assert!(rows[i].ordinal < rows.len());
+                let mut j = i + 1;
+                while j < rows.len() {
+                    assert!(rows[i].ordinal != rows[j].ordinal);
+                    assert!(rows[i].discriminant != rows[j].discriminant);
+                    j += 1;
+                }
+                i += 1;
+            }
+            i = 0;
+            while i < rows.len() {
+                let mut j = i + 1;
+                while j < rows.len() {
+                    if rows[j].ordinal < rows[i].ordinal {
+                        let row = rows[i];
+                        rows[i] = rows[j];
+                        rows[j] = row;
+                    }
+                    j += 1;
+                }
+                i += 1;
+            }
+            rows
+        };
+    };
+}
+interp_state!(select_snapshot_tables, define_snapshot_exports, $);
