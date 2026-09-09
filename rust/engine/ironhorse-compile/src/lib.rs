@@ -10,7 +10,7 @@
 //! The parser, opcode definitions, and parse meter also remain available by
 //! module path for compiler tooling and conformance harnesses.
 //! Internal passes use the shared identifier tables directly from
-//! `ironhorse-regexp`; this crate does not expose that dependency's module.
+//! `ironhorse-unicode`; this crate does not expose that dependency's module.
 //!
 //! The byte-identity reference is XS pin `23b4d6b0a65f` built on x86_64
 //! with signed plain C `char`. XS hashes symbol spellings through `char*`,

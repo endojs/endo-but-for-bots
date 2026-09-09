@@ -697,4 +697,33 @@ python3 rust/engine/benches/measure_regexp_validation.py \
 
 This measurement is scoped to F152 validation and does not replace the full 1A
 performance gate or resolve the retained helper-extraction benchmark failures.
-The Unicode identifier dependency still needs its separate leaf-crate move.
+The subsequent Unicode identifier extraction is recorded below.
+
+## Shared Unicode identifier leaf (1A, F152)
+
+`ironhorse-unicode` now owns the XS identifier tables and classifiers in a
+zero-dependency, `no_std` crate.
+The lexer imports it directly; `ironhorse-regexp::unicode` preserves the existing
+public path by re-exporting all four symbols.
+The moved implementation is byte-for-byte identical apart from crate attributes.
+An oracle-free test pins the pre-extraction verdicts across all 1,114,112 Unicode
+code points, including surrogates and the trailing variation-selector range.
+The engine CI package list includes the leaf so its tests run on every lane.
+
+The regexp measurement runner builds each revision's own Unicode leaf when
+present and still accepts baselines from before the extraction.
+Its input guard now covers candidate leaf sources.
+These standalone regexp measurements do not measure frontend identifier scanning
+or replace the full 1A performance gate.
+
+[results/1a-unicode-leaf.json](results/1a-unicode-leaf.json) compares the extraction
+with `c250cf311` on macOS arm64 and Rust 1.91.1 using the same nine fixtures and
+sampling protocol above.
+The 379,112-byte program/metadata/error/raw-total comparison remains identical.
+Compilation ratios range from 0.968 to 1.059; all raw samples are retained.
+Validation is compared with **baseline compilation**, not baseline validation:
+its ratios range from 0.637 to 1.006, with Unicode folding at 1.006 and syntax
+failure at 1.002.
+Those ratios include the already-committed validation seam's benefit and do not
+isolate a validation-speed change caused by this extraction.
+Small timing deltas carry no statistical significance claim.

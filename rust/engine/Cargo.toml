@@ -9,6 +9,7 @@ resolver = "2"
 members = [
     "ironhorse-meter",
     "ironhorse-text",
+    "ironhorse-unicode",
     "ironhorse-vm",
     "xs-oracle",
     "ironhorse-262",

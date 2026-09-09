@@ -24,12 +24,19 @@ def run(*args):
 
 
 def build(folder, regexp_src, meter, validation):
+    unicode_source = regexp_src.parent.parent / "ironhorse-unicode/src/lib.rs"
+    unicode_args = []
+    if unicode_source.exists():
+        unicode = folder / "libironhorse_unicode.rlib"
+        run("rustc", *FLAGS, "--crate-type", "rlib", "--crate-name", "ironhorse_unicode",
+            unicode_source, "-o", unicode)
+        unicode_args = ["--extern", f"ironhorse_unicode={unicode}"]
     library = folder / "libironhorse_regexp.rlib"
     run("rustc", *FLAGS, "--crate-type", "rlib", "--crate-name", "ironhorse_regexp",
-        "--extern", f"ironhorse_meter={meter}", regexp_src / "lib.rs", "-o", library)
+        *unicode_args, "--extern", f"ironhorse_meter={meter}", regexp_src / "lib.rs", "-o", library)
     probe = folder / "probe"
     run("rustc", *FLAGS, *(["--cfg", "validation_api"] if validation else []),
-        "-L", f"dependency={meter.parent}", "--extern", f"ironhorse_regexp={library}",
+        "-L", f"dependency={meter.parent}", "-L", f"dependency={folder}", "--extern", f"ironhorse_regexp={library}",
         DRIVER, "-o", probe)
     return probe
 
@@ -37,6 +44,7 @@ def build(folder, regexp_src, meter, validation):
 def candidate_hashes():
     sources = sorted((ENGINE / "ironhorse-regexp/src").rglob("*.rs"))
     sources += sorted((ENGINE / "ironhorse-meter/src").rglob("*.rs"))
+    sources += sorted((ENGINE / "ironhorse-unicode/src").rglob("*.rs"))
     sources += [DRIVER, Path(__file__).resolve(), ENGINE / "ironhorse-compile/src/lexer.rs",
                 ENGINE / "ironhorse-vm/src/lib.rs"]
     return {str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -52,9 +60,10 @@ def measure(args):
         before, after = root / "before", root / "after"
         before.mkdir()
         after.mkdir()
-        archive = subprocess.check_output([
-            "git", "archive", baseline, "rust/engine/ironhorse-regexp/src",
-            "rust/engine/ironhorse-meter/src"], cwd=REPO)
+        archive_paths = ["rust/engine/ironhorse-regexp/src", "rust/engine/ironhorse-meter/src"]
+        if run("git", "ls-tree", "--name-only", baseline, "rust/engine/ironhorse-unicode/src"):
+            archive_paths.append("rust/engine/ironhorse-unicode/src")
+        archive = subprocess.check_output(["git", "archive", baseline, *archive_paths], cwd=REPO)
         with tarfile.open(fileobj=io.BytesIO(archive)) as files:
             files.extractall(before, filter="data")
         meter_source = before / "rust/engine/ironhorse-meter/src"
