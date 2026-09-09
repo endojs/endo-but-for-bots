@@ -1,6 +1,10 @@
 //! Snapshot payload ownership and codec wiring. Section identities come from
 //! the VM roster; declaration order here is the historical container atom order.
 //! Multiple payloads can share one image field (errors and promise state).
+//! Container presence is content-determined: empty optional atoms are omitted
+//! to preserve historical bytes and CAS identities. Error frames require an
+//! actual frame, async instances use their nested table, and a name floor
+//! travels only when present (the image builder canonicalizes it).
 
 macro_rules! snapshot_payloads {
     ($consumer:ident) => {
@@ -8,6 +12,7 @@ macro_rules! snapshot_payloads {
             Stack {
                 image_field: stack,
                 atom: Some(crate::format::STAC),
+                present(_image): true,
                 encode(state): {
                     crate::image::encode_stack(&state.stack)
                 },
@@ -18,6 +23,7 @@ macro_rules! snapshot_payloads {
             RetiredFreeList {
                 image_field: slot_free,
                 atom: None,
+                present(_image): false,
                 encode(_state): {
                     crate::image::encode_u32s(&[])
                 },
@@ -28,6 +34,7 @@ macro_rules! snapshot_payloads {
             Keys {
                 image_field: keys,
                 atom: Some(crate::format::KEYS),
+                present(_image): true,
                 encode(state): {
                     crate::image::encode_strings(&state.keys)
                 },
@@ -38,6 +45,7 @@ macro_rules! snapshot_payloads {
             Names {
                 image_field: names,
                 atom: Some(crate::format::NAME),
+                present(_image): true,
                 encode(state): {
                     crate::image::encode_names(&state.names)
                 },
@@ -48,6 +56,7 @@ macro_rules! snapshot_payloads {
             Symbols {
                 image_field: symbols,
                 atom: Some(crate::format::SYMB),
+                present(_image): true,
                 encode(state): {
                     crate::image::encode_symbol_keys(&state.symbols)
                 },
@@ -58,6 +67,7 @@ macro_rules! snapshot_payloads {
             Meter {
                 image_field: meter,
                 atom: Some(crate::format::METR),
+                present(_image): true,
                 encode(state): {
                     state.meter.encode()
                 },
@@ -68,6 +78,7 @@ macro_rules! snapshot_payloads {
             Arrays {
                 image_field: arrays,
                 atom: Some(crate::format::ARRY),
+                present(image): !image.arrays.is_empty(),
                 encode(state): {
                     crate::image::encode_arrays(&state.arrays)
                 },
@@ -78,6 +89,7 @@ macro_rules! snapshot_payloads {
             IndexProperties {
                 image_field: index_props,
                 atom: Some(crate::format::IDXP),
+                present(image): !image.index_props.is_empty(),
                 encode(state): {
                     crate::image::encode_index_props(&state.index_props)
                 },
@@ -88,6 +100,7 @@ macro_rules! snapshot_payloads {
             Collections {
                 image_field: collections,
                 atom: Some(crate::format::COLL),
+                present(image): !image.collections.is_empty(),
                 encode(state): {
                     crate::image::encode_collections(&state.collections)
                 },
@@ -98,6 +111,7 @@ macro_rules! snapshot_payloads {
             Registry {
                 image_field: registry,
                 atom: Some(crate::format::REGY),
+                present(image): !image.registry.is_empty(),
                 encode(state): {
                     crate::image::encode_registry(&state.registry)
                 },
@@ -108,6 +122,7 @@ macro_rules! snapshot_payloads {
             Errors {
                 image_field: errors,
                 atom: Some(crate::format::ERRD),
+                present(image): !image.errors.is_empty(),
                 encode(state): {
                     crate::image::encode_errors(&state.errors)
                 },
@@ -118,6 +133,7 @@ macro_rules! snapshot_payloads {
             ErrorFrames {
                 image_field: errors,
                 atom: Some(crate::format::ESTK),
+                present(image): image.errors.iter().any(|error| !error.frames.is_empty()),
                 encode(state): {
                     crate::image::encode_error_frames(&state.errors)
                 },
@@ -128,6 +144,7 @@ macro_rules! snapshot_payloads {
             Buffers {
                 image_field: buffers,
                 atom: Some(crate::format::ABUF),
+                present(image): !image.buffers.is_empty(),
                 encode(state): {
                     crate::image::encode_buffers(&state.buffers)
                 },
@@ -138,6 +155,7 @@ macro_rules! snapshot_payloads {
             TypedArrays {
                 image_field: typed_arrays,
                 atom: Some(crate::format::TARR),
+                present(image): !image.typed_arrays.is_empty(),
                 encode(state): {
                     crate::image::encode_typed_arrays(&state.typed_arrays)
                 },
@@ -148,6 +166,7 @@ macro_rules! snapshot_payloads {
             DataViews {
                 image_field: data_views,
                 atom: Some(crate::format::DVIW),
+                present(image): !image.data_views.is_empty(),
                 encode(state): {
                     crate::image::encode_data_views(&state.data_views)
                 },
@@ -158,6 +177,7 @@ macro_rules! snapshot_payloads {
             Wrappers {
                 image_field: wrappers,
                 atom: Some(crate::format::WRAP),
+                present(image): !image.wrappers.is_empty(),
                 encode(state): {
                     crate::image::encode_wrappers(&state.wrappers)
                 },
@@ -168,6 +188,7 @@ macro_rules! snapshot_payloads {
             Regexps {
                 image_field: regexps,
                 atom: Some(crate::format::REGX),
+                present(image): !image.regexps.is_empty(),
                 encode(state): {
                     crate::image::encode_regexps(&state.regexps)
                 },
@@ -178,6 +199,7 @@ macro_rules! snapshot_payloads {
             ArgumentsBrands {
                 image_field: arguments_brands,
                 atom: Some(crate::format::ARGB),
+                present(image): !image.arguments_brands.is_empty(),
                 encode(state): {
                     crate::image::encode_arguments_brands(&state.arguments_brands)
                 },
@@ -189,6 +211,7 @@ macro_rules! snapshot_payloads {
             Temporal {
                 image_field: temporal,
                 atom: Some(crate::format::TMPR),
+                present(image): !image.temporal.is_empty(),
                 encode(state): {
                     crate::image::encode_temporal(&state.temporal)
                 },
@@ -199,6 +222,7 @@ macro_rules! snapshot_payloads {
             Intl {
                 image_field: intl,
                 atom: Some(crate::format::INTL),
+                present(image): !image.intl.is_empty(),
                 encode(state): {
                     crate::image::encode_intl(&state.intl)
                 },
@@ -209,6 +233,7 @@ macro_rules! snapshot_payloads {
             Iterators {
                 image_field: iterators,
                 atom: Some(crate::format::ITER),
+                present(image): !image.iterators.is_empty(),
                 encode(state): {
                     crate::image::encode_iterators(&state.iterators)
                 },
@@ -219,6 +244,7 @@ macro_rules! snapshot_payloads {
             Dates {
                 image_field: dates,
                 atom: Some(crate::format::DATE),
+                present(image): !image.dates.is_empty(),
                 encode(state): {
                     crate::image::encode_dates(&state.dates)
                 },
@@ -229,6 +255,7 @@ macro_rules! snapshot_payloads {
             Functions {
                 image_field: function_state,
                 atom: Some(crate::format::FUNC),
+                present(image): !image.function_state.is_empty(),
                 encode(state): {
                     crate::image::encode_function_state(&state.function_state)
                 },
@@ -240,6 +267,7 @@ macro_rules! snapshot_payloads {
             Proxies {
                 image_field: proxy_state,
                 atom: Some(crate::format::PROX),
+                present(image): !image.proxy_state.is_empty(),
                 encode(state): {
                     crate::image::encode_proxy_state(&state.proxy_state)
                 },
@@ -250,6 +278,7 @@ macro_rules! snapshot_payloads {
             Accessors {
                 image_field: accessors,
                 atom: Some(crate::format::ACCS),
+                present(image): !image.accessors.is_empty(),
                 encode(state): {
                     crate::image::encode_accessors(&state.accessors)
                 },
@@ -260,6 +289,7 @@ macro_rules! snapshot_payloads {
             IntlBoundFunctions {
                 image_field: intl_bound_functions,
                 atom: Some(crate::format::IBFN),
+                present(image): !image.intl_bound_functions.is_empty(),
                 encode(state): {
                     crate::image::encode_intl_bound_functions(&state.intl_bound_functions)
                 },
@@ -271,6 +301,7 @@ macro_rules! snapshot_payloads {
             PrivateElements {
                 image_field: private_elements,
                 atom: Some(crate::format::PRIV),
+                present(image): !image.private_elements.is_empty(),
                 encode(state): {
                     crate::image::encode_private_elements(&state.private_elements)
                 },
@@ -282,6 +313,7 @@ macro_rules! snapshot_payloads {
             DisposableStacks {
                 image_field: disposable_stacks,
                 atom: Some(crate::format::DISP),
+                present(image): !image.disposable_stacks.is_empty(),
                 encode(state): {
                     crate::image::encode_disposable_stacks(&state.disposable_stacks)
                 },
@@ -293,6 +325,7 @@ macro_rules! snapshot_payloads {
             Generators {
                 image_field: generators,
                 atom: Some(crate::format::GENR),
+                present(image): !image.generators.is_empty(),
                 encode(state): {
                     crate::image::encode_generators(&state.generators)
                 },
@@ -303,6 +336,7 @@ macro_rules! snapshot_payloads {
             Promises {
                 image_field: promise_cluster,
                 atom: Some(crate::format::PRMS),
+                present(image): !image.promise_cluster.is_empty(),
                 encode(state): {
                     crate::image::encode_promise_cluster(&state.promise_cluster)
                 },
@@ -314,6 +348,7 @@ macro_rules! snapshot_payloads {
             AsyncInstances {
                 image_field: promise_cluster,
                 atom: Some(crate::format::ASYN),
+                present(image): !image.promise_cluster.async_instances.is_empty(),
                 encode(state): {
                     crate::image::encode_async_instances(&state.promise_cluster.async_instances)
                 },
@@ -325,6 +360,7 @@ macro_rules! snapshot_payloads {
             NameFloor {
                 image_field: name_floor,
                 atom: Some(crate::format::NFLR),
+                present(image): image.name_floor.is_some(),
                 encode(state): {
                     match state.name_floor {
                         Some(floor) => floor.to_be_bytes().to_vec(),
@@ -361,6 +397,7 @@ macro_rules! define_payloads {
     ($($section:ident {
         image_field: $field:ident,
         atom: $atom:expr,
+        present($image:ident): $present:expr,
         encode($state:ident): $encode:block,
         canonicalize($bytes:ident): $canonicalize:block,
     })*) => {
@@ -371,6 +408,35 @@ macro_rules! define_payloads {
             match section {
                 $(SmallSection::$section => { let $state = state; $encode },)*
             }
+        }
+        /// Emit payload atoms in the historical order, with content-determined
+        /// omission. NAME bytes were selected alongside the version header so
+        /// scalar-only legacy images retain their original wire encoding.
+        pub(crate) fn write_payload_atoms(
+            writer: &mut crate::atom::AtomWriter,
+            image: &crate::image::MachineImage,
+            names: &[u8],
+        ) -> Result<(), SnapshotError> {
+            $(
+                if let Some(tag) = $atom {
+                    let $image = image;
+                    if $present {
+                        if SmallSection::$section == SmallSection::Names {
+                            writer.atom(tag, names)?;
+                        } else if SmallSection::$section == SmallSection::NameFloor {
+                            // The container can borrow this fixed-width payload;
+                            // the store section API must instead return a Vec.
+                            if let Some(floor) = image.name_floor {
+                                writer.atom(tag, &floor.to_be_bytes())?;
+                            }
+                        } else {
+                            let $state = image;
+                            writer.atom(tag, &$encode)?;
+                        }
+                    }
+                }
+            )*
+            Ok(())
         }
         pub(crate) fn canonical_payload(section: SmallSection, bytes: &[u8]) -> Result<Vec<u8>, SnapshotError> {
             match section {
