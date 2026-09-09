@@ -5395,7 +5395,16 @@ impl Interp {
                             code[pc + 4],
                         ]),
                     };
-                    let target = (pc as isize + size as isize + off as isize) as usize;
+                    let target = branch_target(pc, size, off);
+                    // A handler must name a byte in this buffer. Validate the
+                    // untrusted offset before retaining it, so a later throw
+                    // cannot reach the resume-target invariant with bad input.
+                    if target >= len {
+                        return Step::Host(Halt::Decode(format!(
+                            "catch target {} past end {} at {}",
+                            target, len, pc
+                        )));
+                    }
                     self.jumps.push(CatchJump {
                         target_pc: target,
                         segment: self
