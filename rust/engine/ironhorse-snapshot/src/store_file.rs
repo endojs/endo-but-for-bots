@@ -1003,6 +1003,85 @@ mod tests {
     }
 
     #[test]
+    fn file_framing_has_exact_refusals() {
+        let dir = tmp_dir("framing-refusals");
+        let path = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&path).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+            .unwrap();
+        drop(store);
+        let bytes = std::fs::read(&path).unwrap();
+        FileStore::open(&path).unwrap();
+        let open = |contents: &[u8]| {
+            std::fs::write(&path, contents).unwrap();
+            FileStore::open(&path).unwrap_err()
+        };
+        for length in 0..8 {
+            assert_eq!(
+                open(&bytes[..length]),
+                StoreError::Snapshot(SnapshotError::Corrupt("file store header truncated"))
+            );
+        }
+        let mut invalid = bytes.clone();
+        invalid[0] ^= 1;
+        assert_eq!(
+            open(&invalid),
+            StoreError::Snapshot(SnapshotError::Corrupt("file store magic"))
+        );
+        let manifest_len = u32::from_be_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let small_header = 12 + manifest_len;
+        for length in [8, 11, small_header - 1] {
+            assert_eq!(
+                open(&bytes[..length]),
+                StoreError::Snapshot(SnapshotError::Corrupt("file store manifest block"))
+            );
+        }
+        let small_len =
+            u32::from_be_bytes(bytes[small_header..small_header + 4].try_into().unwrap()) as usize;
+        let counts = small_header + 4 + small_len;
+        for length in [small_header, small_header + 3, counts - 1] {
+            assert_eq!(
+                open(&bytes[..length]),
+                StoreError::Snapshot(SnapshotError::Corrupt("file store small-state block"))
+            );
+        }
+        for length in counts..counts + 8 {
+            assert_eq!(
+                open(&bytes[..length]),
+                StoreError::Snapshot(SnapshotError::Corrupt("file store header truncated"))
+            );
+        }
+        invalid = bytes.clone();
+        invalid[counts..counts + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            open(&invalid),
+            StoreError::Snapshot(SnapshotError::Corrupt("file store directory truncated"))
+        );
+        let entry = counts + 8;
+        assert!(u32::from_be_bytes(bytes[counts..counts + 4].try_into().unwrap()) > 0);
+        assert!(u32::from_be_bytes(bytes[entry + 8..entry + 12].try_into().unwrap()) > 0);
+        invalid = bytes.clone();
+        invalid[entry..entry + 8].copy_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(
+            open(&invalid),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "file store directory entry overflows"
+            ))
+        );
+        invalid = bytes.clone();
+        invalid[entry..entry + 8].copy_from_slice(&(bytes.len() as u64).to_be_bytes());
+        assert_eq!(
+            open(&invalid),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "file store directory entry out of range"
+            ))
+        );
+        std::fs::write(&path, &bytes).unwrap();
+        FileStore::open(&path).unwrap();
+    }
+
+    #[test]
     fn foreign_magic_fails_closed() {
         let dir = tmp_dir("magic");
         let path = dir.join("heap.ihstore");
