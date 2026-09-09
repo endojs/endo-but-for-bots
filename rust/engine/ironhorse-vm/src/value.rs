@@ -1368,6 +1368,59 @@ impl Default for ChunkBytes {
     }
 }
 
+/// Read compaction input without changing arena residency. At most one cold
+/// source extent is retained in scratch; dirty/local extents come from memory.
+struct ChunkReader<'a> {
+    bytes: &'a ChunkBytes,
+    cached: Option<(usize, Vec<u8>)>,
+}
+
+impl ChunkReader<'_> {
+    fn copy_into(&mut self, mut start: usize, mut out: &mut [u8]) {
+        match self.bytes {
+            ChunkBytes::Plain(bytes) => out.copy_from_slice(&bytes[start..start + out.len()]),
+            ChunkBytes::Lazy {
+                cell,
+                resident,
+                source,
+                snapshot_len,
+            } => {
+                let per = CHUNK_EXTENT_BYTES as usize;
+                while !out.is_empty() {
+                    let ext = start / per;
+                    let within = start % per;
+                    let count = out.len().min(per - within);
+                    if resident.get(ext).is_none_or(|bit| bit.get()) {
+                        out[..count].copy_from_slice(&cell.borrow()[start..start + count]);
+                    } else {
+                        if self
+                            .cached
+                            .as_ref()
+                            .is_none_or(|(cached, _)| *cached != ext)
+                        {
+                            let bytes = source.chunk_extent(ext as u32);
+                            let expected = (*snapshot_len).min(ext * per + per) - ext * per;
+                            assert_eq!(bytes.len(), expected,
+                                "compaction source returned wrong extent length (corrupt or torn store row)");
+                            self.cached = Some((ext, bytes));
+                        }
+                        let bytes = &self.cached.as_ref().unwrap().1;
+                        out[..count].copy_from_slice(&bytes[within..within + count]);
+                    }
+                    start += count;
+                    out = &mut out[count..];
+                }
+            }
+        }
+    }
+
+    fn length_at(&mut self, header: usize) -> usize {
+        let mut bytes = [0; CHUNK_HEADER];
+        self.copy_into(header, &mut bytes);
+        u32::from_le_bytes(bytes) as usize
+    }
+}
+
 /// A read guard over chunk bytes: a plain borrow on a resident arena,
 /// a [`Ref`] on a lazy one. Derefs to `[u8]`, so existing byte-slice
 /// consumers keep working; the discriminant branch is the whole
@@ -1555,8 +1608,7 @@ impl ChunkArena {
 
     /// Advance the lazy backing to the CURRENT geometry after the
     /// session's own checkpoint — the extent-space twin of
-    /// [`SlotArena::advance_backing`]. No-op when detached (including
-    /// after a compaction's downgrade to plain storage).
+    /// [`SlotArena::advance_backing`]. No-op when detached.
     pub fn advance_backing(&mut self) {
         let len = self.len();
         if let ChunkBytes::Lazy {
@@ -1567,6 +1619,7 @@ impl ChunkArena {
         {
             *snapshot_len = len;
             let exts = len.div_ceil(CHUNK_EXTENT_BYTES as usize);
+            resident.truncate(exts);
             while resident.len() < exts {
                 resident.push(Cell::new(true));
             }
@@ -1839,12 +1892,10 @@ impl ChunkArena {
         live: &[ChunkOffset],
     ) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
         use std::collections::{HashMap, HashSet};
-        // Compaction reads every live block, so it is the amortized
-        // full reifier on a lazy arena (design decision 4); after it,
-        // every offset has changed and the source is stale, so the
-        // arena downgrades to plain fully-resident storage.
-        self.ensure_all_resident();
-
+        let mut reader = ChunkReader {
+            bytes: &self.bytes,
+            cached: None,
+        };
         let mut seen: Vec<ChunkOffset> = live
             .iter()
             .copied()
@@ -1874,7 +1925,7 @@ impl ChunkArena {
                     h + CHUNK_HEADER <= total,
                     "chunk header out of range (corrupt heap)"
                 );
-                let len = self.len_of(old);
+                let len = reader.length_at(h);
                 // checked_add, not `+`: on a 32-bit usize a corrupt
                 // u32 length can wrap the sum past the guard, and the
                 // later slice would then panic AFTER the byte space
@@ -1895,6 +1946,11 @@ impl ChunkArena {
         let total = self.len();
         let mut header = 0usize;
         let mut matched = 0usize;
+        // Destination/source ranges include their headers. These runs define
+        // the output without requiring either arena to be fully resident.
+        let mut runs = Vec::with_capacity(seen.len());
+        let mut new_len = 0usize;
+        let mut remap = HashMap::with_capacity(seen.len());
         while header < total {
             let payload = header
                 .checked_add(CHUNK_HEADER)
@@ -1905,16 +1961,25 @@ impl ChunkArena {
                     old.0 as usize >= payload,
                     "chunk offset is not a payload boundary (corrupt heap)"
                 );
-                if old.0 as usize == payload {
-                    matched += 1;
-                }
             }
-            let bytes = self.view(header, payload);
-            let len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-            header = payload
+            let len = reader.length_at(header);
+            let end = payload
                 .checked_add(len)
                 .filter(|&end| end <= total)
                 .expect("chunk chain payload out of range (corrupt heap)");
+            if seen
+                .get(matched)
+                .is_some_and(|old| old.0 as usize == payload)
+            {
+                let old = seen[matched];
+                let new_payload = u32::try_from(new_len + CHUNK_HEADER)
+                    .expect("compacted chunk offset exceeds address space");
+                remap.insert(old, ChunkOffset(new_payload));
+                runs.push((new_len, header, end - header));
+                new_len += end - header;
+                matched += 1;
+            }
+            header = end;
         }
         assert_eq!(
             matched,
@@ -1922,67 +1987,73 @@ impl ChunkArena {
             "chunk offset is not a payload boundary (corrupt heap)"
         );
 
-        let old_bytes = std::mem::take(self.bytes_mut());
-        // In-range by the validation pass above; the arithmetic cannot
-        // panic between the take and the reinstall.
-        let len_at = |off: ChunkOffset| -> usize {
-            let h = off.0 as usize - CHUNK_HEADER;
-            u32::from_le_bytes([
-                old_bytes[h],
-                old_bytes[h + 1],
-                old_bytes[h + 2],
-                old_bytes[h + 3],
-            ]) as usize
-        };
-
-        let mut fresh: Vec<u8> = Vec::with_capacity(old_bytes.len());
-        let mut remap: HashMap<ChunkOffset, ChunkOffset> = HashMap::new();
-        for old in seen {
-            let len = len_at(old);
-            let start = old.0 as usize;
-            let header = fresh.len();
-            fresh.extend_from_slice(&(len as u32).to_le_bytes());
-            let new_off = fresh.len() as u32;
-            fresh.extend_from_slice(&old_bytes[start..start + len]);
-            debug_assert_eq!(new_off as usize, header + CHUNK_HEADER);
-            remap.insert(old, ChunkOffset(new_off));
+        // Nothing moved or shrank: keep bytes, backing, dirt and residency
+        // exactly as they were. Only headers were read during validation.
+        if new_len == total {
+            return remap;
         }
-        // Incremental compaction dirt (store seam phase 7): an extent
-        // is dirty only if its BYTES actually changed — a compaction
-        // that moves little (garbage clustered at the tail) re-commits
-        // little. The geometry may have shrunk, so the bitmap tracks
-        // the new extent count; an extent wholly identical to its old
-        // bytes at the same positions stays clean, because the store
-        // already holds exactly those bytes.
-        let exts = fresh.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
         let per = CHUNK_EXTENT_BYTES as usize;
+        let exts = new_len.div_ceil(per);
+        let mut fresh = vec![0; new_len];
         let mut dirty = Vec::with_capacity(exts);
-        for e in 0..exts {
-            let start = e * per;
-            let end = fresh.len().min(start + per);
-            let changed = match old_bytes.get(start..end) {
-                Some(old) => old != &fresh[start..end],
-                // The old space was shorter here: new content, dirty.
-                None => true,
+        let mut unbacked = Vec::with_capacity(exts);
+        let mut residency = Vec::with_capacity(exts);
+        let mut run_index = 0;
+        let mut next = vec![0; per];
+        let mut previous = vec![0; per];
+        for ext in 0..exts {
+            let start = ext * per;
+            let end = new_len.min(start + per);
+            let count = end - start;
+            let mut position = start;
+            while position < end {
+                let (destination, source, size) = runs[run_index];
+                let within = position - destination;
+                let take = (size - within).min(end - position);
+                reader.copy_into(
+                    source + within,
+                    &mut next[position - start..position - start + take],
+                );
+                position += take;
+                if within + take == size {
+                    run_index += 1;
+                }
+            }
+            reader.copy_into(start, &mut previous[..count]);
+            let changed = next[..count] != previous[..count];
+            let was_dirty = self.dirty.get(ext).copied().unwrap_or(true);
+            let was_unbacked = self.unbacked.get(ext).copied().unwrap_or(true);
+            let tail_shrunk = ext == exts - 1 && total.min(start + per) > new_len;
+            let is_dirty = changed || was_dirty || tail_shrunk;
+            let was_resident = match &self.bytes {
+                ChunkBytes::Plain(_) => true,
+                ChunkBytes::Lazy { resident, .. } => resident.get(ext).is_none_or(|bit| bit.get()),
             };
-            // Uncommitted PRE-compaction dirt must survive: the diff
-            // above compares against pre-compaction MEMORY, but the
-            // store holds the last COMMITTED bytes, which may differ
-            // even where compaction moved nothing.
-            let was_dirty = self.dirty.get(e).copied().unwrap_or(true);
-            // A shrunk FINAL extent also counts as changed when ITS
-            // OWN byte count shrank — the stored row carried the old,
-            // longer length. Compare the old space clamped to this
-            // extent, not whole-space lengths: dropping entire
-            // trailing extents while the surviving tail's own bytes
-            // are identical leaves that tail clean (the geometry
-            // shrink travels in the manifest, and the store deletes
-            // rows past the new extent count).
-            let tail_shrunk = e == exts - 1 && old_bytes.len().min(start + per) > fresh.len();
-            dirty.push(changed || was_dirty || tail_shrunk);
+            let keep = was_resident || is_dirty || was_unbacked;
+            if keep {
+                fresh[start..end].copy_from_slice(&next[..count]);
+            }
+            dirty.push(is_dirty);
+            unbacked.push(was_unbacked);
+            residency.push(Cell::new(keep));
         }
-        self.bytes = ChunkBytes::Plain(fresh);
-        self.unbacked = vec![false; dirty.len()];
+        // All source reads and validation finish before replacing storage.
+        // A source failure cannot empty or partially relocate the arena.
+        drop(reader);
+        self.bytes = match std::mem::take(&mut self.bytes) {
+            ChunkBytes::Plain(_) => ChunkBytes::Plain(fresh),
+            ChunkBytes::Lazy {
+                source,
+                snapshot_len,
+                ..
+            } => ChunkBytes::Lazy {
+                cell: RefCell::new(fresh),
+                resident: residency,
+                source,
+                snapshot_len,
+            },
+        };
+        self.unbacked = unbacked;
         self.dirty = dirty;
         remap
     }
