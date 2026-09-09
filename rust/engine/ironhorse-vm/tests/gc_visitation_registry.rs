@@ -31,16 +31,24 @@
 
 use std::collections::BTreeMap;
 
-const SRC: &str = include_str!("../src/interp.rs");
+const SRC: &str = concat!(
+    include_str!("../src/interp.rs"),
+    "\n",
+    include_str!("../src/interp/gc_tables.rs"),
+);
 
 /// The body (including braces) of the function that starts at the
 /// first occurrence of `marker`.
 fn fn_body(marker: &str) -> &'static str {
-    let i = SRC
+    body_in(SRC, marker)
+}
+
+fn body_in<'a>(src: &'a str, marker: &str) -> &'a str {
+    let i = src
         .find(marker)
         .unwrap_or_else(|| panic!("marker not found: {marker}"));
-    let j = i + SRC[i..].find('{').expect("fn body opens");
-    let bytes = SRC.as_bytes();
+    let j = i + src[i..].find('{').expect("fn body opens");
+    let bytes = src.as_bytes();
     let mut depth = 0usize;
     let mut k = j;
     loop {
@@ -49,7 +57,7 @@ fn fn_body(marker: &str) -> &'static str {
             b'}' => {
                 depth -= 1;
                 if depth == 0 {
-                    return &SRC[j..=k];
+                    return &src[j..=k];
                 }
             }
             _ => {}
@@ -253,7 +261,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("intrinsics", &[Req::GcRoots], "every boot constructor — the anchor that transitively keeps boot structure alive"),
     ("well_known_symbols", &[Req::GcRoots], "realm well-known symbol descriptors"),
     ("symbol_registry", &[Req::GcRoots], "Symbol.for registry (strong per spec)"),
-    ("symbol_registry_keys", &[Req::GcRoots], "registry reverse map descriptors"),
+    ("symbol_registry_keys", &[Req::GcRoots, Req::PrunedBothPaths], "registry reverse map descriptors"),
     ("proto_methods", &[Req::GcRoots], "lazy proto method rows (holder+method)"),
     ("proto_data", &[Req::GcRoots], "lazy proto data rows (holder)"),
     ("proto_accessors", &[Req::GcRoots], "lazy proto accessor rows (W6-4)"),
@@ -298,35 +306,35 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("async_gen_run_stack", &[Req::GcRoots], "mid-step async-generator stack"),
     ("promise_jobs", &[Req::GcRoots], "queued microtasks (survive halted cranks)"),
     // --- side tables with strong outgoing edges, walked by BOTH collectors ---
-    ("functions", &[Req::Edges], "closures + super home (W6-2)"),
-    ("bound_functions", &[Req::Edges], "bind target/this/args"),
-    ("proxies", &[Req::Edges], "proxy target + handler"),
-    ("proxy_revokers", &[Req::Edges], "revoke-fn back-links"),
-    ("ctor_prototype", &[Req::Edges], "constructor→prototype links"),
-    ("private_values", &[Req::Edges], "private field cells + values"),
-    ("private_accessors", &[Req::Edges], "private accessor cells + fns"),
-    ("wrapper_data", &[Req::Edges], "boxed primitive values"),
-    ("arrays", &[Req::Edges], "exotic array items (counted bulk)"),
-    ("index_props", &[Req::Edges], "ordinary index-property items (counted bulk)"),
-    ("collections", &[Req::Edges, Req::Ephemeron], "Map/Set entries (counted bulk; weak kinds via ephemerons)"),
-    ("typed_arrays", &[Req::Edges], "view→buffer edges"),
-    ("data_views", &[Req::Edges], "view→buffer edges"),
-    ("accessors", &[Req::Edges], "guest getter/setter slots"),
-    ("iterators", &[Req::Edges], "iterator target/result"),
-    ("promises", &[Req::Edges], "result + reactions (+ reaction-kind payloads)"),
-    ("generators", &[Req::Edges], "suspended frames"),
-    ("async_instances", &[Req::Edges], "suspended frames + result promise"),
-    ("async_generators", &[Req::Edges], "suspended frames + request queue"),
-    ("promise_functions", &[Req::Edges], "resolve/reject→promise links"),
-    ("disposable_stacks", &[Req::Edges], "held resources + dispose methods"),
-    ("number_formats", &[Req::Edges], "bound-format fn edge"),
-    ("segment_iterators", &[Req::Edges], "cursor→segments-instance edge"),
-    ("collator_compare_functions", &[Req::Edges], "compare-fn→collator owner"),
-    ("number_format_bound_functions", &[Req::Edges], "bound-fn→format owner"),
+    ("functions", &[Req::Edges, Req::PrunedBothPaths], "closures + super home (W6-2)"),
+    ("bound_functions", &[Req::Edges, Req::PrunedBothPaths], "bind target/this/args"),
+    ("proxies", &[Req::Edges, Req::PrunedBothPaths], "proxy target + handler"),
+    ("proxy_revokers", &[Req::Edges, Req::PrunedBothPaths], "revoke-fn back-links"),
+    ("ctor_prototype", &[Req::Edges, Req::PrunedBothPaths], "constructor→prototype links"),
+    ("private_values", &[Req::Edges, Req::PrunedBothPaths], "private field cells + values"),
+    ("private_accessors", &[Req::Edges, Req::PrunedBothPaths], "private accessor cells + fns"),
+    ("wrapper_data", &[Req::Edges, Req::PrunedBothPaths], "boxed primitive values"),
+    ("arrays", &[Req::Edges, Req::PrunedBothPaths], "exotic array items (counted bulk)"),
+    ("index_props", &[Req::Edges, Req::PrunedBothPaths], "ordinary index-property items (counted bulk)"),
+    ("collections", &[Req::Edges, Req::PrunedBothPaths, Req::Ephemeron], "Map/Set entries (counted bulk; weak kinds via ephemerons)"),
+    ("typed_arrays", &[Req::Edges, Req::PrunedBothPaths], "view→buffer edges"),
+    ("data_views", &[Req::Edges, Req::PrunedBothPaths], "view→buffer edges"),
+    ("accessors", &[Req::Edges, Req::PrunedBothPaths], "guest getter/setter slots"),
+    ("iterators", &[Req::Edges, Req::PrunedBothPaths], "iterator target/result"),
+    ("promises", &[Req::Edges, Req::PrunedBothPaths], "result + reactions (+ reaction-kind payloads)"),
+    ("generators", &[Req::Edges, Req::PrunedBothPaths], "suspended frames"),
+    ("async_instances", &[Req::Edges, Req::PrunedBothPaths], "suspended frames + result promise"),
+    ("async_generators", &[Req::Edges, Req::PrunedBothPaths], "suspended frames + request queue"),
+    ("promise_functions", &[Req::Edges, Req::PrunedBothPaths], "resolve/reject→promise links"),
+    ("disposable_stacks", &[Req::Edges, Req::PrunedBothPaths], "held resources + dispose methods"),
+    ("number_formats", &[Req::Edges, Req::PrunedBothPaths], "bound-format fn edge"),
+    ("segment_iterators", &[Req::Edges, Req::PrunedBothPaths], "cursor→segments-instance edge"),
+    ("collator_compare_functions", &[Req::Edges, Req::PrunedBothPaths], "compare-fn→collator owner"),
+    ("number_format_bound_functions", &[Req::Edges, Req::PrunedBothPaths], "bound-fn→format owner"),
     ("combinators", &[Req::GcRoots, Req::Edges], "combinator accumulators (rooted while queued, edged via reactions)"),
     ("from_async", &[Req::GcRoots, Req::Edges, Req::ChunkRemap], "fromAsync state (W6-3: chunk remap too)"),
     // --- identity/precision tables ---
-    ("symbol_key_ids", &[Req::Ephemeron, Req::PartialWalk], "symbol-key descriptor identity — full GC retains precisely via the ephemeron pass; the partial walk stays page-conservative"),
+    ("symbol_key_ids", &[Req::Ephemeron, Req::PartialWalk, Req::PrunedBothPaths], "symbol-key descriptor identity — full GC retains precisely via the ephemeron pass; the partial walk stays page-conservative"),
     // --- chunk-reference holders (compaction remap) ---
     ("array_buffers", &[Req::ChunkRemap, Req::PrunedBothPaths], "backing-store chunk offsets"),
     ("static_str", &[Req::ChunkRemap], "boot static-string chunk offsets"),
@@ -458,8 +466,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
         strip_comments(fn_body("fn each_side_table_ref(&self")),
         strip_comments(fn_body("fn each_side_table_ref_tail(&self"))
     );
-    let full_sweep = strip_comments(fn_body("pub fn collect_garbage(&mut self)"));
-    let partial_sweep = strip_comments(fn_body("pub fn free_pages(&mut self, pages: &[u32])"));
+    let (full_sweep, partial_sweep) = sweep_sources(SRC);
 
     let value_type_of = |name: &str| -> &str { &fields.iter().find(|(n, _)| n == name).unwrap().1 };
 
@@ -499,4 +506,59 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
         "GC classification claims that the visitor bodies do not back:\n{}",
         violations.join("\n")
     );
+}
+
+/// Follow the generated calls and inspect the same token templates used by the
+/// executable expansion. A roster entry without an active sweep call is not
+/// evidence of pruning. The registry above remains independent of the roster.
+fn sweep_sources(src: &str) -> (String, String) {
+    fn compact(src: &str) -> String {
+        ironhorse_vm::source_scan::code_only(src)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+    let emitter = compact(body_in(src, "macro_rules! gc_run"));
+    assert_eq!(emitter, "{($($code:tt)*)=>{{$($code)*}};}");
+    let full = compact(body_in(src, "pub fn collect_garbage(&mut self)"));
+    let swept = compact(body_in(src, "fn swept(&mut self, idx: SlotIndex)"));
+    let partial = compact(body_in(src, "pub fn free_pages(&mut self, pages: &[u32])"));
+    assert!(full.contains("letmuthooks=gc_tables!(borrow_gc_tables,self);"));
+    assert!(
+        full.contains("crate::gc::collect_full(&mutself.slots,&mutself.chunks,&roots,&muthooks)")
+    );
+    assert!(swept.contains("self.prune_swept(idx);"));
+    assert!(full.contains("hooks.prune_late(&dead);"));
+    assert!(partial.contains("self.prune_dead_tables(&dead);"));
+    let early_template = compact(body_in(src, "fn prune_swept(&mut self, idx: SlotIndex)"));
+    let late_template = compact(body_in(src, "fn prune_late(&mut self,"));
+    let partial_template = compact(body_in(src, "fn prune_dead_tables(&mut self,"));
+    assert!(early_template.contains("$(gc_remove!(gc_run,self,$early,idx,$early_shape);)*"));
+    assert!(late_template.contains("$(gc_retain!(gc_run,self,$late,dead,$late_shape);)*"));
+    assert!(partial_template.contains("$(gc_retain!(gc_run,self,$early,dead,$early_shape);)*"));
+    assert!(partial_template.contains("$(gc_retain!(gc_run,self,$late,dead,$late_shape);)*"));
+    (
+        ironhorse_vm::interp::gc_tables::FULL_SWEEP_SOURCE.join("\n"),
+        ironhorse_vm::interp::gc_tables::PARTIAL_SWEEP_SOURCE.join("\n"),
+    )
+}
+
+#[test]
+fn generated_sweep_checks_reject_disconnected_calls_and_missing_expansions() {
+    for code in [
+        "{{ $($code)* }}",
+        "self.prune_swept(idx);",
+        "hooks.prune_late(&dead);",
+        "self.prune_dead_tables(&dead);",
+        "gc_remove!(gc_run, self, $early, idx, $early_shape)",
+        "gc_retain!(gc_run, self, $early, dead, $early_shape)",
+        "gc_retain!(gc_run, self, $late, dead, $late_shape)",
+    ] {
+        assert!(SRC.contains(code), "mutation target missing: {code}");
+        let mutation = SRC.replace(code, "/* removed by mutation */");
+        assert!(
+            std::panic::catch_unwind(|| sweep_sources(&mutation)).is_err(),
+            "source lock accepted removed sweep code: {code}"
+        );
+    }
 }
