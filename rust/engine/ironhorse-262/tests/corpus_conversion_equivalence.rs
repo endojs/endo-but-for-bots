@@ -6,9 +6,8 @@
 //! reproduces the coverage the retired `stage*_corpus()` bit-exact tests
 //! carried — **same totals** (one case per corpus line, 1:1), **zero
 //! divergence** (every case the covered grammar reaches meets the runner's
-//! bar), and the **same bit-exact set under `--gate-meter-exact`** (every
-//! unchanged meter-exact case reproduces historical computron agreement;
-//! W2-affected cases carry explicit version-4 raw pins instead). It runs the checked-in `cases/` tree through the same
+//! bar). XS computron gaps are advisory; engine-versioned raw pins remain
+//! release gates. It runs the checked-in `cases/` tree through the same
 //! `endot-ih` machinery a nightly run uses.
 //!
 //! The oracle accumulates process RSS across machine create/destroy cycles;
@@ -57,9 +56,8 @@ fn generated_cases_reproduce_corpus_coverage() {
         "test/ironhorse/ tree must contain generated cases"
     );
 
-    // The gate: verdict + observable agreement (default), and tighten every
-    // `ironhorse-meter-exact`-tagged case to the historical bit-exact computron
-    // bar — the "same bit-exact set" half of the proof.
+    // Gate observable agreement and engine-versioned pins. The legacy flag
+    // requests an advisory XS cost report, not an equality acceptance gate.
     let cfg = Config {
         gate_meter_exact: true,
         ..Config::default()
@@ -91,9 +89,7 @@ fn generated_cases_reproduce_corpus_coverage() {
         "every generated case must run exactly once"
     );
 
-    // Zero divergence AND the bit-exact set: no failures through the runner
-    // with the meter-exact gate armed. A wrapper-perturbed metering or a
-    // one-sided completion would land here.
+    // Observable divergences and stale engine-versioned pins remain failures.
     assert!(
         rep.met_bar() && rep.failures.is_empty(),
         "corpus-conversion coverage equivalence: {} failure(s) under --gate-meter-exact",
