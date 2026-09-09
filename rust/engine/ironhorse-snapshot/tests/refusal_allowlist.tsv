@@ -4,8 +4,6 @@
 # New labels require a regression assertion or an individually reviewed entry.
 HEAP record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
-checkpoint deferred slot page decode	Existing corruption guard; dedicated exact-label regression fixture deferred.
-checkpoint deferred slot page leaf mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
 file store chunk extent row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store slot page row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 generator frame: current function has no body	Existing corruption guard; dedicated exact-label regression fixture deferred.
