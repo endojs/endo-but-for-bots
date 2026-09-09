@@ -6,12 +6,10 @@
 //! Everything that records or models cost lives behind the
 //! `cost-calibration` Cargo feature, **off by default**. With the feature
 //! off, [`CostRecorder`] is a zero-sized unit struct whose `on_*` methods
-//! are `#[inline(always)]` empty bodies, so LLVM deletes every call and
-//! [`crate::interp::Interp::dispatch_at`] stays instruction-identical to
-//! the pre-instrumentation hot loop (acceptance bar C1: the object-code /
-//! disassembly firewall proof; the cheaper structural proof landed here is
-//! `size_of::<CostRecorder>() == 0` in the default build — see the
-//! `firewall_off_tests::recorder_is_zero_sized_when_off` test).
+//! are `#[inline(always)]` empty bodies. The structural test checks
+//! `size_of::<CostRecorder>() == 0`; it does not prove instruction-identical
+//! hot-loop object code. That disassembly firewall proof remains a C1
+//! acceptance obligation. See `firewall_off_tests::recorder_is_zero_sized_when_off`.
 //!
 //! The recorder only ever **observes** interpreter state: it holds no
 //! `&mut Meter` and exposes no method the meter, `RunOutcome`, or a
@@ -40,9 +38,8 @@ mod off {
     use crate::opcode::Opcode;
 
     /// Zero-sized recorder. Every method is an inlined empty body, so the
-    /// instrumentation calls in the interpreter hot loop compile away
-    /// entirely and the metered path is byte-identical to the
-    /// pre-instrumentation build.
+    /// instrumentation calls can be eliminated by optimization. This shape
+    /// alone is not the planned byte-identical object-code firewall proof.
     #[derive(Debug, Default, Clone)]
     pub struct CostRecorder;
 

@@ -31,21 +31,23 @@
 //! that is not re-derived; excluding them is what keeps the list to genuine
 //! snapshot obligations, and this is the audit trail for each:
 //!
-//! **Per-activation registers — empty at a crank boundary.** These describe
-//! *the frame currently executing*; between cranks the call stack is
-//! unwound, so each is at its inert default and carries no cross-crank state:
+//! **Per-activation registers — inert at an admitted quiescent boundary.**
+//! These describe the executing frame. A halt can retain them; persistence
+//! requires `last_crank_completed` and the independent transient gates in
+//! `is_quiescent`, not merely a return from `run`. The following descriptions
+//! apply only to a successfully completed, admitted boundary:
 //! - `args`, `this_val`, `cur_func`, `cur_target` — the active call's
 //!   arguments / receiver / callee / new-target; none while no call is live.
 //! - `exception` — the in-flight thrown value; none outside a `throw`/catch
-//!   window, all of which close before a crank returns.
+//!   window, cleared before successful boundary admission.
 //! - `locals`, `frame_slots`, `id_map` — the executing frame's local slots,
 //!   saved-frame region, and name→local index map; all belong to a live
 //!   activation and are re-established by the next crank's `BEGIN_*` prologue.
 //! - `resume_status` — the generator/async resume signal, meaningful only
 //!   mid-`resume`; a *suspended* generator's state is the `generators` row
-//!   (tracked, Pending), not this register.
+//!   (tracked and serialized), not this register.
 //! - `env` — the active `with`/eval environment head; live only inside a
-//!   `with` body or eval frame, all of which close before a crank returns
+//!   `with` body or eval frame, cleared at an admitted boundary
 //!   (SUSPENDED environments live in `SavedFrame.env`, inside their row).
 //! - `result`, `strict` — the completion register and top-level strictness;
 //!   both cleared/reset at the crank boundary (wave-6 W6-11/W6-6), so a
@@ -195,16 +197,9 @@ pub enum SideTable {
     Functions,
     /// `bound_functions` — `Function.prototype.bind` target/`this`/args.
     BoundFunctions,
-    /// `proxies` (+ `proxy_revokers`) — each `Proxy` exotic's
-    /// `[[ProxyTarget]]`/`[[ProxyHandler]]` internal slots and the revoke-fn →
-    /// proxy back-links. Runtime-minted per `new Proxy`/`Proxy.revocable`, not
-    /// arena-recoverable and not boot-derived, so honestly `Pending` (like
-    /// `BoundFunctions`) until an atom carries it — a machine suspended holding
-    /// a live proxy cannot yet round-trip. Its honest carry is
-    /// dependency-gated on the `functions` row: traps are guest
-    /// functions, and a resumed guest function is uncallable today, so
-    /// carrying the row alone would trade silent-wrong for
-    /// visible-broken, not for correct.
+    /// `proxies` (+ `proxy_revokers`) — target/handler slots and revoker links.
+    /// Serialized with function metadata available on restore, so resumed guest
+    /// traps remain callable. The proxy carry tests exercise invocation and revoke.
     Proxies,
     /// `call_stack` — the suspended `CallerState` activations (scope,
     /// args, result) of the active call chain. Empty at every
@@ -224,12 +219,9 @@ pub enum SideTable {
     /// small-state errors section (store schema 9), owner-ascending,
     /// name drawn from the engine's closed error-constructor set.
     ErrorData,
-    /// `accessors` — per-instance getter/setter function slots.
-    /// Pending, dependency-gated on the `functions` row exactly as
-    /// `Proxies` is (getters/setters are guest functions). The one
-    /// boot-derived entry — the seeded `Intl.NumberFormat` `format`
-    /// getter — is exempt from the persist gate and re-derived at
-    /// restore from boot structure (`rebuild_boot_accessors`).
+    /// `accessors` — per-instance getter/setter slots, serialized with their
+    /// callable function metadata. Boot-seeded accessors are reconstructed and
+    /// reconciled with carried entries during restore.
     Accessors,
     /// `wrapper_data` — per-instance primitive-wrapper boxed value.
     WrapperData,
@@ -324,12 +316,12 @@ pub enum SideTable {
     AsyncGenerators,
     /// `private_values` + `private_accessors` — class private
     /// fields/methods and private accessors keyed by (instance, brand).
-    /// Reachable only through these maps (no arena property slot), so a
-    /// suspended instance's private state does not yet travel.
+    /// Reachable through these maps rather than arena properties; serialized
+    /// in `PRIV`, including callable metadata for private accessors.
     PrivateElements,
     /// `disposable_stacks` — `DisposableStack`/`AsyncDisposableStack`
     /// recorded resources and dispose callbacks. Per-instance runtime
-    /// state; a suspended stack's pending disposals do not yet travel.
+    /// state, serialized in `DISP` with callback identity and LIFO order.
     DisposableStacks,
     /// The nine Intl per-instance record tables (`locales`,
     /// `collators`, `list_formats`, `plural_rules`, `number_formats`,
@@ -346,21 +338,11 @@ pub enum SideTable {
     /// `dates` — per-instance `Date` internal slots (the epoch
     /// milliseconds, one `f64` keyed by the branded instance slot;
     /// the llm mainline's Date-core landing, 2026-08-28 rebase).
-    /// Pure data — the same class as the Temporal records — so its
-    /// carry is a recorded follow-up, not a design blocker.
+    /// Serialized in `DATE`; the date carry tests preserve the epoch value.
     Dates,
-    /// The Intl bound-function link tables
-    /// (`collator_compare_functions`, `number_format_bound_functions`)
-    /// and the `NumberFormatData::bound_format` cache they mirror. A
-    /// minted bound compare/format function IS a `functions`
-    /// (`FuncInfo`) row — `alloc_method` creates one per mint — so the
-    /// links are dependency-gated on the `functions` carry exactly as
-    /// `Proxies`/`Accessors` are. Deliberately DROPPED at the
-    /// boundary, not refused: both getters re-mint on a cache miss, so
-    /// an instance-held collator/format answers identically after
-    /// resume (first-access behavior); only a guest that held the
-    /// bound function ITSELF degrades, exactly as every held guest
-    /// function does today.
+    /// Intl bound-function links and the matching per-instance format cache.
+    /// Serialized so a guest-held compare/format function retains identity and
+    /// its receiver across restore; the Intl carry tests cover these links.
     IntlBoundFunctions,
     /// `code_segments` + `func_segments` — retained defining-crank and
     /// eval/dynamic-Function bytecode plus each guest function's segment
@@ -369,7 +351,7 @@ pub enum SideTable {
     /// `ctor_prototype` — each constructor instance's `.prototype` object.
     /// The `.prototype` *object* is an arena slot, but the constructor→proto
     /// link is HashMap-only (never an own-property slot), so it is not
-    /// arena-recoverable and stays `Pending` (with `functions`).
+    /// arena-recoverable; it travels with function metadata in `FUNC`.
     CtorPrototype,
     /// `symbol_registry` (+ `symbol_registry_keys`) — the global
     /// `Symbol.for`/`keyFor` registry.
@@ -387,8 +369,7 @@ pub enum SideTable {
     /// property key (`o[sym]` / `Object.defineProperty(o, sym, …)`), and
     /// its top-down mint counter (ids descend from `u16::MAX`, so they
     /// never collide with the growing name table). Both travel in the
-    /// `SYMB` atom (2026-08-26; formerly the honest-`Pending` intern gap
-    /// that made intern-holding machines refuse to persist).
+    /// `SYMB` atom, so intern-holding machines retain their property-key identity.
     SymbolKeyIds,
     /// `installed_names_len` — the installed-names floor (wave-6
     /// W6-7): partial install passes re-consider only ids ABOVE it, so
@@ -570,12 +551,10 @@ impl SideTable {
             // and every entry provably live. Resolving-function
             // `FuncInfo`s rebuild at restore exactly as
             // `make_resolving_functions` minted them (the `IBFN`
-            // pattern). An ASYNC-flavored reaction kind (an `await`'s
-            // resumption, an async generator's, `Array.fromAsync`)
-            // still refuses at the persist gate by KIND — those
-            // instance rows remain Pending below, and every resumable
-            // async suspension is anchored by exactly such a reaction.
-            // Locks: the `promise_carry.rs` twins.
+            // pattern). Async-instance rows also carry; unsupported reaction
+            // and runtime-native kinds remain subject to the persist gates.
+            // Locks: `promise_carry.rs` and `async_carry.rs` twins plus
+            // `persist_gates.rs` refusal tests.
             SideTable::Promises => ("promises", Serialized),
             SideTable::PromiseFunctions => ("promise_functions", Serialized),
             SideTable::PromiseGuards => ("promise_guards", Serialized),

@@ -1,6 +1,8 @@
 # Engine crate dependencies
 
-Generated from `cargo metadata --no-deps --format-version 1` for the engine workspace.
+Generated from Cargo metadata; do not edit this diagram by hand.
+Regenerate: `python3 rust/engine/scripts/crate-graph.py` from the repository root.
+CI checks drift with the same command plus `--check`.
 Arrows point from dependent to dependency.
 Solid edges are normal dependencies; dashed edges are development dependencies.
 Optional dependencies are labeled: their presence does not mean the default build links them.

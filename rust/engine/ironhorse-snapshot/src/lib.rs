@@ -1,54 +1,22 @@
 #![forbid(unsafe_code)]
-//! ironhorse-snapshot: the ironhorse XS_M atom-container writer/reader and
-//! index-arena heap serializer (design `designs/ironhorse-engine.md`
-//! § Snapshots, requirement 1c; the callback-signature discipline from
-//! `designs/daemon-xs-worker-snapshot.md`).
+//! Validated JavaScript machine persistence: containers and paged heap stores.
 //!
-//! Ironhorse writes and reads the length-prefixed big-endian FourCC atom
-//! grammar — `XS_M` over `VERS`/`SIGN`/`CREA`/`BLOC`/`HEAP`/`STAC`/
-//! `KEYS`/`NAME`/`SYMB` — with an **ironhorse `VERS` discriminator** so an
-//! ironhorse snapshot is never mistaken for a XS one and vice versa. The
-//! XS importer is out of scope (resolved question 3): this crate is the
-//! Rust-native writer and reader only.
+//! The canonical FourCC grammar is [`format::CANONICAL_ATOM_ORDER`], under an
+//! IronHorse version discriminator. This is not an XS snapshot importer.
+//! [`slot_codec`] serializes fields independently of Rust's resident struct layout.
+//! [`versions`] names the compatibility identifiers and their bump rules.
 //!
-//! Because the heap is index arenas, the writer is a **serializer, not a
-//! relocator**: a `SlotIndex`/`ChunkOffset` is already position-
-//! independent, so the `HEAP`/`BLOC` atoms are the flat arena images and a
-//! read reconstructs identical arenas ([`ironhorse_vm::SlotArena::from_image`]
-//! / [`ironhorse_vm::ChunkArena::from_image`]).
+//! [`image::GatedImage`] admits production writes; [`image::ValidatedSnapshot`]
+//! admits restore. [`machine::MachineSnapshot`] provides file/CAS operations and
+//! [`store::HeapStore`] / [`store::HeapStoreCommit`] separate backend storage from
+//! shared validation and commit admission. Container and store versions are distinct.
+//! The outer Endo workspace embeds this machinery directly, not through xsnap.
 //!
-//! # Surface (what child 3 builds on)
-//!
-//! - [`atom`] — the raw FourCC atom container ([`atom::AtomWriter`] /
-//!   [`atom::AtomReader`]).
-//! - [`format`] — the tags, the ironhorse [`format::Version`] discriminator,
-//!   and the host callback-table [`format::Signature`] scheme.
-//! - [`slot_codec`] — [`ironhorse_vm::Slot`] ↔ fixed-width record.
-//! - [`image`] — [`image::MachineImage`] plus [`image::write_machine`] /
-//!   [`image::read_machine`] for low-level tooling, and the
-//!   proof-carrying [`image::ValidatedSnapshot`] the `Machine`-level
-//!   adoption surface consumes. Includes the [`image::MeterImage`] `METR`
-//!   atom (meter state across suspend, design row 6).
-//! - [`machine`] — the xsnap-shaped `Machine` surface (stage-6 child 3):
-//!   the [`machine::MachineSnapshot`] extension trait on `ironhorse_vm::Interp`
-//!   (`write_snapshot_to_file`/`suspend_to_cas`) plus
-//!   [`machine::from_snapshot_file`]/[`machine::resume_from_cas`]. Its
-//!   suspend-point contract (between-crank quiescence) is documented there.
-//! - [`sha256`] — the dependency-free, `unsafe`-free SHA-256 the CAS
-//!   content addressing uses.
-//!
-//! # Side-table completeness (the bug class this crate designs against)
-//!
-//! A machine's reachable state is not wholly in the arenas: dozens of
-//! `Interp` side tables hold per-instance and per-activation state. An
-//! atom grammar that misses one is the snapshot-shaped version of a
-//! missing GC root. [`sidetable::SideTable`] enumerates them explicitly,
-//! one compiler-forced variant per table, each with its current
-//! [`sidetable::Coverage`] — so the remaining atoms are a compile-checked
-//! ledger, never a silent omission.
-//!
-//! The whole crate is `#![forbid(unsafe_code)]` (the engine unsafe budget
-//! is zero, design § Minimizing `unsafe`).
+//! [`sidetable::SideTable`] records serialized, reconstructed and boundary-gated state.
+//! Functions, proxies and accessors are carried; unsupported live states still refuse
+//! persistence. See `rust/engine/ARCHITECTURE.md` for the four seams, and the schema
+//! perspectives in `designs/ironhorse-snapshot-schema*.md` for field-change obligations.
+//! This crate forbids unsafe Rust; the outer SQLite backend is outside that scope.
 
 pub mod atom;
 pub mod format;
@@ -60,6 +28,7 @@ pub mod slot_codec;
 pub mod store;
 pub mod store_file;
 pub mod store_sections;
+pub mod versions;
 // Backend-parameterized acceptance suites (metamorphic determinism,
 // checkpoint locks) for OTHER crates' backends to instantiate; test
 // support only, hence feature-gated.

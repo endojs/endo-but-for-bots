@@ -34,12 +34,10 @@ icu_segmenter = "=2.2.0"
 ironhorse-compile = { path = "../ironhorse-compile" }
 
 [features]
-# Off by default. The determinism firewall (design
-# `designs/ironhorse-meter-opcode-cost-instrumentation.md` § firewall):
-# no default/release/snapshot/consensus build enables this; only the
-# test-ironhorse-calibration CI job and local instrumentation runs turn it on. With
-# the feature off the `CostRecorder` is a zero-sized no-op and the metered
-# hot loop is instruction-identical to the pre-instrumentation build.
+# Off by default; only the isolated test-ironhorse-calibration CI job and local
+# instrumentation runs enable this. Consensus builds reject the feature.
+# No timing driver exists yet. The disabled recorder is zero-sized; the planned
+# instruction-identical object-code firewall proof is not established by that test.
 default = []
 cost-calibration = []
 # Shipping workers opt in; instrumentation cannot unify into this configuration.

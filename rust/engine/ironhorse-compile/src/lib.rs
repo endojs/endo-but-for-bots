@@ -1,14 +1,9 @@
-//! `ironhorse-compile` — the oracle-locked transliteration of the XS
-//! compiler (design `designs/ironhorse-engine.md` § roadmap row 5).
+//! Pure-Rust JavaScript compiler: lexer, parser, scoper and coder.
 //!
-//! Stage 5 of the XS→Rust port replaces the differential-oracle compiler
-//! with a pure-Rust one built in the shape of XS: lexer → parser →
-//! scoper → coder, held to a **byte-identical-bytecode** bar against
-//! XS on the conformance corpus. This crate is that pipeline; child 1
-//! lands the first stratum, the **lexer** ([`lexer`], [`token`]), plus
-//! the deterministic parse meter ([`meter`]) threaded from the first
-//! token and the structured error surface ([`error`]) the fuzz target
-//! will lean on.
+//! [`compile_atoms`] emits bytecode and a CESU-8 symbol atom for the VM.
+//! Budgeted entry points charge source admission and incremental compiler work;
+//! [`meter::PARSE_METER_RELEASE`] aliases the shared runtime meter release.
+//! The private budget-stop unwind requires `panic=unwind`; unrelated panics propagate.
 //!
 //! The byte-identity reference is XS pin `23b4d6b0a65f` built on x86_64
 //! with signed plain C `char`. XS hashes symbol spellings through `char*`,
@@ -16,8 +11,12 @@
 //! names. Ironhorse always hashes CESU-8 bytes with signed-byte promotion,
 //! independently of host architecture; it does not adopt the host C ABI.
 //!
-//! Everything here is `#![forbid(unsafe_code)]`, like every engine crate
-//! except the audited `xs-oracle` FFI seam.
+//! Byte identity against the pinned XS compiler is tested on named corpora, not
+//! implied for every input by this crate's existence. The default build is oracle-free;
+//! the optional oracle integration supplies differential tests.
+//! See `rust/engine/ARCHITECTURE.md` for the SourceCompiler seam and
+//! `rust/engine/README.md` for the current acceptance status.
+//! This crate forbids unsafe Rust.
 
 #![forbid(unsafe_code)]
 

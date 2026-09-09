@@ -36,7 +36,7 @@ The debugger roadmap is not implemented by a missing crate of another name.
 The separate xsnap backend does not depend on the IronHorse VM.
 `rust/endo/ironhorse-store-sqlite` implements the store backend outside this workspace.
 It links bundled SQLite through `rusqlite`.
-The engine crate-root unsafe rule therefore does not mean “the daemon contains no C.”
+The engine library-root unsafe rule therefore does not mean “the daemon contains no C.”
 
 ## Execution and ownership
 
@@ -234,6 +234,8 @@ object-code firewall proof and calibration loop remain planned work.
 
 ## Release and compatibility identifiers
 
+The source documentation in [`versions.rs`](ironhorse-snapshot/src/versions.rs)
+names the bump rules and upgrade consequences.
 These are the five identifiers named by the review, audited at `96db92e23`.
 `PARSE_METER_RELEASE` is now an alias, so they are not five independent counters.
 

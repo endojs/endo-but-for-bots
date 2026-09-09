@@ -1,19 +1,11 @@
-//! The index-arena value and heap model (design § Value and heap
-//! model). XS's pointer-linked slot graph becomes index arenas:
+//! Index-arena values and heap storage.
 //!
-//! - `SlotIndex(u32)` replaces `txSlot*`; the slot heap is an arena of
-//!   32-byte slot records with a free list (XS's "slots never move").
-//! - `ChunkOffset(u32)` replaces chunk pointers; the chunk heap is a
-//!   growable byte arena with the same header discipline, ready for the
-//!   slide-compaction GC that lands in stage 2.
-//!
-//! The 32-byte record layout is held exactly (resolved question 5) so
-//! `currentHeapCount` semantics and snapshot slot images stay aligned
-//! with the oracle: kind + flag + 16-bit id + next-index + 16-byte
-//! payload. Stage 1 exercises the immediate value kinds (undefined,
-//! null, boolean, integer, number); reference/string kinds carry their
-//! arena handles and are filled in as later stages land the object
-//! model and GC.
+//! `SlotIndex` replaces native pointers; slots retain stable indices until reuse.
+//! `ChunkOffset` addresses byte storage and is rewritten during full compaction.
+//! Guest strings are UTF-16 code units; other chunk payloads have their own codecs.
+//! Rust `Slot` layout is not a stable ABI (24 bytes on the audited 64-bit build).
+//! Snapshots encode fields explicitly into a separate 20-byte wire record.
+//! XS's 32-byte slot accounting is not a resident-memory measurement.
 
 /// Default execution profile: at most one million slot records and 256 MiB
 /// of chunk address space. These are deterministic policy limits, not claims
@@ -392,10 +384,9 @@ pub enum Payload {
     BigInt(ChunkOffset),
 }
 
-/// One 32-byte slot record. The struct is deliberately compact; the
-/// `#[repr(C)]`-style field order matches XS's `txSlot` (next, id,
-/// flag, kind, value) so a future snapshot writer is a serializer, not
-/// a relocator (design § Snapshots).
+/// One arena slot, with Rust's unspecified field layout (no `repr(C)` contract).
+/// It is 24 bytes on the audited 64-bit build; the snapshot codec encodes fields
+/// individually and does not copy or rely on this resident layout.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Slot {
     /// XS `next` link (property lists, frame chains): a slot index.
@@ -565,7 +556,7 @@ impl Slot {
     }
 }
 
-/// A slot arena: fixed-size 32-byte records that never move, with a
+/// A slot arena: fixed-size Rust records with stable indices, with a
 /// free list. This is XS's slot heap; the mark-sweep collector
 /// ([`crate::gc`]) sweeps it to the free list (design § Value and heap
 /// model). Because it is index-based it is safe code: a stale index is
@@ -1113,8 +1104,9 @@ impl SlotArena {
         self.live
     }
 
-    /// Slot heap footprint in bytes, held at 32 per record (resolved
-    /// question 5) so heap accounting stays comparable with XS.
+    /// XS-accounted capacity: 32 bytes per addressable record.
+    /// This legacy metric is not resident memory: it excludes Rust layout,
+    /// bookkeeping vectors and side tables. See architecture finding F121.
     #[inline]
     pub fn byte_size(&self) -> usize {
         self.capacity() as usize * 32
