@@ -674,11 +674,7 @@ mod tests {
     /// arena), and a renamed/removed field fails the reverse direction.
     #[test]
     fn ledger_classification_reconciles_with_the_interp_struct() {
-        let src = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../ironhorse-vm/src/interp.rs"
-        ))
-        .expect("read the vm source");
+        let src = include_str!("../../ironhorse-vm/src/interp.rs");
         let start = src.find("pub struct Interp {").expect("struct Interp");
         let body = &src[start..];
         let end = body.find("\n}").expect("struct end");
@@ -1157,11 +1153,7 @@ mod tests {
             // The property-key id-space poison latch.
             "id_space_exhausted",
         ];
-        let src = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../ironhorse-vm/src/interp.rs"
-        ))
-        .expect("read the vm source");
+        let src = include_str!("../../ironhorse-vm/src/interp.rs");
         let start = src
             .find("pub fn is_quiescent(&self)")
             .expect("the predicate");
