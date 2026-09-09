@@ -1664,16 +1664,18 @@ impl SmallState {
     fn decode_legacy(p: &[u8]) -> Result<SmallState, StoreError> {
         let mut i = 0usize;
         let mut read_small_section = |name: &'static str| -> Result<&[u8], StoreError> {
-            if i + 4 > p.len() {
+            if p.len() - i < 4 {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
             }
             let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
             i += 4;
-            if i + len > p.len() {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-            }
-            let s = &p[i..i + len];
-            i += len;
+            // The wire length can exhaust usize on 32-bit targets.
+            let end = match i.checked_add(len).filter(|&end| end <= p.len()) {
+                Some(end) => end,
+                None => return Err(StoreError::Snapshot(SnapshotError::Corrupt(name))),
+            };
+            let s = &p[i..end];
+            i = end;
             Ok(s)
         };
         let stack = decode_stack(read_small_section("small state stack section")?)?;
@@ -2253,16 +2255,18 @@ pub trait HeapStore {
 fn peek_cost_table_version(p: &[u8]) -> Result<String, StoreError> {
     let mut i = 0usize;
     let mut read_small_section = |name: &'static str| -> Result<&[u8], StoreError> {
-        if i + 4 > p.len() {
+        if p.len() - i < 4 {
             return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
         }
         let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
         i += 4;
-        if i + len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-        }
-        let s = &p[i..i + len];
-        i += len;
+        // The wire length can exhaust usize on 32-bit targets.
+        let end = match i.checked_add(len).filter(|&end| end <= p.len()) {
+            Some(end) => end,
+            None => return Err(StoreError::Snapshot(SnapshotError::Corrupt(name))),
+        };
+        let s = &p[i..end];
+        i = end;
         Ok(s)
     };
     let _ = read_small_section("small state stack section")?;
@@ -4422,6 +4426,214 @@ mod tests {
     use crate::image::read_machine;
     use crate::machine::MachineSnapshot;
     use ironhorse_vm::Interp;
+
+    /// Exercise the actual decoder and migration prefix reader with short
+    /// headers, truncated payloads, and a wire length that overflows usize
+    /// after the header on 32-bit targets. The intact image is a control.
+    #[test]
+    fn small_section_framing_refusals() {
+        let bytes = image_to_batch_unchecked(&ran_image(), 1, "").small;
+        let small = SmallState::decode(&bytes).unwrap();
+        assert_eq!(
+            peek_cost_table_version(&bytes).unwrap(),
+            small.meter.cost_table_version
+        );
+        let sections = small.encode_sections();
+        let mut prefix = Vec::new();
+        for (section, payload) in sections.iter().enumerate() {
+            let mut malformed = Vec::new();
+            for header_bytes in 0..4 {
+                let mut short = prefix.clone();
+                short.extend_from_slice(&(payload.len() as u32).to_be_bytes()[..header_bytes]);
+                malformed.push(short);
+            }
+            let mut oversized = prefix.clone();
+            oversized.extend_from_slice(&u32::MAX.to_be_bytes());
+            malformed.push(oversized);
+            if !payload.is_empty() {
+                let mut short = prefix.clone();
+                short.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+                short.extend_from_slice(&payload[..payload.len() - 1]);
+                malformed.push(short);
+            }
+            for bytes in malformed {
+                let error = SmallState::decode(&bytes).unwrap_err();
+                if section < 6 {
+                    assert_eq!(peek_cost_table_version(&bytes).unwrap_err(), error);
+                }
+                match section {
+                    0 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state stack section"))
+                    ),
+                    1 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state free-list section"
+                        ))
+                    ),
+                    2 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state keys section"))
+                    ),
+                    3 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state names section"))
+                    ),
+                    4 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state symbols section"))
+                    ),
+                    5 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state meter section"))
+                    ),
+                    6 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state arrays section"))
+                    ),
+                    7 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state collections section"
+                        ))
+                    ),
+                    8 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state registry section"
+                        ))
+                    ),
+                    9 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state errors section"))
+                    ),
+                    10 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state buffers section"))
+                    ),
+                    11 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state typed-arrays section"
+                        ))
+                    ),
+                    12 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state data-views section"
+                        ))
+                    ),
+                    13 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state wrappers section"
+                        ))
+                    ),
+                    14 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state regexps section"))
+                    ),
+                    15 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state arguments section"
+                        ))
+                    ),
+                    16 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state temporal section"
+                        ))
+                    ),
+                    17 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state intl section"))
+                    ),
+                    18 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state name-floor section"
+                        ))
+                    ),
+                    19 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state iterators section"
+                        ))
+                    ),
+                    20 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state dates section"))
+                    ),
+                    21 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state function section"
+                        ))
+                    ),
+                    22 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state proxy section"))
+                    ),
+                    23 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state accessor section"
+                        ))
+                    ),
+                    24 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state Intl bound-function section"
+                        ))
+                    ),
+                    25 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state private-element section"
+                        ))
+                    ),
+                    26 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state disposable-stack section"
+                        ))
+                    ),
+                    27 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state generator section"
+                        ))
+                    ),
+                    28 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state error-frames section"
+                        ))
+                    ),
+                    29 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state promise section"))
+                    ),
+                    30 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt("small state async section"))
+                    ),
+                    31 => assert_eq!(
+                        error,
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "small state index-props section"
+                        ))
+                    ),
+                    _ => unreachable!(),
+                }
+            }
+            prefix.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            prefix.extend_from_slice(payload);
+        }
+        assert_eq!(prefix, bytes);
+    }
 
     fn sig() -> Signature {
         Signature::new("ironhorse-store-test-v1")

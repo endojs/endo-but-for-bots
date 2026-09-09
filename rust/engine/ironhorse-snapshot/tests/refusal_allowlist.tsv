@@ -250,40 +250,8 @@ side-table restore: malformed temporal record	Existing corruption guard; dedicat
 side-table restore: malformed typed-array family	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: unknown error name	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: unknown kind code	Existing corruption guard; dedicated exact-label regression fixture deferred.
-small state Intl bound-function section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state accessor section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state arguments section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state arrays section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state async section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state buffers section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state collections section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state data-views section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state dates section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state disposable-stack section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state error-frames section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state errors section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state free-list section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state function section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state generator section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state index-props section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state intl section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state iterators section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state keys section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state meter section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state name-floor section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
 small state name-floor section size	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state names section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state private-element section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state promise section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state proxy section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state regexps section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state registry section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state stack section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state symbols section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state temporal section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
 small state trailing bytes	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state typed-arrays section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state wrappers section	Small-state framing guard; dedicated exact-label truncation fixture deferred.
 store chunk extent fails its leaf hash	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store epoch exhausted	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file directory offset overflow	Existing corruption guard; dedicated exact-label regression fixture deferred.
