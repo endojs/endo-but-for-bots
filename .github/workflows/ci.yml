@@ -700,6 +700,11 @@ jobs:
       - name: Install pinned rustfmt
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
 
+      - name: Check generated compiler opcode table
+        run: |
+          python3 rust/engine/scripts/test-compiler-opcodes.py
+          python3 rust/engine/scripts/generate-compiler-opcodes.py --check
+
       - name: Check ironhorse engine formatting
         run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
 

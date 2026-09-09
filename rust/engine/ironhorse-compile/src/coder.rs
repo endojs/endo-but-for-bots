@@ -1129,7 +1129,7 @@ fn compile_goal_metered(
     if let Some(error) = coder.error.take() {
         return Err(error);
     }
-    Ok(coder.serialize_atoms())
+    coder.serialize_atoms()
 }
 
 /// A compiled unit and its complete front-end cost (all raw deltas were already
@@ -5957,7 +5957,7 @@ impl Coder<'_, '_> {
     /// byte-identical to the oracle's whenever the operands are (the
     /// stage-5 id contract), letting the `Ironhorse` seam stop borrowing the
     /// oracle's atom.
-    fn serialize_atoms(&mut self) -> (Vec<u8>, Vec<u8>) {
+    fn serialize_atoms(&mut self) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
         self.optimize();
         self.meter.work(self.codes.len().saturating_mul(3));
         self.meter.work(self.symbols.entries.len());
@@ -5995,9 +5995,9 @@ impl Coder<'_, '_> {
         // ---- pass 3: emit ---------------------------------------------
         let mut out: Vec<u8> = Vec::with_capacity(size.max(0) as usize);
         for c in &self.codes {
-            emit_step(c, &mut out, &self.targets, &sym_ids);
+            emit_step(c, &mut out, &self.targets, &sym_ids)?;
         }
-        (out, symbols)
+        Ok((out, symbols))
     }
 }
 
@@ -6226,10 +6226,21 @@ fn size2_step(c: &mut Code, size: &mut i32, delta: &mut i32, targets: &mut [Targ
 }
 
 /// Pass 3: emit the opcode byte and its operand with the chosen width.
-fn emit_step(c: &Code, out: &mut Vec<u8>, targets: &[Target], sym_ids: &[i32]) {
-    if c.id != XS_NO_CODE {
-        out.push(c.id as u8);
+fn emit_step(
+    c: &Code,
+    out: &mut Vec<u8>,
+    targets: &[Target],
+    sym_ids: &[i32],
+) -> Result<(), crate::parser::ParseError> {
+    if c.id == XS_NO_CODE {
+        return Ok(()); // Internal target records do not emit instructions.
     }
+    let byte = u8::try_from(c.id).map_err(|_| emission_error(c.id))?;
+    let size = *CODE_SIZES
+        .get(byte as usize)
+        .ok_or_else(|| emission_error(c.id))?;
+    let start = out.len();
+    out.push(byte);
     match c.id {
         XS_NO_CODE => {}
         // branch _1/_2/_4: displacement from just past the operand
@@ -6342,9 +6353,46 @@ fn emit_step(c: &Code, out: &mut Vec<u8>, targets: &[Target], sym_ids: &[i32]) {
                 out.push((index_value(c) + 1) as u8);
             } else if is_index_2_fixed(c.id) {
                 out.extend_from_slice(&((index_value(c) + 1) as u16).to_le_bytes());
+            } else if size != 1 {
+                return Err(emission_error(c.id));
             }
-            // else: a plain 1-byte opcode, already pushed
         }
+    }
+    // Cross-check the actual bytes, including variable-length prefixes, so a
+    // missing numeric data or inconsistent lengths cannot frame later code wrongly.
+    let emitted = &out[start..];
+    let expected = match size {
+        1.. => Some(size as usize),
+        0 => Some(1 + ID_SIZE as usize),
+        -1 => emitted.get(1).and_then(|&n| 2usize.checked_add(n as usize)),
+        -2 => emitted
+            .get(1..3)
+            .and_then(|n| 3usize.checked_add(u16::from_le_bytes([n[0], n[1]]) as usize)),
+        -4 => emitted.get(1..5).and_then(|n| {
+            usize::try_from(u32::from_le_bytes([n[0], n[1], n[2], n[3]]))
+                .ok()
+                .and_then(|n| 5usize.checked_add(n))
+        }),
+        _ => None,
+    };
+    if expected != Some(emitted.len()) {
+        return Err(emission_error(c.id));
+    }
+    Ok(())
+}
+
+fn emission_error(id: i32) -> crate::parser::ParseError {
+    let name = usize::try_from(id)
+        .ok()
+        .and_then(|i| OPCODE_NAMES.get(i))
+        .copied();
+    crate::parser::ParseError {
+        line: 0,
+        kind: crate::parser::ParseErrorKind::Unsupported,
+        message: format!(
+            "unsupported or invalid opcode emission: {} ({id})",
+            name.unwrap_or("unknown")
+        ),
     }
 }
 
@@ -6374,10 +6422,6 @@ fn symbol_id(c: &Code, sym_ids: &[i32]) -> i32 {
         _ => 0,
     }
 }
-
-/// `sizeof(txID)` at the oracle pin (`mx32bitID` undefined → 2 bytes),
-/// matching `ironhorse_vm::opcode::ID_SIZE`.
-const ID_SIZE: i32 = 2;
 
 /// XS stores a BigInt literal as `bigint->data`: an array of `txU4` limbs
 /// in machine (little-endian) byte order, `bigint->size` of them, trimmed
@@ -6731,4 +6775,95 @@ pub fn compile_atoms_goal_with_meter(
         return Err(crate::meter::limit_error());
     }
     result.map_err(|()| crate::meter::limit_error())?
+}
+
+#[cfg(test)]
+mod emission_contract {
+    use super::*;
+
+    #[test]
+    fn every_opcode_emits_its_declared_width_or_is_explicitly_refused() {
+        let not_emittable = [
+            XS_CODE_CODE_ARCHIVE_1,
+            XS_CODE_CODE_ARCHIVE_2,
+            XS_CODE_CODE_ARCHIVE_4,
+            XS_CODE_STRING_ARCHIVE_1,
+            XS_CODE_STRING_ARCHIVE_2,
+            XS_CODE_STRING_ARCHIVE_4,
+        ];
+        for (ordinal, &size) in CODE_SIZES.iter().enumerate().skip(1) {
+            let id = i32::try_from(ordinal).unwrap();
+            let payload = match id {
+                XS_CODE_NUMBER => Payload::Number { value: 1.25 },
+                XS_CODE_INTEGER_1 | XS_CODE_INTEGER_2 | XS_CODE_INTEGER_4 | XS_CODE_RUN_1
+                | XS_CODE_RUN_2 | XS_CODE_RUN_4 | XS_CODE_RUN_TAIL_1 | XS_CODE_RUN_TAIL_2
+                | XS_CODE_RUN_TAIL_4 => Payload::Integer { value: 7 },
+                XS_CODE_BIGINT_1 | XS_CODE_BIGINT_2 => Payload::BigInt {
+                    bytes: vec![1, 0, 0, 0],
+                    measure: 4,
+                },
+                _ if size < 0 => Payload::Str {
+                    bytes: vec![b'x', 0],
+                    len: 2,
+                },
+                _ if size == 0 => Payload::Symbol { sym: 0 },
+                _ if (XS_CODE_BRANCH_1..=XS_CODE_CODE_ARCHIVE_4).contains(&id) => {
+                    Payload::Branch { tid: 0 }
+                }
+                _ => Payload::Index { index: 0 },
+            };
+            let c = Code {
+                id,
+                stack_level: 0,
+                payload,
+            };
+            let mut bytes = Vec::new();
+            let result = emit_step(&c, &mut bytes, &[Target::default()], &[1]);
+            if not_emittable.contains(&id) {
+                assert!(result.is_err(), "{}", OPCODE_NAMES[ordinal]);
+            } else {
+                result.unwrap_or_else(|e| panic!("{}: {e}", OPCODE_NAMES[ordinal]));
+                let expected = match size {
+                    0 => 1 + ID_SIZE as usize,
+                    -1 => 2 + bytes[1] as usize,
+                    -2 => 3 + u16::from_le_bytes([bytes[1], bytes[2]]) as usize,
+                    -4 => 5 + u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize,
+                    n => n as usize,
+                };
+                assert_eq!(bytes.len(), expected, "{}", OPCODE_NAMES[ordinal]);
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_opcodes_and_malformed_emissions_are_refused() {
+        for (id, payload) in [
+            (-1, Payload::Byte),
+            (256, Payload::Byte),
+            (XS_CODE_COUNT as i32, Payload::Byte),
+            (XS_CODE_NUMBER, Payload::Byte),
+            (XS_CODE_STRING_1, Payload::Byte),
+            (
+                XS_CODE_STRING_1,
+                Payload::Str {
+                    bytes: vec![0; 257],
+                    len: 257,
+                },
+            ),
+            (
+                XS_CODE_BIGINT_2,
+                Payload::BigInt {
+                    bytes: vec![0; 4],
+                    measure: 8,
+                },
+            ),
+        ] {
+            let code = Code {
+                id,
+                stack_level: 0,
+                payload,
+            };
+            assert!(emit_step(&code, &mut Vec::new(), &[], &[]).is_err());
+        }
+    }
 }
