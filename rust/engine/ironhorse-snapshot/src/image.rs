@@ -10252,6 +10252,104 @@ mod object_semantic_refusals {
     }
 
     #[test]
+    fn regexp_source_and_flags_must_compile() {
+        for (source, flags) in [("a+", "g"), ("(?:)", ""), ("[a-z]", "iu")] {
+            let rows = [RegExpImage {
+                owner: 1,
+                source: source.into(),
+                flags: flags.into(),
+                last_index_bits: 0,
+            }];
+            assert_eq!(
+                check(&LangRows {
+                    regexps: &rows,
+                    ..LangRows::EMPTY
+                }),
+                Ok(())
+            );
+        }
+        for (source, flags) in [("[", ""), ("(", ""), ("a", "gg"), ("a", "z")] {
+            let rows = [RegExpImage {
+                owner: 1,
+                source: source.into(),
+                flags: flags.into(),
+                last_index_bits: 0,
+            }];
+            assert_eq!(
+                check(&LangRows {
+                    regexps: &rows,
+                    ..LangRows::EMPTY
+                }),
+                Err(SnapshotError::Corrupt(
+                    "regexp side table: persisted source does not compile"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn intl_bound_function_requires_owner_in_the_right_table() {
+        let intl = IntlTables {
+            collators: vec![(
+                1,
+                CollatorData {
+                    locale: "en".into(),
+                    usage: "sort".into(),
+                    sensitivity: "variant".into(),
+                    collation: "default".into(),
+                    numeric: false,
+                    case_first: "false".into(),
+                    ignore_punctuation: false,
+                },
+            )],
+            ..IntlTables::default()
+        };
+        let valid = ironhorse_vm::IntlBoundFunctionRow {
+            kind: 0,
+            function: 2,
+            owner: 1,
+            name: "compare".into(),
+            name_chunk: u32::MAX,
+            arity: 2,
+        };
+        let rows = [valid.clone()];
+        assert_eq!(
+            check(&LangRows {
+                intl: &intl,
+                intl_bound_functions: &rows,
+                ..LangRows::EMPTY
+            }),
+            Ok(())
+        );
+        for (owner, kind) in [(3, 0), (1, 1)] {
+            let rows = [ironhorse_vm::IntlBoundFunctionRow {
+                owner,
+                kind,
+                ..valid.clone()
+            }];
+            assert_eq!(
+                check(&LangRows {
+                    intl: &intl,
+                    intl_bound_functions: &rows,
+                    ..LangRows::EMPTY
+                }),
+                Err(SnapshotError::Corrupt(
+                    "Intl bound-function state: owner has no Intl row"
+                ))
+            );
+        }
+        assert_eq!(
+            check(&LangRows {
+                intl_bound_functions: &rows,
+                ..LangRows::EMPTY
+            }),
+            Err(SnapshotError::Corrupt(
+                "Intl bound-function state: owner has no Intl row"
+            ))
+        );
+    }
+
+    #[test]
     fn revoked_proxy_and_revoker_targets() {
         let mut state = ProxyStateSnapshot {
             proxies: vec![ProxyRow {

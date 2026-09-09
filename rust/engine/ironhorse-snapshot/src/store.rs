@@ -5540,6 +5540,38 @@ mod tests {
     }
 
     #[test]
+    fn leaf_inventory_must_match_each_arena_geometry() {
+        let mut image = ran_image();
+        image.slot_free.push(image.slots.len() as u32);
+        image.slots.push(Slot::undefined());
+        for kind in 0..3 {
+            for extra in [false, true] {
+                let mut store = MemoryStore::new();
+                store
+                    .commit(&image_to_batch_unchecked(&image, 1, ""))
+                    .unwrap();
+                validate_store(&store, &sig()).unwrap();
+                let leaves = match kind {
+                    0 => &mut store.leaf_pages,
+                    1 => &mut store.leaf_exts,
+                    _ => &mut store.leaf_frees,
+                };
+                if extra {
+                    leaves.push([0; 32]);
+                } else {
+                    assert!(leaves.pop().is_some(), "fixture must have every row class");
+                }
+                assert_eq!(
+                    validate_store(&store, &sig()).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store leaf-hash inventory disagrees with geometry"
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn validate_fails_closed_on_accounting_mismatch() {
         let image = ran_image();
         let mut corrupt = image.clone();
