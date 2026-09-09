@@ -9,7 +9,6 @@ HEAP header	Existing corruption guard; dedicated exact-label regression fixture 
 HEAP record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
 HEAP slot record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 HEAP trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-Intl bound-function state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 Intl bound-function state: functions not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 Intl bound-function state: name not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 Intl bound-function state: owner has no Intl row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -22,22 +21,17 @@ STAC not empty at a quiescent boundary	Existing corruption guard; dedicated exac
 STAC record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC slot record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-accessor state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 accessor state: bad option tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: getter or setter is not callable	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: id outside the property-key tables	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: rows not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-arguments brand set	Existing corruption guard; dedicated exact-label regression fixture deferred.
 arguments brand set: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-array-buffers side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 array-buffers side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 array-buffers side table: unknown flag bits	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-arrays side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 arrays side table: item index at or past the declared length	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 arrays side table: item indices not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 arrays side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 async activation: invalid promise capability or anchor	Existing corruption guard; dedicated exact-label regression fixture deferred.
-async instances	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async instances: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async reaction: invalid payload	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async reaction: missing or duplicate activation	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -50,7 +44,6 @@ checkpoint deferred slot page leaf mismatch	Existing corruption guard; dedicated
 chunk offset out of arena bounds	Existing corruption guard; dedicated exact-label regression fixture deferred.
 collection cadence mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
 collection kind code	Existing corruption guard; dedicated exact-label regression fixture deferred.
-collections side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 collections side table: live size past the grow threshold	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 collections side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 collections side table: unreachable rehash geometry	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -59,26 +52,21 @@ constructor-prototype state: owner has no function row	Side-table decoding guard
 constructor-prototype state: rows not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 container atoms out of canonical order or unknown	Existing corruption guard; dedicated exact-label regression fixture deferred.
 container missing an atom its version always writes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-data-views side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 data-views side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 data-views side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-date side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 date side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 deleted-function metadata: id outside the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
 deleted-function metadata: rows not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-disposable stacks	Existing corruption guard; dedicated exact-label regression fixture deferred.
 disposable stacks: bad boolean byte	Existing corruption guard; dedicated exact-label regression fixture deferred.
 disposable stacks: disposal method is not callable	Existing corruption guard; dedicated exact-label regression fixture deferred.
 disposable stacks: disposed stack retains records	Existing corruption guard; dedicated exact-label regression fixture deferred.
 disposable stacks: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 durable counter regression	Existing corruption guard; dedicated exact-label regression fixture deferred.
-error-data side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-data side table: message flag not 0/1	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-data side table: message not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-data side table: name not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-data side table: not an engine error name	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-data side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-error-frame side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-frame side table: empty frame list is not emitted	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-frame side table: frame name not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 error-frame side table: owner has no error row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -99,7 +87,6 @@ file store page directory disagrees with geometry	File backend structural guard;
 file store page edges truncated	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store slot page row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store small-state block	File backend structural guard; dedicated exact-label corruption fixture deferred.
-function state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 function state: bad body tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 function state: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 function state: bad class tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -120,17 +107,14 @@ generator frame: id map not strictly ascending	Existing corruption guard; dedica
 generator frame: invalid resume cursor or scope map	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: invalid saved handler	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: malformed body bytecode	Existing corruption guard; dedicated exact-label regression fixture deferred.
-generators	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generators: bad frame tag	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generators: invalid state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generators: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generators: state and frame disagree	Existing corruption guard; dedicated exact-label regression fixture deferred.
-index-props side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 index-props side table: high-water mark below its own items	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 index-props side table: item indices not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 index-props side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 installed-names floor does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
-intl record tables	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: bad option tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -140,7 +124,6 @@ intl side table: segment iterator names no covering segments row	Side-table deco
 intl side table: string not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: unicode keys not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: unknown date-time component key	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 iterator cursors: bad done byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 iterator cursors: collection cursor names no covering row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 iterator cursors: for-in cursor past its key list	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -164,10 +147,8 @@ non-canonical small state	Existing corruption guard; dedicated exact-label regre
 private accessors: bad option tag	Existing corruption guard; dedicated exact-label regression fixture deferred.
 private accessors: getter or setter is not callable	Existing corruption guard; dedicated exact-label regression fixture deferred.
 private accessors: rows not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-private elements	Existing corruption guard; dedicated exact-label regression fixture deferred.
 private elements: key has both value and accessor rows	Existing corruption guard; dedicated exact-label regression fixture deferred.
 private values: rows not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-promise cluster	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 promise cluster: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 promise cluster: combinator capability names no function	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 promise cluster: combinator index out of range	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -196,11 +177,9 @@ promise cluster: unknown combinator kind	Side-table decoding guard; dedicated ex
 promise cluster: unused reaction payload not zero	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 proxy revoker names no proxy row	Existing corruption guard; dedicated exact-label regression fixture deferred.
 proxy revokers: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-proxy state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 proxy state: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 proxy state: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 proxy state: revoked proxy retains target or handler	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-regexp side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 regexp side table: flags not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 regexp side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 regexp side table: persisted source does not compile	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -248,7 +227,6 @@ string list entry body	Existing corruption guard; dedicated exact-label regressi
 string list entry not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
 string list header	Existing corruption guard; dedicated exact-label regression fixture deferred.
 string list trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-symbol registry	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol registry: keys not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 symbol registry: two keys share a descriptor	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -259,10 +237,8 @@ temporal durations: owners not strictly ascending	Existing corruption guard; ded
 temporal instants: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 temporal plains: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 temporal plains: unknown kind	Existing corruption guard; dedicated exact-label regression fixture deferred.
-temporal record tables	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 temporal zoneds: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 temporal zoneds: time zone not UTF-8	Existing corruption guard; dedicated exact-label regression fixture deferred.
-typed-arrays side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 typed-arrays side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 typed-arrays side table: unknown element kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 typed-arrays side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -270,5 +246,4 @@ u32 list entry	Existing corruption guard; dedicated exact-label regression fixtu
 u32 list header	Existing corruption guard; dedicated exact-label regression fixture deferred.
 u32 list trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
 unsupported store schema version	Existing corruption guard; dedicated exact-label regression fixture deferred.
-wrapper side table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 wrapper side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.

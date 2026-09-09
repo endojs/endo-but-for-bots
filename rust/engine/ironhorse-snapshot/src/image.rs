@@ -6967,6 +6967,114 @@ mod tests {
     }
 
     #[test]
+    fn side_table_decoders_refuse_truncated_headers_and_absent_rows() {
+        // No complete count header, or a count claiming rows without bytes.
+        // Every call below runs the production decoder and names its refusal.
+        for bytes in [&[][..], &[0], &[0, 0], &[0, 0, 0], &[0, 0, 0, 1], &[255; 4]] {
+            assert!(matches!(
+                decode_index_props(bytes),
+                Err(SnapshotError::Corrupt("index-props side table"))
+            ));
+            assert!(matches!(
+                decode_arrays(bytes),
+                Err(SnapshotError::Corrupt("arrays side table"))
+            ));
+            assert!(matches!(
+                decode_collections(bytes),
+                Err(SnapshotError::Corrupt("collections side table"))
+            ));
+            assert!(matches!(
+                decode_registry(bytes),
+                Err(SnapshotError::Corrupt("symbol registry"))
+            ));
+            assert!(matches!(
+                decode_errors(bytes),
+                Err(SnapshotError::Corrupt("error-data side table"))
+            ));
+            assert!(matches!(
+                decode_error_frames(bytes),
+                Err(SnapshotError::Corrupt("error-frame side table"))
+            ));
+            assert!(matches!(
+                decode_buffers(bytes),
+                Err(SnapshotError::Corrupt("array-buffers side table"))
+            ));
+            assert!(matches!(
+                decode_typed_arrays(bytes),
+                Err(SnapshotError::Corrupt("typed-arrays side table"))
+            ));
+            assert!(matches!(
+                decode_data_views(bytes),
+                Err(SnapshotError::Corrupt("data-views side table"))
+            ));
+            assert!(matches!(
+                decode_wrappers(bytes),
+                Err(SnapshotError::Corrupt("wrapper side table"))
+            ));
+            assert!(matches!(
+                decode_regexps(bytes),
+                Err(SnapshotError::Corrupt("regexp side table"))
+            ));
+            assert!(matches!(
+                decode_dates(bytes),
+                Err(SnapshotError::Corrupt("date side table"))
+            ));
+            assert!(matches!(
+                decode_function_state(bytes),
+                Err(SnapshotError::Corrupt("function state"))
+            ));
+            assert!(matches!(
+                decode_proxy_state(bytes),
+                Err(SnapshotError::Corrupt("proxy state"))
+            ));
+            assert!(matches!(
+                decode_accessors(bytes),
+                Err(SnapshotError::Corrupt("accessor state"))
+            ));
+            assert!(matches!(
+                decode_intl_bound_functions(bytes),
+                Err(SnapshotError::Corrupt("Intl bound-function state"))
+            ));
+            assert!(matches!(
+                decode_private_elements(bytes),
+                Err(SnapshotError::Corrupt("private elements"))
+            ));
+            assert!(matches!(
+                decode_disposable_stacks(bytes),
+                Err(SnapshotError::Corrupt("disposable stacks"))
+            ));
+            assert!(matches!(
+                decode_generators(bytes),
+                Err(SnapshotError::Corrupt("generators"))
+            ));
+            assert!(matches!(
+                decode_async_instances(bytes),
+                Err(SnapshotError::Corrupt("async instances"))
+            ));
+            assert!(matches!(
+                decode_promise_cluster(bytes),
+                Err(SnapshotError::Corrupt("promise cluster"))
+            ));
+            assert!(matches!(
+                decode_arguments_brands(bytes),
+                Err(SnapshotError::Corrupt("arguments brand set"))
+            ));
+            assert!(matches!(
+                decode_temporal(bytes),
+                Err(SnapshotError::Corrupt("temporal record tables"))
+            ));
+            assert!(matches!(
+                decode_intl(bytes),
+                Err(SnapshotError::Corrupt("intl record tables"))
+            ));
+            assert!(matches!(
+                decode_iterators(bytes),
+                Err(SnapshotError::Corrupt("iterator cursors"))
+            ));
+        }
+    }
+
+    #[test]
     fn optional_empty_atoms_have_exact_refusals() {
         let image = MachineImage::from_arenas(
             sig(),
