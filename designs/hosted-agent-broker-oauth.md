@@ -493,7 +493,7 @@ stays fenced.
 The cost is an operator re-grant for a token nothing ever presented, which is
 the direction every other trade here errs in.
 
-Both undos are best-effort in the sense that failing to land leaves the
+The undo is best-effort in the sense that failing to land leaves the
 conservative state, which an operator holding the record's read capability can
 see as a `pendingRefresh` with the instant it was set, and which the secret
 manager's audit trail records as a refused or failed write.
