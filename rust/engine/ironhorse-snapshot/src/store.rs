@@ -5106,6 +5106,73 @@ mod tests {
     }
 
     #[test]
+    fn manifest_version_and_epoch_have_exact_refusals() {
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        let original = store.manifest.clone();
+        store.manifest.as_mut().unwrap().version.format_version = u32::MAX;
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("store version stamp mismatch"))
+        );
+        store.manifest = original;
+        store.manifest.as_mut().unwrap().epoch = 0;
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("store manifest epoch 0"))
+        );
+    }
+
+    #[test]
+    fn eager_store_checks_each_row_class_against_its_leaf() {
+        let mut image = ran_image();
+        image.slot_free.push(image.slots.len() as u32);
+        image.slots.push(Slot::undefined());
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        let control = store_to_image(&store).unwrap();
+        let page = store.slot_pages.get(&0).unwrap().clone();
+        store.slot_pages.get_mut(&0).unwrap()[0] ^= 1;
+        assert_eq!(
+            store_to_image(&store).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store slot page fails its leaf hash"
+            ))
+        );
+        store.slot_pages.insert(0, page);
+        assert_eq!(store_to_image(&store).unwrap(), control);
+        let extent = store.chunk_extents.get(&0).unwrap().clone();
+        store.chunk_extents.get_mut(&0).unwrap()[0] ^= 1;
+        assert_eq!(
+            store_to_image(&store).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store chunk extent fails its leaf hash"
+            ))
+        );
+        store.chunk_extents.insert(0, extent);
+        assert_eq!(store_to_image(&store).unwrap(), control);
+        store.free_segs.get_mut(&0).unwrap()[0] ^= 1;
+        assert_eq!(
+            store_to_image(&store).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free segment fails its leaf hash"
+            ))
+        );
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store free segment fails its leaf hash"
+            ))
+        );
+    }
+
+    #[test]
     fn validate_fails_closed_on_missing_row() {
         let image = ran_image();
         let mut store = MemoryStore::new();
@@ -5158,8 +5225,14 @@ mod tests {
                 .commit(&image_to_batch_unchecked(&image, 1, ""))
                 .unwrap();
             mutate(store.manifest.as_mut().unwrap());
-            assert!(validate_store(&store, &sig()).is_err());
-            assert!(store_to_image(&store).is_err());
+            assert_eq!(
+                validate_store(&store, &sig()).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("store manifest seal mismatch"))
+            );
+            assert_eq!(
+                store_to_image(&store).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("store manifest seal mismatch"))
+            );
         }
     }
 
@@ -5245,12 +5318,12 @@ mod tests {
         store
             .commit(&image_to_batch_unchecked(&corrupt, 1, ""))
             .unwrap();
-        match validate_store(&store, &sig()) {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store live/free/count accounting mismatch",
-            ))) => {}
-            other => panic!("expected accounting mismatch, got {other:?}"),
-        }
+        assert_eq!(
+            validate_store(&store, &sig()).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "store live/free/count accounting mismatch"
+            ))
+        );
     }
 
     /// A shrink (the GC-compaction shape) drops stale rows: a later

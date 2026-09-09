@@ -65,20 +65,13 @@ side-table restore: unknown error name	Existing corruption guard; dedicated exac
 side-table restore: unknown kind code	Existing corruption guard; dedicated exact-label regression fixture deferred.
 small state name-floor section size	Small-state framing guard; dedicated exact-label truncation fixture deferred.
 small state trailing bytes	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-store chunk extent fails its leaf hash	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store epoch exhausted	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file directory offset overflow	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file header truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file manifest region truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store free segment fails its leaf hash	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store free-list contains duplicate indices	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store free-list index out of range	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store leaf-hash inventory disagrees with geometry	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store live/free/count accounting mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest epoch 0	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest seal mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store slot page fails its leaf hash	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store slot page record	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store version stamp mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table: counter inside the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
