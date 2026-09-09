@@ -3,8 +3,28 @@
 The inference broker and isolated listener are implemented, for API-key and for
 a broker-held refreshing OAuth credential.
 Subscription authentication is a separate requirement.
-Hosted subscription mode remains disabled until the relevant stock CLI is
-proven to work through this boundary using a vendor-supported configuration.
+Codex now has an explicitly enabled experimental host composition, described
+below; this does not change the Claude conclusions in this document.
+
+## Live Codex experiment (2026-09-10; supersedes earlier Codex status)
+
+The pinned Codex 0.152.0 custom-provider configuration completed real Floot
+Codex Sol turns through the strict attested sandbox with no slice credential.
+The host broker held the renewable ChatGPT credential in general Secrets,
+successfully renewed it, and mapped only the permitted Responses inference route.
+This is empirical acceptance of the fixed subscription route, not a claim that
+OpenAI promises a stable public third-party subscription proxy API.
+The model-facing app-server does not receive even a short-lived bearer token;
+the external `chatgptAuthTokens` login mode is therefore not used in the slice.
+
+The account is pinned in formula configuration and checked against every credential
+read, including revival; replacement with another account fails closed.
+The long-lived refresh token, not the cached access token, drives renewal.
+Uncertain refresh intents require operator recovery rather than unsafe replay.
+See [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) for the explicit operator
+entry point and limits that remain before general-purpose deployment.
+
+The findings below are retained as historical research, not current enablement status.
 
 ## Finding: Codex has a documented path; Claude does not (revised 2026-09-09)
 

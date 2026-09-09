@@ -27,6 +27,7 @@ const policy = harden({
 /** @param {any} [options] */
 const fixture = ({
   leaseDurationMs = 60_000,
+  requestTimeoutMs,
   startBarrier,
   now,
   policy: policyOverride,
@@ -36,6 +37,7 @@ const fixture = ({
   let fails = false;
   let drift = false;
   let endpoint;
+  let listenerLimits;
   let disconnect = () => {};
   const closed = new Promise(resolve => {
     disconnect = () => resolve(undefined);
@@ -44,6 +46,7 @@ const fixture = ({
     runtime: {
       async start(input) {
         endpoint = input.endpoint;
+        listenerLimits = input.limits;
         if (startBarrier) await startBarrier;
         return {
           async observe() {
@@ -72,6 +75,7 @@ const fixture = ({
     policy: policyOverride ?? policy,
     ...(credential === undefined ? {} : { credential }),
     leaseDurationMs,
+    requestTimeoutMs,
     now,
     imageDigest: digest,
     accountRef: 'account',
@@ -79,6 +83,7 @@ const fixture = ({
   return {
     issuer,
     endpoint: () => endpoint,
+    listenerLimits: () => listenerLimits,
     stops: () => stops,
     failCleanup: () => {
       fails = true;
@@ -93,6 +98,51 @@ const fixture = ({
     closed,
   };
 };
+
+test('request deadlines default to two minutes and allow bounded host opt-in', async t => {
+  for (const [leaseDurationMs, requestTimeoutMs, expected] of [
+    [3_600_000, undefined, 120_000],
+    [3_600_000, 600_000, 600_000],
+    [60_000, 600_000, 60_000],
+  ]) {
+    const f = fixture({ leaseDurationMs, requestTimeoutMs, now: () => 0 });
+    t.teardown(f.issuer.dispose);
+    // eslint-disable-next-line no-await-in-loop
+    await f.issuer(spec);
+    t.is(f.listenerLimits().timeoutMs, expected);
+  }
+});
+
+test('request deadlines clamp to remaining lease time before admission', async t => {
+  let reads = 0;
+  const f = fixture({
+    leaseDurationMs: 60_000,
+    requestTimeoutMs: 600_000,
+    now: () => {
+      reads += 1;
+      return reads === 1 ? 0 : 1000;
+    },
+  });
+  t.teardown(f.issuer.dispose);
+  await f.issuer(spec);
+  t.is(f.listenerLimits().timeoutMs, 59_000);
+});
+
+test('invalid host request deadlines are refused', t => {
+  for (const requestTimeoutMs of [
+    0,
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    600_001,
+    '600000',
+  ]) {
+    t.throws(() => fixture({ requestTimeoutMs }), {
+      message: 'Invalid provider request deadline',
+    });
+  }
+});
 
 test('lease binds observations and only delegates inference; retry preserves live lease', async t => {
   const f = fixture();

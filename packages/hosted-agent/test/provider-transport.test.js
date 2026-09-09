@@ -5,6 +5,8 @@ import { E } from '@endo/eventual-send';
 import { isCredentialRejection } from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
+/** @import { ProviderTransportDiagnostic } from '../src/provider-transport.js' */
+
 const request = harden({
   url: 'https://api.example.test/v1/responses',
   method: 'POST',
@@ -14,11 +16,15 @@ const request = harden({
   maxResponseBytes: 10n,
 });
 
-/** @param {any} fetch */
-const setup = fetch => {
+/**
+ * @param {any} fetch
+ * @param {(diagnostic: ProviderTransportDiagnostic) => void | Promise<void>} [onDiagnostic]
+ */
+const setup = (fetch, onDiagnostic = undefined) => {
   const timers = new Set();
   const transport = makeProviderFetchTransport({
     fetch,
+    onDiagnostic,
     timeoutMs: 100,
     maxRequestBytes: 100n,
     maxResponseBytes: 10n,
@@ -38,6 +44,141 @@ const setup = fetch => {
     },
   };
 };
+
+test('ChatGPT headers are allowed only on the fixed subscription inference route', async t => {
+  let dispatched = 0;
+  const subject = setup(async () => {
+    dispatched += 1;
+    return new Response('ok');
+  });
+  const subscription = {
+    ...request,
+    url: 'https://chatgpt.com/backend-api/codex/responses',
+    headers: {
+      ...request.headers,
+      'chatgpt-account-id': 'account-1',
+      originator: 'codex_cli_rs',
+    },
+  };
+  t.deepEqual(await E(subject.transport).request(subscription), {
+    status: 200,
+    body: 'ok',
+  });
+  await t.throwsAsync(() =>
+    E(subject.transport).request({ ...subscription, url: request.url }),
+  );
+  await t.throwsAsync(() =>
+    E(subject.transport).request({
+      ...subscription,
+      headers: { ...subscription.headers, originator: 'other' },
+    }),
+  );
+  await t.throwsAsync(() =>
+    E(subject.transport).request({
+      ...subscription,
+      headers: {
+        ...subscription.headers,
+        'chatgpt-account-id': 'bad\r\nheader',
+      },
+    }),
+  );
+  t.is(dispatched, 1);
+  subject.dispose();
+});
+
+test('host diagnostics contain only fixed stages and bounded HTTP status', async t => {
+  const diagnostics = [];
+  const capture = diagnostic => {
+    t.true(Object.isFrozen(diagnostic));
+    diagnostics.push(diagnostic);
+  };
+  const denied = setup(
+    async () =>
+      new Response('body-canary-secret', {
+        status: 429,
+        headers: { 'www-authenticate': 'header-canary-secret' },
+      }),
+    capture,
+  );
+  t.teardown(denied.dispose);
+  await t.throwsAsync(() => E(denied.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const broken = setup(async () => {
+    throw Error('exception-canary-secret');
+  }, capture);
+  t.teardown(broken.dispose);
+  await t.throwsAsync(() => E(broken.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const invalid = setup(async () => {
+    t.fail('invalid requests must not dispatch');
+  }, capture);
+  t.teardown(invalid.dispose);
+  await t.throwsAsync(() =>
+    E(invalid.transport).request({
+      ...request,
+      body: 'body-canary'.repeat(20),
+    }),
+  );
+  t.deepEqual(diagnostics, [
+    { stage: 'response', status: 429 },
+    { stage: 'fetch' },
+    { stage: 'request' },
+  ]);
+  t.false(JSON.stringify(diagnostics).includes('canary'));
+});
+
+test('diagnostic observer failures cannot change provider outcomes', async t => {
+  for (const observer of [
+    () => {
+      throw Error('observer-canary-secret');
+    },
+    async () => {
+      throw Error('observer-canary-secret');
+    },
+  ]) {
+    const denied = setup(
+      async () => new Response('secret', { status: 401 }),
+      observer,
+    );
+    t.teardown(denied.dispose);
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(denied.transport).request(request), {
+      message: 'Provider credential rejected',
+    });
+  }
+});
+
+test('body failures and idle deadlines emit one sanitized diagnostic', async t => {
+  t.timeout(1000);
+  const diagnostics = [];
+  const { response } = streamResponse([new Uint8Array([0xff])]);
+  const invalid = setup(
+    async () => response,
+    value => {
+      diagnostics.push(value);
+    },
+  );
+  t.teardown(invalid.dispose);
+  await t.throwsAsync(() => E(invalid.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const idle = setup(
+    async () => new Response(new ReadableStream()),
+    value => {
+      diagnostics.push(value);
+    },
+  );
+  t.teardown(idle.dispose);
+  const streaming = await E(idle.transport).requestStream(request);
+  idle.timeout();
+  await t.throwsAsync(() => E(streaming.reader).next(), { message: /stopped/ });
+  t.deepEqual(diagnostics, [
+    { stage: 'body', status: 200 },
+    { stage: 'timeout', status: 200 },
+  ]);
+});
 
 /**
  * @param {Uint8Array[]} chunks

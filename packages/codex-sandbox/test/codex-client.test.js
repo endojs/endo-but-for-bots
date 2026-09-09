@@ -755,6 +755,70 @@ test('replaying an already durable checkpoint is idempotent', async t => {
   await fixture.client.terminate();
 });
 
+test('Floot retry after revival acknowledges the durable base then reconciles the failed turn', async t => {
+  t.timeout(1000);
+  let state;
+  const failed = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: null,
+        turnId: 'turn-1',
+        status: 'completed',
+      },
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  t.teardown(() => failed.client.terminate());
+  const reader = await failed.client.send('fails', {
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  failed.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-2', status: 'failed' },
+    },
+  });
+  t.is((await drain(reader)).at(-1).type, 'abort');
+  await failed.client.terminate();
+  const revived = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1', 'turn-2'],
+    clientOptions: {
+      savedRecovery: /** @type {any} */ (state).recovery,
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  t.teardown(() => revived.client.terminate());
+  const retry = await revived.client.send('retry', {
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  const revert = revived.sent.find(
+    message => message.method === 'thread/revert',
+  );
+  t.is(revert.params.beforeTurnId, 'turn-2');
+  const methods = revived.sent.map(message => message.method);
+  t.true(methods.indexOf('thread/revert') < methods.indexOf('turn/start'));
+  revived.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-3', status: 'completed' },
+    },
+  });
+  t.deepEqual((await drain(retry)).at(-1), {
+    type: 'end',
+    checkpoint: 'turn-3',
+  });
+  await revived.client.acknowledge('turn-3');
+});
+
 test('a failed thread-binding audit is retried before dispatch', async t => {
   let bindingAttempts = 0;
   const fixture = makeFixture({

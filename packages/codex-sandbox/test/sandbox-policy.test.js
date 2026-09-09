@@ -127,7 +127,10 @@ const fixture = (changes = {}) => {
       },
     }),
   };
-  const makeSlice = makeAttestedCodexSliceFactory(powers);
+  const makeSlice = makeAttestedCodexSliceFactory({
+    ...powers,
+    volumeLimits: changes.volumeLimits,
+  });
   const brokerLease = Far('lease', {
     attestation: () =>
       harden({
@@ -168,6 +171,31 @@ const fixture = (changes = {}) => {
       }),
   };
 };
+
+test('operator disk reductions reach the actual slice mount request', async t => {
+  const volumeLimits = {
+    workspaceBytes: 512n * 1024n ** 2n,
+    stateBytes: 256n * 1024n ** 2n,
+  };
+  const f = fixture({ volumeLimits });
+  const slice = await f.create();
+  t.teardown(() => E(slice).dispose());
+  const mounts = f.request().policy.mounts;
+  const actualWritable = mounts.reduce(
+    (sum, mount) => sum + mount.sizeBytes * (mount.kind === 'tmpfs' ? 2n : 1n),
+    2n * f.request().policy.resources.shmBytes,
+  );
+  t.is(f.request().policy.resources.writableBytes, actualWritable);
+  t.is((await E(slice).policy()).limits.writableBytes, Number(actualWritable));
+  t.is(
+    mounts.find(mount => mount.destination === '/workspace').sizeBytes,
+    volumeLimits.workspaceBytes,
+  );
+  t.is(
+    mounts.find(mount => mount.destination === '/codex-home').sizeBytes,
+    volumeLimits.stateBytes,
+  );
+});
 
 test('composes independently verified evidence with exact aggregate budgets', async t => {
   const f = fixture();

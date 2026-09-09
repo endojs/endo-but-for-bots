@@ -64,13 +64,15 @@ const fixture = (projectIds = { first: 1000, last: 2000 }) => {
     },
     observe: async ({ name }) => harden(limits.get(name)),
   });
-  const reopen = () =>
+  /** @param {{workspaceBytes: bigint, stateBytes: bigint}} [volumeLimits] */
+  const reopen = (volumeLimits = undefined) =>
     makeCodexDurableVolumeProvider({
       ownerId: 'operator-1',
       projectIds,
       registry,
       volumes,
       quota,
+      volumeLimits,
     });
   return {
     reopen,
@@ -91,6 +93,24 @@ const fixture = (projectIds = { first: 1000, last: 2000 }) => {
     },
   };
 };
+
+test('operator reductions survive reopen and refuse implicit quota migration', async t => {
+  const f = fixture();
+  const volumeLimits = {
+    workspaceBytes: 512n * 1024n ** 2n,
+    stateBytes: 256n * 1024n ** 2n,
+  };
+  const spec = { sessionId: 'small' };
+  await f.reopen(volumeLimits).makeWorkspace(spec);
+  t.deepEqual(
+    [...f.limits.values()].map(value => value.hardBytes),
+    [volumeLimits.workspaceBytes, volumeLimits.stateBytes],
+  );
+  await f.reopen(volumeLimits).makeWorkspace(spec);
+  await t.throwsAsync(() => f.reopen().makeWorkspace(spec), {
+    message: /limit|migration/i,
+  });
+});
 
 test('durable volumes reopen unchanged and leases preserve data', async t => {
   const f = fixture();

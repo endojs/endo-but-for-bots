@@ -44,9 +44,37 @@ export const startProviderListenerWorker = async ({ input, output }) => {
     (Object.keys(configuration).length === allowed.length &&
       allowed.every(key => Object.hasOwn(configuration, key))) ||
       Fail`Invalid provider worker bootstrap`;
+    let diagnosticCount = 0;
     listener = await makeProviderHttpListener({
       endpoint: configuration.endpoint,
       ...configuration.limits,
+      onDiagnostic: diagnostic => {
+        if (configuration.limits.diagnostics !== true || diagnosticCount >= 4)
+          return;
+        diagnosticCount += 1;
+        // Project only fixed, locally generated stages and header-check bits.
+        // Four bounded lines fit within the runtime's 4096-byte stderr budget.
+        const { stage, checks } = diagnostic;
+        const line = JSON.stringify({
+          stage,
+          ...(checks
+            ? {
+                checks: {
+                  method: checks.method,
+                  path: checks.path,
+                  host: checks.host,
+                  origin: checks.origin,
+                  cookie: checks.cookie,
+                  authorization: checks.authorization,
+                  encoding: checks.encoding,
+                  contentType: checks.contentType,
+                },
+              }
+            : {}),
+        });
+        if (line.length <= 768)
+          console.error(`Provider HTTP diagnostic: ${line}`);
+      },
     });
     if (stopped) {
       await listener.dispose();
