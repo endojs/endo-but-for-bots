@@ -11,11 +11,15 @@ import { showInventory } from '../src/inventory-view.js';
 import { showMailbox } from '../src/mailbox-view.js';
 import { serveThixotrope } from '../src/supervisor.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const [command, directory = './.thix', ...args] = process.argv.slice(2);
 const statePath = resolve(directory);
 try {
   if (command === 'serve') {
-    const supervisor = await serveThixotrope(statePath);
+    const supervisor = await serveThixotrope(nodePowers, statePath);
     const stop = () => {
       void supervisor.close().catch(error => {
         console.error(error.message);
@@ -58,7 +62,10 @@ try {
     command === 'status' ||
     command === 'stop'
   ) {
-    const client = await connectLocalControl(join(statePath, 'control.sock'));
+    const client = await connectLocalControl(
+      nodePowers,
+      join(statePath, 'control.sock'),
+    );
     try {
       if (command === 'clock-grant') {
         console.log(JSON.stringify(await client.call('clockGrant', args[0])));
@@ -76,7 +83,7 @@ try {
       } else if (command === 'http-services') {
         console.log(JSON.stringify(await client.call('httpServices'), null, 2));
       } else if (command === 'mail') {
-        await showMailbox(client);
+        await showMailbox(nodePowers, client);
       } else if (
         [
           'revoke-invite',
@@ -113,7 +120,7 @@ try {
           if (separator < 1) throw Error('Expected power=inventory-key');
           return [grant.slice(0, separator), grant.slice(separator + 1)];
         });
-        const { bundle } = await bundleApplication(modulePath);
+        const { bundle } = await bundleApplication(nodePowers, modulePath);
         console.log(
           JSON.stringify(
             await client.call('install', name, bundle, grants),
@@ -122,7 +129,7 @@ try {
           ),
         );
       } else if (command === 'inventory') {
-        await showInventory(client);
+        await showInventory(nodePowers, client);
       } else if (command === 'attach') {
         const terminal = createInterface({
           input: process.stdin,

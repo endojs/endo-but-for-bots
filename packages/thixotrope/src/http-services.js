@@ -1,13 +1,10 @@
 // @ts-check
-/* global setTimeout, clearTimeout */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
-import { randomBytes } from 'node:crypto';
-import { createServer } from 'node:http';
-import { join } from 'node:path';
 
-import { makeServiceState } from './service-state.js';
+/** @import { SyncStringAtom } from './sync-string-atom.js' */
 
 /** @import { Server, IncomingMessage, ServerResponse } from 'node:http' */
 /** @import { Socket } from 'node:net' */
@@ -17,31 +14,32 @@ import { makeServiceState } from './service-state.js';
 const limit = 64 * 1024;
 const maxRequests = 16;
 const deadlineMs = 5000;
-const randomId = () =>
-  Array.from(randomBytes(16), byte => byte.toString(16).padStart(2, '0')).join(
-    '',
-  );
-
 /**
  * Persistent HTTP listener recipes; all sockets, request clients and deadlines
  * are ephemeral. The caller owns the engine lease for this manager's lifetime.
  * Ports are explicit, loopback-only, and each allocation is a single-use lease.
  * Repeated listen rejects; inspect status after an uncertain configuration call.
+ * @param {Pick<NodePowers, 'http' | 'timers' | 'randomBytes'>} powers
  * @param {object} options
- * @param {string} options.statePath
+ * @param {SyncStringAtom} options.storage
  * @param {(handler: any, secret: string) => void} options.publish
  * @param {(secret: string) => void} options.unpublish
  * @param {() => Promise<RequestClient>} options.openClient
  */
-export const makeHttpServices = ({
-  statePath,
-  publish,
-  unpublish,
-  openClient,
-}) => {
-  const storage = makeServiceState(join(statePath, 'http-services.json'));
+export const makeHttpServices = (
+  powers,
+  { storage, publish, unpublish, openClient },
+) => {
+  const { createServer } = powers.http;
+  const { setTimeout, clearTimeout } = powers.timers;
+  const randomId = () =>
+    Array.from(powers.randomBytes(16), byte =>
+      byte.toString(16).padStart(2, '0'),
+    ).join('');
   /** @type {{version: number, listeners: Recipe[]}} */
-  let state = storage.read() ?? { version: 1, listeners: [] };
+  let state = { version: 1, listeners: [] };
+  const saved = storage.read();
+  if (saved !== undefined) state = JSON.parse(saved);
   (state.version === 1 && Array.isArray(state.listeners)) ||
     Fail`Invalid HTTP service state`;
   const ids = new Set();
@@ -93,7 +91,7 @@ export const makeHttpServices = ({
   const save = listeners => {
     !failedStorage || Fail`HTTP service storage requires restart`;
     try {
-      storage.write({ version: 1, listeners });
+      storage.write(JSON.stringify({ version: 1, listeners }));
     } catch (error) {
       failedStorage = true;
       throw error;

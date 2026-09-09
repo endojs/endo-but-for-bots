@@ -10,18 +10,32 @@ import { fileURLToPath } from 'node:url';
 import { bundleApplication } from '../../src/bundle-application.js';
 import { connectLocalControl } from '../../src/local-control.js';
 
+import { makeNodePowers } from '../../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import {ExecutionContext} from 'ava' */
+
+const supervisorModuleSpecifier = JSON.stringify(
+  new URL('../../src/supervisor.js', import.meta.url).href,
+);
+
+const powersModuleSpecifier = JSON.stringify(
+  new URL('../../src/platform/node-powers.js', import.meta.url).href,
+);
 
 // Hold wall time constant in each process so even a slow CI worker cannot
 // deliver the first alarm before the crash. Only the host receives this power.
 const supervisorScript = `
 import '@endo/init';
-import { serveThixotrope } from ${JSON.stringify(new URL('../../src/supervisor.js', import.meta.url).href)};
+import { serveThixotrope } from ${supervisorModuleSpecifier};
+import { makeNodePowers } from ${powersModuleSpecifier};
+const nodePowers = makeNodePowers();
 const [path, timestamp] = process.argv.slice(1);
 if (!/^[0-9]+$/.test(timestamp)) throw Error('Invalid test timestamp');
 const now = BigInt(timestamp);
 if (now >= 2n ** 63n) throw Error('Invalid test timestamp');
-const supervisor = await serveThixotrope(path, { alarmNow: () => now });
+const supervisor = await serveThixotrope(nodePowers, path, { alarmNow: () => now });
 console.log('Alarm supervisor ready');
 await supervisor.stopped;
 await supervisor.close();
@@ -60,7 +74,10 @@ const start = async (t, path, now) => {
       throw Error(`Alarm supervisor exited: ${diagnostic}`);
     }),
   ]);
-  const client = await connectLocalControl(join(path, 'control.sock'));
+  const client = await connectLocalControl(
+    nodePowers,
+    join(path, 'control.sock'),
+  );
   t.teardown(() => client.close());
   return { child, exited, client };
 };
@@ -86,6 +103,7 @@ test.serial(
     const first = await start(t, path, 1000n);
     await first.client.call('clockGrant', 'clock');
     const { bundle } = await bundleApplication(
+      nodePowers,
       fileURLToPath(new URL('../../examples/reminder.js', import.meta.url)),
     );
     await first.client.call('install', 'reminders', bundle, [

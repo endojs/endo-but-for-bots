@@ -9,6 +9,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePipeNetwork } from './pipe-network.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
+/** @import { NodePowers } from './platform/node-powers.js' */
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
@@ -36,6 +37,7 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * frames, same state and outbound frames, so a snapshot-restored
  * incarnation is indistinguishable. Endowments are pure capabilities.
  *
+ * @param {{randomBytes: NodePowers['randomBytes'], console: Pick<NodePowers['console'], 'error'>}} powers
  * @param {object} options
  * @param {string} options.workerId
  * @param {(bytes: Uint8Array) => void} options.send outbound OCapN
@@ -43,12 +45,15 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * @param {string} [options.debugLabel]
  * @param {boolean} [options.enableImportCollection] replay doubles disable nondeterministic Node GC frames
  */
-export const makeWorkerPeer = async ({
-  workerId,
-  send,
-  debugLabel = 'thixotrope-worker-peer',
-  enableImportCollection = true,
-}) => {
+export const makeWorkerPeer = async (
+  powers,
+  {
+    workerId,
+    send,
+    debugLabel = 'thixotrope-worker-peer',
+    enableImportCollection = true,
+  },
+) => {
   const compartment = new Compartment();
   Object.assign(compartment.globalThis, {
     E,
@@ -93,6 +98,12 @@ export const makeWorkerPeer = async ({
   });
 
   const client = await makeOcapn({
+    randomBytes: length => powers.randomBytes(length),
+    logger: harden({
+      log: powers.console.error,
+      error: powers.console.error,
+      info: () => {},
+    }),
     enableImportCollection,
     codec: syrupCodec,
     network: pipe.network,

@@ -14,6 +14,10 @@ import { callerSource, counterSource } from '../../src/demo-counter-vats.js';
 import { makeIronhorseEngine } from '../../src/ironhorse-engine.js';
 import { makeFsStore } from '../../src/store-fs.js';
 
+import { makeNodePowers } from '../../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import { ExecutionContext } from 'ava' */
 /** @import { WorkerEngine } from '../../src/worker-engine.js' */
 
@@ -52,8 +56,8 @@ export const makeFixture = async (
       await rm(statePath, { recursive: true, force: true });
     }
   });
-  const store = makeFsStore(statePath);
-  const rawEngine = makeIronhorseEngine({
+  const store = makeFsStore(nodePowers, statePath);
+  const rawEngine = makeIronhorseEngine(nodePowers, {
     workerBinary,
     bootPaths,
     storePath: join(statePath, 'heaps'),
@@ -118,7 +122,7 @@ export const makeFixture = async (
     },
   });
   const start = () =>
-    makeThixotropeDaemon({
+    makeThixotropeDaemon(nodePowers, {
       store,
       engine,
       codec: syrupCodec,

@@ -5,6 +5,10 @@ import { Far } from '@endo/far';
 import { makeAlarmScheduler } from '../src/alarm-scheduler.js';
 import { makeDurableClock } from '../src/durable-clock.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import {ExecutionContext} from 'ava' */
 const flush = async () => {
   for (let index = 0; index < 30; index += 1) {
@@ -25,7 +29,7 @@ const setup = t => {
   let failClose = false;
   const delivered = [];
   let control;
-  const scheduler = makeAlarmScheduler({
+  const scheduler = makeAlarmScheduler(nodePowers, {
     secret: 'private-clock',
     now: () => current,
     retryMs: 10,
@@ -178,7 +182,7 @@ test('shutdown rejects startup and closes a client that opens late', async t => 
   const opening = new Promise(resolve => {
     open = resolve;
   });
-  const scheduler = makeAlarmScheduler({
+  const scheduler = makeAlarmScheduler(nodePowers, {
     openClient: () => opening,
     secret: 'clock',
   });
@@ -248,7 +252,7 @@ test('shutdown surfaces cleanup failure instead of releasing ownership silently'
   const entered = new Promise(resolve => {
     enter = () => resolve(undefined);
   });
-  const scheduler = makeAlarmScheduler({
+  const scheduler = makeAlarmScheduler(nodePowers, {
     secret: 'clock',
     openClient: async () => ({
       lookup: async () =>

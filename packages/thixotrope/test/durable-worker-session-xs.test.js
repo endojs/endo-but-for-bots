@@ -27,6 +27,10 @@ import { makeFsStore } from '../src/store-fs.js';
 import { makeXsEngine } from '../src/xs-engine.js';
 import { makeTestOcapn } from './_util.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const workerBinary =
   process.env.THIXOTROPE_XS_WORKER ??
@@ -66,20 +70,20 @@ const COUNTER_SOURCE = `
 testXs('an XS worker session sleeps, wakes, and survives crashes', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-dws-xs-test-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const engine = makeXsEngine({
+  const engine = makeXsEngine(nodePowers, {
     workerBinary,
     bootPath,
     bundlePath,
     casPath: join(statePath, 'cas'),
   });
-  const store = makeFsStore(statePath);
+  const store = makeFsStore(nodePowers, statePath);
   const workerId = '1'.repeat(32);
   const workerStore = store.provideWorkerStore(workerId);
 
   const hub = makeOcapnHub({ codec: syrupCodec });
   /** @type {any} */
   const holder = {};
-  const transport = makeDurableWorkerTransport({
+  const transport = makeDurableWorkerTransport(nodePowers, {
     workerId,
     store: workerStore,
     engine,

@@ -79,7 +79,10 @@ export const makeObservableInventory = () => {
       assertKey(key);
       return values.has(key);
     },
-    /** @param {string} key @param {any} value */
+    /**
+     * @param {string} key @param {any} value
+     * @param value
+     */
     set: (key, value) => {
       assertKey(key);
       if (!values.has(key) || !Object.is(values.get(key), value)) {

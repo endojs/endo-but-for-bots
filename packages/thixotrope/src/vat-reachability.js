@@ -1,6 +1,7 @@
 // @ts-check
 import harden from '@endo/harden';
-import { createHash } from 'node:crypto';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 /**
  * Explain the same conservative session graph used for vat collection.
@@ -29,7 +30,10 @@ export const inspectVatReachability = ({
   );
   /** @type {Map<string, {holder: string, target: string, kind: string}>} */
   const edges = new Map();
-  /** @param {string} id @param {any} reason */
+  /**
+   * @param {string} id @param {any} reason
+   * @param reason
+   */
   const root = (id, reason) => {
     const node = nodes.get(id);
     if (
@@ -45,7 +49,10 @@ export const inspectVatReachability = ({
   }
   /** @type {Record<string, any>} */
   const refs = hubState?.refs ?? {};
-  /** @param {string} refId @param {boolean} [resolver] */
+  /**
+   * @param {string} refId @param {boolean} [resolver]
+   * @param resolver
+   */
   const targetOf = (refId, resolver = false) => {
     const row = refs[refId];
     if (!row || row.dead || (row.resolver && !resolver)) return undefined;
@@ -67,7 +74,13 @@ export const inspectVatReachability = ({
     }
     return ids.has(target) ? { target, facade } : undefined;
   };
-  /** @param {string} holder @param {string} refId @param {string} kind @param {boolean} [resolver] @param {boolean} [hostOperation] */
+  /**
+   * @param {string} holder @param {string} refId @param {string} kind @param {boolean} [resolver] @param {boolean} [hostOperation]
+   * @param refId
+   * @param kind
+   * @param resolver
+   * @param hostOperation
+   */
   const reference = (
     holder,
     refId,
@@ -161,7 +174,7 @@ export const inspectVatReachability = ({
   const displaySession = session =>
     ids.has(session) || session === 'endpoint'
       ? session
-      : `session:${createHash('sha256').update(session).digest('hex')}`;
+      : `session:${bytesToHex(sha256(new TextEncoder().encode(session)))}`;
   return harden({
     workers: ordered.map(node => ({
       ...node,

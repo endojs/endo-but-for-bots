@@ -1,50 +1,46 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
-import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import {
-  copyFile,
-  mkdir,
-  open,
-  readFile,
-  readdir,
-  rename,
-  rm,
-} from 'node:fs/promises';
-import { join } from 'node:path';
-import { createInterface } from 'node:readline';
 
-/** @param {string} path */
-export const hashFile = async path => {
+/**
+ * @param {NodePowers} powers
+ * @param {string} path
+ */
+export const hashFile = async (powers, path) => {
+  const { createHash } = powers.crypto;
+  const { createReadStream } = powers.fs;
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
 };
 harden(hashFile);
 
-/** @param {string} path */
-const sync = async path => {
-  const file = await open(path, 'r');
-  try {
-    await file.sync();
-  } finally {
-    await file.close();
-  }
-};
-
 /**
  * Hold a kernel lease and pin the exact executable/bootstrap used for replay.
  * The helper cannot clean up old incarnations until compatibility is accepted.
+ * @param {NodePowers} powers
  * @param {{statePath: string, workerBinary: string, bootPaths: string[], crankBudget: number, onLost: () => void}} options
  */
-export const acquireIronhorseRuntime = async ({
-  statePath,
-  workerBinary,
-  bootPaths,
-  crankBudget,
-  onLost,
-}) => {
+export const acquireIronhorseRuntime = async (
+  powers,
+  { statePath, workerBinary, bootPaths, crankBudget, onLost },
+) => {
+  const { spawn } = powers.childProcess;
+  const { createHash } = powers.crypto;
+  const { copyFile, mkdir, open, readFile, readdir, rename, rm } =
+    powers.fsPromises;
+  const { join } = powers.path;
+  const { createInterface } = powers.readline;
+  /** @param {string} path */
+  const sync = async path => {
+    const file = await open(path, 'r');
+    try {
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+  };
+
   await mkdir(statePath, { recursive: true });
   const ownerFile = await open(join(statePath, 'supervisor.lock'), 'a+', 0o600);
   let child;
@@ -115,7 +111,7 @@ export const acquireIronhorseRuntime = async ({
     if (locked.op === 'error') throw Error(locked.message);
     if (locked.op !== 'locked') throw Error('Invalid ownership protocol');
     const hashes = await Promise.all(
-      [workerBinary, ...bootPaths].map(hashFile),
+      [workerBinary, ...bootPaths].map(file => hashFile(powers, file)),
     );
     const identity = {
       format: 1,
@@ -171,7 +167,7 @@ export const acquireIronhorseRuntime = async ({
         const destination = join(directory, String(index));
         const temporary = `${destination}.tmp`;
         await copyFile(source, temporary);
-        if ((await hashFile(temporary)) !== hashes[index]) {
+        if ((await hashFile(powers, temporary)) !== hashes[index]) {
           await rm(temporary, { force: true });
           throw Error('Ironhorse runtime changed while being copied');
         }

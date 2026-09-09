@@ -1,16 +1,22 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
-import { clearTimeout, setTimeout } from 'node:timers';
 
 /**
  * Keep pending guest operations in a scope that never contains a socket.
  * Merely omitting socket references from a nested callback is insufficient:
  * V8 shares captured bindings between closures created in the same scope.
+ * @param {Pick<NodePowers, 'timers'>} powers
  * @param {any} inventory
  * @param {number} [cleanupGraceMs] local timer delay
  */
-export const makeInventoryViewLifetime = (inventory, cleanupGraceMs = 1000) => {
+export const makeInventoryViewLifetime = (
+  powers,
+  inventory,
+  cleanupGraceMs = 1000,
+) => {
+  const { setTimeout, clearTimeout } = powers.timers;
   let closed = false;
   let watching = false;
   /** @type {any} */

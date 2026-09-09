@@ -21,6 +21,10 @@ import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeWorkerPeer } from '../src/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const textEncoder = new TextEncoder();
 /** @param {string} text */
 const bytesOf = text => frozenBytes(textEncoder.encode(text));
@@ -53,7 +57,7 @@ const attachWorker = async (hub, workerId, debugLabel) => {
   const outbound = { sink: undefined, pending: [] };
   /** @type {Array<Uint8Array>} every frame the hub sent this worker */
   const framesToWorker = [];
-  const worker = await makeWorkerPeer({
+  const worker = await makeWorkerPeer(nodePowers, {
     workerId,
     debugLabel,
     send: frame => {

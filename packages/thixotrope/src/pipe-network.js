@@ -27,6 +27,11 @@ import { makeQueue } from '@endo/stream';
 
 const NETWORK_ID = 'thixotrope-pipe';
 
+// Pipe identities derive exclusively from the worker id, including on replay.
+const denyEntropy = () => {
+  throw Error('Deterministic pipe identities do not use entropy');
+};
+
 const textEncoder = new TextEncoder();
 
 /** @param {PipeRole} role */
@@ -74,7 +79,7 @@ const makeSideIdentity = (cryptography, workerId, role) => {
  *   portably
  */
 export const derivePipeResumption = ({ codec, workerId, role = 'host' }) => {
-  const cryptography = makeCryptography(codec);
+  const cryptography = makeCryptography(codec, denyEntropy);
   const self = makeSideIdentity(cryptography, workerId, role);
   const peer = makeSideIdentity(cryptography, workerId, otherRole(role));
   return harden({
@@ -110,7 +115,7 @@ harden(derivePipeResumption);
  * }}
  */
 export const makePipeNetwork = ({ codec, workerId, role, send }) => {
-  const cryptography = makeCryptography(codec);
+  const cryptography = makeCryptography(codec, denyEntropy);
   const self = makeSideIdentity(cryptography, workerId, role);
   const peer = makeSideIdentity(cryptography, workerId, otherRole(role));
   const selfIdentity = harden({

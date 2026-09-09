@@ -18,6 +18,10 @@ import {
   makeUnixNetLayer,
 } from '../src/unix-netlayer.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import { ExecutionContext } from 'ava' */
 /** @import { SocketOperations } from '@endo/ocapn/client/types' */
 
@@ -74,7 +78,7 @@ const setup = async t => {
       closed.resolve();
     },
   };
-  const layer = await makeUnixNetLayer({
+  const layer = await makeUnixNetLayer(nodePowers, {
     socketPath,
     handlers: /** @type {any} */ (handlers),
     logger,
@@ -171,7 +175,7 @@ test.serial(
     first.end();
     await sender.closed.promise;
     receiver.layer.shutdown();
-    const successor = await makeUnixNetLayer({
+    const successor = await makeUnixNetLayer(nodePowers, {
       socketPath: receiver.socketPath,
       handlers: /** @type {any} */ (receiver.handlers),
       logger,
@@ -228,13 +232,17 @@ test.serial(
       handlers: /** @type {any} */ (handlers),
       logger,
     };
-    await t.throwsAsync(() => makeUnixNetLayer(options), {
+    await t.throwsAsync(() => makeUnixNetLayer(nodePowers, options), {
       code: 'EADDRINUSE',
     });
     t.is(await readFile(socketPath, 'utf8'), 'keep me');
     await chmod(path, 0o755);
     await t.throwsAsync(
-      () => makeUnixNetLayer({ ...options, socketPath: join(path, 'new') }),
+      () =>
+        makeUnixNetLayer(nodePowers, {
+          ...options,
+          socketPath: join(path, 'new'),
+        }),
       { message: /private and owned/ },
     );
   },
@@ -252,7 +260,7 @@ test.serial(
       { ...layer.location, designator: `/tmp/${'a'.repeat(104)}` },
       { ...layer.location, designator: `${path}/bad\0.sock` },
     ]) {
-      t.throws(() => assertUnixPeerLocation(location), {
+      t.throws(() => assertUnixPeerLocation(nodePowers, location), {
         message: /Invalid Unix peer location/,
       });
     }
@@ -260,7 +268,7 @@ test.serial(
     // Neither is permitted as a bearer-token destination, even before dialing.
     for (const designator of ['/tmp/unsafe.sock', '/unsafe.sock']) {
       const location = { ...layer.location, designator };
-      t.throws(() => assertUnixPeerLocation(location), {
+      t.throws(() => assertUnixPeerLocation(nodePowers, location), {
         message: /private and owned/,
       });
       t.throws(() => layer.connect(location), { message: /private and owned/ });
@@ -277,7 +285,7 @@ test.serial(
   async t => {
     t.timeout(10_000);
     const { layer } = await setup(t);
-    const canonical = assertUnixPeerLocation({
+    const canonical = assertUnixPeerLocation(nodePowers, {
       ...layer.location,
       hints: { ignored: 'alias' },
     });
