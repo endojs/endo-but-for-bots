@@ -56,7 +56,7 @@ pub struct MatchOutcome {
     /// `true` when the caller's check callback refused further work
     /// ([`match_regexp_checked`]): the match was abandoned mid-way,
     /// `matched` is `false`, and `captures`/`names` are meaningless. The
-    /// A finite dispatch budget can also set it.
+    /// A finite dispatch budget or an invalid reference operand can also set it.
     pub aborted: bool,
     /// The deterministic scratch or backtracking storage ceiling was reached.
     pub resource_limit: bool,
@@ -363,12 +363,19 @@ pub fn match_regexp_budgeted(
                         let mut e = code[p];
                         if e < 0 {
                             let f = code[p + 1];
-                            e = names[f as usize];
+                            let Some(&capture) = names.get(f as usize) else {
+                                aborted = true;
+                                break 'scan;
+                            };
+                            e = capture;
                             if e < 0 {
                                 continue; // matched empty (unset named ref)
                             }
                         }
-                        let cap = captures[e as usize];
+                        let Some(&cap) = captures.get(e as usize) else {
+                            aborted = true;
+                            break 'scan;
+                        };
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
                             // Deliberately still `offset - (to - from)`, the
@@ -420,12 +427,19 @@ pub fn match_regexp_budgeted(
                         let mut e = code[p];
                         if e < 0 {
                             let f = code[p + 1];
-                            e = names[f as usize];
+                            let Some(&capture) = names.get(f as usize) else {
+                                aborted = true;
+                                break 'scan;
+                            };
+                            e = capture;
                             if e < 0 {
                                 continue;
                             }
                         }
-                        let cap = captures[e as usize];
+                        let Some(&cap) = captures.get(e as usize) else {
+                            aborted = true;
+                            break 'scan;
+                        };
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
                             // The matched text need not occupy the same number
@@ -759,4 +773,33 @@ fn word_at(subject: &[u8], offset: i32, boundary: i32, flags: i32) -> bool {
         WORD_CHARACTERS[0],
         get_character(subject, at, flags as u32),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compile::compile;
+
+    #[test]
+    fn invalid_reference_operands_abort_in_both_directions() {
+        for opcode in [
+            CX_CAPTURE_REFERENCE_FORWARD_STEP,
+            CX_CAPTURE_REFERENCE_BACKWARD_STEP,
+        ] {
+            // A minimal program enters a reference and then accepts. A bad
+            // operand must neither panic nor reach that accepting step.
+            for (capture, name) in [(-1, -1), (-1, 0), (-1, i32::MAX), (1, -1), (i32::MAX, -1)] {
+                let mut program = compile("", "").unwrap();
+                program.code.truncate(5);
+                program
+                    .code
+                    .extend([opcode, 36, capture, name, CX_MATCH_STEP]);
+                let out = match_regexp(&program, b"", 0);
+                assert!(
+                    out.aborted && !out.matched,
+                    "{opcode}: {capture}, {name}: {out:?}"
+                );
+            }
+        }
+    }
 }
