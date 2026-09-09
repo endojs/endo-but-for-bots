@@ -434,7 +434,7 @@ impl Compiler<'_, '_> {
         self.work.charge(self.nodes.len() as u64);
         for node in &self.nodes {
             if let Kind::CaptureReference { capture_index, .. } = &node.kind {
-                if *capture_index >= 0 && *capture_index >= self.capture_index {
+                if *capture_index != -1 && !(0..self.capture_index).contains(capture_index) {
                     return Err(self.error(&format!("invalid reference number \\{capture_index}")));
                 }
             }
@@ -541,12 +541,14 @@ impl Compiler<'_, '_> {
     }
 
     /// `fxPatternParserDecimal`: fold the current digit into `value`.
+    /// Saturate while consuming every digit; callers refuse values outside
+    /// their representable range instead of interpreting a wrapped value.
     fn decimal(&self, value: &mut u32) -> bool {
         let c = self.character;
         if (b'0' as i64..=b'9' as i64).contains(&c) {
             *value = value
-                .wrapping_mul(10)
-                .wrapping_add((c - b'0' as i64) as u32);
+                .saturating_mul(10)
+                .saturating_add((c - b'0' as i64) as u32);
             true
         } else {
             false
@@ -1783,7 +1785,7 @@ impl Compiler<'_, '_> {
             return Ok(None);
         }
         if value > 0x7FFF_FFFF {
-            value = 0x7FFF_FFFF;
+            return Err(CompileError::ResourceLimit);
         }
         Ok(Some(value as i32))
     }
@@ -1972,7 +1974,8 @@ impl Compiler<'_, '_> {
                 self.next()?;
             }
             let node = self.add_node(Kind::CaptureReference {
-                capture_index: value as i32,
+                capture_index: i32::try_from(value)
+                    .map_err(|_| self.error("invalid reference number"))?,
                 name_slot: -1,
             });
             self.quantifier_parse(node, current_index)
