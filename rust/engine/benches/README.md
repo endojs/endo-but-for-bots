@@ -1255,3 +1255,21 @@ The complete results and raw charges agree across both revisions and every run.
 The initial slowdown remains recorded; the paired check does not reproduce it.
 The extraction is retained on this fresh evidence, without revising the historical
 review or the prior experiment's measurements.
+
+## Live-linking extraction reconsidered
+
+[results/1a-link-reconsidered.json](results/1a-link-reconsidered.json) records the
+12-method move into `interp/link.rs` on `cf2fa0340`.
+Public entry points retain their signatures, and method bodies, attributes, and
+comments are preserved apart from formatting and necessary internal visibility.
+GC and allocation source locks include the child module.
+
+Fresh validation passes 1,492 engine tests and 116 SQLite tests, plus source locks,
+strict VM library Clippy, documentation builds, and the math control.
+All 48 controls pass the unchanged pinned-baseline gate, with a maximum of 1.190x.
+Direct full linking changes by +5.0%, growing relinking by +1.0%, and template
+relinking by -5.2%, with identical results and raw charges.
+The before aggregate measurements and source-lock results come from the immediately
+preceding JSON candidate with the same runtime source and lock inputs as this base.
+The old rejection and its measurements remain intact; this fresh evidence supports
+retaining the extraction.
