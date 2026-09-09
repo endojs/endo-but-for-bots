@@ -10493,6 +10493,11 @@ impl Interp {
             .flat_map(|a| a.items().iter().map(|(_, v)| v))
             .any(names)
             || self
+                .index_props
+                .values()
+                .flat_map(|a| a.items().iter().map(|(_, v)| v))
+                .any(names)
+            || self
                 .collections
                 .values()
                 .flat_map(|c| c.entries().iter().flatten().flat_map(|e| [&e.0, &e.1]))
