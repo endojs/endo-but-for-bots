@@ -945,3 +945,19 @@ post-drain results and raw meter totals; these do not override the general failu
 No further trials were selected, and these observations establish no cause.
 This extraction is not accepted; full 1A decomposition and performance acceptance
 remain outstanding.
+
+## Array checkpoint code-generation diagnostic (1A)
+
+[results/1a-array-checkpoint-codegen.json](results/1a-array-checkpoint-codegen.json)
+compares the retained baseline and rejected Array-candidate benchmark binaries.
+The sliding fixture times `checkpoint_to_store` after GC; guest execution and
+collection occur before its timer starts.
+The two checkpoint disassemblies contain 1,332 instructions at identical
+addresses, with identical mnemonic sequences.
+Their 43 differing rows concern calls and data-address operands or annotations.
+The artifact retains both disassemblies, binary hashes, and every differing row.
+
+This comparison covers one function, not its callees, linked data, heap state,
+or processor behavior, and does not establish a cause for the timing failures.
+No additional timing trials were run and no acceptance decision changed.
+The rejected Array patch and all failed observations remain in the earlier record.
