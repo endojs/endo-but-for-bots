@@ -1,6 +1,5 @@
 //! Temporal records, ISO calendar arithmetic, duration rounding, and text conversion.
 
-use super::resolve_time_zone;
 use crate::value::{Kind, Payload, Slot};
 
 /// Records backing branded Temporal values. Their fields live outside the
@@ -1395,4 +1394,90 @@ pub(super) fn balance_zoned_diff(ns: i128, largest: &str) -> Option<TemporalDura
         nanoseconds: f(vals[6])?,
         ..Default::default()
     })
+}
+
+/// Resolve a requested time-zone identifier to `(canonical name, fixed offset
+/// minutes east of UTC)` over the frozen profile: UTC and its aliases, numeric
+/// `±HH[:MM]` offsets, the `Etc/GMT±N` fixed zones, and a small table of common
+/// IANA names carried at their **standard** (non-DST) offset. An unrecognized
+/// identifier yields `None` (a RangeError at the call site).
+pub(super) fn resolve_time_zone(raw: &str) -> Option<(String, i32)> {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "utc" | "etc/utc" | "gmt" | "etc/gmt" | "zulu" | "etc/zulu"
+    ) {
+        return Some(("UTC".to_string(), 0));
+    }
+    // Numeric offset: +HH, +HHMM, +HH:MM (and the minus forms).
+    if let Some((sign, rest)) = trimmed
+        .strip_prefix('+')
+        .map(|r| (1, r))
+        .or_else(|| trimmed.strip_prefix('-').map(|r| (-1, r)))
+    {
+        let digits: String = rest.chars().filter(|c| c.is_ascii_digit()).collect();
+        let colon_ok = rest.chars().all(|c| c.is_ascii_digit() || c == ':');
+        if colon_ok && (digits.len() == 2 || digits.len() == 4) {
+            let hh: i32 = digits[0..2].parse().ok()?;
+            let mm: i32 = if digits.len() == 4 {
+                digits[2..4].parse().ok()?
+            } else {
+                0
+            };
+            if hh <= 23 && mm <= 59 {
+                let total = sign * (hh * 60 + mm);
+                let canonical = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, hh, mm);
+                return Some((canonical, total));
+            }
+        }
+        return None;
+    }
+    // Etc/GMT±N (sign inverted: Etc/GMT+1 is UTC-1).
+    if let Some(rest) = lower.strip_prefix("etc/gmt") {
+        if let Some((sign, num)) = rest
+            .strip_prefix('+')
+            .map(|n| (1, n))
+            .or_else(|| rest.strip_prefix('-').map(|n| (-1, n)))
+        {
+            if let Ok(n) = num.parse::<i32>() {
+                if n <= 14 {
+                    let canonical = format!("Etc/GMT{}{}", if sign < 0 { "-" } else { "+" }, n);
+                    return Some((canonical, -sign * n * 60));
+                }
+            }
+        }
+    }
+    // Common IANA zones at their standard offset (DST not modeled).
+    let table: &[(&str, &str, i32)] = &[
+        ("america/new_york", "America/New_York", -300),
+        ("america/chicago", "America/Chicago", -360),
+        ("america/denver", "America/Denver", -420),
+        ("america/los_angeles", "America/Los_Angeles", -480),
+        ("america/sao_paulo", "America/Sao_Paulo", -180),
+        ("america/anchorage", "America/Anchorage", -540),
+        ("america/halifax", "America/Halifax", -240),
+        ("america/mexico_city", "America/Mexico_City", -360),
+        ("europe/london", "Europe/London", 0),
+        ("europe/paris", "Europe/Paris", 60),
+        ("europe/berlin", "Europe/Berlin", 60),
+        ("europe/moscow", "Europe/Moscow", 180),
+        ("africa/cairo", "Africa/Cairo", 120),
+        ("asia/jerusalem", "Asia/Jerusalem", 120),
+        ("asia/kolkata", "Asia/Kolkata", 330),
+        ("asia/calcutta", "Asia/Kolkata", 330),
+        ("asia/shanghai", "Asia/Shanghai", 480),
+        ("asia/tokyo", "Asia/Tokyo", 540),
+        ("asia/hong_kong", "Asia/Hong_Kong", 480),
+        ("asia/seoul", "Asia/Seoul", 540),
+        ("australia/sydney", "Australia/Sydney", 600),
+        ("pacific/auckland", "Pacific/Auckland", 720),
+        ("pacific/honolulu", "Pacific/Honolulu", -600),
+    ];
+    for (key, canonical, offset) in table {
+        if lower == *key {
+            return Some((canonical.to_string(), *offset));
+        }
+    }
+    None
 }

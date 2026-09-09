@@ -6,6 +6,10 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/bigint.rs"),
     "\n",
     include_str!("../src/interp/temporal.rs"),
+    "\n",
+    include_str!("../src/interp/date.rs"),
+    "\n",
+    include_str!("../src/interp/locale.rs"),
 );
 
 fn method(name: &str) -> &str {
