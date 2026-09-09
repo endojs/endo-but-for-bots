@@ -14,6 +14,8 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
+import { normalizeCodexVolumeLimits } from './volume-limits.js';
+
 /**
  * Real atomic file registry. Linux flock holds a transaction across its callback;
  * only the child holding that lock writes state, with fsync + atomic rename.
@@ -24,11 +26,12 @@ import { M } from '@endo/patterns';
  * their effects have completed or their processes were terminated and reaped.
  * A dead helper cannot
  * commit a late parent update. Caller supplies a private, persistent directory.
- * @param {{directory: string, timeoutMs?: number, ownerReaper?: {reap(owner: {ownerPid:string,ownerStartTime:string,transactionId:string}): Promise<void>}}} options
+ * @param {{directory: string, timeoutMs?: number, flockPath?: string, ownerReaper?: {reap(owner: {ownerPid:string,ownerStartTime:string,transactionId:string}): Promise<void>}}} options
  */
 export const makeFileVolumeRegistry = async ({
   directory,
   timeoutMs = 60_000,
+  flockPath = '/usr/bin/flock',
   ownerReaper,
 }) => {
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -45,7 +48,7 @@ export const makeFileVolumeRegistry = async ({
   const transaction = async operation => {
     const transactionId = randomUUID();
     const child = spawn(
-      '/usr/bin/flock',
+      flockPath,
       [
         '--exclusive',
         '--no-fork',
@@ -144,7 +147,7 @@ export const makeFileVolumeRegistry = async ({
       // only our own poison marker; other instances cannot retire this callback while its effects continue.
       if (!finished) {
         const recovery = spawn(
-          '/usr/bin/flock',
+          flockPath,
           [
             '--exclusive',
             '--no-fork',
@@ -232,7 +235,7 @@ export const makeFileVolumeRegistry = async ({
       clearTimeout(deadline);
     }
     const recovery = spawn(
-      '/usr/bin/flock',
+      flockPath,
       [
         '--exclusive',
         '--no-fork',
@@ -278,7 +281,7 @@ const roles = harden(['workspace', 'state']);
  * physical identity, and remove without force. Quota assignment is idempotent
  * for a reserved project ID and must refuse nonempty unowned directories.
  *
- * @param {{ownerId:string, projectIds:{first:number,last:number}, registry:any, volumes:any, quota:any}} powers
+ * @param {{ownerId:string, projectIds:{first:number,last:number}, registry:any, volumes:any, quota:any, volumeLimits?: {workspaceBytes:bigint,stateBytes:bigint}}} powers
  */
 export const makeCodexDurableVolumeProvider = ({
   ownerId,
@@ -286,7 +289,9 @@ export const makeCodexDurableVolumeProvider = ({
   registry,
   volumes,
   quota,
+  volumeLimits,
 }) => {
+  const limits = normalizeCodexVolumeLimits(volumeLimits);
   (typeof ownerId === 'string' &&
     ownerId.length > 0 &&
     ownerId.length <= 256) ||
@@ -345,7 +350,7 @@ export const makeCodexDurableVolumeProvider = ({
             role,
             name: identity(sessionId, role),
             projectId: nextProjectId + index,
-            hardBytes: `${(role === 'workspace' ? 8n : 4n) * 1024n ** 3n}`,
+            hardBytes: `${role === 'workspace' ? limits.workspaceBytes : limits.stateBytes}`,
             ready: false,
           })),
         };
@@ -357,6 +362,11 @@ export const makeCodexDurableVolumeProvider = ({
       record.phase !== 'deleting' ||
         Fail`Session volume deletion must finish before reopening`;
       for (const volume of record.volumes) {
+        BigInt(volume.hardBytes) ===
+          (volume.role === 'workspace'
+            ? limits.workspaceBytes
+            : limits.stateBytes) ||
+          Fail`Stored Codex volume limits changed; explicit migration required`;
         // Each intent is durable before touching a resource; retries reuse the
         // same volume/project identity and never erase existing user data.
         const observed = await E(volumes).ensure({

@@ -1,5 +1,12 @@
 # Merge blockers and external dependencies
 
+Codex status update, 2026-09-10: an explicit experimental subscription composition
+now has live Floot acceptance with host-held renewable Secrets credentials.
+See [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) for its bounded lifecycle
+and remaining deployment limitations.
+Earlier blanket statements below that Codex subscription mode is disabled are
+historical; they must not be read as acceptance of general-purpose deployment.
+
 This branch does not cherry-pick the exploratory PR #994 hosted-management
 stack.
 Its shared writable Codex home, one-process-per-turn client, ambient thread

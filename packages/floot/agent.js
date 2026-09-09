@@ -2242,33 +2242,28 @@ export const make = (hostPowers, _context, { env } = {}) => {
     'codex-backend',
     'claude-backend',
   ];
-  /** @type {Promise<Map<string, { factory: any, descriptor: any }>> | undefined} */
-  let hostedBackendsP;
-  const getHostedBackends = () => {
-    if (!hostedBackendsP) {
-      hostedBackendsP = (async () => {
-        const backends = new Map();
-        for (const name of [...new Set(configuredBackendNames)]) {
-          // eslint-disable-next-line @jessie.js/safe-await-separator
-          if (await E(powers).has(name)) {
-            const factory = await E(powers).lookup(name);
-
-            const descriptor = assertHostedBackendDescriptor(
-              await E(factory).describe(),
-            );
-            if (backends.has(descriptor.id)) {
-              throw Error(`Invalid or duplicate hosted backend at "${name}"`);
-            }
-            backends.set(descriptor.id, { factory, descriptor });
-          }
+  // Operator bindings can be added, removed, or replaced after factory boot.
+  // Resolve this small configured set at selection time; existing sessions
+  // retain their own lifecycle owner and are not silently switched mid-turn.
+  const getHostedBackends = async () => {
+    await null;
+    const backends = new Map();
+    for (const name of [...new Set(configuredBackendNames)]) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await E(powers).has(name)) {
+        // eslint-disable-next-line no-await-in-loop
+        const factory = await E(powers).lookup(name);
+        const descriptor = assertHostedBackendDescriptor(
+          // eslint-disable-next-line no-await-in-loop
+          await E(factory).describe(),
+        );
+        if (backends.has(descriptor.id)) {
+          throw Error(`Invalid or duplicate hosted backend at "${name}"`);
         }
-        return backends;
-      })().catch(error => {
-        hostedBackendsP = undefined;
-        throw error;
-      });
+        backends.set(descriptor.id, { factory, descriptor });
+      }
     }
-    return hostedBackendsP;
+    return backends;
   };
 
   // The account oracle is an operator-endowed, read-only capability: it answers

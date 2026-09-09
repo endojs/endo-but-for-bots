@@ -123,6 +123,11 @@ test('factory facets retain disconnected turns, commit history, and provision de
     },
   });
   const factory = make(host);
+  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
+  hostStore.delete('codex-backend');
+  t.false((await E(factory).listBackends()).some(item => item.id === 'test'));
+  hostStore.set('codex-backend', backend);
+  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
   t.teardown(async () => {
     backendEvents.push(harden({ type: 'end' }));
     inbox.close();

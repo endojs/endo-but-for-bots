@@ -14,7 +14,7 @@ import { makeSecretRotator } from './secret-rotator.js';
  * maxTotalBytes: bigint, maxCostMicrounits: bigint,
  * maxCostMicrounitsPerRequest: bigint, credentialHeader?: 'bearer' | 'x-api-key',
  * anthropicVersion?: string, anthropicBeta?: string,
- * authMode?: 'api-key' | 'oauth', accountRef?: string }} BrokerPolicy
+ * authMode?: 'api-key' | 'oauth' | 'subscription', accountRef?: string }} BrokerPolicy
  * @typedef {{ startedAt: number }} BrokerRefreshIntent
  * @typedef {{ version: 'BrokerOAuthStateV1', accessToken: string,
  * refreshToken?: string, expiresAt: number, accountId: string,
@@ -527,14 +527,11 @@ export const makeProviderBrokerLease = (
     maxCostMicrounitsPerRequest,
   } = policy;
   const authMode = policy.authMode ?? 'api-key';
-  // 'subscription' is deliberately absent. Neither vendor documents a
-  // configuration in which the broker holds an individual subscription
-  // credential and the slice does not: Codex's proxy mode
-  // (`requires_openai_auth`) authenticates with the CLI's own `auth.json`, and
-  // a Claude Code gateway credential replaces the claude.ai login rather than
-  // carrying it. See packages/codex-sandbox/SUBSCRIPTION-AUTH.md.
+  // Subscription is a fixed ChatGPT inference profile, not an arbitrary OAuth
+  // proxy. Account/login/refresh routes remain on separate host-only powers.
   authMode === 'api-key' ||
     authMode === 'oauth' ||
+    authMode === 'subscription' ||
     Fail`Unsupported broker authentication mode`;
   const credentialHeader = policy.credentialHeader ?? 'bearer';
   credentialHeader === 'bearer' ||
@@ -570,7 +567,7 @@ export const makeProviderBrokerLease = (
   // read synchronously, which requires the credential to be a local object: the
   // single-flight guard it carries only excludes callers sharing that object,
   // so a remote presence to it would not be the guard this mode needs anyway.
-  if (authMode === 'oauth') {
+  if (authMode === 'oauth' || authMode === 'subscription') {
     credentialHeader === 'bearer' || Fail`Unprovisioned broker OAuth mode`;
     // The lease's account is the operator's selection; a credential for some
     // other account is a different session's, not this one's.
@@ -580,7 +577,7 @@ export const makeProviderBrokerLease = (
       Fail`Unprovisioned broker OAuth mode`;
   }
   const oauth =
-    authMode === 'oauth'
+    authMode === 'oauth' || authMode === 'subscription'
       ? (credential ?? Fail`Unprovisioned broker OAuth mode`)
       : undefined;
   const parsedOrigin = new URL(origin);
@@ -601,6 +598,17 @@ export const makeProviderBrokerLease = (
     return `${method} ${path}`;
   });
   routes.length > 0 || Fail`Inference routes required`;
+  if (authMode === 'subscription') {
+    (origin === 'https://chatgpt.com' &&
+      credentialHeader === 'bearer' &&
+      anthropicVersion === undefined &&
+      anthropicBeta === undefined &&
+      typeof accountRef === 'string' &&
+      /^[A-Za-z0-9_-]{1,256}$/.test(accountRef) &&
+      routes.length === 1 &&
+      routes[0] === 'POST /v1/responses') ||
+      Fail`Invalid ChatGPT subscription profile`;
+  }
   const models = [...policy.models];
   (models.length > 0 &&
     models.every(model => typeof model === 'string' && model.length > 0)) ||
@@ -637,6 +645,15 @@ export const makeProviderBrokerLease = (
       revoked = true;
     }
   };
+  // Keep the existing small-body admission envelope, but allow configured
+  // larger prompts up to the private pipe's 8MiB frame ceiling. UTF-8 byte
+  // accounting below remains authoritative (characters are not bytes).
+  const BodyShape = M.string({
+    stringLengthLimit: Math.max(
+      100_000,
+      Number(maxRequestBytes < 8_388_608n ? maxRequestBytes : 8_388_608n),
+    ),
+  });
   const endpoint = makeExo(
     'ProviderInferenceLease',
     M.interface('ProviderInferenceLease', {
@@ -644,7 +661,7 @@ export const makeProviderBrokerLease = (
         M.splitRecord({
           method: M.string(),
           path: M.string(),
-          body: M.string(),
+          body: BodyShape,
         }),
       ).returns(M.promise()),
 
@@ -652,7 +669,7 @@ export const makeProviderBrokerLease = (
         M.splitRecord({
           method: M.string(),
           path: M.string(),
-          body: M.string(),
+          body: BodyShape,
         }),
       ).returns(M.promise()),
     }),
@@ -766,6 +783,10 @@ export const makeProviderBrokerLease = (
       typeof data.model === 'string' &&
       models.includes(data.model)) ||
       Fail`Model denied`;
+    if (authMode === 'subscription') {
+      (data.store === false && data.stream === true) ||
+        Fail`Subscription inference requires non-stored streaming responses`;
+    }
     const canonicalBody = JSON.stringify(data);
     const canonicalBytes = BigInt(
       new TextEncoder().encode(canonicalBody).length,
@@ -808,7 +829,10 @@ export const makeProviderBrokerLease = (
         if (!exposed.includes(screen)) exposed.push(screen);
       }
       const upstream = harden({
-        url: `${origin}${path}`,
+        url:
+          authMode === 'subscription'
+            ? 'https://chatgpt.com/backend-api/codex/responses'
+            : `${origin}${path}`,
         method,
         headers: {
           ...(credentialHeader === 'bearer'
@@ -821,6 +845,12 @@ export const makeProviderBrokerLease = (
             ? {}
             : { 'anthropic-beta': anthropicBeta }),
           'content-type': 'application/json',
+          ...(authMode === 'subscription'
+            ? {
+                'chatgpt-account-id': accountRef,
+                originator: 'codex_cli_rs',
+              }
+            : {}),
         },
         body: canonicalBody,
         redirect: /** @type {const} */ ('error'),

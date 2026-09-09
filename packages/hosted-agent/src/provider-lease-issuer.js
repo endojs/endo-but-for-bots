@@ -31,10 +31,12 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {typeof globalThis.fetch} options.fetch Explicit outbound authority.
  * @param {Omit<BrokerPolicy,'expiresAt'>} options.policy
  * @param {number} options.leaseDurationMs
+ * @param {number} [options.requestTimeoutMs] Host-only request deadline, at most ten minutes; lease expiry remains authoritative.
  * @param {string} options.imageDigest Target Codex image, not listener image.
  * @param {string} options.accountRef
  * @param {() => number} [options.now]
  * @param {(event: any) => void} [options.audit]
+ * @param {Parameters<typeof makeProviderFetchTransport>[0]['onDiagnostic']} [options.onDiagnostic]
  * @param {any} [options.credential] The record's shared refreshing credential,
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and lease over it.
@@ -45,10 +47,12 @@ export const makeProviderBrokerLeaseIssuer = ({
   fetch,
   policy,
   leaseDurationMs,
+  requestTimeoutMs = 120_000,
   imageDigest,
   accountRef,
   now = Date.now,
   audit,
+  onDiagnostic,
   credential,
 }) => {
   (Number.isInteger(leaseDurationMs) &&
@@ -61,6 +65,10 @@ export const makeProviderBrokerLeaseIssuer = ({
     policy.maxRequests > 0n &&
     policy.maxRequests <= 0xffff_ffffn) ||
     Fail`Invalid provider lease issuer policy`;
+  (Number.isInteger(requestTimeoutMs) &&
+    requestTimeoutMs > 0 &&
+    requestTimeoutMs <= 600_000) ||
+    Fail`Invalid provider request deadline`;
   // The issuer's selected account is the binding, so an operator policy may
   // agree with it but never name a different one. The broker then refuses any
   // credential — including a refreshed one — that belongs elsewhere.
@@ -73,7 +81,7 @@ export const makeProviderBrokerLeaseIssuer = ({
   // the selected account, and able to refresh. Without the second half an
   // object that cannot refresh is admitted here, reports `authMode: 'oauth'`
   // in its attestation, and only fails on the first turn.
-  if (authMode === 'oauth') {
+  if (authMode === 'oauth' || authMode === 'subscription') {
     credential !== undefined || Fail`Invalid provider lease issuer policy`;
     credential.accountRef === accountRef ||
       Fail`Invalid provider lease issuer policy`;
@@ -115,11 +123,17 @@ export const makeProviderBrokerLeaseIssuer = ({
       Fail`Provider lease request denied`;
     const expiresAt = now() + leaseDurationMs;
     const leaseId = `lease-${randomUUID()}`;
+    // Both sides of the private pipe use the same host-selected ceiling.
+    // The lease's independent expiry timer also revokes requests started late.
+    const timeoutMs = Math.min(requestTimeoutMs, expiresAt - now());
+    (Number.isInteger(timeoutMs) && timeoutMs > 0) ||
+      Fail`Provider lease expired before admission`;
     const transport = makeProviderFetchTransport({
       fetch,
-      timeoutMs: Math.min(leaseDurationMs, 120_000),
+      timeoutMs,
       maxRequestBytes: configuredPolicy.maxRequestBytes,
       maxResponseBytes: configuredPolicy.maxResponseBytes,
+      onDiagnostic,
     });
     const core = makeProviderBrokerLease(
       { ...configuredPolicy, expiresAt },
@@ -166,10 +180,11 @@ export const makeProviderBrokerLeaseIssuer = ({
       worker = await runtime.start({
         endpoint: core.endpoint,
         limits: harden({
+          diagnostics: Boolean(onDiagnostic),
           maxConnections: 4,
           maxRequestBytes: configuredPolicy.maxRequestBytes,
           maxResponseBytes: configuredPolicy.maxResponseBytes,
-          timeoutMs: Math.min(leaseDurationMs, 120_000),
+          timeoutMs,
         }),
       });
       const initial = await worker.observe();
