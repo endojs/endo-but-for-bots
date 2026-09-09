@@ -5,6 +5,37 @@ use crate::opcode::Opcode;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[test]
+fn prototype_method_roots_preserve_repeated_and_revisited_holders() {
+    use crate::value::SlotIndex;
+
+    let mut vm = Interp::new();
+    vm.proto_methods.clear();
+    let mut expected: std::collections::BTreeSet<_> =
+        vm.gc_roots().into_iter().map(|slot| slot.0).collect();
+    let fresh: Vec<_> = (0..6).map(|_| vm.slots.alloc(Slot::undefined())).collect();
+    assert!(fresh.iter().all(|slot| !expected.contains(&slot.0)));
+    let [a, b, c, d, e, f] = fresh.as_slice() else {
+        unreachable!()
+    };
+    vm.proto_methods = vec![
+        (SlotIndex::NULL, "null-holder", *f),
+        (*a, "first", *b),
+        (*a, "same-holder", *c),
+        (*d, "null-method", SlotIndex::NULL),
+        (*a, "revisited-holder", *e),
+        (*e, "overlapping-identities", *a),
+    ];
+    expected.extend([SlotIndex::NULL, *a, *b, *c, *d, *e, *f].map(|slot| slot.0));
+    assert_eq!(
+        vm.gc_roots()
+            .into_iter()
+            .map(|slot| slot.0)
+            .collect::<Vec<_>>(),
+        expected.into_iter().collect::<Vec<_>>()
+    );
+}
+
 fn b(op: Opcode) -> u8 {
     op as u8
 }

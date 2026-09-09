@@ -35,6 +35,13 @@ Both measured sides record a SHA-256 digest of the fixture sources and toolchain
 plus the compiler and relevant build environment; a check refuses mismatched provenance.
 The archived reference uses its own build directory even if `CARGO_TARGET_DIR` is set.
 The pinned revision, 48-metric roster, 1.25x floor, and growth policies are unchanged.
+The 1A records below also retain local predecessor and original-branch comparisons.
+Those additional references provide diagnostic evidence; they do not replace the
+repository gate against `baseline.json` or create additional CI thresholds.
+Historical candidate rejection records remain intact, including the measurements
+and the stricter local methodology used for those decisions.
+Reconsidering a candidate requires fresh review and validation, with its earlier
+measurements preserved and its new before/after results reported explicitly.
 Baseline updates are explicit, reviewable operations, never part of a check:
 
 ```sh
@@ -1201,3 +1208,29 @@ The same one-CGU binary pair passed the earlier diagnostic and fails here.
 These finite measurements do not establish a stable compiler-only cause or justify
 a production profile change; every sample and failed comparison remains recorded.
 No additional runs were selected, and the existing rejections remain in force.
+
+## Consecutive prototype-holder root emissions
+
+[results/1a-root-emission.json](results/1a-root-emission.json) records a small
+optimization to the generated root walk: consecutive methods on the same prototype
+emit their holder once, while every method and every revisited holder still emits.
+The public root vector remains sorted and deduplicated, without a retained cache.
+An oracle-free regression covers null, repeated, revisited, and overlapping roots.
+
+The focused control improves from 47.084 ms to 38.884 ms per 5,000 walks (17.4%),
+with all 729 root identities identical and unchanged meter values.
+Full engine tests pass (1,491 passed, 27 ignored), as do SQLite tests (116 passed,
+3 ignored), source locks, strict VM library Clippy, and the math control.
+VM documentation builds with its existing warnings.
+
+The actual repository gate against pinned `51b99651` fails three controls:
+GC query at 5,000 objects is 1.300x, root-page enumeration at 20,000 is 1.412x,
+and lazy wake is 1.378x.
+The earlier local predecessor comparison and all failed measurements are retained.
+A fixed before/after/after/before diagnostic using saved binaries measures those
+three local ratios at 1.042x, 0.871x, and 1.059x, respectively.
+All 42 controls in that bounded diagnostic range below 1.107x.
+The saved lazy-wake binaries have identical hashes, so their local timing delta
+comes from repeated execution of the same executable.
+These results support retaining the incremental optimization, but do not clear the
+failed whole-branch pinned gate or establish a cause for its remaining failures.

@@ -83,10 +83,19 @@ macro_rules! gc_root {
         } }
     };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, proto_methods) => {
-        $emit! { for (holder, _, method) in &$vm.$field {
-            $roots.push(*holder);
-            $roots.push(*method);
-        } }
+        $emit! {
+            // Boot groups methods by prototype. Avoid sorting the same holder
+            // once per method; revisited holders still emit after a different
+            // holder, and the public root set remains sorted and deduplicated.
+            let mut previous_holder = None;
+            for (holder, _, method) in &$vm.$field {
+                if previous_holder != Some(*holder) {
+                    $roots.push(*holder);
+                    previous_holder = Some(*holder);
+                }
+                $roots.push(*method);
+            }
+        }
     };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, proto_data) => {
         $emit! { for (holder, _, _) in &$vm.$field {
