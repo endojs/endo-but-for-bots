@@ -12,6 +12,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/locale.rs"),
     "\n",
     include_str!("../src/interp/text.rs"),
+    "\n",
+    include_str!("../src/interp/numeric.rs"),
 );
 
 fn method(name: &str) -> &str {
