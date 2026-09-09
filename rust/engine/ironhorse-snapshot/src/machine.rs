@@ -286,6 +286,7 @@ macro_rules! define_side_table_transfer {
 macro_rules! define_live_side_tables {
     ($($section:ident {
         image_field: $field:ident,
+        builder: $builder:ident,
         live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
         $($rest:tt)*
     })*) => {
@@ -399,6 +400,7 @@ macro_rules! define_restore_chain {
 macro_rules! define_restore_steps {
     ($($section:ident {
         image_field: $field:ident,
+        builder: $builder:ident,
         live: [$($live:tt)*],
         bounds: [$($bounds:tt)*],
         gate: [$($gate:tt)*],

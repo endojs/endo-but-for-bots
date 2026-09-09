@@ -541,6 +541,7 @@ impl ValidatedSnapshot {
 macro_rules! define_image_constructor {
     ($($section:ident {
         image_field: $field:ident,
+        builder: $builder:ident,
         live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
         $($rest:tt)*
     })*) => {
@@ -575,6 +576,49 @@ macro_rules! define_image_constructor {
                 $($($live_field: Default::default(),)?) *
                 name_floor: None,
             }
+        }
+    };
+}
+
+// These compatibility builders keep their historical argument order. The
+// roster owns each grouped field's type, group membership, and assignment.
+macro_rules! define_grouped_builders {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        gate: [$($gate:tt)*],
+        restore: [$($restore:tt)*],
+        initialize: [$($next:ident; $(#[$attr:meta])* $init_field:ident: $ty:ty = $init:expr)?],
+        $($rest:tt)*
+    })*) => {
+        define_grouped_builders!(@scan [] []; $(($builder; [$($init_field: $ty)?]))*);
+    };
+    (@scan $bulk:tt $language:tt; (none; $field:tt) $($rest:tt)*) => {
+        define_grouped_builders!(@scan $bulk $language; $($rest)*);
+    };
+    (@scan [$($bulk:tt)*] $language:tt; (bulk; [$field:ident: $ty:ty]) $($rest:tt)*) => {
+        define_grouped_builders!(@scan [$($bulk)* $field: $ty,] $language; $($rest)*);
+    };
+    (@scan $bulk:tt [$($language:tt)*]; (language; [$field:ident: $ty:ty]) $($rest:tt)*) => {
+        define_grouped_builders!(@scan $bulk [$($language)* $field: $ty,]; $($rest)*);
+    };
+    (@scan [$($bulk:ident: $bulk_ty:ty,)*] [$($language:ident: $language_ty:ty,)*];) => {
+        /// Attach the bulk side tables, symbol registry, and error data
+        /// (side-table ledger). The snapshot surface calls this with the
+        /// live machine's `*_snapshot()` views, already in canonical order.
+        pub fn with_side_tables(mut self, $($bulk: $bulk_ty,)*) -> MachineImage {
+            $(self.$bulk = $bulk;)*
+            self
+        }
+        /// Attach the data-only language rows (store schema v11): primitive
+        /// wrappers, regexps, the arguments-exotic brand, and the Temporal
+        /// record tables. The snapshot surface calls this with the live
+        /// machine's `*_snapshot()` views, already in canonical order.
+        pub fn with_language_rows(mut self, $($language: $language_ty,)*) -> MachineImage {
+            $(self.$language = $language;)*
+            self
         }
     };
 }
@@ -628,50 +672,7 @@ impl MachineImage {
         self
     }
 
-    /// Attach the bulk side tables, symbol registry, and error data
-    /// (side-table ledger). The snapshot surface calls this with the
-    /// live machine's `*_snapshot()` views, already in canonical order.
-    pub fn with_side_tables(
-        mut self,
-        arrays: Vec<ArrayImage>,
-        index_props: Vec<IndexPropsImage>,
-        collections: Vec<CollectionImage>,
-        registry: Vec<RegistryImage>,
-        errors: Vec<ErrorImage>,
-        buffers: Vec<BufferImage>,
-        typed_arrays: Vec<TypedArrayImage>,
-        data_views: Vec<DataViewImage>,
-    ) -> MachineImage {
-        self.arrays = arrays;
-        self.index_props = index_props;
-        self.collections = collections;
-        self.registry = registry;
-        self.errors = errors;
-        self.buffers = buffers;
-        self.typed_arrays = typed_arrays;
-        self.data_views = data_views;
-        self
-    }
-
-    /// Attach the data-only language rows (store schema v11): primitive
-    /// wrappers, regexps, the arguments-exotic brand, and the Temporal
-    /// record tables. The snapshot surface calls this with the live
-    /// machine's `*_snapshot()` views, already in canonical order.
-    pub fn with_language_rows(
-        mut self,
-        wrappers: Vec<WrapperImage>,
-        regexps: Vec<RegExpImage>,
-        arguments_brands: Vec<u32>,
-        temporal: TemporalImage,
-        intl: IntlTables,
-    ) -> MachineImage {
-        self.wrappers = wrappers;
-        self.regexps = regexps;
-        self.arguments_brands = arguments_brands;
-        self.temporal = temporal;
-        self.intl = intl;
-        self
-    }
+    crate::snapshot_roster::snapshot_payloads!(define_grouped_builders);
 
     /// Attach the built-in iterator cursors (ledger `Iterators` row).
     /// The snapshot surface calls this with the live machine's
@@ -3724,6 +3725,7 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
 macro_rules! define_bounds_tables {
     ($($section:ident {
         image_field: $field:ident,
+        builder: $builder:ident,
         live: [$($live:tt)*],
         bounds: [$($bounds_field:ident: $ty:ty = $empty:expr)?],
         $($rest:tt)*
@@ -3942,6 +3944,7 @@ macro_rules! define_gate_chain {
 macro_rules! define_gate_steps {
     ($($section:ident {
         image_field: $field:ident,
+        builder: $builder:ident,
         live: [$($live:tt)*],
         bounds: [$($bounds:tt)*],
         gate: [$($next:ident, [$($gated:ident),+],
@@ -4286,11 +4289,12 @@ macro_rules! define_container_decoder {
 macro_rules! define_container_payloads {
     ($($section:ident {
         image_field: $field:ident,
+        builder: $builder:ident,
         live: [$($live:tt)*],
         bounds: [$($bounds:tt)*],
         gate: [$($gate:tt)*],
         restore: [$($restore:tt)*],
-        initialize: [$($init_field:ident = $init:expr)?],
+        initialize: [$($small_next:ident; $(#[$small_attr:meta])* $init_field:ident: $init_ty:ty = $init:expr)?],
         legacy_label: $legacy_label:literal,
         decode_legacy($decoded:ident, $input:ident): $decode:block,
         decode_container: [$($next:ident, $mode:ident, ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $body:block)?],
