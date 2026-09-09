@@ -10,4 +10,3 @@ generator frame: current function has no body	Existing corruption guard; dedicat
 generator frame: malformed body bytecode	Existing corruption guard; dedicated exact-label regression fixture deferred.
 manifest parent seal length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
-non-canonical machine encoding	Existing corruption guard; dedicated exact-label regression fixture deferred.
