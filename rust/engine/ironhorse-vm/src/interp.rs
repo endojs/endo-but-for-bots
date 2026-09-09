@@ -51,6 +51,8 @@ pub use state::SIDE_TABLES;
 pub mod gc_tables;
 #[doc(hidden)]
 pub mod boundary;
+#[doc(hidden)]
+pub mod persistence;
 
 use ironhorse_meter::{
     ARRAY_FIND_VALUE_METERING, ARRAY_ITEM_BYTES, CHUNK_ALIGNMENT, CHUNK_ALLOCATION_METERING,
@@ -10432,17 +10434,9 @@ impl Interp {
             return Some("an async generator whose state does not yet persist");
         }
 
-        // Enumerating HOLDERS cannot be complete: every carried row adds
-        // one, and the round-2 widening proved it by covering
-        // `BoundData.target` while `this_arg` and `args` — the same
-        // struct — went on reaching the store. So ask the question the
-        // other way round: which function slots does resume fail to
-        // bring back, and is ANY of them named by state we are about to
-        // persist?
-        //
-        // The doomed set is computed first because it is almost always
-        // EMPTY (a machine that minted no runtime native has nothing to
-        // lose), and an empty set skips every traversal below.
+        // Compute the functions restore cannot reconstruct before walking
+        // their holders. Most machines have none, so this skips the heap and
+        // roster-generated holder checks without changing the early gates.
         let doomed = self.non_persisting_functions();
         if doomed.is_empty() {
             return None;
@@ -10450,11 +10444,9 @@ impl Interp {
         let names = |slot: &Slot| -> bool {
             matches!(slot.value, Payload::Reference(f) if doomed.contains(&f.0))
         };
-        let names_index = |i: u32| doomed.contains(&i);
 
         // The heap itself, which carries every ordinary property, every
-        // global, and every closure capture — Sol's plain-global and
-        // plain-property cases.
+        // global, and every closure capture.
         let mut page_hit = false;
         if dirty_heap_only {
             for page in self.slots.dirty_pages() {
@@ -10482,105 +10474,11 @@ impl Interp {
                 }
             }
         }
-        if page_hit || self.stack.iter().any(names) {
+        if page_hit {
             return Some("a stored reference to a non-persisted native function");
         }
 
-        // The side tables that carry Slots of their own, outside the
-        // heap arena. Kept in the ledger's order so a new carried row is
-        // easy to slot in beside its neighbours.
-        let side_hit = self
-            .arrays
-            .values()
-            .flat_map(|a| a.items().iter().map(|(_, v)| v))
-            .any(names)
-            || self
-                .index_props
-                .values()
-                .flat_map(|a| a.items().iter().map(|(_, v)| v))
-                .any(names)
-            || self
-                .collections
-                .values()
-                .flat_map(|c| c.entries().iter().flatten().flat_map(|e| [&e.0, &e.1]))
-                .any(names)
-            || self.accessors.values().any(|d| {
-                d.get.as_ref().is_some_and(names) || d.set.as_ref().is_some_and(names)
-            })
-            || self.private_values.values().any(names)
-            || self.private_accessors.values().any(|d| {
-                d.get.as_ref().is_some_and(names) || d.set.as_ref().is_some_and(names)
-            })
-            // The raw slot-INDEX fields. Most side-table indices name
-            // objects (a brand, a home, a prototype, an iterable), which
-            // cannot be the doomed thing; these two are the ones that
-            // can name a FUNCTION, and neither is a Slot, so a walk of
-            // Slot-bearing state alone steps straight past them.
-            //
-            // `BoundData` in full: the target is an index, while
-            // `this_arg` and `args` are Slots the round-2 check missed.
-            || self.bound_functions.values().any(|d| {
-                names_index(d.target.0) || names(&d.this_arg) || d.args.iter().any(names)
-            })
-            // A Proxy over a callable: the proxy row is the only thing
-            // keeping the native reachable once the guest drops its own
-            // reference, and both slots are indices.
-            || self
-                .proxies
-                .values()
-                .any(|p| names_index(p.target.0) || names_index(p.handler.0))
-            || self
-                .disposable_stacks
-                .values()
-                .flat_map(|d| d.records.iter())
-                .any(|r| names(&r.resource) || names(&r.method))
-            || self.wrapper_data.values().any(names)
-            // The promise cluster's Slot-bearing state: a settlement
-            // result, reaction slots, and combinator capability slots can all
-            // hold function references. The remaining raw INDEX fields name
-            // instances that are never function slots.
-            || self.promises.values().any(|p| {
-                names(&p.result)
-                    || p.reactions.iter().any(|r| {
-                        names(&r.on_fulfilled)
-                            || names(&r.on_rejected)
-                            || names(&r.resolve)
-                            || names(&r.reject)
-                    })
-            })
-            || self
-                .combinators
-                .iter()
-                .any(|c| names(&c.resolve) || names(&c.reject));
-        if side_hit {
-            return Some("a stored reference to a non-persisted native function");
-        }
-
-        // Suspended generator frames: every slot of a saved activation
-        // travels, so every one of them can retain a doomed native.
-        let frame_hit = self
-            .generators
-            .values()
-            .filter_map(|g| g.frame.as_ref())
-            .chain(
-                self.async_instances
-                    .values()
-                    .filter_map(|a| a.frame.as_ref()),
-            )
-            .any(|f| {
-                f.locals.iter().any(names)
-                    || f.args.iter().any(names)
-                    || f.stack_slice.iter().any(names)
-                    || names(&f.this_val)
-                    || names(&f.env)
-                    || names(&f.result)
-                    || f.jumps.iter().any(|j| names(&j.env))
-            })
-            || self
-                .async_instances
-                .values()
-                .any(|a| names(&a.resolve_fn) || names(&a.reject_fn));
-        if frame_hit {
+        if self.persisted_holders_contain(&names, &|i| doomed.contains(&i)) {
             return Some("a stored reference to a non-persisted native function");
         }
         None
