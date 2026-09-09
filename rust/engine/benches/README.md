@@ -603,3 +603,27 @@ That fixture constructs a lazy slot arena without invoking the interpreter or GC
 visitors, but this does not establish the cause of the changed timings.
 The failures remain recorded, no performance tuning was applied, and final branch
 acceptance remains pending.
+
+
+## Completed F052 roster checkpoint
+
+[results/1a-f052-roster.json](results/1a-f052-roster.json) measures clean commit
+`7c3aea6b7` against a fresh same-host measurement of the original 1A baseline,
+`96db92e2`.
+The two revisions ran serially with identical fixtures and Rust 1.91.1 on macOS
+arm64, with no concurrent task builds or tests.
+All 48 measurements passed the unchanged 1.25x threshold.
+Dispatch was 0.990x and slot allocation was 0.989x; the 80k-slot full-first,
+full-steady, and partial collections were 1.027x, 1.011x, and 0.994x respectively.
+The largest ratio was 1.210x for the 20k-slot gate measurement.
+The report retains every median, ratio, and both revisions' provenance.
+Earlier incremental reports and their failures remain available above.
+This checkpoint covers the completed roster; it is not final performance
+acceptance for the remaining 1A decomposition.
+
+Validation at this checkpoint passed 1,043 VM/snapshot tests with store integrity
+(18 ignored), including the four source locks, plus clippy and documentation
+builds.
+The architecture review remains unchanged; an independent scope audit found the
+F052 production enumerations generated, while codec wiring and migration/test
+ladders remain under F128 and F141.
