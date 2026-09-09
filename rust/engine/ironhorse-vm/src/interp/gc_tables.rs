@@ -367,7 +367,8 @@ macro_rules! gc_chunk {
 
 macro_rules! define_chunk_walk {
     (() $vis:vis struct $name:ident {
-        $(#[quiescent($boundary:ident)]
+        $(#[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
@@ -653,7 +654,8 @@ macro_rules! gc_slot_table {
 }
 macro_rules! define_slot_walks {
     (() $vis:vis struct $name:ident {
-        $(#[quiescent($boundary:ident)]
+        $(#[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
@@ -806,7 +808,8 @@ macro_rules! gc_weak {
 
 macro_rules! define_weak_walks {
     (() $vis:vis struct $name:ident {
-        $(#[quiescent($boundary:ident)]
+        $(#[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]

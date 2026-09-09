@@ -59,7 +59,8 @@ macro_rules! persist_holder {
 
 macro_rules! define_persist_holders {
     (() $vis:vis struct $name:ident {
-        $(#[quiescent($boundary:ident)]
+        $(#[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
