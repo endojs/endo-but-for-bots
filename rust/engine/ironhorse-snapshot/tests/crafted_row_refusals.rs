@@ -4,6 +4,10 @@
 //! continue with silently missing exotic state), and not accepted into
 //! a machine that cannot safely run or checkpoint.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use std::borrow::Borrow;
 
 use ironhorse_snapshot::format::SnapshotError;
@@ -18,11 +22,6 @@ use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 fn quiescent_machine(src: &str) -> Interp {

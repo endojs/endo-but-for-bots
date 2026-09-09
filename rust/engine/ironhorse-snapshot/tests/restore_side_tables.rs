@@ -22,18 +22,13 @@
 //! `ironhorse-compile` pipeline (no oracle needed), which emits both the bytecode
 //! and the `SYMB` atom, exactly as `dual_run` links a program.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::format::Signature;
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
-use ironhorse_vm::{parse_symbols, Interp};
-
-/// Compile guest `source` to `(bytecode, program symbol names)` — the two
-/// halves `Interp::link_intrinsics` + `Interp::run` consume. Panics if the
-/// pure-Rust compiler cannot lower the source (the fixtures below are chosen
-/// to compile cleanly).
-fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
+use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")

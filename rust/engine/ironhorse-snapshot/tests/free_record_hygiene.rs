@@ -8,6 +8,10 @@
 //! locked by the in-crate `free_records_are_opaque_and_free_owners_
 //! are_refused` unit test.)
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -21,11 +25,6 @@ use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 fn crank(m: &mut Interp, src: &str) -> String {

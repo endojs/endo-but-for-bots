@@ -5,6 +5,10 @@
 //! carry serializes those buffers with function, constructor, bound
 //! function, and deleted-metadata rows.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
@@ -12,11 +16,6 @@ use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 /// The in-test source bridge: the same wiring the conformance harness

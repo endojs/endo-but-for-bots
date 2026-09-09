@@ -6,17 +6,16 @@
 //! embedder's `attach_meter_host` is the one resume form that always
 //! lands in a consistent state.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::{Halt, Interp};
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 const LOOP: &str = "var j = 0; for (j = 0; j < 100000; j++) { j = j; } j";
