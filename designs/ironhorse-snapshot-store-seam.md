@@ -2770,8 +2770,13 @@ bite-checked by reverting the fix under the lock). Statuses:
   identity, typed arrays, and an aborting crank agreeing on the
   rendered error and the at-throw computron count.)
 - **W6-23 DECIDED (libm decision-of-record, 2026-08-27):**
-  determinism is scoped PER RELEASE BINARY PER PLATFORM. The Math
-  transcendentals call the platform libm — the engine's one genuine
+  determinism is scoped PER RELEASE BINARY PER PLATFORM.
+  The [engine design Status](ironhorse-engine.md#determinism-scope) states this
+  execution scope for consumers; the cost-table digest is platform-independent
+  data identity, not a cross-platform execution guarantee.
+  [W6 §4](ironhorse-w6-decisions.md#4-determinism-scope--decided-vendor-libm-behind-a-feature)
+  records the subsequent provider decision and its required coverage.
+  The Math transcendentals call the platform libm — the engine's one genuine
   host-environment dependence — and the pinned XS oracle links the
   SAME platform libm, which is what the differential suite's
   bit-exactness rests on; twins on one host are exact regardless.

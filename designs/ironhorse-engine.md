@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-09-08 |
+| **Updated** | 2026-09-09 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -17,6 +17,42 @@ snapshots. This document is stage 1 of the supervised program
 `port-xs-to-rust-memory-safe-engine`; the implementation accretes
 onto the same branch and pull request as this design.
 
+## Status
+
+Current-state audit: 2026-09-09, base `96db92e23`.
+This ledger separates implemented surfaces from the roadmap's acceptance bars.
+Historical measurements are retained in
+[`rust/engine/CHANGELOG.md`](../rust/engine/CHANGELOG.md); they are evidence at
+named tips, not a fresh whole-tree conformance run.
+The [architecture guide](../rust/engine/ARCHITECTURE.md) describes the current
+crate graph and seams; [W6 decisions](ironhorse-w6-decisions.md) govern pending
+Realm extraction, engine-trait deferral, transcendental providers and GC policy.
+
+| Roadmap stage | Implementation | Acceptance and deviations |
+|---|---|---|
+| 1. Thin slice | Landed | Interpreter, meter and oracle harness exist. The early corpus passed historically; present release costs are pinned by oracle-free golden tests. Shared frozen intrinsics remain a stage-4 gap. |
+| 2. Object model and control flow | Partial | Broad opcode, object, closure and exception support exists. Exact GC exists but is not the production collection path; chunk reclamation and GC scheduling remain open. |
+| 3. Built-ins | Partial | RegExp, promises, BigInt, collections, Intl and Temporal exist. Covered cases are not full built-ins conformance; provider-sensitive Math results are scoped per binary/platform. |
+| 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist. Shared Realm extraction, complete daemon SES boot and SES parity acceptance remain open; named skips are not passing acceptance. |
+| 5. Compiler port | Landed; full bar not reverified | Lexer, parser, scoper and coder are the default compiler. Historical byte-identity measurements cover named corpora; budgeted compilation and golden costs now share the runtime release identity. No fresh full-conformance oracle run is claimed here. |
+| 6. Snapshots | Partial | Container/store persistence, checked restore and supervisor tests exist. Historically accepted subset expanded substantially; live activations and unsupported side-table states still fail closed. Complete daemon worker protocol integration remains open. |
+| 7. Debugger | Not started as an accepted engine surface | No standalone debugger crate or reproduced xsbug/CapTP acceptance is present. Orchestration labels such as “stage-7 child” in historical evidence do not name this roadmap stage. |
+| 8. Parity closure and hardening | Partial — bar not met | Debug/release/macOS, sanitizer and benchmark gates exist. Full result equality, the XS-relative performance/footprint envelope and daemon benchmark arm remain open. |
+| 9. Ecosystem validation | Not started as a completed campaign | No zero-divergence daemon/Agoric corpus acceptance record establishes this bar. |
+
+### Determinism scope
+
+**Execution determinism is scoped per release binary per platform.**
+The same binary, platform, initial state, inputs and host policy are required;
+the release label alone is not a promise that different platform math libraries
+produce bit-identical results or follow identical guest branches.
+The canonical cost-table SHA-256 identity is platform-independent data encoding;
+it does not establish cross-platform execution determinism.
+This qualification applies to every “deterministic per release” claim below.
+W6 §4 records the planned provider feature and its required coverage; that feature
+is not implemented at this audited base and is not an existing guarantee.
+The store-seam decision uses the same scope.
+
 ## Feasibility Verdict
 
 **Feasible, with the risk front-loaded into the first two stages.**
@@ -29,10 +65,10 @@ release-versioned cost model** — is testable within weeks, not
 years. Two sub-properties are separated (see § Metering): (a)
 *result correctness*, the semantic port, which the differential
 oracle checks against XS on every commit (completion kind, value,
-error identity); and (b) *meter determinism per release*, which is a
-construction guarantee — a frozen increment-point set with a frozen
-cost table means identical inputs give identical computrons on every
-host and build. The meter's *purpose* is to be the best available
+error identity); and (b) *meter determinism within a release binary and
+platform*, for matching initial state, input and host policy.
+The frozen increment points and table do not establish execution equivalence
+across different math providers, platforms or builds. The meter's *purpose* is to be the best available
 deterministic proxy for real (wall-clock) execution cost, not to
 reproduce XS's computron counts; XS-computron parity is an explicit
 non-goal. The roadmap below front-loads a differential harness that
@@ -80,14 +116,12 @@ native Compartment support.
 
 ## Ground Truth: What Is Being Ported
 
-Measured against `Moddable-OpenSource/moddable` at `23b4d6b0a65f`
-(moddable **8.3.1**, 2026-07-07). The pin began at `48ee02d8cfe0`
-(8.2.3, 2026-06-17 — the lineage `rust/endo/xsnap/build.rs` compiles
-today) and was bumped to 8.3.1 by the `port-xs-oracle-bump-8-3-1`
-job, deliberately leading xsnap so the port is measured against the
-newer engine semantics (see `rust/engine/README.md` § Upstream
-moddable delta tracking for the per-commit deltas the bump re-bases
-onto the bar).
+The source reference is `Moddable-OpenSource/moddable` at
+`23b4d6b0a65f35209d9118c4c13c6c9b3e68784d` (Moddable 8.3.1).
+This is also the superproject's current `c/moddable` gitlink.
+The original 8.2.3-to-8.3.1 bump narrative is preserved in
+[`rust/engine/CHANGELOG.md`](../rust/engine/CHANGELOG.md).
+The measurements below describe the XS reference, not the Rust resident layout.
 
 **Interpreter.** `fxRunID` in `xs/sources/xsRun.c` is a single
 ~4,000-line dispatch loop, computed-goto under GCC/Clang and a
@@ -264,47 +298,27 @@ ships a mixed C/Rust engine to production.
 
 ## Architecture
 
-```mermaid
-graph TD
-    subgraph rust/engine workspace
-        VM[ironhorse-vm<br/>slot+chunk arenas, GC,<br/>interpreter, meter]
-        SES[ironhorse-ses<br/>lockdown, harden,<br/>Compartment natives]
-        SNAP[ironhorse-snapshot<br/>atom reader/writer]
-        DBG[ironhorse-debug<br/>xsbug XML protocol]
-        CC[ironhorse-compile<br/>lexer, parser, coder<br/>stage 5+]
-        ORACLE[xs-oracle<br/>XS FFI harness<br/>dev/CI only, unsafe here]
-        T262[ironhorse-262<br/>dual-run test262 harness]
-        FUZZ[ironhorse-fuzz<br/>cargo-fuzz targets]
-    end
-    XSNAP[xsnap crate<br/>Machine API]
-    ENDO[endo crate<br/>supervisor, workers]
-    CX[c/moddable submodule<br/>XS]
-    VM --> SES
-    VM --> SNAP
-    VM --> DBG
-    CC --> VM
-    ORACLE --> CX
-    T262 --> VM
-    T262 --> ORACLE
-    FUZZ --> VM
-    FUZZ --> ORACLE
-    XSNAP --> VM
-    XSNAP --> CX
-    ENDO --> XSNAP
-```
+The implemented topology is the nine-member workspace listed in
+[`rust/engine/ARCHITECTURE.md`](../rust/engine/ARCHITECTURE.md).
+`ironhorse-meter` owns the digest-pinned weights and `ironhorse-text` owns CESU-8
+symbol-name conversion; neither a separate SES crate nor a debugger crate exists.
+`rust/endo` embeds IronHorse directly alongside its separate xsnap integration.
+The SQLite store backend belongs to the outer workspace and links bundled SQLite.
+See the architecture guide for dependency direction and runtime versus test edges.
+
 
 ### Value and heap model
 
 The single largest safety re-architecture: XS's pointer-linked
 slot graph becomes an index-based arena.
 
-- A `SlotIndex(u32)` replaces `txSlot*`; the slot heap is a Rust
-  arena of 32-byte slot records with a free list, exactly XS's
-  "slots never move" semantics. Slot records pack kind, flag, ID,
-  the `next` index, and a 16-byte payload, accessed only through
-  typed accessors; the packing preserves XS's 32-byte-per-slot
-  accounting so `currentHeapCount` and slot-growth behavior stay
-  comparable.
+- A `SlotIndex(u32)` replaces `txSlot*`; slots live in an arena with a free list.
+  Rust `Slot` has no stable `repr(C)` contract and is 24 bytes on the audited
+  64-bit build, not XS's 32-byte resident record.
+  The snapshot codec serializes fields into a separate fixed-width wire record;
+  Rust struct layout is not the snapshot ABI.
+  XS accounting constants do not measure resident slots, bookkeeping vectors or
+  side-table allocations, so they cannot establish the footprint acceptance bar.
 - A `ChunkOffset(u32)` replaces chunk pointers; the chunk heap is
   a growable byte arena with the same `txChunk` header discipline
   and slide-compaction during GC (offsets are rewritten exactly
@@ -365,19 +379,17 @@ that geometry.
 parity.** The meter's purpose is to be the best available
 **deterministic proxy for real (wall-clock) execution cost**, not
 to reproduce XS's computron counts. XS-computron parity is an
-explicit non-goal. Two properties are separated, and only the first
-is unconditional:
+explicit non-goal. Two properties are separated:
 
-- **Determinism per release (unconditional, and the property
-  consensus needs).** Within a released Ironhorse version the meter is
-  frozen: a fixed set of increment points with a fixed per-point
-  **cost table**, so identical inputs produce identical computrons
-  on every host, architecture, and build. Any two runs of the same
-  release meter identically. This is a *construction* guarantee (a
-  pure function of the frozen table and the deterministic
-  interpreter), not a bit-exactness proven against a foreign engine
-  — which is why it is cheap and total rather than a long-tail
-  chase.
+- **Determinism within a release binary and platform.**
+  The frozen increment points and integer weights determine the charge for a
+  given execution trace.
+  Identical initial state, input and host policy on the same binary/platform
+  must produce identical computrons.
+  The table's canonical digest is platform-independent, but the trace can depend
+  on platform transcendental results; a release name alone does not guarantee
+  identical execution on every host, architecture or build.
+  See [Determinism scope](#determinism-scope) and W6 §4 for the provider decision.
 - **Accuracy across releases (recalibrated, versioned).** The cost
   table is a *model* of real execution cost. It is recalibrated
   between releases as measurement improves, and every recalibration
@@ -428,14 +440,13 @@ compare, index, slice, char access — are expressed against the
 representation's real cost shape: **O(n) in code-unit length** for
 the length-proportional operations, **O(1) for a single code-unit
 access** (the cursor and fast-path machinery CESU-8 indexing
-required no longer exists to meter). Future calibrated weights will derive from
-the cost-calibration instrumentation (sibling plan
-[ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md))
-and the live calibration work
-(`xs2rust-endor-meter-calibration-stage-c1`) measuring the UTF-16
-implementation — **not** CESU-8 byte lengths, and not values chosen
-to match the oracle's counts. Like every other entry they are
-frozen per release and recalibrated only across releases with an
+required no longer exists to meter).
+Future calibrated weights will derive from the
+[cost-calibration instrumentation](ironhorse-meter-opcode-cost-instrumentation.md)
+and a timing driver measuring the UTF-16 implementation, rather than CESU-8 byte
+lengths or values chosen to match the oracle's counts.
+C1 currently supplies histogram/model scaffolding only.
+Like every other entry, weights are frozen per release and changed only with an
 `ironhorse-meter-N` bump.
 
 **Check points and abort.** Checks happen at XS's loop-closing
@@ -481,11 +492,13 @@ The policy is consensus-relevant like the checkpoint cadence, and like
 the cadence it is not recorded in the store (only the armed interval
 rides the `METR` atom, never the limit): replicas must agree on it out
 of band to refuse the same cranks.
-The meter interrupts loops and regexp matches within one check
-interval of the limit; a single built-in still runs to completion
-before the refusal lands (F021/F073), and the heap ceiling and
-allocation-pressure collection the design requires above remain
-unlanded, so it is a time bound and not yet a memory bound.
+The meter checks loops, regexp work and routed allocation/operation admission.
+[W2 allocation](../rust/engine/architecture-review/2026-09-06/W2-ALLOCATION.md)
+added slot/chunk ceilings, fallible guest-sized reservations and uncatchable
+`HeapExhausted` stops.
+These bound arenas and selected scratch/collection paths, not total process memory
+or aggregate side-table allocation.
+Allocation-pressure collection and chunk reclamation remain open.
 
 **The oracle is result-only; computrons are advisory telemetry.**
 The differential harness compares **results** (completion kind,
@@ -500,32 +513,32 @@ with XS is never an acceptance gate. XS's hand-tuned
 parity obligation the port must reproduce weight-for-weight; where a
 built-in's port keeps them, it is to preserve the meter's *internal*
 consistency across fast and slow paths within an Ironhorse release, not
-to match XS. What must hold unconditionally is that Ironhorse is
-*internally* deterministic per release (the differential harness
-plus cross-platform CI verify computron stability across runs and
-platforms); cross-engine computron equality with XS is neither
+to match XS. Ironhorse must be
+*internally* deterministic within the stated binary/platform scope (the differential harness
+and golden vectors verify computron stability for their covered inputs;
+cross-platform coverage does not prove arbitrary executions equivalent); cross-engine computron equality with XS is neither
 required nor pursued.
 
-The `Machine` metering API (`begin_metering`, `end_metering`,
-`current_meter`, `current_computrons`, `set_meter`,
-`run_promise_jobs_metered`, `set_crank_limit`) is preserved
-verbatim, so the crank lifecycle, admission gate, and meter-report
-envelopes of the [metering design](daemon-xs-worker-metering.md)
-carry over without supervisor changes; the C callback and
-thread-local `CRANK_LIMIT` become a safe closure and a machine
-field.
+The actual embedder seam arms a meter host closure and supplies compilation budgets.
+The Endo wrapper starts the crank budget before compilation and retains it through
+execution; persistent failures rewind to the last checkpoint.
+It does not preserve the xsnap metering method list verbatim or use a thread-local
+`CRANK_LIMIT` as a shared engine abstraction.
+See [W4's implementation record](../rust/engine/architecture-review/2026-09-06/W4-IMPLEMENTATION.md)
+and `rust/endo/src/ironhorse_engine.rs` for the wired lifecycle.
 
 ### Agoric consensus compatibility (the doctrine's binding question)
 
 Agoric metering is consensus-critical: computron counts drive
 gas/fees and must be identical across all validators, or the chain
-halts. "Accuracy over XS-parity" is safe for consensus **iff Ironhorse's
-meter is itself the consensus meter and every validator runs the
-same Ironhorse release** — which is exactly the *determinism per release*
-property above: same release ⇒ same frozen cost table ⇒ identical
-computrons ⇒ consensus holds. The doctrine does not weaken consensus
-determinism; it relocates the reference from "XS's counts" to "this
-Ironhorse release's counts."
+halts.
+Adopting Ironhorse as the consensus meter requires coordinated release identity
+**and** the current execution scope: matching release binary, platform, initial
+state, input and host policy.
+A shared table alone does not imply a shared execution trace or identical computrons.
+Heterogeneous-platform consensus requires the provider work and coverage recorded
+in W6 §4; a coordinated release label does not supply that guarantee by itself.
+The reference is Ironhorse's own release costs, not equality with XS's counts.
 
 **Decision — (b): Ironhorse ships its own release-versioned native meter
 that consumers, Agoric included, adopt at a coordinated upgrade
@@ -566,22 +579,25 @@ legacy meter on a running fleet.
 
 ### Snapshots (requirement 1c)
 
-Ironhorse writes and reads the XS atom container grammar (`XS_M` over
-`VERS`/`SIGN`/`CREA`/`BLOC`/`HEAP`/`STAC`/`KEYS`/`NAME`/`SYMB`)
-with an Ironhorse `VERS` discriminator and the host signature scheme
-unchanged (append-only callback table, signature bump on layout
-change, per the [snapshot design](daemon-xs-worker-snapshot.md)).
-Because the heap is index-based, the writer is a serializer, not a
-relocator; reading streams through the same
-`write_snapshot_to_file`/`from_snapshot_file`/`suspend_to_cas`
-surface the xsnap crate exposes today, so the supervisor's
-suspend/resume and CAS integration are untouched.
+Ironhorse writes an `XS_M`-shaped container with its own version discriminator,
+field codec, meter identity and mechanical boot fingerprint.
+The current atom grammar is
+[`CANONICAL_ATOM_ORDER`](../rust/engine/ironhorse-snapshot/src/format.rs), not a
+second hand-maintained tag list in this document.
+Slot records are serialized field by field; Rust resident layout is not the ABI.
+The container codec and paged `HeapStore` representation have distinct version gates.
+`MachineSnapshot` provides file/CAS operations, while `rust/endo` embeds the
+persistent engine directly; this is not an unchanged xsnap supervisor API.
+Production writes materialize encoded buffers, so the file helper is not a
+streaming, constant-memory serializer.
+See the [architecture guide](../rust/engine/ARCHITECTURE.md#seam-2-heapstore) for
+validation, checkpoints, rollback and the remaining daemon worker-protocol gap.
 
 **The format question.** Reading *XS-produced* snapshots is more
 tractable than it first appears, because the on-disk form is
 already position-independent (indices, offsets, and callback-table
 ordinals rather than raw pointers); an importer is a decoder from
-32-byte slot images and chunk data into Ironhorse arenas, not a
+field-encoded slot images and chunk data into Ironhorse arenas, not a
 layout-compatibility exercise. It is still real work (every slot
 kind's union arm must be decoded, both endiannesses and the
 version matrix handled), and no Ironhorse use case requires migrating
@@ -594,7 +610,7 @@ question 3: out of scope for the build phase).
 
 ### Debugger (requirement 1b)
 
-Ironhorse implements the xsbug wire protocol byte-compatibly: the same
+The stage-7 target is to implement the xsbug wire protocol byte-compatibly: the same
 XML elements, the same CRLF framing, the same command set
 (including breakpoint conditions, hit counts, and profiling), so
 `xsbug`, the headless `xsbug-node` client, and the endo
@@ -685,8 +701,10 @@ differential harness, not an interpreter integrity gap.
 ### Minimizing `unsafe` (requirement 2)
 
 The budget is zero in shipped engine crates, enforced by
-`#![forbid(unsafe_code)]` on `ironhorse-vm`, `ironhorse-ses`,
-`ironhorse-snapshot`, `ironhorse-debug`, `ironhorse-compile`, and `ironhorse-262`.
+`#![forbid(unsafe_code)]` on every member of the `rust/engine` workspace
+except the audited `xs-oracle` FFI harness.
+This is a workspace-source rule, not a claim that transitive dependencies or
+the daemon contain no C.
 The index-arena design is what makes this achievable: no raw
 pointers, no self-referential structures, no `unsafe` GC.
 
@@ -694,6 +712,7 @@ pointers, no self-referential structures, no `unsafe` GC.
 |---|---|---|
 | `ironhorse-vm` and other engine crates | No (`forbid`) | The headline property; index arenas remove the need |
 | `xs-oracle` | Yes | FFI to XS via the existing xsnap `ffi.rs`; dev and CI only, never linked into a shipped engine |
+| `ironhorse-store-sqlite` (outer workspace) | Bundled SQLite through `rusqlite` | Production persistence backend; outside the engine workspace unsafe budget |
 | `xsnap` crate glue | Existing FFI remains until the C engine is retired; Ironhorse paths add none | Audited seam, shrinking over time |
 
 Any future proposal to introduce `unsafe` into an engine crate (a
@@ -748,16 +767,18 @@ allocation-faithfulness canary, but a computron difference against
 XS is not, by itself, a failing test (per the accuracy-over-parity
 doctrine, § Metering). Ironhorse's own metering acceptance is
 *determinism*: the harness re-runs metered tests and confirms
-identical computrons across runs and platforms for the same build.
+identical computrons across repeated runs of the same binary and platform.
+Cross-platform equality remains subject to the [determinism scope](#determinism-scope).
 Matching the *fail* vector matters as much as the pass vector: a
 test Ironhorse passes that XS fails is a semantic divergence and gets
 an exceptions-ledger entry or a fix, never a silent "improvement".
 
 Coverage bootstraps by section, tracking the stage ladder:
-stage-scoped curated lists (checked into `ironhorse-262/corpora/`)
-grow into whole-section runs, and CI publishes the agreement
-percentage per section so progress toward parity is a monotone,
-visible number.
+the committed cases now live under
+`packages/test262-runner/test262/test/ironhorse/`, with module fixtures in
+`ironhorse-262/corpora-modules/` and coverage policy in `ironhorse-262/expectations/`.
+Reports and expectation checks expose covered cases and named gaps; historical
+covered counts are not current measurements.
 
 **Completion-phase convergence (maintainer directive, 2026-07-02,
 PR #600).** Toward the completion of the port, the bespoke stage
@@ -768,8 +789,8 @@ design
 specs both halves — the case shape and `features:`-marker gating,
 the meter assertions kept out of test bodies, and the `endot-ih`
 runner that subsumes this harness with the differential oracle as
-its Ironhorse extension. That milestone is parked behind the remaining
-build stages; nothing in it changes the stage bars above.
+its Ironhorse extension. The `endot-ih` runner and fixture conversion have landed; this does not
+by itself meet the complete SES or full-conformance acceptance bars.
 
 **Corpus source: the monorepo's `packages/test262-runner`, not a
 separate pinned submodule** (maintainer directive, 2026-07-03,
@@ -796,7 +817,7 @@ like `c/moddable`" plan. As Ironhorse's SES/Compartment surface lands
 (stage 4), the `ses-xs-parity`-tagged tests become directly
 runnable on Ironhorse through the runner's host abstraction (a third
 host alongside `xst` and `node`); until then ironhorse-262's curated
-`corpora/` lists are the stage-scoped bootstrap that converges onto
+historical corpus lists were the stage-scoped bootstrap that converged onto
 that shared tree.
 
 ### Fuzzability (requirement 7)
@@ -836,6 +857,12 @@ interpreter subset does) and runs nightly in CI with a checked-in
 corpus and a trophies ledger.
 
 ### Endor integration (requirement 8)
+
+**Current status:** direct embedding exists in `rust/endo/src/ironhorse_engine.rs`;
+the common engine trait is deferred under W6 decision 2, and the complete worker
+deliver protocol and host-function/SES boot surface remain open.
+The following integration shape and reconciliation table are targets, not a claim
+that the current supervisor APIs are unchanged.
 
 The seam is the existing `Machine` API in `rust/endo/xsnap/src/`
 (`new`, `eval`, `define_function`, `register_powers`,
@@ -900,7 +927,7 @@ the Compartment seam, and bootstraps test262, before any breadth.
 | 5. Compiler port | `ironhorse-compile`: lexer, parser, scoper, coder replacing the oracle compiler; parse metering | Byte-identical bytecode versus the oracle compiler on the full conformance corpus; parse metering deterministic per release (parse computrons stable across runs; computron-vs-XS advisory); parser fuzz target armed |
 | 6. Snapshots | `ironhorse-snapshot` atom writer/reader; `Machine` snapshot surface; suspend/resume through the supervisor; meter state across suspend | Round-trip invariance under fuzzing; supervisor suspend/resume integration test passes on `-e ironhorse` |
 | 7. Debugger | xsbug protocol; `DebugTransport` over the envelope bus; instruments; break-on-uncaught | The existing 11 Rust debug-protocol tests and 16 CapTP debugger tests pass unmodified against Ironhorse; xsbug connects |
-| 8. Parity closure and hardening | test262 result-parity per the requirement 6 bar; nightly differential fuzzing at full breadth; performance pass to the envelope; fourth benchmark variant wired; engine selection documented | Pass-vector (result) equality with the oracle; meter determinism verified across runs and platforms; computron-vs-XS characterized as calibration telemetry, not gated; envelope met |
+| 8. Parity closure and hardening | test262 result-parity per the requirement 6 bar; nightly differential fuzzing at full breadth; performance pass to the envelope; fourth benchmark variant wired; engine selection documented | Pass-vector (result) equality with the oracle; meter determinism verified for repeated same-binary/platform runs, with cross-platform vectors measuring their covered cases; computron-vs-XS characterized as calibration telemetry, not gated; envelope met |
 | 9. Ecosystem validation (fork-scoped) | Differential replay of real workload corpora: endo daemon integration suites, and agoric contract corpora on the `kriscendobot/agoric-sdk` fork tooling only (no upstream interaction) | Zero **result** divergence on the corpora (computron divergence recorded as calibration telemetry, not a failure); divergences triaged to the exceptions ledger or fixed |
 
 Stages 1 through 4 keep the oracle compiler in the loop, which is
@@ -1073,10 +1100,10 @@ wall-clock or host state.
 5. **Meter is a release-versioned accuracy model, not XS-parity
    (accuracy over parity, 2026-07-04).** The meter's purpose is to
    be the best available deterministic proxy for real wall-clock
-   cost. Determinism is *per release* (a frozen, versioned cost
-   table); the table is calibrated for accuracy and recalibrated
-   across releases as an `ironhorse-meter-N` bump. Internal determinism
-   is unconditional; XS-computron parity is a non-goal; the
+   cost. Determinism is scoped per release binary per platform.
+   The frozen table is currently an XS-derived estimate; future calibration
+   changes ship as an `ironhorse-meter-N` bump.
+   XS-computron parity is a non-goal; the
    `c/moddable` oracle checks *results*, with computrons kept as
    advisory telemetry (§ Metering).
 6. **Rust-native snapshots first; XS import as optional bounded
@@ -1093,7 +1120,8 @@ wall-clock or host state.
    and after, for as long as the differential oracle earns its keep.
 9. **Agoric consensus by coordinated ironhorse-native upgrade, option
    (b).** Ironhorse's own release-versioned meter is the consensus meter
-   (every validator on the same release meters identically); Agoric
+   (subject to the release-binary/platform scope and matching state, input and
+   host policy); Agoric
    adopts it at a coordinated upgrade boundary, exactly as every
    `xs-meter-N` bump has shipped. No XS-computron-compatible mode is
    a build-phase goal; one can be added later only as a conditional,
@@ -1137,8 +1165,8 @@ annotations inline mark exactly what changed.
    `xs-meter-N` bump at a chain upgrade; mixed-fleet bit-exactness
    would force decision 1 onto the divergent fork oracle and make
    the strictly harder target load-bearing for no operational
-   gain. What remains unconditional is internal determinism per
-   release. *(Reinforced 2026-07-04: this question is now
+   gain. Internal determinism remains required within the release-binary
+   and platform scope, with matching initial state, input and host policy. *(Reinforced 2026-07-04: this question is now
    load-bearing for the accuracy-over-parity doctrine — it is the
    mechanism (option (b)) by which "accuracy over XS-parity" stays
    consensus-safe. The former "published equivalence corpus against
@@ -1172,11 +1200,11 @@ annotations inline mark exactly what changed.
    XS snapshot importer would transcode at import. The xsnap
    crate's `cesu8.rs` codec remains where it serves the XS
    boundary; it is no longer Ironhorse's heap encoding.
-5. **The 32-byte slot-record layout holds.** Kind + flag + ID +
-   next-index + 16-byte payload fits in 32 bytes; holding it keeps
-   `currentHeapCount` semantics and snapshot slot images aligned
-   with the oracle. A roomier Rust enum is not worth divergent
-   heap accounting.
+5. **Slot memory layout is distinct from serialization.**
+   The Rust record is 24 bytes on the audited 64-bit build and has no stable
+   representation guarantee; the codec writes its wire fields explicitly.
+   XS's 32-byte accounting is not a resident-memory measurement.
+   The stage-8 footprint envelope therefore needs a separate instrument.
 6. **RegExp: port `xsre`.** RegExp execution is metered and
    guest-reachable, and an off-the-shelf engine such as `regress`
    has different internals, hence subtle **semantic** drift and a
@@ -1265,9 +1293,11 @@ annotations inline mark exactly what changed.
    `xs2rust-endor-meter-calibration-stage-c1`…`-c4`); the program
    name `port-xs-to-rust-memory-safe-engine`; commit messages; the
    quoted 2026-07-17 directive above; and the verification-ledger
-   blockquotes in `rust/engine/README.md`, whose crate names and
+   blockquotes in `rust/engine/CHANGELOG.md`, whose crate names and
    `ENDOR-*` labels record what the tools were called at those
    measured tips.
+   The current acceptance record is the [Status section](#status), not those
+   historical blockquotes.
 8. **Machines stay `!Send`.** Preserving thread-pinned parity
    with today's runner model keeps the port's behavior envelope
    identical; cross-thread machine migration is a separate
@@ -1285,19 +1315,17 @@ annotations inline mark exactly what changed.
    on `xsnap`, because xsnap's `lib.rs` embeds gitignored generated
    SES bundles absent from a fresh checkout and its `ffi.rs`
    declares the pre-drift argument-free `fxInitializeSharedCluster`.
-   The recorded `c/moddable` submodule gitlink (`5516726…`, not
-   fetchable upstream) is deliberately **not** bumped by this
-   program: correcting it requires the matching `xsnap` `ffi.rs`
-   arity fix and belongs to a dedicated maintenance change. The
-   oracle's build pin is `23b4d6b0a65f` (8.3.1) per § Ground Truth —
-   bumped from the original `48ee02d8cfe0` (8.2.3) by the
-   `port-xs-oracle-bump-8-3-1` job — with the reproduction
-   procedure in `rust/engine/README.md`.
-10. **Intl is omitted (`intl402` stays out), matching the
-    oracle.** Parity with XS is the acceptance bar and XS
-    deliberately omits Intl. Adding an ICU4X-backed Intl later is
-    meter-affecting and therefore version-gated behind a meter
-    bump; no seam is reserved for it beyond that rule.
+   *Amended 2026-09-09:* the superproject gitlink has since been bumped to
+   `23b4d6b0a65f35209d9118c4c13c6c9b3e68784d` (Moddable 8.3.1), matching
+   the oracle build pin.
+   Populate it with `git submodule update --init --depth 1 c/moddable` from
+   the repository root; see the engine README for a full-fetch fallback.
+10. **Intl extends beyond the oracle's surface.**
+    The original omission decision has been superseded by implemented Intl data,
+    ICU-backed normalization/segmentation and persisted Intl records.
+    The oracle's missing Intl globals are not evidence of IronHorse conformance.
+    `INTL_DATA_VERSION` is a guest-visible label, not a comprehensive dependency
+    or resume compatibility gate; see the architecture compatibility index.
 
 ## Prompt
 

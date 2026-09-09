@@ -4,9 +4,34 @@
 |---|---|
 | **Created** | 2026-07-05 |
 | **Author** | endolinbot (prompted) |
-| **Status** | Not Started (designer-first; sibling plan of `ironhorse-engine`) |
+| **Updated** | 2026-09-09 |
+| **Status** | In Progress |
 | **Program** | `port-xs-to-rust-memory-safe-engine`, on PR #600's `xs2rust-endor` branch |
 | **Parent** | [ironhorse-engine](ironhorse-engine.md) § Metering (requirement 1a); this is the "cost-calibration instrumentation (sibling plan)" that design names as the source of the release-versioned cost table's weights |
+
+## Status
+
+Audited 2026-09-09 at `96db92e23`.
+`rust/engine/ironhorse-vm/src/cost.rs` implements the feature-gated histogram,
+work-function model and zero-sized default recorder.
+That is the structural portion of C1, not its object-code firewall proof.
+No `ironhorse-calibrate` driver or calibration CI job exists at this base.
+The feature-enabled library suite is not yet wired into CI at this base either.
+
+| Stage | State | Remaining acceptance |
+|---|---|---|
+| C1. Scaffold, firewall, histogram | Partial | Instruction-identical disassembly proof and feature-on/off corpus/snapshot equivalence are not established by the zero-size test. |
+| C2. Timing and normalization | Not started | Batched timing driver, normalized reports and reference-platform measurements. |
+| C3. Sampled corpus timing | Not started | Corpus aggregation, model findings and timing firewall evidence. |
+| C4. Calibration loop | Not started | Cadenced report and human-reviewed candidate weights. |
+
+The current release weights come from `ironhorse-meter`'s frozen XS-derived
+estimates and append-only release ledger, not measured CPU calibration.
+[W4's implementation record](../rust/engine/architecture-review/2026-09-06/W4-IMPLEMENTATION.md)
+describes the digest, budgeted compilation and golden vectors that already landed.
+The roadmap below remains the plan for measurement-based calibration.
+Execution determinism has the parent design's per-release-binary-per-platform
+scope; a platform-independent weight digest is not an execution guarantee.
 
 ## Summary
 
