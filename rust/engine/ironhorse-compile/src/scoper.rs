@@ -193,7 +193,7 @@ pub struct Scope {
     /// Annex B.3.4 permits var redeclaration of this simple catch parameter.
     simple_catch_parameter: bool,
     /// The declare list, in XS's order (`firstDeclareNode`…). Removals in
-    /// [`fx_scope_hoisted`] are applied here.
+    /// `fx_scope_hoisted` are applied here.
     pub declares: Vec<Declare>,
     /// The define list, in define order (coder output).
     pub defines: Vec<DefineEntry>,
@@ -208,7 +208,7 @@ pub struct Scope {
     pub define_count: i32,
     /// `disposableNodeCount`.
     pub disposable_count: i32,
-    /// `mxDefaultFlag` was propagated here by [`fx_scope_arrow`] — an
+    /// `mxDefaultFlag` was propagated here by `fx_scope_arrow` — an
     /// arrow function that transitively uses `this` / `super` / `target`.
     pub arrow_default: bool,
     /// Whether this scope's creating node carries `mxArrowFlag`. Read by the
@@ -219,10 +219,10 @@ pub struct Scope {
     pub is_arrow: bool,
     /// Whether this scope's node carries the **direct-`eval`** hoist extra
     /// (`hoist_call`'s `add_extra`), as opposed to a `with`-poisoned scope
-    /// (which sets [`SCOPE_EVAL`] on `flags` but leaves the node clean). The
+    /// (which sets `SCOPE_EVAL` on `flags` but leaves the node clean). The
     /// coder's `fxScopeCodingBody`/`fxScopeCodedBody` key on this, not on the
     /// poisoned `flags`. Computed once the node's extras are populated
-    /// ([`fx_scope_hoisted`]).
+    /// (`fx_scope_hoisted`).
     pub direct_eval: bool,
 }
 
@@ -295,27 +295,27 @@ pub struct ScopeTree {
     /// (`self->scope`), `.1` secondary (`statementScope`/`symbolScope`).
     /// The coder walks the *same* parsed tree the scoper walked, so a
     /// node's address keys back to the scope XS hung off it in place
-    /// (`self->scope`, `xsScope.c`). Keyed with [`node_key`].
+    /// (`self->scope`, `xsScope.c`). Keyed with `node_key`.
     pub node_scopes: HashMap<usize, (usize, Option<usize>)>,
-    /// Per-node access resolution (see [`Scoper::resolutions`]): an
+    /// Per-node access resolution (see `Scoper::resolutions`): an
     /// `Access` / declaration / `Define` node address → the `(scope,
     /// declare id)` its symbol binds to, or `None` for the symbol path.
-    /// Keyed with [`node_key`].
+    /// Keyed with `node_key`.
     pub resolutions: HashMap<usize, Option<(usize, u32)>>,
     /// A class node address → its synthesized `instanceInit` closure
     /// declare `(scope, id)` when the class has instance data fields.
-    /// Keyed with [`node_key`].
+    /// Keyed with `node_key`.
     pub class_instance_init: HashMap<usize, (usize, u32)>,
     /// A `super(...)` node address → the capturing alias `(scope, id)` for
     /// the enclosing derived class's `instanceInit` closure. Keyed with
-    /// [`node_key`].
+    /// `node_key`.
     pub super_instance_init: HashMap<usize, (usize, u32)>,
     /// A class member node address (`PropertyAt` computed field /
     /// `PrivateProperty`) → the class-scope closure declares XS's
     /// `fxClassNodeHoist` creates for it (`atAccess` / `symbolAccess` /
     /// `valueAccess`). The coder reads these to emit the member-loop
     /// `CONST_CLOSURE` and the field function's `GET_CLOSURE` / `NEW_PRIVATE`.
-    /// Keyed with [`node_key`].
+    /// Keyed with `node_key`.
     pub class_member_access: HashMap<usize, MemberAccess>,
     /// A class node address → the synthesized **instance** field-init
     /// function scope (XS's `instanceInit` function node scope) when the
@@ -326,7 +326,7 @@ pub struct ScopeTree {
     /// scope's use-closure aliases to `RESERVE`/`RETRIEVE`/`STORE` and to
     /// resolve each captured value access as a `GET_CLOSURE`. Absent when
     /// the class has a computed-key or private instance field (that path
-    /// keeps the member-closure-only field function). Keyed with [`node_key`].
+    /// keeps the member-closure-only field function). Keyed with `node_key`.
     pub class_field_init_inst: HashMap<usize, usize>,
     /// A class **member** node address (`PropertyAt` / `PrivateProperty`) →
     /// the **field-init function scope** use-closure alias declares its
@@ -337,14 +337,14 @@ pub struct ScopeTree {
     /// reads these to emit the field body's `GET_CLOSURE` / `NEW_PRIVATE`
     /// with the function-frame retrieve slot (not the class-scope index). A
     /// get/set accessor pair shares one brand slot (the `symbolAccess`
-    /// use-closure dedups by symbol). Keyed with [`node_key`].
+    /// use-closure dedups by symbol). Keyed with `node_key`.
     pub class_member_fi: HashMap<usize, MemberAccess>,
     /// A class node address → its synthesized **static** field-init function
     /// scope (XS's `constructorInit` function node scope), when the class has
     /// static fields / `static { … }` blocks. Analogous to
     /// [`ScopeTree::class_field_init_inst`]; the coder reads it to drive the
     /// static field function's `RESERVE`/`RETRIEVE`/`STORE`. Keyed with
-    /// [`node_key`].
+    /// `node_key`.
     pub class_field_init_static: HashMap<usize, usize>,
 }
 
@@ -380,8 +380,8 @@ pub fn node_key(n: &Node) -> usize {
 /// The goal matters only for a strict program's top-level `var`/function
 /// declarations (see [`Goal`]). Callers that ask goal-independent questions of
 /// the tree — which names a program declares, whether it is strict — get the
-/// same answer either way; a caller that needs the Script placement should
-/// scope with [`run_goal`] instead.
+/// same answer either way. To compile with Script placement, use
+/// [`crate::compile_atoms_goal`] with [`Goal::Script`].
 pub fn scope_program(source: &str, strict: bool) -> Result<ScopeTree, ParseError> {
     let mut parser = Parser::new(source, strict, false)?;
     let root = parser.parse_program(strict)?;
@@ -418,7 +418,7 @@ pub fn scope_module(source: &str) -> Result<ScopeTree, ParseError> {
 ///
 /// This lives in the scoper rather than the coder because the scoper is the
 /// lower layer and is where the distinction is first consumed
-/// ([`Scoper::eval_scope_hoists_vars`]); `coder` re-exports it.
+/// (`Scoper::eval_scope_hoists_vars`); `coder` re-exports it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Goal {
     /// A top-level Script (the default program entry, `coder::compile`).
@@ -427,8 +427,8 @@ pub enum Goal {
     Module,
     /// An `eval` program (the runtime source bridge, `coder::compile_with`).
     ///
-    /// It is the `Default` only so the `#[derive(Default)]` on [`Scoper`]
-    /// compiles; [`run_goal`] is the sole constructor and always sets the goal
+    /// It is the `Default` only so the `#[derive(Default)]` on `Scoper`
+    /// compiles; `run_goal` is the sole constructor and always sets the goal
     /// explicitly, so nothing ever runs on a defaulted value.
     #[default]
     Eval,
@@ -436,7 +436,7 @@ pub enum Goal {
 
 /// Run the two scoper passes over an already-parsed root node under the
 /// **eval goal** — the shape the runtime `eval` bridge needs and the one the
-/// oracle shim emits. For any other goal use [`run_goal`].
+/// oracle shim emits. For any other goal use `run_goal`.
 pub fn run(root: &Item) -> Result<ScopeTree, ParseError> {
     run_goal(root, Goal::Eval)
 }
@@ -532,7 +532,7 @@ struct Scoper<'a> {
     /// Tree levels currently on the native stack (see [`TREE_DEPTH_LIMIT`]
     /// and [`Self::descend`]).
     depth: u32,
-    /// The [`Goal`] this run is scoping for (see [`run_goal`]).
+    /// The [`Goal`] this run is scoping for (see `run_goal`).
     goal: Goal,
     scopes: Vec<Scope>,
     // Most block scopes have no declarations. Keep only a pointer-sized

@@ -20,7 +20,7 @@
 use crate::error::{LexError, LexErrorKind};
 use crate::meter::ParseMeter;
 use crate::token::{classify_word, Token};
-use crate::unicode::{is_identifier_first, is_identifier_next};
+use ironhorse_regexp::unicode::{is_identifier_first, is_identifier_next};
 use ironhorse_text::SymbolName;
 
 /// The end-of-input sentinel, XS's `(txU4)C_EOF`.
@@ -58,7 +58,7 @@ pub struct Lexeme {
     pub escaped: bool,
     /// The cooked string value, for `String`/`Template*`/regexp body,
     /// carried as UTF-16 code units so lone surrogates from `\u` escapes
-    /// survive to the coder's CESU-8 emission (see [`ast::Value::Str`]).
+    /// survive to the coder's CESU-8 emission (see [`crate::Value::Str`]).
     pub string: Option<Vec<u16>>,
     /// The raw (pre-cook) string value, for `String`/`Template*`, likewise
     /// UTF-16 code units.
