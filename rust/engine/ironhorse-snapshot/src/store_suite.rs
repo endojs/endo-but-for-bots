@@ -68,7 +68,7 @@ struct Baseline {
     results: Vec<CrankResult>,
     /// Cumulative computrons AFTER EVERY CRANK, not just the last: a
     /// mid-run meter divergence that reconverges by the final crank
-    /// must still fail (the collaborator review's finding).
+    /// must still fail.
     computrons: Vec<u64>,
     final_blob: Vec<u8>,
 }
@@ -183,9 +183,9 @@ enum Resume {
     /// both right after the resume (attach-time rows) and right after
     /// each checkpoint (rows the session itself just committed and
     /// cleaned). Any evict schedule must be observably irrelevant
-    /// (store seam phase 8, the Decision-3 amendment), including the
-    /// commit-then-evict-then-refault ordering the phase-8 review
-    /// found unexercised (stale attach-time leaves). The arm asserts
+    /// (see `designs/ironhorse-snapshot-store-seam.md`), including
+    /// commit-then-evict-then-refault: the fault must check the refreshed
+    /// leaves, not stale attach-time leaves. The arm asserts
     /// eviction genuinely happened, so a future guard change cannot
     /// silently degrade it into a prefetch duplicate.
     LazyAdversarialEvict,
@@ -282,7 +282,7 @@ fn run_store_scheduled<S: HeapStore + 'static>(
             // their re-faults must verify against the leaves the
             // commit refreshed (frozen attach-time leaves would
             // misdiagnose exactly this healthy re-fault as a corrupt
-            // store — the phase-8 review finding). The final
+            // store). The final
             // `write_snapshot` below re-faults everything evicted
             // here.
             let manifest = store.borrow().manifest().unwrap();
@@ -677,7 +677,7 @@ pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
             "var i; var s; last.v + 1",
         ],
     );
-    // The uncoercible-completion class (architecture review F030/F022):
+    // The uncoercible-completion class:
     // a crank whose completion value the oracle harness's
     // `String(result)` cannot coerce. The engine reports it COMPLETED
     // with its own rendering and the harness's `TypeError` beside it
@@ -702,8 +702,7 @@ pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
 }
 
 /// The continuous-versus-resumed IMAGE comparison after a boundary
-/// collection, against a backend (architecture review F011,
-/// F030/F022). The seven-way runner compares results, computrons and
+/// collection, against a backend. The seven-way runner compares results, computrons and
 /// final bytes, and is blind to a machine whose boundary registers
 /// stayed rooted: two such twins answer every crank identically while
 /// their free lists, live counts and canonical bytes diverge at the

@@ -184,8 +184,8 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 
 /// The Ironhorse snapshot format version — the stamp every writer
 /// emits. Bumped on any change to the atom layout or the slot-record
-/// encoding, INCLUDING the addition of state-bearing atoms (review
-/// finding 1): version 2 marks the initial side-table atom family
+/// encoding, INCLUDING the addition of state-bearing atoms:
+/// version 2 marks the initial side-table atom family
 /// (`ARRY`…`INTL`/`ITER`/`NFLR`), so a version-1 reader — which skips
 /// unknown atoms and would silently drop arrays, collections, RegExps,
 /// Intl records and iterator cursors — refuses a version-2 container
@@ -281,8 +281,7 @@ impl Version {
         // The read RANGE, not the write stamp: an older readable
         // version decodes (its atoms are a subset with the same
         // encodings), while a NEWER one is refused — its atoms may
-        // carry state this reader would silently skip (review
-        // finding 1).
+        // carry state this reader would silently skip.
         if !(IRONHORSE_FORMAT_VERSION_MIN_READ..=IRONHORSE_FORMAT_VERSION).contains(&format_version)
         {
             return Err(VersionError::UnsupportedVersion(format_version));
