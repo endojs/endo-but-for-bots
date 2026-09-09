@@ -72,13 +72,14 @@ impl Interp {
 #[cfg(test)]
 mod tests {
     use super::{CallerHandlers, Halt, Interp, Slot, Step};
-    use crate::interp::CatchJump;
+    use crate::interp::{CatchJump, ResumeTarget};
 
     #[test]
     fn escaped_resume_is_refused_after_restoring_the_caller_chain() {
         let mut vm = Interp::new();
         vm.jumps.push(CatchJump {
             target_pc: 123,
+            segment: None,
             stack_len: 0,
             locals_len: 0,
             id_map: Default::default(),
@@ -89,7 +90,10 @@ mod tests {
         });
         let outcome = vm.run_guest_under_native_try::<()>(CallerHandlers::Isolate, |machine| {
             assert!(machine.jumps.is_empty());
-            Err(Step::Unwound(17))
+            Err(Step::Unwound(ResumeTarget {
+                pc: 17,
+                segment: None,
+            }))
         });
         assert!(matches!(
             outcome,
@@ -106,6 +110,7 @@ mod tests {
         let mut vm = Interp::new();
         vm.jumps.push(CatchJump {
             target_pc: 123,
+            segment: None,
             stack_len: 0,
             locals_len: 0,
             id_map: Default::default(),
@@ -119,9 +124,18 @@ mod tests {
                 .jumps
                 .pop()
                 .expect("caller handler stays accessible");
-            Err(Step::Unwound(handler.target_pc))
+            Err(Step::Unwound(ResumeTarget {
+                pc: handler.target_pc,
+                segment: handler.segment,
+            }))
         });
-        assert!(matches!(outcome, Err(Step::Unwound(123))));
+        assert!(matches!(
+            outcome,
+            Err(Step::Unwound(ResumeTarget {
+                pc: 123,
+                segment: None
+            }))
+        ));
         assert!(
             vm.jumps.is_empty(),
             "consumed handlers must not be restored"

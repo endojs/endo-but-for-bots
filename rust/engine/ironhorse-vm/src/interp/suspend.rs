@@ -38,6 +38,7 @@ impl Interp {
             .into_iter()
             .map(|jump| SavedJump {
                 target_pc: jump.target_pc,
+                segment: jump.segment,
                 stack_offset: jump.stack_len.saturating_sub(stack_base),
                 locals_len: jump.locals_len,
                 id_map: jump.id_map,
@@ -103,9 +104,14 @@ impl Interp {
         self.strict = saved.strict;
         self.result = saved.result;
         self.stack.extend(saved.stack_slice);
+        // Legacy saved rows carry no explicit handler segment. Resolve them
+        // only after all restore phases have installed the function cluster:
+        // async instances restore before FUNC, generators restore after it.
+        let restored_segment = self.func_segments.get(&self.cur_func).copied();
         self.jumps
             .extend(saved.jumps.into_iter().map(|jump| CatchJump {
                 target_pc: jump.target_pc,
+                segment: jump.segment.or(restored_segment),
                 stack_len: stack_base + jump.stack_offset,
                 locals_len: jump.locals_len,
                 id_map: jump.id_map,
@@ -996,3 +1002,53 @@ mod tests {
         }
     }
 }
+
+// Saved-frame owners come from the same state roster as the GC frame walks.
+// A code compaction must rewrite handlers in all three suspension families.
+macro_rules! remap_frame_table {
+    ($vm:ident, $field:ident, $remap:ident, frame) => {
+        for data in $vm.$field.values_mut() {
+            if let Some(frame) = &mut data.frame {
+                for jump in &mut frame.jumps {
+                    if let Some(segment) = &mut jump.segment {
+                        *segment = $remap[segment];
+                    }
+                }
+            }
+        }
+    };
+    ($vm:ident, $field:ident, $remap:ident, async_frame) => {
+        remap_frame_table!($vm, $field, $remap, frame);
+    };
+    ($vm:ident, $field:ident, $remap:ident, queued_frame) => {
+        remap_frame_table!($vm, $field, $remap, frame);
+    };
+    ($vm:ident, $field:ident, $remap:ident, $other:ident) => {};
+}
+
+macro_rules! define_frame_segment_remap {
+    (() $vis:vis struct $name:ident {
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
+          #[persist_refs($persist:ident)]
+          #[runtime_keys($runtime_keys:ident)]
+          #[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
+        impl Interp {
+            pub(super) fn remap_saved_handler_segments(
+                &mut self,
+                remap: &std::collections::BTreeMap<usize, usize>,
+            ) {
+                $(remap_frame_table!(self, $field, remap, $chunk);)*
+            }
+        }
+    };
+}
+interp_state!(define_frame_segment_remap);
