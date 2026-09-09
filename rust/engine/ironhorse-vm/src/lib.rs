@@ -24,6 +24,7 @@ compile_error!("consensus and cost-calibration are mutually exclusive");
 
 mod bulk;
 mod classification;
+mod side_tables;
 mod snapshot_dirty;
 pub use snapshot_dirty::{SnapshotBaseline, SnapshotDirty, SnapshotSection};
 pub mod compartment;

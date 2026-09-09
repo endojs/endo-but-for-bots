@@ -15208,7 +15208,7 @@ impl Interp {
 
         loop {
             if self.n_dispatched != 0
-                && self.n_dispatched % 4096 == 0
+                && self.n_dispatched.is_multiple_of(4096)
                 && self.check_meter() == MeterCheck::Abort
             {
                 return Step::Host(Halt::MeterAbort);

@@ -5,128 +5,40 @@
 use crate::store::{build_class_tree, class_tree_root, leaf_hash, update_class_tree, StoreError};
 use crate::SnapshotError;
 
-pub const SMALL_SECTION_COUNT: usize = 32;
 const LEAF_SECTION: u8 = b'T';
 const TREE_SMALL: u8 = b'm';
 
-/// Existing framing order. IDs are persisted identities and must not move.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum SmallSection {
-    Stack = 0,
-    RetiredFreeList = 1,
-    Keys = 2,
-    Names = 3,
-    Symbols = 4,
-    Meter = 5,
-    Arrays = 6,
-    Collections = 7,
-    Registry = 8,
-    Errors = 9,
-    Buffers = 10,
-    TypedArrays = 11,
-    DataViews = 12,
-    Wrappers = 13,
-    Regexps = 14,
-    ArgumentsBrands = 15,
-    Temporal = 16,
-    Intl = 17,
-    NameFloor = 18,
-    Iterators = 19,
-    Dates = 20,
-    Functions = 21,
-    Proxies = 22,
-    Accessors = 23,
-    IntlBoundFunctions = 24,
-    PrivateElements = 25,
-    DisposableStacks = 26,
-    Generators = 27,
-    ErrorFrames = 28,
-    Promises = 29,
-    AsyncInstances = 30,
-    IndexProperties = 31,
-}
-impl SmallSection {
-    pub const fn vm_section(self) -> ironhorse_vm::SnapshotSection {
-        match self {
-            Self::Stack => ironhorse_vm::SnapshotSection::Stack,
-            Self::RetiredFreeList => ironhorse_vm::SnapshotSection::RetiredFreeList,
-            Self::Keys => ironhorse_vm::SnapshotSection::Keys,
-            Self::Names => ironhorse_vm::SnapshotSection::Names,
-            Self::Symbols => ironhorse_vm::SnapshotSection::Symbols,
-            Self::Meter => ironhorse_vm::SnapshotSection::Meter,
-            Self::Arrays => ironhorse_vm::SnapshotSection::Arrays,
-            Self::Collections => ironhorse_vm::SnapshotSection::Collections,
-            Self::Registry => ironhorse_vm::SnapshotSection::Registry,
-            Self::Errors => ironhorse_vm::SnapshotSection::Errors,
-            Self::Buffers => ironhorse_vm::SnapshotSection::Buffers,
-            Self::TypedArrays => ironhorse_vm::SnapshotSection::TypedArrays,
-            Self::DataViews => ironhorse_vm::SnapshotSection::DataViews,
-            Self::Wrappers => ironhorse_vm::SnapshotSection::Wrappers,
-            Self::Regexps => ironhorse_vm::SnapshotSection::Regexps,
-            Self::ArgumentsBrands => ironhorse_vm::SnapshotSection::ArgumentsBrands,
-            Self::Temporal => ironhorse_vm::SnapshotSection::Temporal,
-            Self::Intl => ironhorse_vm::SnapshotSection::Intl,
-            Self::NameFloor => ironhorse_vm::SnapshotSection::NameFloor,
-            Self::Iterators => ironhorse_vm::SnapshotSection::Iterators,
-            Self::Dates => ironhorse_vm::SnapshotSection::Dates,
-            Self::Functions => ironhorse_vm::SnapshotSection::Functions,
-            Self::Proxies => ironhorse_vm::SnapshotSection::Proxies,
-            Self::Accessors => ironhorse_vm::SnapshotSection::Accessors,
-            Self::IntlBoundFunctions => ironhorse_vm::SnapshotSection::IntlBoundFunctions,
-            Self::PrivateElements => ironhorse_vm::SnapshotSection::PrivateElements,
-            Self::DisposableStacks => ironhorse_vm::SnapshotSection::DisposableStacks,
-            Self::Generators => ironhorse_vm::SnapshotSection::Generators,
-            Self::ErrorFrames => ironhorse_vm::SnapshotSection::ErrorFrames,
-            Self::Promises => ironhorse_vm::SnapshotSection::Promises,
-            Self::AsyncInstances => ironhorse_vm::SnapshotSection::AsyncInstances,
-            Self::IndexProperties => ironhorse_vm::SnapshotSection::IndexProperties,
+macro_rules! define_small_sections {
+    ($($name:ident = $id:literal,)*) => {
+        pub const SMALL_SECTION_COUNT: usize = [$(stringify!($name)),*].len();
+
+        /// Existing framing order. IDs are persisted identities and must not move.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u8)]
+        pub enum SmallSection {
+            $($name = $id,)*
         }
-    }
-    pub const ALL: [Self; SMALL_SECTION_COUNT] = [
-        Self::Stack,
-        Self::RetiredFreeList,
-        Self::Keys,
-        Self::Names,
-        Self::Symbols,
-        Self::Meter,
-        Self::Arrays,
-        Self::Collections,
-        Self::Registry,
-        Self::Errors,
-        Self::Buffers,
-        Self::TypedArrays,
-        Self::DataViews,
-        Self::Wrappers,
-        Self::Regexps,
-        Self::ArgumentsBrands,
-        Self::Temporal,
-        Self::Intl,
-        Self::NameFloor,
-        Self::Iterators,
-        Self::Dates,
-        Self::Functions,
-        Self::Proxies,
-        Self::Accessors,
-        Self::IntlBoundFunctions,
-        Self::PrivateElements,
-        Self::DisposableStacks,
-        Self::Generators,
-        Self::ErrorFrames,
-        Self::Promises,
-        Self::AsyncInstances,
-        Self::IndexProperties,
-    ];
-    pub fn from_id(id: u32) -> Result<Self, StoreError> {
-        Self::ALL
-            .get(id as usize)
-            .copied()
-            .ok_or_else(|| corrupt("small section id"))
-    }
-    pub const fn id(self) -> u32 {
-        self as u32
-    }
+        impl SmallSection {
+            pub const fn vm_section(self) -> ironhorse_vm::SnapshotSection {
+                match self {
+                    $(Self::$name => ironhorse_vm::SnapshotSection::$name,)*
+                }
+            }
+            pub const ALL: [Self; SMALL_SECTION_COUNT] = [$(Self::$name,)*];
+            pub fn from_id(id: u32) -> Result<Self, StoreError> {
+                Self::ALL
+                    .get(id as usize)
+                    .copied()
+                    .ok_or_else(|| corrupt("small section id"))
+            }
+            pub const fn id(self) -> u32 {
+                self as u32
+            }
+        }
+    };
 }
+ironhorse_vm::snapshot_sections!(define_small_sections);
+
 fn corrupt(message: &'static str) -> StoreError {
     StoreError::Snapshot(SnapshotError::Corrupt(message))
 }
@@ -423,6 +335,52 @@ impl SectionLeaves {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Independent schema-28 fixture: do not generate this from the roster.
+    /// A coordinated rename/reorder must not silently reinterpret stored sections.
+    #[test]
+    fn schema_28_section_identities_are_stable() {
+        let expected = [
+            SmallSection::Stack,
+            SmallSection::RetiredFreeList,
+            SmallSection::Keys,
+            SmallSection::Names,
+            SmallSection::Symbols,
+            SmallSection::Meter,
+            SmallSection::Arrays,
+            SmallSection::Collections,
+            SmallSection::Registry,
+            SmallSection::Errors,
+            SmallSection::Buffers,
+            SmallSection::TypedArrays,
+            SmallSection::DataViews,
+            SmallSection::Wrappers,
+            SmallSection::Regexps,
+            SmallSection::ArgumentsBrands,
+            SmallSection::Temporal,
+            SmallSection::Intl,
+            SmallSection::NameFloor,
+            SmallSection::Iterators,
+            SmallSection::Dates,
+            SmallSection::Functions,
+            SmallSection::Proxies,
+            SmallSection::Accessors,
+            SmallSection::IntlBoundFunctions,
+            SmallSection::PrivateElements,
+            SmallSection::DisposableStacks,
+            SmallSection::Generators,
+            SmallSection::ErrorFrames,
+            SmallSection::Promises,
+            SmallSection::AsyncInstances,
+            SmallSection::IndexProperties,
+        ];
+        assert_eq!(SmallSection::ALL, expected);
+        for (id, section) in expected.into_iter().enumerate() {
+            assert_eq!(section.id(), id as u32);
+            assert_eq!(section.vm_section() as u8, id as u8);
+            assert_eq!(SmallSection::from_id(id as u32).unwrap(), section);
+        }
+    }
 
     fn sample_payloads() -> [Vec<u8>; SMALL_SECTION_COUNT] {
         std::array::from_fn(|id| vec![id as u8; id])
