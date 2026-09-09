@@ -10182,3 +10182,97 @@ mod buffer_geometry_refusals {
         assert_eq!(check(&[detached], &[], &[valid]), Ok(()));
     }
 }
+
+#[cfg(test)]
+mod container_grammar_refusals {
+    use super::*;
+    use crate::format::FourCc;
+
+    fn image() -> MachineImage {
+        MachineImage::from_arenas(
+            Signature::new("container-refusals"),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec![],
+            vec![],
+            SymbolKeyImage::default(),
+        )
+    }
+
+    #[test]
+    fn container_requires_canonical_order_and_known_tags() {
+        let image = image();
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &image.signature).unwrap(), image);
+        let parsed = AtomReader::parse(&bytes).unwrap();
+        let atoms = parsed.atoms();
+        for index in 0..atoms.len() - 1 {
+            let mut order: Vec<_> = (0..atoms.len()).collect();
+            order.swap(index, index + 1);
+            let mut writer = AtomWriter::new();
+            for i in order {
+                writer.atom(atoms[i].tag, atoms[i].payload).unwrap();
+            }
+            assert_eq!(
+                read_machine(&writer.finish().unwrap(), &image.signature),
+                Err(SnapshotError::Corrupt(
+                    "container atoms out of canonical order or unknown"
+                ))
+            );
+        }
+        let mut writer = AtomWriter::new();
+        for atom in atoms {
+            writer.atom(atom.tag, atom.payload).unwrap();
+        }
+        writer.atom(FourCc(*b"NOPE"), &[]).unwrap();
+        assert_eq!(
+            read_machine(&writer.finish().unwrap(), &image.signature),
+            Err(SnapshotError::Corrupt(
+                "container atoms out of canonical order or unknown"
+            ))
+        );
+    }
+
+    #[test]
+    fn required_atoms_and_quiescent_stack() {
+        let image = image();
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &image.signature).unwrap(), image);
+        let parsed = AtomReader::parse(&bytes).unwrap();
+        for omitted in [CREA, BLOC, STAC, KEYS, NAME, SYMB, METR] {
+            assert!(parsed.find(omitted).is_some());
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                if atom.tag != omitted {
+                    writer.atom(atom.tag, atom.payload).unwrap();
+                }
+            }
+            let result = read_machine(&writer.finish().unwrap(), &image.signature);
+            if omitted == METR {
+                assert_eq!(result, Err(SnapshotError::Corrupt("missing METR identity")));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(SnapshotError::Corrupt(
+                        "container missing an atom its version always writes"
+                    ))
+                );
+            }
+        }
+        let mut stacked = image.clone();
+        stacked.stack.push(Slot::integer(1));
+        assert_eq!(
+            read_machine(&write_machine_unchecked(&stacked), &image.signature),
+            Err(SnapshotError::Corrupt(
+                "STAC not empty at a quiescent boundary"
+            ))
+        );
+        let mut wrong_size = image;
+        wrong_size.creation.initial_chunk_bytes = 1;
+        assert_eq!(
+            read_machine(&write_machine_unchecked(&wrong_size), &wrong_size.signature),
+            Err(SnapshotError::Corrupt("BLOC length differs from CREA"))
+        );
+    }
+}
