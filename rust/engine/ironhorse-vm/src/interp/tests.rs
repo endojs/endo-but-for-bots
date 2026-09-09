@@ -566,7 +566,10 @@ fn internal_transfers_cannot_be_reported_as_host_completions() {
         Step::Yielded(Slot::undefined()),
         Step::Awaited(Slot::undefined()),
         Step::AsyncYielded(Slot::undefined()),
-        Step::Unwound(42),
+        Step::Unwound(super::ResumeTarget {
+            pc: 42,
+            segment: None,
+        }),
     ] {
         assert_eq!(
             interp.finish_step(&[], step),
@@ -2175,4 +2178,137 @@ fn runtime_key_scan_keeps_arena_precedence_and_tail_minimum() {
     assert_eq!(vm.stored_runtime_intern(), Some(floor + 6));
     vm.stack.clear();
     assert_eq!(vm.stored_runtime_intern(), None);
+}
+
+#[test]
+fn catch_landing_identity_survives_top_level_promotion() {
+    let mut vm = Interp::new();
+    let code: std::rc::Rc<[u8]> = std::rc::Rc::from([0_u8, 1]);
+    vm.top_level_code = Some(code.clone());
+    let target = super::ResumeTarget {
+        pc: 1,
+        segment: None,
+    };
+    vm.assert_resume_target(target, &code);
+    let segment = vm.ensure_active_code_segment(&code);
+    assert_eq!(vm.active_segment, Some(segment));
+    // A handler fenced in a Rust local during promotion still names the same
+    // top-level buffer through None; no duplicate segment must be allocated.
+    vm.assert_resume_target(target, &code);
+    vm.assert_resume_target(
+        super::ResumeTarget {
+            pc: 1,
+            segment: Some(segment),
+        },
+        &code,
+    );
+    assert_eq!(vm.retained_code_segment_count(), 1);
+}
+
+#[test]
+fn catch_landing_rejects_an_equal_pc_in_another_dispatch_buffer() {
+    let mut vm = Interp::new();
+    let outer: std::rc::Rc<[u8]> = std::rc::Rc::from([0_u8, 1]);
+    let inner: std::rc::Rc<[u8]> = std::rc::Rc::from([0_u8, 1]);
+    vm.top_level_code = Some(outer.clone());
+    vm.code_segments.push(inner.clone());
+    vm.active_segment = Some(0);
+    let target = super::ResumeTarget {
+        pc: 1,
+        segment: Some(0),
+    };
+    // The mutable active register and cursor both look valid. Equal byte
+    // contents do not make the outer dispatch the owner of this handler.
+    assert!(vm.resume_target_belongs_to(target, &inner));
+    assert!(!vm.resume_target_belongs_to(target, &outer));
+    vm.assert_resume_target(target, &inner);
+    #[cfg(debug_assertions)]
+    let wrong = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        vm.assert_resume_target(target, &outer);
+    }));
+    #[cfg(debug_assertions)]
+    assert!(wrong.is_err());
+}
+
+#[test]
+fn segment_compaction_remaps_handlers_in_every_suspension_family() {
+    let mut vm = Interp::new();
+    for source in [
+        "var discarded = function () {}; discarded = null; 0",
+        "var gate = new Promise(function () {}); \
+         var gen = (function* () { try { yield 1; } catch (e) {} })(); gen.next(); \
+         var pending = (async function () { try { await gate; } catch (e) {} })(); \
+         var agen = (async function* () { try { await gate; } catch (e) {} })(); agen.next(); 0",
+    ] {
+        let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
+        let code = vm
+            .relink_crank(&code, &crate::parse_symbols(&names))
+            .unwrap();
+        let out = vm.run(&code);
+        assert!(out.completed, "{:?}", out.halt);
+    }
+    let check = |vm: &Interp, expected| {
+        // Independent enumeration: omitting one roster frame family must fail.
+        let families: [Vec<&SavedFrame>; 3] = [
+            vm.generators
+                .values()
+                .filter_map(|data| data.frame.as_ref())
+                .collect(),
+            vm.async_instances
+                .values()
+                .filter_map(|data| data.frame.as_ref())
+                .collect(),
+            vm.async_generators
+                .values()
+                .filter_map(|data| data.frame.as_ref())
+                .collect(),
+        ];
+        for frames in families {
+            assert_eq!(frames.len(), 1);
+            let frame = frames[0];
+            assert!(!frame.jumps.is_empty());
+            assert_eq!(vm.func_segments[&frame.cur_func], expected);
+            for jump in &frame.jumps {
+                assert_eq!(jump.segment, Some(expected));
+            }
+        }
+    };
+    assert_eq!(vm.retained_code_segment_count(), 2);
+    check(&vm, 1);
+    vm.collect_garbage();
+    assert_eq!(vm.retained_code_segment_count(), 1);
+    check(&vm, 0);
+    vm.collect_garbage();
+    check(&vm, 0);
+}
+
+#[test]
+fn segment_indices_stay_stable_until_a_halted_activation_is_abandoned() {
+    let mut vm = Interp::new();
+    for source in [
+        "var discarded = function () {}; discarded = null; 0",
+        "var retained = function () {}; try { while (true) {} } catch (e) {}",
+    ] {
+        let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
+        let code = vm
+            .relink_crank(&code, &crate::parse_symbols(&names))
+            .unwrap();
+        vm.run_bounded(&code, 100);
+    }
+    assert!(!vm.last_crank_completed);
+    assert!(!vm.jumps.is_empty());
+    assert_eq!(vm.retained_code_segment_count(), 2);
+    let retained = vm.code_segments[1].clone();
+    vm.collect_garbage();
+    assert_eq!(vm.retained_code_segment_count(), 2);
+    assert!(std::rc::Rc::ptr_eq(&retained, &vm.code_segments[1]));
+    assert!(vm.jumps.iter().all(|jump| jump.segment == Some(1)));
+    let (code, names) = ironhorse_compile::compile_atoms("0").unwrap();
+    let code = vm
+        .relink_crank(&code, &crate::parse_symbols(&names))
+        .unwrap();
+    assert!(vm.run(&code).completed);
+    vm.collect_garbage();
+    assert_eq!(vm.retained_code_segment_count(), 1);
+    assert!(std::rc::Rc::ptr_eq(&retained, &vm.code_segments[0]));
 }

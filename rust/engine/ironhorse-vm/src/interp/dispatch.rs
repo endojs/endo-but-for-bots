@@ -17,9 +17,9 @@ use super::{
 
 /// Consume a [`Step`] inside the bytecode dispatch loop. This is the ONLY
 /// way a `Step::Unwound` may be acted on: a handler that lives in a frame
-/// below this loop's `return_depth` belongs to an enclosing (Rust-level
-/// nested) dispatch, so the `Resume` propagates out to it; a handler in
-/// this loop's frames resumes here, paying XS's `mxFirstCode` meter check
+/// below this loop's `return_depth`, or in a different bytecode buffer,
+/// belongs to an enclosing dispatch, so the unwind propagates out to it.
+/// A handler owned by this loop resumes here, paying XS's `mxFirstCode` meter check
 /// at the catch landing (`xsRun.c` `XS_CODE_CATCH`, after the `c_setjmp`
 /// restore). Every other halt leaves the loop as-is.
 ///
@@ -30,13 +30,17 @@ use super::{
 /// form is exactly what skipped the depth test (review F001) and what let
 /// an internal `Resume` escape to the host as a result (review F006).
 macro_rules! dispatch_halt {
-    ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr) => {
+    ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
         match $halt {
-            Step::Unwound(target) if $machine.call_stack.len() < $return_depth => {
+            Step::Unwound(target)
+                if $machine.call_stack.len() < $return_depth
+                    || !$machine.resume_target_belongs_to(target, $code) =>
+            {
                 return Step::Unwound(target);
             }
             Step::Unwound(target) => {
-                $program_counter = target;
+                $machine.assert_resume_target(target, $code);
+                $program_counter = target.pc;
                 if $machine.check_meter() == MeterCheck::Abort {
                     return Step::Host(Halt::MeterAbort);
                 }
@@ -51,10 +55,10 @@ macro_rules! dispatch_halt {
 /// at a JavaScript catch/finally target when a native helper raised an error
 /// (see [`dispatch_halt!`]).
 macro_rules! dispatch_result {
-    ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr) => {
+    ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
         match $expression {
             Ok(value) => value,
-            Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth),
+            Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
         }
     };
 }
@@ -276,7 +280,13 @@ impl Interp {
                                 if !self.cur_target {
                                     let error =
                                         self.internal_error("TypeError", "call: class".into());
-                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                    dispatch_halt!(
+                                        self.raise_js(error),
+                                        pc,
+                                        self,
+                                        return_depth,
+                                        code
+                                    );
                                 }
                                 self.run_constructor();
                             }
@@ -286,7 +296,13 @@ impl Interp {
                                 if !self.cur_target {
                                     let error =
                                         self.internal_error("TypeError", "call: class".into());
-                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                    dispatch_halt!(
+                                        self.raise_js(error),
+                                        pc,
+                                        self,
+                                        return_depth,
+                                        code
+                                    );
                                 }
                                 self.this_val = Slot::uninitialized();
                             }
@@ -430,7 +446,7 @@ impl Interp {
                     // `CanDeclareGlobalFunction` (e.g. `function NaN(){}`)
                     // raises a realm `TypeError` here, before any body runs.
                     if let Err(error) = self.hoist_vars_to_global() {
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     // `fxRunEvalEnvironment` ends `the->scope = top + 1`,
                     // resetting the scope region: the hoisted vars now live
@@ -460,7 +476,8 @@ impl Interp {
                         self.resolve_env_reference(code, name),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     if let Some(target) = resolved {
                         self.push(Slot::of(Kind::Reference, Payload::Reference(target)));
@@ -579,7 +596,7 @@ impl Interp {
                             "TypeError",
                             format!("set {}: const", self.id_name(id)),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     self.set_local(k, top);
@@ -596,7 +613,7 @@ impl Interp {
                             "TypeError",
                             format!("set {}: const", self.id_name(id)),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let v = self.pop();
                     self.set_local(k, v);
@@ -627,7 +644,7 @@ impl Interp {
                                     self.property_debug_name(id)
                                 ),
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     }
                 }
@@ -683,7 +700,13 @@ impl Interp {
                                         "ReferenceError",
                                         format!("get {}: undefined variable", self.id_name(name)),
                                     );
-                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                    dispatch_halt!(
+                                        self.raise_js(error),
+                                        pc,
+                                        self,
+                                        return_depth,
+                                        code
+                                    );
                                 };
                                 self.push(v);
                                 pc += ilen;
@@ -693,7 +716,8 @@ impl Interp {
                                 self.mop_get(code, inst, name, envref),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                             self.push(v);
                             pc += ilen;
@@ -714,7 +738,8 @@ impl Interp {
                             self.mop_get(code, self.global_obj, name, global),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ))
                     } else if self.instance_has(self.object_proto, name).0 {
                         // `global_props` is the OWN-property index of the
@@ -744,7 +769,8 @@ impl Interp {
                             self.mop_get(code, self.object_proto, name, global),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ))
                     } else {
                         None
@@ -792,7 +818,7 @@ impl Interp {
                                 "ReferenceError",
                                 format!("get {}: undefined variable", self.id_name(name)),
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     }
                     pc += ilen;
@@ -815,7 +841,8 @@ impl Interp {
                             self.catchable_type_error_msg(cannot_coerce_to_object(top.kind)),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ),
                         // A `Number`/`Integer`/`Boolean` primitive's ToObject
                         // boxes to its `%Number.prototype%`/`%Boolean.prototype%`
@@ -935,7 +962,8 @@ impl Interp {
                                             self.raise_js(error),
                                             pc,
                                             self,
-                                            return_depth
+                                            return_depth,
+                                            code
                                         );
                                     }
                                     EnvironmentSet::Const => {
@@ -950,7 +978,8 @@ impl Interp {
                                             self.raise_js(error),
                                             pc,
                                             self,
-                                            return_depth
+                                            return_depth,
+                                            code
                                         );
                                     }
                                     EnvironmentSet::Missing => {}
@@ -971,7 +1000,8 @@ impl Interp {
                                 self.mop_has_with_recursions(code, inst, name),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                             self.meter
                                 .tick_raw(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING);
@@ -979,7 +1009,8 @@ impl Interp {
                                 self.mop_set(code, inst, name, value, envref),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                             if !accepted && self.strict {
                                 // A rejected store (frozen or non-writable
@@ -990,7 +1021,8 @@ impl Interp {
                                     self.failed_set_error(inst, name, "set"),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                             }
                             self.meter.tick_builtin();
@@ -1021,7 +1053,7 @@ impl Interp {
                                 "TypeError",
                                 format!("set {}: const", self.property_debug_name(name)),
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     } else {
                         // `global_props` is the OWN-property index of the global
@@ -1054,7 +1086,7 @@ impl Interp {
                                 "ReferenceError",
                                 format!("set {}: undefined property", self.id_name(name)),
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                         if !own_global {
                             // The create is refused on a non-extensible global —
@@ -1084,14 +1116,16 @@ impl Interp {
                             self.ordinary_set(code, self.global_obj, name, value, global),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         if !accepted && self.strict {
                             dispatch_halt!(
                                 self.failed_set_error(self.global_obj, name, "set"),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                         }
                     }
@@ -1169,11 +1203,18 @@ impl Interp {
                             self.catchable_type_error_msg(cannot_coerce_to_object(base.kind)),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                     }
                     let key = if key.kind == Kind::Reference {
-                        dispatch_result!(self.to_primitive(code, key, true), pc, self, return_depth)
+                        dispatch_result!(
+                            self.to_primitive(code, key, true),
+                            pc,
+                            self,
+                            return_depth,
+                            code
+                        )
                     } else {
                         key
                     };
@@ -1198,7 +1239,8 @@ impl Interp {
                         self.property_at_get(code, obj, key),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     self.push(s);
                     pc += size as usize;
@@ -1213,7 +1255,8 @@ impl Interp {
                         self.property_at_set(code, obj, key, value, false),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     self.push(value);
                     pc += size as usize;
@@ -1309,7 +1352,8 @@ impl Interp {
                             self.property_at_set(code, obj, key, value, true),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         // Compact array elements live outside the ordinary
                         // property chain; carry the compiler's descriptor
@@ -1359,7 +1403,8 @@ impl Interp {
                                     self.ordinary_get(code, instance, symbol_id, iterable),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                                 (method.kind != Kind::Undefined).then_some(method)
                             }
@@ -1372,7 +1417,8 @@ impl Interp {
                             self.call_primitive_method(code, method, iterable, &[]),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         if iterator.kind != Kind::Reference {
                             // GetIterator step 3 (`fxGetIterator`'s
@@ -1384,7 +1430,8 @@ impl Interp {
                                 self.catchable_type_error_msg("iterator: not an object".into()),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                         }
                         self.push(iterator);
@@ -1417,7 +1464,8 @@ impl Interp {
                                     self.ordinary_get(code, instance, sync_id, iterable),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 )
                             };
                             if matches!(sync_method.kind, Kind::Undefined | Kind::Null) {
@@ -1425,10 +1473,17 @@ impl Interp {
                                     self.catchable_type_error_msg("call: not a function".into()),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                             }
-                            dispatch_halt!(self.catchable_type_error(), pc, self, return_depth);
+                            dispatch_halt!(
+                                self.catchable_type_error(),
+                                pc,
+                                self,
+                                return_depth,
+                                code
+                            );
                         }
                     }
                     match iterable.value {
@@ -1489,7 +1544,8 @@ impl Interp {
                                 )),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         _ => {
@@ -1500,7 +1556,7 @@ impl Interp {
                             // same activation observes it.
                             let error =
                                 self.internal_error("TypeError", "call: not a function".into());
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     }
                     pc += size as usize;
@@ -1554,7 +1610,8 @@ impl Interp {
                             self.catchable_type_error_msg("iterator result: not an object".into()),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                     }
                     pc += size as usize;
@@ -1702,7 +1759,7 @@ impl Interp {
                             // Valid compiled private initialization always has an
                             // instance receiver; this guards malformed VM input.
                             let error = self.build_error("TypeError", 0, 0);
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     };
                     let flag = code[pc + ilen + 1];
@@ -1766,7 +1823,7 @@ impl Interp {
                                     format!("get {private_name}: undefined private property")
                                 },
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     };
                     let key = (object, brand);
@@ -1778,7 +1835,8 @@ impl Interp {
                                 self.run_callback(code, getter, receiver, &[]),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             ),
                             None => Slot::undefined(),
                         }
@@ -1787,7 +1845,7 @@ impl Interp {
                             "TypeError",
                             format!("get {private_name}: undefined private property"),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     };
                     self.push(value);
                     pc += ilen;
@@ -1814,7 +1872,7 @@ impl Interp {
                                     format!("set {private_name}: undefined private property")
                                 },
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     };
                     let key = (object, brand);
@@ -1827,7 +1885,8 @@ impl Interp {
                                     self.run_callback(code, setter, receiver, &[value]),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                             }
                             None => {
@@ -1835,7 +1894,7 @@ impl Interp {
                                     "TypeError",
                                     format!("set {private_name}: undefined private property"),
                                 );
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                             }
                         }
                     } else {
@@ -1843,7 +1902,7 @@ impl Interp {
                             "TypeError",
                             format!("set {private_name}: undefined private property"),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     self.push(value);
                     pc += ilen;
@@ -1864,7 +1923,7 @@ impl Interp {
                         _ => {
                             let error =
                                 self.internal_error("TypeError", "in: not an object".into());
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     };
                     self.push(Slot::boolean(present));
@@ -1892,7 +1951,7 @@ impl Interp {
                                 "TypeError",
                                 format!("set {}: not extensible", self.property_debug_name(id)),
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     } else if let Payload::Reference(inst) = obj.value {
                         if self.proxies.contains_key(&inst) {
@@ -1902,13 +1961,14 @@ impl Interp {
                                 self.proxy_set(code, inst, id, value, obj),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                             if !accepted && self.strict {
                                 // XS ignores a false set-trap result here. Keep
                                 // the spec strict rejection without invented text.
                                 let error = self.build_error("TypeError", 0, 0);
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                             }
                         } else if self.arrays.contains_key(&inst)
                             && !self.arguments_objects.contains(&inst)
@@ -1926,7 +1986,13 @@ impl Interp {
                                         "TypeError",
                                         "set length: not writable".into(),
                                     );
-                                    dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                    dispatch_halt!(
+                                        self.raise_js(error),
+                                        pc,
+                                        self,
+                                        return_depth,
+                                        code
+                                    );
                                 }
                                 self.push(value);
                                 pc += ilen;
@@ -1943,19 +2009,21 @@ impl Interp {
                                 ),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                             if !accepted && self.strict {
                                 // XS ignores the failed shrink result here; this
                                 // spec strict rejection has no XS throw message.
                                 let error = self.build_error("TypeError", 0, 0);
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                             }
                         } else if !dispatch_result!(
                             self.ordinary_set(code, inst, id, value, obj),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ) {
                             // A frozen / non-writable property, or a new key on a
                             // non-extensible object: XS's `mxBehaviorSetProperty`
@@ -1970,7 +2038,8 @@ impl Interp {
                                     self.failed_set_error(inst, id, "set"),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                             }
                         }
@@ -1982,7 +2051,8 @@ impl Interp {
                             self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                     }
                     self.push(value);
@@ -2220,7 +2290,8 @@ impl Interp {
                                 self.ordinary_get(code, inst, id, obj),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         Payload::Reference(inst)
@@ -2246,7 +2317,8 @@ impl Interp {
                                     self.regexp_source_bytes_metered(inst),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                                 if allocated {
                                     self.new_string_metered(&bytes)
@@ -2361,7 +2433,8 @@ impl Interp {
                                 self.ordinary_get(code, self.symbol_proto, id, obj),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         // …and with no `%Symbol.prototype%` linked there is
@@ -2374,7 +2447,8 @@ impl Interp {
                                 self.proxy_get(code, inst, id, obj),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         // Route a thrown getter through the enclosing
@@ -2388,7 +2462,8 @@ impl Interp {
                             self.ordinary_get(code, inst, id, obj),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ),
                         // A primitive string boxes to `%String.prototype%`
                         // (XS's `fxCoerceToString`/string behavior): `.length`
@@ -2398,7 +2473,8 @@ impl Interp {
                             self.string_property_get(code, off, id, obj),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ),
                         // A primitive number boxes to `%Number.prototype%`
                         // (`(42).toString(2)`): resolve the inherited method.
@@ -2409,7 +2485,8 @@ impl Interp {
                                 self.ordinary_get(code, self.number_proto, id, obj),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         // A primitive bigint boxes to `%BigInt.prototype%`.
@@ -2418,7 +2495,8 @@ impl Interp {
                                 self.ordinary_get(code, self.bigint_proto, id, obj),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         // A primitive boolean boxes to `%Boolean.prototype%`
@@ -2428,7 +2506,8 @@ impl Interp {
                                 self.ordinary_get(code, self.boolean_proto, id, obj),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         // `null.f` / `undefined.f`: `mxToInstance(mxStack)` throws
@@ -2439,7 +2518,8 @@ impl Interp {
                             self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ),
                         _ => Slot::undefined(),
                     };
@@ -2473,7 +2553,8 @@ impl Interp {
                                     self.proxy_delete(code, inst, id),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 )
                             } else if self.arrays.contains_key(&inst)
                                 && !self.arguments_objects.contains(&inst)
@@ -2496,7 +2577,7 @@ impl Interp {
                                         self.property_debug_name(id)
                                     ),
                                 );
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                             }
                             if let Some(s) = self.stack.last_mut() {
                                 *s = Slot::boolean(deleted);
@@ -2507,7 +2588,8 @@ impl Interp {
                                 self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         // ToObject succeeds for every other primitive. Such a
@@ -2570,7 +2652,8 @@ impl Interp {
                                     },
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 )
                             } else if let Some(index) =
                                 numeric_index.filter(|_| self.arrays.contains_key(&inst))
@@ -2637,7 +2720,8 @@ impl Interp {
                                 self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         }
                         // String wrapper index properties are non-configurable.
@@ -2654,7 +2738,7 @@ impl Interp {
                                 self.property_debug_name(id.unwrap_or(0))
                             ),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     self.push(Slot::boolean(deleted));
                     pc += size as usize;
@@ -2841,7 +2925,7 @@ impl Interp {
                                 "TypeError",
                                 "extends: class is not a constructor".into(),
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     };
                     let proto = self.slots.alloc(Slot::instance(parent_proto));
@@ -2976,7 +3060,7 @@ impl Interp {
                     if parent.is_null() || !self.slot_is_constructor(parent) {
                         let error =
                             self.internal_error("TypeError", "super: not a constructor".into());
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     self.pending_new_target = Some(self.target_func);
                     self.push(Slot::uninitialized());
@@ -3015,7 +3099,7 @@ impl Interp {
                     self.eval_direct = true;
                     let outcome = self.call_native(Native::Eval, base, argc, false, code);
                     self.eval_direct = false;
-                    dispatch_result!(outcome, pc, self, return_depth);
+                    dispatch_result!(outcome, pc, self, return_depth, code);
                     if self.check_meter() == MeterCheck::Abort {
                         return Step::Host(Halt::MeterAbort);
                     }
@@ -3089,11 +3173,12 @@ impl Interp {
                                 self.catchable_type_error_msg("new: not a constructor".into()),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                         }
                         let result = self.call_promise_function(code, f, base, argc);
-                        dispatch_result!(result, pc, self, return_depth);
+                        dispatch_result!(result, pc, self, return_depth, code);
                         if self.check_meter() == MeterCheck::Abort {
                             return Step::Host(Halt::MeterAbort);
                         }
@@ -3104,7 +3189,8 @@ impl Interp {
                             self.call_native(native, base, argc, has_target, code),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         // Return into the JS caller: `END_ALL` checks.
                         if self.check_meter() == MeterCheck::Abort {
@@ -3122,7 +3208,8 @@ impl Interp {
                                 self.catchable_type_error_msg("new: not a constructor".into()),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                         }
                         // A native receiver can be dispatched in place; a user
@@ -3132,7 +3219,8 @@ impl Interp {
                             self.call_dot_call_native(base, argc, code),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ) {
                             true => {
                                 if self.check_meter() == MeterCheck::Abort {
@@ -3147,7 +3235,7 @@ impl Interp {
                                     }
                                     pc = body_start;
                                 }
-                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
+                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),
                             },
                         }
                     } else if let Some((NativeMethod::FunctionApply, base)) = method {
@@ -3159,7 +3247,8 @@ impl Interp {
                                 self.catchable_type_error_msg("new: not a constructor".into()),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                         }
                         // A native receiver dispatches in place (dense-array or
@@ -3169,7 +3258,8 @@ impl Interp {
                             self.call_dot_apply_native(base, code),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ) {
                             true => {
                                 if self.check_meter() == MeterCheck::Abort {
@@ -3188,7 +3278,7 @@ impl Interp {
                                 // TypeError: resume a caller's handler (or escape
                                 // to the host if uncaught) rather than propagate
                                 // the raw `Resume`.
-                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
+                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),
                             },
                         }
                     } else if let Some((m, base)) = method {
@@ -3205,14 +3295,16 @@ impl Interp {
                                 self.catchable_type_error_msg("new: not a constructor".into()),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                         }
                         dispatch_result!(
                             self.call_native_method(m, base, argc, code),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         if self.check_meter() == MeterCheck::Abort {
                             return Step::Host(Halt::MeterAbort);
@@ -3234,7 +3326,8 @@ impl Interp {
                                     self.catchable_type_error_msg("new: not a constructor".into()),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                             }
                             match self.enter_construct_bound(bf, base, argc, ret_pc) {
@@ -3245,7 +3338,7 @@ impl Interp {
                                     pc = body_start;
                                     continue;
                                 }
-                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
+                                Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),
                             }
                         }
                         // BoundFunction.[[Call]] is ordinary abstract Call
@@ -3266,7 +3359,8 @@ impl Interp {
                             self.invoke_value(code, func, this, &args),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         self.push(result);
                         if self.check_meter() == MeterCheck::Abort {
@@ -3298,14 +3392,16 @@ impl Interp {
                                 self.proxy_construct(code, px, &args, nt),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         } else {
                             dispatch_result!(
                                 self.proxy_call(code, px, this, &args),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             )
                         };
                         self.push(result);
@@ -3336,7 +3432,7 @@ impl Interp {
                             // outward. Without this, a throw from an
                             // eval-/`Function`-defined callee returned straight
                             // out of the caller, bypassing its `try`/`catch`.
-                            Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
+                            Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),
                         }
                     } else {
                         match self.enter_call(argc, ret_pc, has_target) {
@@ -3352,7 +3448,7 @@ impl Interp {
                             // is entered. Resume the catch/finally in this loop,
                             // or propagate to the dispatch loop that owns a
                             // handler below this one.
-                            Err(halt) => dispatch_halt!(halt, pc, self, return_depth),
+                            Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),
                         }
                     }
                 }
@@ -3398,7 +3494,7 @@ impl Interp {
                                         self.property_debug_name(id)
                                     ),
                                 );
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                                dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
@@ -3436,7 +3532,7 @@ impl Interp {
                             "TypeError",
                             format!("set {}: const", self.id_name(id)),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     self.write_closure_cell(k, top);
@@ -3502,7 +3598,7 @@ impl Interp {
                             "TypeError",
                             format!("set {}: const", self.id_name(id)),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let v = self.pop();
                     self.write_closure_cell(k, v);
@@ -3769,7 +3865,7 @@ impl Interp {
 
                 // ---- arithmetic -------------------------------------
                 XS_CODE_ADD => {
-                    dispatch_result!(self.op_add(code), pc, self, return_depth);
+                    dispatch_result!(self.op_add(code), pc, self, return_depth, code);
                     pc += size as usize;
                 }
                 XS_CODE_SUBTRACT => {
@@ -3777,7 +3873,8 @@ impl Interp {
                         self.binary_arith(code, ArithOp::Sub),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     pc += size as usize;
                 }
@@ -3786,7 +3883,8 @@ impl Interp {
                         self.binary_arith(code, ArithOp::Mul),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     pc += size as usize;
                 }
@@ -3795,7 +3893,8 @@ impl Interp {
                         self.binary_arith(code, ArithOp::Div),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     pc += size as usize;
                 }
@@ -3804,34 +3903,71 @@ impl Interp {
                         self.binary_arith(code, ArithOp::Mod),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     pc += size as usize;
                 }
 
                 // ---- bitwise ----------------------------------------
                 XS_CODE_BIT_AND => {
-                    dispatch_result!(self.binary_bit(code, BitOp::And), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_bit(code, BitOp::And),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_BIT_OR => {
-                    dispatch_result!(self.binary_bit(code, BitOp::Or), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_bit(code, BitOp::Or),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_BIT_XOR => {
-                    dispatch_result!(self.binary_bit(code, BitOp::Xor), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_bit(code, BitOp::Xor),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_LEFT_SHIFT => {
-                    dispatch_result!(self.binary_bit(code, BitOp::Shl), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_bit(code, BitOp::Shl),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_SIGNED_RIGHT_SHIFT => {
-                    dispatch_result!(self.binary_bit(code, BitOp::Sar), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_bit(code, BitOp::Sar),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_UNSIGNED_RIGHT_SHIFT => {
-                    dispatch_result!(self.binary_bit(code, BitOp::Shr), pc, self, return_depth);
+                    dispatch_result!(
+                        self.binary_bit(code, BitOp::Shr),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_BIT_NOT => {
@@ -3840,7 +3976,8 @@ impl Interp {
                         self.to_numeric_integer_value(code, raw),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     if let Payload::BigInt(off) = a.value {
                         let result = self.bigint_bit_not(off);
@@ -3853,7 +3990,13 @@ impl Interp {
 
                 // ---- comparison -------------------------------------
                 XS_CODE_LESS => {
-                    dispatch_result!(self.relational(code, RelOp::Less), pc, self, return_depth);
+                    dispatch_result!(
+                        self.relational(code, RelOp::Less),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_LESS_EQUAL => {
@@ -3861,12 +4004,19 @@ impl Interp {
                         self.relational(code, RelOp::LessEqual),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     pc += size as usize;
                 }
                 XS_CODE_MORE => {
-                    dispatch_result!(self.relational(code, RelOp::More), pc, self, return_depth);
+                    dispatch_result!(
+                        self.relational(code, RelOp::More),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_MORE_EQUAL => {
@@ -3874,32 +4024,62 @@ impl Interp {
                         self.relational(code, RelOp::MoreEqual),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     pc += size as usize;
                 }
                 XS_CODE_STRICT_EQUAL => {
-                    dispatch_result!(self.equality(code, true, false), pc, self, return_depth);
+                    dispatch_result!(
+                        self.equality(code, true, false),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_STRICT_NOT_EQUAL => {
-                    dispatch_result!(self.equality(code, true, true), pc, self, return_depth);
+                    dispatch_result!(
+                        self.equality(code, true, true),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_EQUAL => {
-                    dispatch_result!(self.equality(code, false, false), pc, self, return_depth);
+                    dispatch_result!(
+                        self.equality(code, false, false),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
                 XS_CODE_NOT_EQUAL => {
-                    dispatch_result!(self.equality(code, false, true), pc, self, return_depth);
+                    dispatch_result!(
+                        self.equality(code, false, true),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += size as usize;
                 }
 
                 // ---- unary ------------------------------------------
                 XS_CODE_MINUS => {
                     let raw = self.pop();
-                    let a =
-                        dispatch_result!(self.to_number_value(code, raw), pc, self, return_depth);
+                    let a = dispatch_result!(
+                        self.to_number_value(code, raw),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     // `-aBigInt` (XS_CODE_MINUS general path →
                     // `fxToNumericNumberUnary(the, a, gxTypeBigInt._neg)`):
                     // `fxBigInt_neg` copies the magnitude into a fresh chunk
@@ -3917,15 +4097,20 @@ impl Interp {
                 }
                 XS_CODE_PLUS => {
                     let raw = self.pop();
-                    let a =
-                        dispatch_result!(self.to_number_value(code, raw), pc, self, return_depth);
+                    let a = dispatch_result!(
+                        self.to_number_value(code, raw),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     // Unary plus performs ToNumber rather than ToNumeric, so
                     // a BigInt is a catchable TypeError. Preserve XS's integer
                     // fast kind for every other integral conversion.
                     if a.kind == Kind::BigInt {
                         let error = self
                             .internal_error("TypeError", "cannot coerce bigint to number".into());
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     self.push(a);
                     pc += size as usize;
@@ -3957,7 +4142,7 @@ impl Interp {
                     if self.this_val.kind == Kind::Uninitialized {
                         let error = self
                             .internal_error("ReferenceError", "this: not initialized yet".into());
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     self.push(self.this_val);
                     pc += size as usize;
@@ -4005,7 +4190,7 @@ impl Interp {
                     if self.this_val.kind != Kind::Uninitialized {
                         let error = self
                             .internal_error("ReferenceError", "this: already initialized".into());
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     self.this_val = self.stack.last().copied().unwrap_or_else(Slot::undefined);
                     for capture in self.this_captures.drain(..) {
@@ -4038,13 +4223,14 @@ impl Interp {
                             "TypeError",
                             format!("get super.{}: no prototype", self.property_debug_name(id)),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let value = dispatch_result!(
                         self.ordinary_get(code, base, id, receiver),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     self.push(value);
                     pc += ilen;
@@ -4078,7 +4264,7 @@ impl Interp {
                     // guard bare rather than invent a corresponding XS text.
                     if super_ref.next.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let value = dispatch_result!(
                         match read_key {
@@ -4089,7 +4275,8 @@ impl Interp {
                         },
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     self.push(value);
                     pc += size as usize;
@@ -4115,20 +4302,22 @@ impl Interp {
                             "TypeError",
                             format!("set super.{}: no prototype", self.property_debug_name(id)),
                         );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, base, id, value, receiver),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     if !accepted {
                         dispatch_halt!(
                             self.failed_super_set_error(base, id, receiver),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                     }
                     self.push(value);
@@ -4159,20 +4348,22 @@ impl Interp {
                     // ID; there is no corresponding stable diagnostic here.
                     if super_ref.next.is_null() {
                         let error = self.build_error("TypeError", 0, 0);
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, super_ref.next, id, value, receiver),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     if !accepted {
                         dispatch_halt!(
                             self.failed_super_set_error(super_ref.next, id, receiver),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                     }
                     self.push(value);
@@ -4264,7 +4455,8 @@ impl Interp {
                                 self.to_number_value(code, top),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             );
                             if let Some(s) = self.stack.last_mut() {
                                 *s = numeric;
@@ -4282,7 +4474,8 @@ impl Interp {
                         self.to_primitive(code, top, true),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     if primitive.kind == Kind::Symbol {
                         return Step::Host(Halt::NotImplemented("to_string:symbol"));
@@ -4309,7 +4502,8 @@ impl Interp {
                             self.to_number_value(code, current),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ),
                     };
                     if let Payload::BigInt(off) = numeric.value {
@@ -4376,15 +4570,30 @@ impl Interp {
                     }
                     let left = self.stack[n - 2];
                     let right = self.stack[n - 1];
-                    let a =
-                        dispatch_result!(self.to_number_value(code, left), pc, self, return_depth);
-                    let b =
-                        dispatch_result!(self.to_number_value(code, right), pc, self, return_depth);
+                    let a = dispatch_result!(
+                        self.to_number_value(code, left),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
+                    let b = dispatch_result!(
+                        self.to_number_value(code, right),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     self.stack.truncate(n - 2);
                     match (a.kind, b.kind) {
                         (Kind::BigInt, Kind::BigInt) => {
-                            let result =
-                                dispatch_result!(self.bigint_pow(a, b), pc, self, return_depth);
+                            let result = dispatch_result!(
+                                self.bigint_pow(a, b),
+                                pc,
+                                self,
+                                return_depth,
+                                code
+                            );
                             self.push(result);
                         }
                         (Kind::BigInt, _) | (_, Kind::BigInt) => {
@@ -4397,7 +4606,7 @@ impl Interp {
                                 }
                                 .into(),
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                         _ => self.push(Slot::number(fx_pow(to_number(&a), to_number(&b)))),
                     }
@@ -4415,7 +4624,8 @@ impl Interp {
                         self.instanceof_operator(code, left, right),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     self.push(Slot::boolean(result));
                     pc += size as usize;
@@ -4449,14 +4659,20 @@ impl Interp {
                             self.catchable_type_error_msg("in: not an object".into()),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         ),
                     };
                     // The spec checks that the RHS is an object before
                     // coercing the LHS. In particular, an object key's
                     // `@@toPrimitive` must not run for `key in null`.
-                    let key =
-                        dispatch_result!(self.to_property_key(code, key), pc, self, return_depth);
+                    let key = dispatch_result!(
+                        self.to_property_key(code, key),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     // `k in p`: the proxy `has` trap (ECMA-262 10.5.7). No index /
                     // boot-default gate applies — a proxy honors any string key.
                     if self.proxies.contains_key(&objref) {
@@ -4481,7 +4697,8 @@ impl Interp {
                             },
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         self.meter.tick_raw(IN_METERING);
                         self.push(Slot::boolean(present));
@@ -4516,7 +4733,8 @@ impl Interp {
                                     self.to_property_id(code, key),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 )),
                             }
                         } else {
@@ -4524,7 +4742,8 @@ impl Interp {
                                 self.to_property_id(code, key),
                                 pc,
                                 self,
-                                return_depth
+                                return_depth,
+                                code
                             ))
                         };
                     // Answer with the metered chain walk: `fxRunIn` calls
@@ -4541,7 +4760,8 @@ impl Interp {
                         self.mop_has_read_with_recursions(code, objref, read_key),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     self.meter.tick_raw(IN_METERING);
                     self.meter
@@ -4663,7 +4883,7 @@ impl Interp {
                             // which `step_async` turns into a result-promise
                             // rejection.
                             let v = *self.stack.last().unwrap_or(&Slot::undefined());
-                            dispatch_halt!(self.raise_js(v), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(v), pc, self, return_depth, code);
                         }
                         ResumeStatus::Return => {
                             // Fall through to the compiler-emitted generator
@@ -4831,7 +5051,8 @@ impl Interp {
                         // native method driving a callback via `run_callback`).
                         // Construct/`this` return still applies; leave the
                         // result on the value stack for the caller to read.
-                        let ret = dispatch_result!(self.end_completion(op), pc, self, return_depth);
+                        let ret =
+                            dispatch_result!(self.end_completion(op), pc, self, return_depth, code);
                         if return_depth != 0 {
                             // A callback frame: pop the activation and push its
                             // result, exactly as a normal `END` does, so
@@ -4861,7 +5082,8 @@ impl Interp {
                     // Construct return (XS's `END` with `mxFrameHasTarget`):
                     // a constructor's completion is its `this` instance unless
                     // the body explicitly returned an object.
-                    let ret = dispatch_result!(self.end_completion(op), pc, self, return_depth);
+                    let ret =
+                        dispatch_result!(self.end_completion(op), pc, self, return_depth, code);
                     let resume = self.leave_call();
                     self.push(ret);
                     pc = resume;
@@ -5053,7 +5275,8 @@ impl Interp {
                         ),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     let promise = self.async_instances[&inst].result_promise;
                     let promise_slot = Slot::of(Kind::Reference, Payload::Reference(promise));
@@ -5176,6 +5399,9 @@ impl Interp {
                     let target = (pc as isize + size as isize + off as isize) as usize;
                     self.jumps.push(CatchJump {
                         target_pc: target,
+                        segment: self
+                            .active_segment
+                            .or_else(|| self.func_segments.get(&self.cur_func).copied()),
                         stack_len: self.stack.len(),
                         locals_len: self.locals.len(),
                         id_map: self.id_map.clone(),
@@ -5210,7 +5436,7 @@ impl Interp {
                 // no handler the throw escapes to the host: `Halt::Throw`.
                 XS_CODE_THROW => {
                     let v = *self.stack.last().unwrap_or(&Slot::undefined());
-                    dispatch_halt!(self.raise_js(v), pc, self, return_depth);
+                    dispatch_halt!(self.raise_js(v), pc, self, return_depth, code);
                 }
                 // `rethrow` (`XS_CODE_RETHROW`, xsRun.c:1405): re-`fxJump`
                 // with the current `mxException` (a finally re-raising a
@@ -5218,7 +5444,7 @@ impl Interp {
                 // already in `mxException` rather than on the stack.
                 XS_CODE_RETHROW => {
                     let v = self.exception;
-                    dispatch_halt!(self.raise_js(v), pc, self, return_depth);
+                    dispatch_halt!(self.raise_js(v), pc, self, return_depth, code);
                 }
                 // `throw_status` (`XS_CODE_THROW_STATUS`, xsRun.c:1423):
                 // throw only when the frame's status carries `XS_THROW_STATUS`
@@ -5253,7 +5479,8 @@ impl Interp {
                             self.array_to_object(resource),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                         let Payload::Reference(inst) = object.value else {
                             unreachable!("ToObject result")
@@ -5265,7 +5492,8 @@ impl Interp {
                                     self.mop_get(code, inst, id, resource),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                             }
                         }
@@ -5280,13 +5508,14 @@ impl Interp {
                                     self.mop_get(code, inst, id, resource),
                                     pc,
                                     self,
-                                    return_depth
+                                    return_depth,
+                                    code
                                 );
                             }
                         }
                         if !self.is_callable_value(value) {
                             let error = self.internal_error("TypeError", error_message.into());
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth);
+                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                         value
                     };
@@ -5411,14 +5640,16 @@ impl Interp {
                             self.run_callback(code, initialize, Slot::undefined(), &[]),
                             pc,
                             self,
-                            return_depth
+                            return_depth,
+                            code
                         );
                     }
                     let _ = dispatch_result!(
                         self.run_callback(code, execute, Slot::undefined(), &[]),
                         pc,
                         self,
-                        return_depth
+                        return_depth,
+                        code
                     );
                     // `fxPrepareModule` returns a module instance to the host
                     // loader. The test262 execution boundary observes only the

@@ -172,6 +172,13 @@ impl Interp {
     /// Drop code buffers no live guest function references and remap the
     /// surviving function→segment indices densely.
     fn compact_code_segments(&mut self) {
+        // Dispatchers and native fences retain segment indices in Rust locals.
+        // Those handles cannot participate in a machine-field remap. Keep code
+        // indices stable while a crank runs or retains a halted activation;
+        // the next collection after a completed crank may compact them.
+        if !self.last_crank_completed {
+            return;
+        }
         let live: std::collections::BTreeSet<usize> =
             self.func_segments.values().copied().collect();
         if live.len() == self.code_segments.len()
@@ -190,6 +197,7 @@ impl Interp {
             .enumerate()
             .filter_map(|(index, segment)| live.contains(&index).then_some(segment))
             .collect();
+        self.remap_saved_handler_segments(&remap);
         for segment in self.func_segments.values_mut() {
             *segment = remap[segment];
         }

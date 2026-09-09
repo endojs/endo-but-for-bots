@@ -65,8 +65,8 @@ fn unguarded_unwinds(code: &[Token<'_>]) -> Vec<usize> {
 
 fn macro_ownership_and_metering(code: &[Token<'_>]) -> bool {
     [
-        "Step::Unwound(target) if $machine.call_stack.len() < $return_depth => { return Step::Unwound(target); }",
-        "Step::Unwound(target) => { $program_counter = target; if $machine.check_meter() == MeterCheck::Abort { return Step::Host(Halt::MeterAbort); } continue; }",
+        "Step::Unwound(target) if $machine.call_stack.len() < $return_depth || !$machine.resume_target_belongs_to(target, $code) => { return Step::Unwound(target); }",
+        "Step::Unwound(target) => { $machine.assert_resume_target(target, $code); $program_counter = target.pc; if $machine.check_meter() == MeterCheck::Abort { return Step::Host(Halt::MeterAbort); } continue; }",
     ].iter().all(|pattern| token_positions(code, pattern).len() == 1)
 }
 
@@ -134,7 +134,7 @@ fn an_unwind_leaves_dispatch_only_after_the_depth_test() {
     assert_eq!(
         token_positions(
             result_macro,
-            "Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth)"
+            "Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code)"
         )
         .len(),
         1
@@ -173,7 +173,7 @@ fn control_scan_rejects_renamed_and_obscured_raw_returns() {
         assert_eq!(unwrapped_raises(&tokens(&source)).len(), 1, "{source}");
     }
     let mutated = SRC.replacen(
-        "Err(halt) => dispatch_halt!(halt, pc, self, return_depth),",
+        "Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),",
         "Err(halt) => break halt,",
         1,
     );
@@ -200,6 +200,8 @@ fn control_scan_rejects_missing_depth_and_meter_guards() {
     for (before, after) in [
         ("if $machine.call_stack.len() < $return_depth", ""),
         ("$machine.check_meter()", "MeterCheck::Continue"),
+        ("$machine.assert_resume_target(target, $code);", ""),
+        ("|| !$machine.resume_target_belongs_to(target, $code)", ""),
     ] {
         assert!(macro_source.contains(before));
         let mutated = macro_source.replace(before, after);

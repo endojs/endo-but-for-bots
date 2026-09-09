@@ -4245,9 +4245,17 @@ enum Step {
     Awaited(Slot),
     AsyncYielded(Slot),
     /// Resume a handler in the dispatch activation that owns its frame.
-    Unwound(usize),
+    Unwound(ResumeTarget),
     /// A non-JavaScript abort, propagated unchanged through native boundaries.
     Host(Halt),
+}
+
+/// A handler cursor and the code buffer it indexes. `None` names the current
+/// crank's top-level buffer, including catches established before promotion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResumeTarget {
+    pc: usize,
+    segment: Option<usize>,
 }
 
 /// XS's `fxToInstance` diagnostic for a member access on a nullish base
@@ -5011,7 +5019,8 @@ struct CallerState {
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by
 /// `CATCH`). It records exactly what XS's `c_setjmp` restore restores when
-/// a throw longjmps here: where to resume (`target_pc`, XS's `jump->code`),
+/// a throw longjmps here: where to resume (`segment`/`target_pc`, XS's
+/// `jump->code`),
 /// the value-stack cut (`stack_len`, XS's `jump->stack`), the scope cut
 /// (`locals_len`/`id_map`, XS's `jump->scope`/environment), and the call
 /// depth to unwind to (`call_depth`, XS's `jump->frame` — a throw that
@@ -5021,6 +5030,7 @@ struct CallerState {
 #[derive(Clone)]
 struct CatchJump {
     target_pc: usize,
+    segment: Option<usize>,
     stack_len: usize,
     locals_len: usize,
     id_map: std::collections::HashMap<u16, usize>,
@@ -5100,6 +5110,7 @@ struct SavedFrame {
 #[derive(Clone)]
 struct SavedJump {
     target_pc: usize,
+    segment: Option<usize>,
     stack_offset: usize,
     locals_len: usize,
     id_map: std::collections::HashMap<u16, usize>,
@@ -8754,6 +8765,9 @@ impl Interp {
                 .map(|jump| {
                     Some(SavedJump {
                         target_pc: usize::try_from(jump.target_pc).ok()?,
+                        // Legacy rows identify the buffer through cur_func.
+                        // FUNC may be restored after the promise cluster.
+                        segment: None,
                         stack_offset: usize::try_from(jump.stack_offset).ok()?,
                         locals_len: usize::try_from(jump.locals_len).ok()?,
                         id_map: map(jump.id_map)?,
@@ -11911,6 +11925,27 @@ impl Interp {
         self.code_segments.push(buffer);
         self.active_segment = Some(segment);
         segment
+    }
+
+    /// A dispatch may consume a handler only when it borrows that handler's
+    /// buffer. The depth guard alone cannot distinguish nested code buffers.
+    fn resume_target_belongs_to(&self, target: ResumeTarget, code: &[u8]) -> bool {
+        let buffer = match target.segment {
+            Some(segment) => self.code_segments.get(segment),
+            None => self.top_level_code.as_ref(),
+        };
+        buffer.is_some_and(|buffer| std::ptr::eq(buffer.as_ref(), code))
+    }
+
+    /// Check the immutable buffer borrowed by the landing dispatch. Native
+    /// wrappers can restore `active_segment`, and top-level promotion can turn
+    /// an earlier `None` identity into `Some`, without changing that buffer.
+    fn assert_resume_target(&self, target: ResumeTarget, code: &[u8]) {
+        debug_assert!(
+            self.resume_target_belongs_to(target, code),
+            "catch target belongs to another dispatch buffer"
+        );
+        debug_assert!(target.pc < code.len(), "catch target is outside its buffer");
     }
 
     /// The code segment a callee function's body lives in, and whether it
@@ -39742,10 +39777,10 @@ impl Interp {
     /// `the->firstJump`), restoring exactly what the `c_setjmp` restore in
     /// `CATCH` restores — the call frames back to the establishing frame,
     /// then that frame's value-stack and scope cuts — and returning the
-    /// target pc to resume at. Returns `None` when the chain is empty (the
-    /// throw escapes every JS handler and reaches the host boundary), so
+    /// code segment and target pc to resume at. Returns `None` when the chain
+    /// is empty (the throw escapes every JS handler and reaches the host boundary), so
     /// the caller yields `Halt::Throw`.
-    fn unwind_to_jump(&mut self) -> Option<usize> {
+    fn unwind_to_jump(&mut self) -> Option<ResumeTarget> {
         // A throw between `XS_CODE_SUPER` (which arms the pending
         // new-target for the construct about to happen) and the
         // construct frame that consumes it abandons that construct
@@ -39781,7 +39816,10 @@ impl Interp {
         // `with` body resets the environment for the surviving catch/finally.
         self.env = jump.env;
         let _ = jump.flag; // every ironhorse jump is a JS jump (flag == 1)
-        Some(jump.target_pc)
+        Some(ResumeTarget {
+            pc: jump.target_pc,
+            segment: jump.segment,
+        })
     }
 
     /// Raise an engine-created JavaScript value through the same jump-buffer
@@ -39792,7 +39830,7 @@ impl Interp {
     /// The result is always a control transfer for the enclosing dispatch
     /// loop to consume: `Step::Unwound(target)` when a handler caught the
     /// value (the loop that OWNS the handler's frame resumes there, which
-    /// `dispatch_halt!`'s depth test decides), or `Halt::Throw` when the
+    /// `dispatch_halt!`'s depth and buffer tests decide), or `Halt::Throw` when the
     /// chain is empty and the throw escapes to the host. Yielding the caught
     /// case as `Resume` rather than a bare `Ok(target)` is what makes the
     /// depth test unskippable: a raise site cannot assign the target to its
