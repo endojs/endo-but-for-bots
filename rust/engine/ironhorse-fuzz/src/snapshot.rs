@@ -1,14 +1,13 @@
-//! Stage-6 child 4 (design § Snapshots, § Fuzzability): the **snapshot
-//! round-trip-invariance** and **malformed-atom decoder** fuzz arms over
+//! The **snapshot round-trip-invariance** and **malformed-atom decoder** fuzz arms over
 //! `ironhorse-snapshot`'s `XS_M` writer/reader.
 //!
-//! Two invariants, mirroring the two stage-1 fuzz targets' write/read split:
+//! Two invariants cover writing and reading:
 //!
 //! - **Round-trip invariance** ([`roundtrip_generated_is_invariant`],
 //!   [`roundtrip_program_is_invariant`]): a machine state serialized with
 //!   [`ironhorse_snapshot::write_machine_unchecked`], read back with
 //!   [`ironhorse_snapshot::read_machine`], and re-serialized must be
-//!   **byte-identical**, and the decoded image must equal the original. The
+//!   **byte-identical**, including non-reflexive NaN payloads. The
 //!   generated-image arm folds fuzzer bytes into an adversarially-shaped
 //!   slot/chunk arena graph directly (fast, oracle-free); the program arm
 //!   **drives the engine** with a generated program — objects, closures,
@@ -102,9 +101,8 @@ fn pick_off(c: &mut Cursor, offs: &[ChunkOffset]) -> ChunkOffset {
         // payload always sits above its 4-byte header, so 0 is an
         // offset the compactor rejects outright ("chunk offset below
         // header"). `NULL` is the absence sentinel, and the bounds gate
-        // and `page_of` both skip it (review wave 5 — the widened gate
-        // caught this generator minting images that would have panicked
-        // at their first compaction).
+        // and `page_of` both skip it. Using 0 would produce an image
+        // that cannot survive its first compaction.
         ChunkOffset::NULL
     } else {
         offs[(c.byte() as usize) % offs.len()]
@@ -199,8 +197,8 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // free-list round-trip (indices are distinct — all allocated before
     // any free — so no double-free). A suffix, not a prefix: the ledger
     // rows below take ascending owners/descriptors from the LOW indices,
-    // and the reader now refuses a side-table row owned by a free slot
-    // (review findings 2+3), so the generated free set and the generated
+    // and the reader refuses a side-table row owned by a free slot,
+    // so the generated free set and the generated
     // owners must not overlap.
     let n_free = (c.byte() as usize) % idxs.len();
     for &ix in idxs.iter().skip(idxs.len() - n_free) {
@@ -214,8 +212,8 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     idxs.truncate(live_cap as usize);
 
     // The value stack is EMPTY: the reader enforces quiescence (a
-    // populated `STAC` cannot come from an honest writer — review
-    // finding 5), so a generated stack would turn the round-trip target
+    // populated `STAC` cannot come from an honest writer), so a
+    // generated stack would turn the round-trip target
     // into a decode-failure target. The refusal itself is locked by
     // `crafted_row_refusals.rs`, and the raw-bytes mutation lane still
     // corrupts the STAC atom's framing.
@@ -257,18 +255,16 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         count: c.u32() as u64,
     };
 
-    // Side-table ledger rows (wave-4 fuzz gap): arrays, collections,
+    // Side-table ledger rows: arrays, collections,
     // and the `Symbol.for` registry. Generated VALID — owners/refs
     // in-bounds (`< n_slots`), owners/keys strictly ascending — so the
     // round-trip target's write→read identity holds while the
-    // byte-mutation target now has well-framed ARRY/COLL/REGY atoms to
-    // corrupt (before this the decoders were never exercised). A
-    // running counter keeps owners ascending-unique.
+    // byte-mutation target has well-framed ARRY/COLL/REGY atoms to
+    // corrupt. A running counter keeps owners ascending-unique.
     //
-    // "Valid" is whatever the decoders accept, so wave 5's new rules are
-    // generated here too: array item indices strictly ascending and
-    // below the row's declared length, and registry descriptors
-    // pairwise distinct — and, since the review round, owners drawn
+    // Match the decoder's admission rules: array item indices strictly
+    // ascending and below the row's declared length, and registry descriptors
+    // pairwise distinct, owners drawn
     // only from LIVE slots and collection tables with reachable rehash
     // geometry. Generating rows the decoder refuses would turn the
     // round-trip target into a decode-failure target and stop
@@ -313,7 +309,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             })
             .collect();
         let kind = c.byte() % 4;
-        // Reachable rehash geometry (review finding 9): weak kinds
+        // Reachable rehash geometry: weak kinds
         // carry no table; Map/Set carry the smallest power of two
         // whose grow threshold covers the live size, optionally
         // doubled a step or two (the cleared-then-shrinking states the
@@ -388,11 +384,10 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         })
         .collect();
 
-    // The GRADUATION-WAVE atoms. Eight state-bearing families landed
-    // and only `DATE` reached this generator, so seven decoders were
-    // exercised by nothing but their own hand-written fixtures --
-    // exactly the gap the earlier ARRY/COLL/REGY comment describes,
-    // reopened one wave later. Generated VALID for the same reason:
+    // Function, proxy, accessor, private, disposal, generator, and
+    // promise state must also reach the decoder through generated atoms.
+    // `generated_arena_snapshots_round_trip_byte_exact` requires a
+    // non-empty witness for each family. Generate valid rows according to
     // what the DECODERS accept (strictly-ascending keys, in-range
     // enums, UTF-8 names, no records on a disposed stack, frame and
     // state agreeing), so write -> read identity holds here while the
@@ -1109,11 +1104,8 @@ mod tests {
         let mut saw_free = false;
         let mut saw_chunks = false;
         let mut saw_symbols = false;
-        // The side-table arms need witnesses too. Review wave 5 probed
-        // the generator and found it DOES produce all three today — but
-        // the four witnesses above exist precisely so a refactor cannot
-        // silently degrade an arm to empty, and the ledger arm shipped
-        // without that protection.
+        // Require non-empty witnesses for the side-table arms too, so a
+        // generator refactor cannot silently stop exercising a decoder.
         let mut saw_arrays = false;
         let mut saw_collections = false;
         let mut saw_registry = false;
@@ -1170,7 +1162,7 @@ mod tests {
         assert!(saw_free, "free-list arm never exercised");
         // (No value-stack witness: the reader enforces quiescence, so
         // the generator emits only the empty stack every honest writer
-        // does — review finding 5.)
+        // does.)
         assert!(saw_chunks, "chunk-arena arm never exercised");
         assert!(saw_symbols, "symbol-table arm never exercised");
         assert!(saw_arrays, "side-table ARRY arm never exercised");
@@ -1281,10 +1273,8 @@ mod tests {
         // correct) but in the invariant: `roundtrip_image_is_invariant`
         // asserts write→read→write **byte-equality**, not value
         // equality, so a non-reflexive float payload is not a false
-        // trophy. The seed input was re-derived when the reader's
-        // quiescence gate emptied the generated stack (review finding
-        // 5) — the original's NaN rode a stack slot; this one is
-        // constructed to land it in heap slot 0 (no chunks, one slot,
+        // trophy. The reader's quiescence gate requires an empty stack,
+        // so the seed places the NaN in heap slot 0 (no chunks, one slot,
         // arm 4, bits 0x7ff8_0000_…).
         let data = [0x00u8, 0x00, 0x04, 0x7f, 0xf8, 0x00, 0x00, 0x00];
         let img = gen_machine_image(&data);
