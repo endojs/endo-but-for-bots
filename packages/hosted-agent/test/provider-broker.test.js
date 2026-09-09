@@ -1273,6 +1273,33 @@ test('a rotation that fails outright never hands out the unstored credential', a
   });
   t.is(record.rotations.length, 0);
   t.is(record.stored().accessToken, accessToken);
+  t.is(record.exchanges.length, 1);
+
+  // The token that exchange consumed is still what the record holds. Failing
+  // the request that discovered the lost write is not enough: without a fence
+  // the next call re-reads the same record and presents the same spent token,
+  // which is the replay that revokes the grant.
+  await t.throwsAsync(() => E(stranded).current(harden({})), {
+    message: /Broker credential consumed/,
+  });
+  t.is(record.exchanges.length, 1);
+
+  // An operator installing a genuinely new grant lifts the fence, because the
+  // record no longer holds the token that was spent.
+  record.replace(
+    oauthState({
+      accessToken: 'operator-regrant',
+      refreshToken: 'operator-refresh',
+      expiresAt: 10_000,
+    }),
+  );
+  await t.throwsAsync(() => E(stranded).current(harden({})), {
+    message: /Broker credential rotation failed/,
+  });
+  // It exchanged again, and against the new grant's token rather than the
+  // spent one.
+  t.is(record.exchanges.length, 2);
+  t.is(record.exchanges[1].refreshToken, 'operator-refresh');
 });
 
 test('a conditional write names the generation it read', async t => {

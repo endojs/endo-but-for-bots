@@ -375,6 +375,31 @@ the one this exchange already spent, so there is nothing safe to hand out.
 That is what makes the invariant recoverable when it is broken rather than
 merely asserted.
 
+### A consumed refresh token outlives the request that lost it
+
+An exchange that succeeds and then fails to store its result has spent the
+stored refresh token without recording what it bought.
+Failing that request is the obvious response and it is not sufficient: the
+single-flight flag clears when the request settles, so the next one re-reads
+the same record and presents the same already-consumed token.
+Against a provider that invalidates a refresh token on use, that second
+presentation is the replay that revokes the whole grant — the failure being
+guarded against, arriving one turn later.
+
+So the loss is fenced rather than merely reported.
+The credential remembers the generation whose token it spent, refuses to
+exchange while the record still holds it, and lifts the fence when the record
+changes, which is exactly the operator re-grant the situation calls for.
+
+The fence is in memory and bounded by the process, and cannot be otherwise: the
+record is where a durable mark would go, and being unable to write the record
+is the condition being marked.
+A broker restarted while a record is fenced will attempt one more exchange and
+can still trip replay detection once.
+That is a real remaining hole, stated rather than papered over, because the
+alternative is a comment claiming a completeness the code does not have — which
+is how the first version of this same failure got written.
+
 ### One retry, on one classification
 
 The transport tells the broker whether the *credential* was refused or the
