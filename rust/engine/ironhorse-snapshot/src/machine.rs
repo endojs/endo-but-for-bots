@@ -2332,6 +2332,30 @@ mod tests {
     }
 
     #[test]
+    fn restore_boundary_reports_name_floor_and_symbol_table_failures() {
+        let image = Interp::new().snapshot_image_for_testing(&sig()).unwrap();
+        // Deliberately bypass admission to test restoration's own backstops.
+        // No external caller can mutate a real ValidatedSnapshot this way.
+        let restore =
+            |image| image_to_interp(ValidatedSnapshot::from_validated_image(image)).map(|_| ());
+        assert_eq!(restore(image.clone()), Ok(()));
+        let mut invalid = image.clone();
+        invalid.name_floor = Some(u32::MAX);
+        assert_eq!(
+            restore(invalid),
+            Err(SnapshotError::Corrupt(
+                "installed-names floor does not restore"
+            ))
+        );
+        let mut invalid = image;
+        invalid.symbols.next_id = 0;
+        assert_eq!(
+            restore(invalid),
+            Err(SnapshotError::Corrupt("symbol-key table does not restore"))
+        );
+    }
+
+    #[test]
     fn checkpoint_refuses_a_legacy_ledger_then_rebuilds_without_losing_state() {
         use crate::store::{HeapStore, MemoryStore, RootLedger};
         let (code, symbols) = ironhorse_compile::compile_atoms("1").unwrap();
