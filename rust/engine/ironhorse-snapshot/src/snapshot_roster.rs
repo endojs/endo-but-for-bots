@@ -712,6 +712,36 @@ macro_rules! define_payloads {
         pub(crate) const PAYLOADS: &[PayloadDesc] = &[
             $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), atom: $atom },)*
         ];
+        // Uniform field cloning also covers the Copy name-floor field.
+        #[allow(clippy::clone_on_copy)]
+        pub(crate) fn small_from_image(image: &crate::image::MachineImage) -> crate::store::SmallState {
+            crate::store::SmallState {
+                $($($init_field: image.$init_field.clone(),)?) *
+            }
+        }
+
+        pub(crate) fn image_from_small(
+            small: crate::store::SmallState,
+            manifest: crate::store::StoreManifest,
+            chunks: Vec<u8>,
+            slots: Vec<ironhorse_vm::Slot>,
+            slot_free: Vec<u32>,
+        ) -> crate::image::MachineImage {
+            let mut image = crate::image::MachineImage {
+                version: manifest.version,
+                signature: manifest.signature,
+                creation: manifest.creation,
+                chunks,
+                slots,
+                slot_live: manifest.slot_live,
+                $($($init_field: small.$init_field,)?) *
+            };
+            // The retired small-state free-list payload is not authoritative:
+            // the store's independently validated arena segments supply it.
+            image.slot_free = slot_free;
+            image
+        }
+
         /// Preserve section-ID order and permissive migration decoding. Later
         /// sections can extend earlier fields (error frames and async state).
         pub(crate) fn decode_legacy_payloads(p: &[u8]) -> Result<crate::store::SmallState, StoreError> {
