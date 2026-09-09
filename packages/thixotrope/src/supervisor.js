@@ -1,25 +1,8 @@
 // @ts-check
-/* global setImmediate */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
-import { createHash } from 'node:crypto';
-import {
-  chmod,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-} from 'node:fs/promises';
-import { createServer } from 'node:net';
-import { join, resolve } from 'node:path';
-import { performance } from 'node:perf_hooks';
-import { setTimeout, clearTimeout } from 'node:timers';
-import process from 'node:process';
-import { inspect } from 'node:util';
-import { fileURLToPath } from 'node:url';
 
 import { makeApplicationRegistry } from './application-registry.js';
 import { makeClockService } from './clock-service.js';
@@ -31,6 +14,9 @@ import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
 import { makeHttpServices } from './http-services.js';
 import { makeObservableInventory } from './observable-inventory.js';
 import { makeMailbox } from './mailbox.js';
+import { makeMailContact } from './mail-contact.js';
+import { makeMailAddressBook } from './mail-address-book.js';
+import { makeFileSyncStringAtom } from './file-sync-string-atom.js';
 import { makeFsStore } from './store-fs.js';
 import { assertUnixPeerLocation, makeUnixNetLayer } from './unix-netlayer.js';
 
@@ -38,10 +24,13 @@ import { assertUnixPeerLocation, makeUnixNetLayer } from './unix-netlayer.js';
 /** @import { Socket } from 'node:net' */
 
 /**
+ * @param {NodePowers} powers
  * @param {string} path
  * @param {unknown} value
  */
-const save = async (path, value) => {
+const save = async (powers, path, value) => {
+  const { open, rename } = powers.fsPromises;
+  const { resolve } = powers.path;
   const file = await open(`${path}.tmp`, 'w', 0o600);
   try {
     await file.writeFile(`${JSON.stringify(value)}\n`);
@@ -60,13 +49,23 @@ const save = async (path, value) => {
 
 /**
  * Run a single local supervisor. The engine lease encloses socket lifetime.
+ * @param {NodePowers} powers
  * @param {string} statePath
  * @param {{engine?: WorkerEngine, idleSleepMs?: number, alarmNow?: () => bigint}} [options]
  */
 export const serveThixotrope = async (
+  powers,
   statePath,
   { engine, idleSleepMs = 30_000, alarmNow } = {},
 ) => {
+  const { chmod, lstat, mkdir, readFile, rm } = powers.fsPromises;
+  const { join, resolve } = powers.path;
+  const { createServer } = powers.net;
+  const { createHash } = powers.crypto;
+  const { process, performance, console } = powers;
+  const { inspect } = powers.util;
+  const { fileURLToPath } = powers.url;
+  const { setTimeout, clearTimeout, setImmediate } = powers.timers;
   statePath = resolve(statePath);
   await mkdir(statePath, { recursive: true, mode: 0o700 });
   const stat = await lstat(statePath);
@@ -86,7 +85,7 @@ export const serveThixotrope = async (
   const packagePath = fileURLToPath(new URL('../', import.meta.url));
   const rawEngine =
     engine ??
-    makeIronhorseEngine({
+    makeIronhorseEngine(powers, {
       workerBinary:
         process.env.THIXOTROPE_IRONHORSE_WORKER ??
         resolve(
@@ -146,8 +145,11 @@ export const serveThixotrope = async (
   /** @type {ReturnType<typeof makeHttpServices> | undefined} */
   let httpServices;
   const provideHttpServices = () => {
-    httpServices ??= makeHttpServices({
-      statePath,
+    httpServices ??= makeHttpServices(powers, {
+      storage: makeFileSyncStringAtom(
+        powers,
+        join(statePath, 'http-services.json'),
+      ),
       publish: (handler, secret) => daemon.publish(handler, secret),
       unpublish: secret => daemon.unpublish(secret),
       openClient: () => daemon.openEphemeralClient(),
@@ -157,8 +159,8 @@ export const serveThixotrope = async (
   /** @type {ReturnType<typeof makeClockService> | undefined} */
   let clockService;
   const provideClockService = () => {
-    clockService ??= makeClockService({
-      statePath,
+    clockService ??= makeClockService(powers, {
+      storage: makeFileSyncStringAtom(powers, join(statePath, 'clock.json')),
       getDaemon: () => daemon,
       ...(alarmNow === undefined ? {} : { now: alarmNow }),
     });
@@ -208,8 +210,8 @@ export const serveThixotrope = async (
   };
 
   try {
-    daemon = await makeThixotropeDaemon({
-      store: makeFsStore(statePath),
+    daemon = await makeThixotropeDaemon(powers, {
+      store: makeFsStore(powers, statePath),
       engine: measured,
       codec: syrupCodec,
       idleSleepMs,
@@ -222,13 +224,13 @@ export const serveThixotrope = async (
       makeNetlayer: async ({ handlers, logger, resumption }) => {
         // makeThixotropeDaemon already holds the exclusive engine lease.
         await rm(peerPath, { force: true });
-        return makeDurableNetLayer({
+        return makeDurableNetLayer(powers, {
           handlers,
           logger,
           resumption,
-          makeBaseNetlayer: async powers => {
-            peerNetlayer = await makeUnixNetLayer({
-              ...powers,
+          makeBaseNetlayer: async networkPowers => {
+            peerNetlayer = await makeUnixNetLayer(powers, {
+              ...networkPowers,
               socketPath: peerPath,
             });
             return peerNetlayer;
@@ -264,7 +266,7 @@ export const serveThixotrope = async (
         publication: `workspace-${workerId}`,
         initialized: false,
       };
-      await save(configPath, config);
+      await save(powers, configPath, config);
     }
     if (
       config?.version !== 1 ||
@@ -284,7 +286,7 @@ export const serveThixotrope = async (
       daemon.publish(root, config.publication);
       await workspace.sleep();
       config.initialized = true;
-      await save(configPath, config);
+      await save(powers, configPath, config);
     }
     let inventory;
     let applications;
@@ -303,10 +305,34 @@ export const serveThixotrope = async (
     }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
     await rm(socketPath, { force: true });
-    const getMailbox = () =>
-      workspace.evaluate(
-        `(globalThis.mailbox ??= E(vats).createWorker('mailbox').then(worker => E(worker).getEvaluator()).then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})()`)})))`,
+    // The workspace owns the durable root. Reuse its presence during this host
+    // lifetime instead of journaling another evaluator call for every command.
+    /** @type {Promise<any> | undefined} */
+    let mailboxAddressBook;
+    const getMailbox = () => {
+      if (mailboxAddressBook) return mailboxAddressBook;
+      const opening = workspace.evaluate(
+        `(globalThis.mailAddressBook ??= (async () => {
+          globalThis.mailbox ??= E(vats).createWorker('mailbox')
+            .then(worker => E(worker).getEvaluator())
+            .then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})()`)}));
+          const mailbox = await globalThis.mailbox;
+          if (!inventory.has('contacts')) {
+            inventory.set('contacts', (${makeObservableInventory.toString()})());
+          }
+          return (${makeMailAddressBook.toString()})(
+            mailbox, inventory.get('contacts'), (${makeMailContact.toString()})
+          );
+        })())`,
       );
+      mailboxAddressBook = opening;
+      // Failed initialization can be repaired in the workspace. Do not pin a
+      // rejected attempt in the host after the user repairs its durable root.
+      void opening.catch(() => {
+        if (mailboxAddressBook === opening) mailboxAddressBook = undefined;
+      });
+      return opening;
+    };
     /** @param {unknown} text */
     const parseInvitation = text => {
       if (typeof text !== 'string' || text.length > 4096)
@@ -324,7 +350,7 @@ export const serveThixotrope = async (
         throw Error('Invalid invitation');
       return {
         ...invitation,
-        location: assertUnixPeerLocation(invitation.location),
+        location: assertUnixPeerLocation(powers, invitation.location),
       };
     };
     const adminMethods = {
@@ -414,8 +440,15 @@ export const serveThixotrope = async (
         });
       },
       invite: async name => {
-        const invitation = await E(getMailbox()).invite(name);
+        const { invitation, identity } =
+          await E(getMailbox()).inviteWithIdentity(name);
         const secret = daemon.publish(invitation);
+        // The publication's cancellation authority follows its identity even
+        // if the user renames or removes the address-book entry later.
+        await workspace.evaluate(
+          '((globalThis.mailInvitations ??= new Map()).set(secret, identity), true)',
+          { secret, identity },
+        );
         return JSON.stringify({
           version: 1,
           location: daemon.location,
@@ -435,7 +468,17 @@ export const serveThixotrope = async (
         const invitation = parseInvitation(text);
         if (invitation.location.designator !== peerPath)
           throw Error('Invitation belongs to another supervisor');
-        await E(getMailbox()).cancelInvitation(invitation.name);
+        await workspace.evaluate(
+          `(async () => {
+            const identity = globalThis.mailInvitations?.get(secret);
+            if (identity) {
+              await E(identity).cancelInvitation();
+              mailInvitations.delete(secret);
+            }
+            return true;
+          })()`,
+          { secret: invitation.secret },
+        );
         daemon.unpublish(invitation.secret);
         return true;
       },
@@ -447,7 +490,7 @@ export const serveThixotrope = async (
         // value crosses into the mailbox vat.
         await getMailbox();
         return workspace.evaluate(
-          'E(mailbox).send(name, text, inventory.get(key))',
+          'E(mailAddressBook).send(name, text, inventory.get(key))',
           { name, text, key },
         );
       },
@@ -468,7 +511,7 @@ export const serveThixotrope = async (
         return;
       }
       sockets.add(socket);
-      const view = makeInventoryViewLifetime(inventory);
+      const view = makeInventoryViewLifetime(powers, inventory);
       const disconnect = () => {
         disconnectViews.delete(socket);
         return view.disconnect();
@@ -491,7 +534,7 @@ export const serveThixotrope = async (
           return view.watch(listener);
         },
       });
-      void makeLocalControl(socket, 'worker', admin).catch(() =>
+      void makeLocalControl(powers, socket, 'worker', admin).catch(() =>
         socket.destroy(),
       );
     });

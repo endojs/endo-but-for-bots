@@ -1,5 +1,5 @@
 // @ts-check
-/* global crypto */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
@@ -16,7 +16,7 @@ import { makeOcapnHub } from './hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { makeEphemeralHubClient } from './ephemeral-hub-client.js';
 import { derivePipeResumption } from './pipe-network.js';
-import { isSessionToken } from './store-fs.js';
+import { isSessionToken } from './store-validators.js';
 import { inspectVatReachability } from './vat-reachability.js';
 import { WorkerHaltError } from './worker-engine.js';
 import { makeWorkerSessionRecords } from './worker-session-records.js';
@@ -96,13 +96,6 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {() => Promise<void>} crash drain queued work then terminate without snapshots
  */
 
-// 128 random bits as lowercase hex: worker ids and default swissnums.
-const randomHex128 = () => {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-};
-
 const textEncoder = new TextEncoder();
 const SHELL_SWISSNUM = swissnumFromBytes(textEncoder.encode('shell'));
 // The endpoint's pseudo-worker id: its session records (resource
@@ -111,6 +104,7 @@ const ENDPOINT_ID = 'e'.repeat(32);
 const ENDPOINT_SESSION = 'endpoint';
 
 /**
+ * @param {Pick<NodePowers, 'randomBytes' | 'console' | 'timers'>} powers
  * @param {object} options
  * @param {ThixotropeStore} options.store
  * @param {WorkerEngine} options.engine
@@ -123,21 +117,33 @@ const ENDPOINT_SESSION = 'endpoint';
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
-const buildDaemon = async ({
-  store,
-  engine,
-  codec,
-  makeNetlayer,
-  resources = {},
-  idleSleepMs = undefined,
-  verbose = false,
-}) => {
+const buildDaemon = async (
+  powers,
+  {
+    store,
+    engine,
+    codec,
+    makeNetlayer,
+    resources = {},
+    idleSleepMs = undefined,
+    verbose = false,
+  },
+) => {
+  // 128 random bits as lowercase hex: worker ids and default swissnums.
+  const randomHex128 = () => {
+    const bytes = powers.randomBytes(16);
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(
+      '',
+    );
+  };
+
   const logError = verbose
-    ? // eslint-disable-next-line no-console
-      (...args) => console.error('thixotrope daemon:', ...args)
+    ? (...args) => powers.console.error('thixotrope daemon:', ...args)
     : () => {};
 
-  const cryptography = makeCryptography(codec);
+  const cryptography = makeCryptography(codec, length =>
+    powers.randomBytes(length),
+  );
   /** @type {any} */
   const handoffDialRef = {};
   const hub = makeOcapnHub({
@@ -163,7 +169,7 @@ const buildDaemon = async ({
       const workerStore = store.provideWorkerStore(workerId);
       /** @type {any} */
       const holder = {};
-      const transport = makeDurableWorkerTransport({
+      const transport = makeDurableWorkerTransport(powers, {
         workerId,
         store: workerStore,
         engine,
@@ -203,6 +209,8 @@ const buildDaemon = async ({
   const records = makeWorkerSessionRecords({
     store,
     resources: resourceMakers,
+    reportError: error =>
+      powers.console.error('thixotrope worker sessions:', error),
   });
 
   /**
@@ -227,6 +235,8 @@ const buildDaemon = async ({
   // Settled cached answers and imports do not independently pin their vats.
   const pendingEndpointAnswers = new Set();
   const endpointClient = await makeOcapn({
+    logger: harden({ log: logError, error: logError, info: () => {} }),
+    randomBytes: length => powers.randomBytes(length),
     codec,
     debugLabel: 'thixotrope-endpoint',
     sessionHooks: {
@@ -1119,6 +1129,8 @@ const buildDaemon = async ({
     listWorkerIds: () => [...workers.keys()].sort(),
     makeResource: (name, description = null) =>
       records.provideResource(name, description),
+    // Persist a swissnum locator for this held capability. Remote bootstrap
+    // fetch(secret) obtains it; withdrawing the locator leaves existing refs valid.
     publish: (value, secret = randomHex128()) => {
       const position = importPositions.get(value);
       if (position === undefined) {
@@ -1131,7 +1143,7 @@ const buildDaemon = async ({
     lookup,
     openEphemeralClient: async () => {
       if (stopping) throw Error('Daemon is stopping');
-      const opening = makeEphemeralHubClient({
+      const opening = makeEphemeralHubClient(powers, {
         codec,
         hub,
         sessionKey: `transient:${randomHex128()}`,
@@ -1157,6 +1169,9 @@ const buildDaemon = async ({
       }
       return wrapped;
     },
+    // Reuse the canonical peer session, including one established by a gift.
+    // connect is idempotent for an attached/in-flight route; this sends fetch
+    // through that session instead of starting another handshake on its socket.
     importReference: (remoteLocation, secret) => {
       const { sessionKey: key, location: dialLocation } =
         hub.prepareRemoteSession(remoteLocation);
@@ -1201,9 +1216,10 @@ const buildDaemon = async ({
 };
 /**
  * Acquire engine ownership before reading or restoring daemon state.
- * @param {Parameters<typeof buildDaemon>[0]} options
+ * @param {Pick<NodePowers, 'randomBytes' | 'console' | 'timers'>} powers
+ * @param {Parameters<typeof buildDaemon>[1]} options
  */
-export const makeThixotropeDaemon = async options => {
+export const makeThixotropeDaemon = async (powers, options) => {
   const release = await options.engine.acquireStore?.(options.store.statePath);
   try {
     /** @param {any} record @returns {any} */
@@ -1225,7 +1241,7 @@ export const makeThixotropeDaemon = async options => {
           ]),
         ),
       );
-    const daemon = await buildDaemon({
+    const daemon = await buildDaemon(powers, {
       ...options,
       store: guard(options.store),
     });

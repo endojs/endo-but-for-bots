@@ -1,5 +1,5 @@
 // @ts-check
-/* global setTimeout */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
@@ -21,14 +21,15 @@ import { makeWorkerPeer } from './worker-peer.js';
  * logic; deliberately not part of the public API.
  */
 
-const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
-
 /**
+ * @param {Pick<NodePowers, 'timers' | 'randomBytes' | 'console'>} powers
  * @param {object} options
  * @param {string} options.debugName
  * @param {(envelope: Record<string, unknown>) => void} options.onOutbound
  */
-const makePeerIncarnation = ({ debugName, onOutbound }) => {
+const makePeerIncarnation = (powers, { debugName, onOutbound }) => {
+  const macrotask = () =>
+    new Promise(resolve => powers.timers.setTimeout(resolve, 0));
   let alive = true;
   let suppressed = false;
   let activity = 0;
@@ -57,7 +58,7 @@ const makePeerIncarnation = ({ debugName, onOutbound }) => {
     alive || Fail`worker ${q(debugName)} incarnation has been terminated`;
     if (envelope.t === 'init') {
       peer === undefined || Fail`worker ${q(debugName)}: duplicate init`;
-      peer = await makeWorkerPeer({
+      peer = await makeWorkerPeer(powers, {
         // Outbound replay watermarks require identical frame order. Node GC
         // finalizers are not journaled inputs and must not inject protocol frames.
         enableImportCollection: false,
@@ -100,9 +101,10 @@ const makePeerIncarnation = ({ debugName, onOutbound }) => {
  * replays the full journal (init included) into a fresh worker peer.
  * The transport's outbound watermark absorbs every regenerated frame.
  *
+ * @param {Pick<NodePowers, 'timers' | 'randomBytes' | 'console'>} powers
  * @returns {WorkerEngine}
  */
-export const makePeerJournalReplayEngine = () =>
+export const makePeerJournalReplayEngine = powers =>
   harden({
     canSnapshot: false,
     /** @type {WorkerEngine['start']} */
@@ -112,7 +114,10 @@ export const makePeerJournalReplayEngine = () =>
         Fail`peer journal replay engine cannot restore engine snapshot for worker ${q(
           debugName,
         )}`;
-      const incarnation = makePeerIncarnation({ debugName, onOutbound });
+      const incarnation = makePeerIncarnation(powers, {
+        debugName,
+        onOutbound,
+      });
       /** @type {WorkerIncarnation} */
       const workerIncarnation = {
         deliver: incarnation.deliverOne,
@@ -131,14 +136,18 @@ harden(makePeerJournalReplayEngine);
  * XS heap restore (no pre-snapshot outbound reappears). Exercises the
  * journal cut and watermark reset without an XS build.
  *
+ * @param {Pick<NodePowers, 'timers' | 'randomBytes' | 'console'>} powers
  * @returns {WorkerEngine}
  */
-export const makePeerSnapshottingReplayEngine = () =>
+export const makePeerSnapshottingReplayEngine = powers =>
   harden({
     canSnapshot: true,
     /** @type {WorkerEngine['start']} */
     start: async ({ debugName, snapshot, onOutbound }) => {
-      const incarnation = makePeerIncarnation({ debugName, onOutbound });
+      const incarnation = makePeerIncarnation(powers, {
+        debugName,
+        onOutbound,
+      });
       /** @type {Array<Record<string, unknown>>} */
       const log = [];
       if (snapshot !== null && snapshot !== undefined) {

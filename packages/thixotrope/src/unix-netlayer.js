@@ -1,13 +1,9 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 import { locationToLocationId } from '@endo/ocapn/client/util';
 import { writeOcapnHandshakeMessage } from '@endo/ocapn/operations';
-import { statSync } from 'node:fs';
-import { chmod } from 'node:fs/promises';
-import { createConnection, createServer } from 'node:net';
-import { dirname, isAbsolute } from 'node:path';
-import { getuid } from 'node:process';
 
 /** @import { Socket } from 'node:net' */
 /** @import { Connection, NetlayerHandlers, Logger, NetLayer, SelfIdentity } from '@endo/ocapn/client/types' */
@@ -21,9 +17,13 @@ const networkId = 'thix-unix';
  * Validate before importing a reference or recording session intent. The path
  * profile fits macOS and Linux sockaddr_un, including the terminal NUL byte.
  * Parent ownership protects durable-session bearer tokens from other users.
+ * @param {NodePowers} powers
  * @param {any} location
  */
-export const assertUnixPeerLocation = location => {
+export const assertUnixPeerLocation = (powers, location) => {
+  const { statSync } = powers.fs;
+  const { dirname, isAbsolute } = powers.path;
+  const { getuid } = powers.process;
   (location !== null &&
     typeof location === 'object' &&
     location.type === 'ocapn-peer' &&
@@ -59,13 +59,19 @@ harden(assertUnixPeerLocation);
  * never unlinks a preexisting path or asynchronously unlinks a successor.
  * After shutdown(), await closed before releasing directory ownership.
  *
+ * @param {NodePowers} powers
  * @param {object} options
  * @param {string} options.socketPath
  * @param {NetlayerHandlers} options.handlers
  * @param {Logger} options.logger
  */
-export const makeUnixNetLayer = async ({ socketPath, handlers, logger }) => {
-  assertUnixPeerLocation({
+export const makeUnixNetLayer = async (
+  powers,
+  { socketPath, handlers, logger },
+) => {
+  const { chmod } = powers.fsPromises;
+  const { createConnection, createServer } = powers.net;
+  assertUnixPeerLocation(powers, {
     type: 'ocapn-peer',
     network: networkId,
     designator: socketPath,
@@ -196,7 +202,7 @@ export const makeUnixNetLayer = async ({ socketPath, handlers, logger }) => {
     locationId: locationToLocationId(location),
     connect(remote) {
       !stopped || Fail`Unix netlayer is shut down`;
-      assertUnixPeerLocation(remote);
+      assertUnixPeerLocation(powers, remote);
       // The durable layer owns logical session reuse. Sharing a physical
       // stream here would mix envelopes from distinct session tokens.
       return attach(createConnection(remote.designator), true);

@@ -10,6 +10,10 @@ import { connectLocalControl } from '../src/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { serveThixotrope } from '../src/supervisor.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import {TestFn} from 'ava' */
 /**
  * @param {TestFn} test
@@ -24,19 +28,22 @@ export const registerAlarmIntegration = (test, kind) => {
       t.teardown(() => rm(path, { recursive: true, force: true }));
       let wallClock = 1000n;
       const start = async () => {
-        const supervisor = await serveThixotrope(path, {
+        const supervisor = await serveThixotrope(nodePowers, path, {
           alarmNow: () => wallClock,
           ...(kind === 'ironhorse'
             ? {}
             : {
                 engine: harden({
-                  ...makePeerJournalReplayEngine(),
+                  ...makePeerJournalReplayEngine(nodePowers),
                   acquireStore: async () => async () => {},
                 }),
               }),
         });
         t.teardown(() => supervisor.close());
-        const client = await connectLocalControl(join(path, 'control.sock'));
+        const client = await connectLocalControl(
+          nodePowers,
+          join(path, 'control.sock'),
+        );
         t.teardown(() => client.close());
         return { supervisor, client };
       };
@@ -54,6 +61,7 @@ export const registerAlarmIntegration = (test, kind) => {
         'false',
       );
       const { bundle } = await bundleApplication(
+        nodePowers,
         fileURLToPath(new URL('../examples/reminder.js', import.meta.url)),
       );
       await host.client.call('install', 'reminders', bundle, [

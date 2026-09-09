@@ -3,7 +3,12 @@ import { E, Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
 import { setImmediate } from 'node:timers/promises';
 
-import { makeMailbox } from '../src/mailbox.js';
+import { makeMailbox as makeProtocolMailbox } from '../src/mailbox.js';
+import { makeMailContact } from '../src/mail-contact.js';
+import { makeMailAddressBook } from '../src/mail-address-book.js';
+
+const makeMailbox = () =>
+  makeMailAddressBook(makeProtocolMailbox(), new Map(), makeMailContact);
 
 const makeCounter = () => {
   let count = 0n;
@@ -330,4 +335,101 @@ test('mailbox invitation cancellation preserves an established contact in both d
     { id: '1', from: 'Alice', text: 'to Bob' },
   ]);
   t.is(await E(alice).take('1'), await E(bob).take('1'));
+});
+
+test('mailbox sends directly to an identity without any name registry', async t => {
+  t.timeout(10_000);
+  const alice = makeProtocolMailbox();
+  const bob = makeProtocolMailbox();
+  const bobIdentity = makeMailContact(alice);
+  const aliceIdentity = makeMailContact(bob);
+  const invitation = await E(bobIdentity).invite();
+  await E(aliceIdentity).connect(invitation);
+  // eslint-disable-next-line no-await-in-loop
+  while ((await E(aliceIdentity).status()).status !== 'ready') {
+    // eslint-disable-next-line no-await-in-loop
+    await setImmediate();
+  }
+  const counter = makeCounter();
+  t.is(await E(alice).send(bobIdentity, 'No pet name needed', counter), '1');
+  // eslint-disable-next-line no-await-in-loop
+  while ((await E(bob).inbox()).length === 0) {
+    // eslint-disable-next-line no-await-in-loop
+    await setImmediate();
+  }
+  t.deepEqual(await E(bob).inbox(), [
+    { id: '1', from: aliceIdentity, text: 'No pet name needed' },
+  ]);
+  t.is(await E(bob).take('1'), counter);
+  t.is((await E(alice).outbox())[0].to, bobIdentity);
+});
+
+test('renaming a workspace contact preserves identity and pending offers', async t => {
+  t.timeout(10_000);
+  const mailbox = makeProtocolMailbox();
+  const contacts = new Map();
+  const book = makeMailAddressBook(mailbox, contacts, makeMailContact);
+  const invitation = await E(book).invite('old name');
+  const receiver = await E(invitation).accept(
+    Far('RemoteInbox', {
+      deliver: () => true,
+    }),
+  );
+  const counter = makeCounter();
+  await E(receiver).deliver(1n, 'Before rename', counter);
+  const identity = contacts.get('old name');
+  contacts.delete('old name');
+  contacts.set('new name', identity);
+  t.deepEqual(await E(book).inbox(), [
+    { id: '1', from: 'new name', text: 'Before rename' },
+  ]);
+  t.is((await E(mailbox).inbox())[0].from, identity);
+  t.is(await E(book).send('new name', 'After rename', counter), '1');
+  t.is((await E(mailbox).outbox())[0].to, identity);
+});
+
+test('two mailboxes sharing a correspondent do not reuse delivery sequences', async t => {
+  t.timeout(10_000);
+  const alice = makeProtocolMailbox();
+  const secondSender = makeProtocolMailbox();
+  const bob = makeProtocolMailbox();
+  const bobIdentity = makeMailContact(alice);
+  const aliceIdentity = makeMailContact(bob);
+  await E(aliceIdentity).connect(await E(bobIdentity).invite());
+  // eslint-disable-next-line no-await-in-loop
+  while ((await E(aliceIdentity).status()).status !== 'ready') {
+    // eslint-disable-next-line no-await-in-loop
+    await setImmediate();
+  }
+  const counter = makeCounter();
+  t.is(await E(alice).send(bobIdentity, 'First sender', counter), '1');
+  t.is(await E(secondSender).send(bobIdentity, 'Second sender', counter), '1');
+  // eslint-disable-next-line no-await-in-loop
+  while ((await E(bob).inbox()).length !== 2) {
+    // eslint-disable-next-line no-await-in-loop
+    await setImmediate();
+  }
+  t.deepEqual(
+    (await E(bob).inbox()).map(entry => entry.text),
+    ['First sender', 'Second sender'],
+  );
+});
+
+test('invitation ownership survives reassignment of its pet name', async t => {
+  t.timeout(10_000);
+  const mailbox = makeProtocolMailbox();
+  const contacts = new Map();
+  const book = makeMailAddressBook(mailbox, contacts, makeMailContact);
+  // Invoke the local factory facet synchronously to reassign the name while
+  // it is awaiting the invitation, before the host could publish its result.
+  const pairPromise = book.inviteWithIdentity('Bob');
+  const original = contacts.get('Bob');
+  contacts.set('Bob', makeMailContact(mailbox));
+  const { identity, invitation } = await pairPromise;
+  t.is(identity, original);
+  t.not(identity, contacts.get('Bob'));
+  await E(identity).cancelInvitation();
+  await t.throwsAsync(() => E(invitation).accept(Far('Remote', {})), {
+    message: /cancelled/,
+  });
 });

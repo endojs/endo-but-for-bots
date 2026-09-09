@@ -8,8 +8,12 @@ import { join } from 'node:path';
 import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makeDurableNetLayer } from '../src/durable-netlayer.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeMemoryStore } from '../src/store-fs.js';
+import { makeMemoryStore } from '../src/store-memory.js';
 import { makeUnixNetLayer } from '../src/unix-netlayer.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 test.serial(
   'a large remote result and subsequent calls cross the durable Unix session',
@@ -21,17 +25,17 @@ test.serial(
     const start = async name => {
       /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
       let base;
-      const daemon = await makeThixotropeDaemon({
+      const daemon = await makeThixotropeDaemon(nodePowers, {
         store: makeMemoryStore(),
-        engine: makePeerJournalReplayEngine(),
+        engine: makePeerJournalReplayEngine(nodePowers),
         codec: syrupCodec,
         makeNetlayer: ({ handlers, logger, resumption }) =>
-          makeDurableNetLayer({
+          makeDurableNetLayer(nodePowers, {
             handlers,
             logger,
             resumption,
             makeBaseNetlayer: async powers => {
-              base = await makeUnixNetLayer({
+              base = await makeUnixNetLayer(nodePowers, {
                 ...powers,
                 socketPath: join(path, `${name}.sock`),
               });

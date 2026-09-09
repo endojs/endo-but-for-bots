@@ -13,8 +13,15 @@ import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { serveThixotrope } from '../src/supervisor.js';
 import { makeFsStore } from '../src/store-fs.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import {TestFn} from 'ava' */
-/** @param {TestFn} test @param {'replay'|'ironhorse'} kind */
+/**
+ * @param {TestFn} test @param {'replay'|'ironhorse'} kind
+ * @param kind
+ */
 export const registerHttpIntegration = (test, kind) => {
   test.serial(
     `installed HTTP application restores state and listener after restart (${kind})`,
@@ -34,18 +41,22 @@ export const registerHttpIntegration = (test, kind) => {
       await new Promise(resolve => reservation.close(() => resolve(undefined)));
       const start = async () => {
         const supervisor = await serveThixotrope(
+          nodePowers,
           path,
           kind === 'ironhorse'
             ? {}
             : {
                 engine: harden({
-                  ...makePeerJournalReplayEngine(),
+                  ...makePeerJournalReplayEngine(nodePowers),
                   acquireStore: async () => async () => {},
                 }),
               },
         );
         t.teardown(() => supervisor.close());
-        const client = await connectLocalControl(join(path, 'control.sock'));
+        const client = await connectLocalControl(
+          nodePowers,
+          join(path, 'control.sock'),
+        );
         t.teardown(() => client.close());
         return { supervisor, client };
       };
@@ -53,6 +64,7 @@ export const registerHttpIntegration = (test, kind) => {
       const granted = await host.client.call('httpGrant', 'web', port);
       t.is(granted.desired, 'allocated');
       const { bundle } = await bundleApplication(
+        nodePowers,
         fileURLToPath(new URL('../examples/http-counter.js', import.meta.url)),
       );
       await host.client.call('install', 'site', bundle, [['http', 'web']]);
@@ -65,7 +77,10 @@ export const registerHttpIntegration = (test, kind) => {
       }
       // Use a fresh Node HTTP request: Node 24's fetch client cleanup assigns
       // an error message inherited as read-only under SES lockdown.
-      /** @param {string} method @param {string} route */
+      /**
+       * @param {string} method @param {string} route
+       * @param route
+       */
       const request = (method, route) =>
         new Promise((resolve, reject) => {
           const outgoing = httpRequest(
@@ -95,7 +110,7 @@ export const registerHttpIntegration = (test, kind) => {
         await host.client.call('evaluate', "E(E(apps).get('site')).read()"),
         '2n',
       );
-      const store = makeFsStore(path);
+      const store = makeFsStore(nodePowers, path);
       t.false(
         Object.keys(store.getHubState().sessions).some(key =>
           key.startsWith('transient:'),

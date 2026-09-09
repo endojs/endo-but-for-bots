@@ -1,8 +1,13 @@
 // @ts-check
-// Isolate Node built-in mutation from the SES test runner and all other tests.
-import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
+// Inject syscall failures through the store platform capability.
+import '@endo/init';
 import { dirname, join } from 'node:path';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const platform = makeNodePowers();
+const fs = { ...platform.fs };
+const nodePowers = { ...platform, fs };
 
 const [statePath, token, phase, encodedMeta] = process.argv.slice(2);
 const target = join(statePath, 'sessions', token, 'meta.json');
@@ -21,9 +26,9 @@ const fail = () => {
   injections += 1;
   throw Object.assign(Error(`injected ${phase}`), { code: 'ENOSPC' });
 };
-fs.openSync = (...args) => {
-  const fd = original.openSync(...args);
-  paths.set(fd, String(args[0]));
+fs.openSync = (path, flags, mode) => {
+  const fd = original.openSync(path, flags, mode);
+  paths.set(fd, String(path));
   return fd;
 };
 fs.closeSync = fd => {
@@ -50,19 +55,14 @@ fs.renameSync = (from, to) => {
   if (phase === 'rename' && String(to) === target) fail();
   original.renameSync(from, to);
 };
-syncBuiltinESMExports();
-await import('@endo/init');
 const { makeFsStore } = await import('../src/store-fs.js');
-const session = makeFsStore(statePath).provideSessionStore(token);
+const session = makeFsStore(nodePowers, statePath).provideSessionStore(token);
 /** @type {string | undefined} */
 let errorCode;
 try {
   if (phase !== 'read') session.setMeta(JSON.parse(encodedMeta));
 } catch (error) {
   errorCode = /** @type {NodeJS.ErrnoException} */ (error).code;
-} finally {
-  Object.assign(fs, original);
-  syncBuiltinESMExports();
 }
 process.stdout.write(
   JSON.stringify({ injections, errorCode, meta: session.getMeta() }),
