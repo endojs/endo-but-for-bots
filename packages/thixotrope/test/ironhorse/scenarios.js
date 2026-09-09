@@ -278,16 +278,75 @@ test.serial(
 );
 
 test.serial(
+  'completed-crank garbage is reclaimed across snapshot recovery',
+  async t => {
+    t.timeout(120_000);
+    const f = await makeFixture(t, {
+      ownerSource: `(() => {
+        const retained = { count: 0 };
+        const aliases = [retained, retained];
+        return Far('AllocationChurn', {
+          churn: () => {
+            const temporary = [];
+            for (let i = 0; i < 20000; i += 1) {
+              temporary.push({ index: i, owner: retained, label: 'temporary' });
+            }
+            if (temporary[19999].owner !== retained) throw Error('lost owner');
+            retained.count += 1;
+            return retained.count;
+          },
+          read: () => harden({
+            count: retained.count,
+            same: aliases[0] === retained && aliases[1] === retained,
+          }),
+        });
+      })()`,
+      guestSource: `Far('ChurnCaller', {
+        churn: () => E(counter).churn(),
+        read: () => E(counter).read(),
+      })`,
+    });
+    // Each crank fits comfortably in the heap, but their discarded objects
+    // together exceed the default slot ceiling without between-crank GC.
+    // Retained identity and state must survive both collection and restore.
+    for (let phase = 0; phase < 2; phase += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const caller = await f.guest();
+      for (let round = 0; round < 6; round += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        t.is(await E(caller).churn(), phase * 6 + round + 1);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await f.restart();
+      // eslint-disable-next-line no-await-in-loop
+      t.deepEqual(await E(await f.guest()).read(), {
+        count: (phase + 1) * 6,
+        same: true,
+      });
+    }
+  },
+);
+
+test.serial(
   'a corrupted sleep image is refused without leaking an incarnation',
   async t => {
     t.timeout(120_000);
     const f = await makeFixture(t);
+    // Startup only wakes workers with journal entries after their checkpoint.
+    // Give this snapshot a recovery suffix explicitly instead of relying on
+    // incidental GC traffic after a clean shutdown to trigger its validation.
+    await f.daemon.getWorker(f.ownerId).sleep();
+    t.is(await E(await f.guest()).incr(), 1n);
+    const ownerStore = f.store.provideWorkerStore(f.ownerId);
+    t.true(
+      ownerStore.journalLength() > (ownerStore.getMeta().snapshot?.cut ?? 0),
+    );
     let imagePath = '';
     /** @type {Uint8Array} */
     let original = new Uint8Array();
     await t.throwsAsync(
       () =>
-        f.restart(false, async () => {
+        f.restart(true, async () => {
           const ref = f.store.provideWorkerStore(f.ownerId).getMeta()
             .snapshot?.ref;
           t.is(typeof ref, 'string');
@@ -302,6 +361,7 @@ test.serial(
     // Restoring the immutable image permits a fresh startup to recover work.
     await writeFile(imagePath, original);
     await f.restart(true);
+    t.is(await E(await f.guest()).read(), 1n);
     t.is(await f.daemon.getWorker(f.guestId).evaluate('6 * 7'), 42);
   },
 );
