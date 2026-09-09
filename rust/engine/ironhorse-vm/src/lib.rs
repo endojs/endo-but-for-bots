@@ -149,9 +149,10 @@ pub fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
 /// engine build.
 ///
 /// Snapshot validation calls this before admitting an image, so restoration
-/// never discovers malformed RegExp state after the trust boundary.
+/// never discovers malformed RegExp state after the trust boundary. The probe
+/// checks the compiler grammar and limits without materializing a program.
 pub fn regexp_source_compiles(source: &str, flags: &str) -> bool {
-    ironhorse_regexp::compile(source, flags).is_ok()
+    ironhorse_regexp::validate(source, flags).is_ok()
 }
 
 /// Disassemble a bytecode buffer to `(offset, mnemonic)` pairs, walking

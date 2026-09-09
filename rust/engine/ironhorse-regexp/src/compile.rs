@@ -91,6 +91,13 @@ pub struct CompileOutcome {
     pub work_meter_raw: u64,
 }
 
+/// Validation result plus the same logical work charges as compilation.
+#[derive(Debug)]
+pub struct ValidationOutcome {
+    pub result: PResult<()>,
+    pub work_meter_raw: u64,
+}
+
 #[derive(Debug)]
 enum CompileStop {
     Budget,
@@ -158,7 +165,7 @@ impl WorkBudget<'_> {
 type NodeId = usize;
 
 /// A term-tree node. Layout fields (`step`/`completion`/`loop_off`) are
-/// filled by [`Compiler::measure`] and read by [`Compiler::code`],
+/// filled by [`Compiler::measure`] and read by [`Compiler::emit`],
 /// mirroring the `txTermPart` header and the per-term struct fields.
 #[derive(Debug)]
 struct Node {
@@ -253,7 +260,7 @@ const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 /// [`Compiler::measure`] and [`Compiler::emit`]).
 pub const MAX_NESTING_DEPTH: u32 = 512;
 
-struct Compiler<'a, 'b> {
+struct Compiler<'a, 'b, const MATERIALIZE: bool> {
     work: &'a WorkBudget<'b>,
     pattern: Vec<u8>, // NUL-terminated
     offset: usize,
@@ -326,6 +333,44 @@ pub fn compile_checked(
     budget: u64,
     check: Option<&mut dyn FnMut(u64) -> bool>,
 ) -> CompileOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        compile_inner::<true>(pattern, flags, work).map(Compiler::into_program)
+    });
+    CompileOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+/// Validate a pattern and flags without constructing a matcher program.
+/// Uses the same grammar, semantic checks, and resource profile as [`compile()`].
+pub fn validate(pattern: &str, flags: &str) -> PResult<()> {
+    validate_checked(pattern, flags, u64::MAX, None).result
+}
+
+/// Validate without materializing code, retaining compilation's logical work
+/// charges, callback boundaries, and storage admission limits. Keeping those
+/// charges stable lets lexers use this entry without changing their cost table.
+pub fn validate_checked(
+    pattern: &str,
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> ValidationOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        compile_inner::<false>(pattern, flags, work).map(|_| ())
+    });
+    ValidationOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+fn checked_work<T>(
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+    operation: impl FnOnce(&WorkBudget<'_>) -> PResult<T>,
+) -> (PResult<T>, u64) {
     let work = WorkBudget {
         remaining: Cell::new(budget),
         payload_bytes: Cell::new(0),
@@ -334,7 +379,7 @@ pub fn compile_checked(
         check: RefCell::new(check),
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let result = compile_inner(pattern, flags, &work);
+        let result = operation(&work);
         work.check_now();
         result
     }));
@@ -348,13 +393,14 @@ pub fn compile_checked(
             Err(payload) => std::panic::resume_unwind(payload),
         },
     };
-    CompileOutcome {
-        result,
-        work_meter_raw: work.spent.get() * XS_PARSE_REGEXP_METERING,
-    }
+    (result, work.spent.get() * XS_PARSE_REGEXP_METERING)
 }
 
-fn compile_inner(pattern: &str, flags: &str, work: &WorkBudget<'_>) -> PResult<Program> {
+fn compile_inner<'a, 'b, const MATERIALIZE: bool>(
+    pattern: &str,
+    flags: &str,
+    work: &'a WorkBudget<'b>,
+) -> PResult<Compiler<'a, 'b, MATERIALIZE>> {
     if pattern.len() > MAX_PATTERN_BYTES {
         stop(CompileStop::Resource);
     }
@@ -377,7 +423,7 @@ fn compile_inner(pattern: &str, flags: &str, work: &WorkBudget<'_>) -> PResult<P
     work.allocate(pattern.len() + 1);
     let mut pattern_bytes = pattern.as_bytes().to_vec();
     pattern_bytes.push(0);
-    let mut c = Compiler {
+    let mut c = Compiler::<MATERIALIZE> {
         work,
         pattern: pattern_bytes,
         offset: 0,
@@ -405,11 +451,28 @@ fn compile_inner(pattern: &str, flags: &str, work: &WorkBudget<'_>) -> PResult<P
     // Core u/v scalar execution and character-valued Unicode properties run
     // for real. Only syntax that actually uses v's string/set-expression
     // extension is marked unsupported at its parse site.
-    c.compile_pattern()
+    c.compile_pattern()?;
+    Ok(c)
 }
 
-impl Compiler<'_, '_> {
-    fn compile_pattern(&mut self) -> PResult<Program> {
+impl Compiler<'_, '_, true> {
+    fn into_program(self) -> Program {
+        #[cfg(test)]
+        validation_tests::record_program();
+        Program {
+            code: self.code,
+            capture_count: self.capture_index as usize,
+            name_count: self.name_index as usize,
+            assertion_count: self.assertion_index as usize,
+            quantifier_count: self.quantifier_index as usize,
+            compile_meter_raw: self.work.spent.get() * XS_PARSE_REGEXP_METERING,
+            capture_group_names: self.named_groups,
+        }
+    }
+}
+
+impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
+    fn compile_pattern(&mut self) -> PResult<()> {
         self.next()?;
         let mut term = self.disjunction_parse(C_EOF)?;
         // `fxCompileRegExp`: a named-capture *group* sets XS_REGEXP_N, and
@@ -474,38 +537,45 @@ impl Compiler<'_, '_> {
         // trailing match word is accounted, matching fxCompileRegExp).
         let match_offset = self.size;
         self.size += 4;
+        self.prepare_code();
+        self.write_word(0, self.flags as i32);
+        self.write_word(1, self.capture_index);
+        self.write_word(2, self.name_index);
+        self.write_word(3, self.assertion_index);
+        self.write_word(4, self.quantifier_index);
+        // Named-capture id slots [5 .. 5+nameIndex) stay 0 here (only the
+        // JS surface reads them; the matcher does not).
+
+        self.emit(term, 1, match_offset as i32);
+        self.write_word((match_offset / 4) as usize, CX_MATCH_STEP);
+
+        Ok(())
+    }
+
+    fn prepare_code(&mut self) {
         if self.size < 0 || self.size as u64 > MAX_CODE_BYTES as u64 {
             stop(CompileStop::Resource);
         }
         self.work.charge(self.size as u64);
 
-        // Allocate and zero the code buffer.
+        // Both paths admit the same logical code payload. Only compilation
+        // materializes it; validation keeps its code vector unallocated.
         let total_words = (self.size / 4) as usize;
         self.work.allocate(total_words * 4);
-        self.code
-            .try_reserve_exact(total_words)
-            .unwrap_or_else(|_| stop(CompileStop::Resource));
-        self.code.resize(total_words, 0);
-        self.code[0] = self.flags as i32;
-        self.code[1] = self.capture_index;
-        self.code[2] = self.name_index;
-        self.code[3] = self.assertion_index;
-        self.code[4] = self.quantifier_index;
-        // Named-capture id slots [5 .. 5+nameIndex) stay 0 here (only the
-        // JS surface reads them; the matcher does not).
+        if MATERIALIZE {
+            #[cfg(test)]
+            validation_tests::record_code_words(total_words);
+            self.code
+                .try_reserve_exact(total_words)
+                .unwrap_or_else(|_| stop(CompileStop::Resource));
+            self.code.resize(total_words, 0);
+        }
+    }
 
-        self.emit(term, 1, match_offset as i32);
-        self.code[(match_offset / 4) as usize] = CX_MATCH_STEP;
-
-        Ok(Program {
-            code: std::mem::take(&mut self.code),
-            capture_count: self.capture_index as usize,
-            name_count: self.name_index as usize,
-            assertion_count: self.assertion_index as usize,
-            quantifier_count: self.quantifier_index as usize,
-            compile_meter_raw: self.work.spent.get() * XS_PARSE_REGEXP_METERING,
-            capture_group_names: std::mem::take(&mut self.named_groups),
-        })
+    fn write_word(&mut self, at: usize, value: i32) {
+        if MATERIALIZE {
+            self.code[at] = value;
+        }
     }
 
     // ---- pattern lexer primitives (fxPatternParser*) ----
@@ -2312,27 +2382,31 @@ impl Compiler<'_, '_> {
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = opcode;
-                self.code[at + 1] = sequel;
+                self.write_word(at, opcode);
+                self.write_word(at + 1, sequel);
             }
             Shape::CharSet(count) => {
-                let chars: Vec<i32> = match &self.nodes[id].kind {
-                    Kind::CharSet { chars, .. } => {
-                        self.work.charge(chars.len() as u64);
-                        chars.clone()
-                    }
+                let chars = match &self.nodes[id].kind {
+                    Kind::CharSet { chars, .. } => chars,
                     _ => unreachable!(),
                 };
-                let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 {
-                    CX_CHARSET_FORWARD_STEP
-                } else {
-                    CX_CHARSET_BACKWARD_STEP
-                };
-                self.code[at + 1] = sequel;
-                self.code[at + 2] = count;
-                for i in 0..count as usize {
-                    self.code[at + 3 + i] = chars[1 + i];
+                self.work.charge(chars.len() as u64);
+                if MATERIALIZE {
+                    let chars = chars.clone();
+                    let at = (self.nodes[id].step / 4) as usize;
+                    self.write_word(
+                        at,
+                        if direction == 1 {
+                            CX_CHARSET_FORWARD_STEP
+                        } else {
+                            CX_CHARSET_BACKWARD_STEP
+                        },
+                    );
+                    self.write_word(at + 1, sequel);
+                    self.write_word(at + 2, count);
+                    for i in 0..count as usize {
+                        self.write_word(at + 3 + i, chars[1 + i]);
+                    }
                 }
             }
             // The `Disjunction` and `Sequence` arms walk their right-nested
@@ -2350,9 +2424,9 @@ impl Compiler<'_, '_> {
                     self.work.charge(1);
                     if let Shape::Disjunction(left, right) = self.child_shape(id) {
                         let at = (self.nodes[id].step / 4) as usize;
-                        self.code[at] = CX_DISJUNCTION_STEP;
-                        self.code[at + 1] = self.nodes[left].step;
-                        self.code[at + 2] = self.nodes[right].step;
+                        self.write_word(at, CX_DISJUNCTION_STEP);
+                        self.write_word(at + 1, self.nodes[left].step);
+                        self.write_word(at + 2, self.nodes[right].step);
                         pending_rights.push(right);
                         id = left;
                     } else {
@@ -2421,26 +2495,32 @@ impl Compiler<'_, '_> {
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
-                self.code[at] = if direction == 1 {
-                    CX_CAPTURE_FORWARD_STEP
-                } else {
-                    CX_CAPTURE_BACKWARD_STEP
-                };
-                self.code[at + 1] = term_step;
-                self.code[at + 2] = capture_index;
+                self.write_word(
+                    at,
+                    if direction == 1 {
+                        CX_CAPTURE_FORWARD_STEP
+                    } else {
+                        CX_CAPTURE_BACKWARD_STEP
+                    },
+                );
+                self.write_word(at + 1, term_step);
+                self.write_word(at + 2, capture_index);
                 self.emit(term, direction, completion);
                 let ct = (completion / 4) as usize;
-                self.code[ct] = if direction == 1 {
-                    CX_CAPTURE_FORWARD_COMPLETION
-                } else {
-                    CX_CAPTURE_BACKWARD_COMPLETION
-                };
-                self.code[ct + 1] = sequel;
-                self.code[ct + 2] = capture_index;
+                self.write_word(
+                    ct,
+                    if direction == 1 {
+                        CX_CAPTURE_FORWARD_COMPLETION
+                    } else {
+                        CX_CAPTURE_BACKWARD_COMPLETION
+                    },
+                );
+                self.write_word(ct + 1, sequel);
+                self.write_word(ct + 2, capture_index);
                 // The name-id operand: the group's name slot for a named
                 // capture (so the matcher records `names[slot] = index` on
                 // completion), or -1 for a plain numbered group.
-                self.code[ct + 3] = name_slot;
+                self.write_word(ct + 3, name_slot);
             }
             Shape::CaptureReference => {
                 let (capture_index, name_slot) = match &self.nodes[id].kind {
@@ -2451,17 +2531,20 @@ impl Compiler<'_, '_> {
                     _ => unreachable!(),
                 };
                 let at = (self.nodes[id].step / 4) as usize;
-                self.code[at] = if direction == 1 {
-                    CX_CAPTURE_REFERENCE_FORWARD_STEP
-                } else {
-                    CX_CAPTURE_REFERENCE_BACKWARD_STEP
-                };
-                self.code[at + 1] = sequel;
+                self.write_word(
+                    at,
+                    if direction == 1 {
+                        CX_CAPTURE_REFERENCE_FORWARD_STEP
+                    } else {
+                        CX_CAPTURE_REFERENCE_BACKWARD_STEP
+                    },
+                );
+                self.write_word(at + 1, sequel);
                 // A numbered `\N` reference carries its resolved index and a
                 // name-id of -1; a `\k<name>` reference carries index -1 and
                 // its name slot, resolved at match time through `names[]`.
-                self.code[at + 2] = capture_index;
-                self.code[at + 3] = name_slot;
+                self.write_word(at + 2, capture_index);
+                self.write_word(at + 3, name_slot);
             }
             Shape::Assertion {
                 term,
@@ -2481,24 +2564,24 @@ impl Compiler<'_, '_> {
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
                 if not {
-                    self.code[at] = CX_ASSERTION_NOT_STEP;
-                    self.code[at + 1] = term_step;
-                    self.code[at + 2] = ai;
-                    self.code[at + 3] = sequel;
+                    self.write_word(at, CX_ASSERTION_NOT_STEP);
+                    self.write_word(at + 1, term_step);
+                    self.write_word(at + 2, ai);
+                    self.write_word(at + 3, sequel);
                 } else {
-                    self.code[at] = CX_ASSERTION_STEP;
-                    self.code[at + 1] = term_step;
-                    self.code[at + 2] = ai;
+                    self.write_word(at, CX_ASSERTION_STEP);
+                    self.write_word(at + 1, term_step);
+                    self.write_word(at + 2, ai);
                 }
                 self.emit(term, dir, completion);
                 let ct = (completion / 4) as usize;
                 if not {
-                    self.code[ct] = CX_ASSERTION_NOT_COMPLETION;
-                    self.code[ct + 1] = ai;
+                    self.write_word(ct, CX_ASSERTION_NOT_COMPLETION);
+                    self.write_word(ct + 1, ai);
                 } else {
-                    self.code[ct] = CX_ASSERTION_COMPLETION;
-                    self.code[ct + 1] = sequel;
-                    self.code[ct + 2] = ai;
+                    self.write_word(ct, CX_ASSERTION_COMPLETION);
+                    self.write_word(ct + 1, sequel);
+                    self.write_word(ct + 2, ai);
                 }
             }
             Shape::Quantifier(term) => {
@@ -2539,30 +2622,33 @@ impl Compiler<'_, '_> {
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
-                self.code[at] = CX_QUANTIFIER_STEP;
-                self.code[at + 1] = loop_off;
-                self.code[at + 2] = quantifier_index;
-                self.code[at + 3] = min;
-                self.code[at + 4] = max;
+                self.write_word(at, CX_QUANTIFIER_STEP);
+                self.write_word(at + 1, loop_off);
+                self.write_word(at + 2, quantifier_index);
+                self.write_word(at + 3, min);
+                self.write_word(at + 4, max);
                 let lp = (loop_off / 4) as usize;
-                self.code[lp] = if greedy {
-                    CX_QUANTIFIER_GREEDY_LOOP
-                } else {
-                    CX_QUANTIFIER_LAZY_LOOP
-                };
-                self.code[lp + 1] = term_step;
-                self.code[lp + 2] = quantifier_index;
-                self.code[lp + 3] = sequel;
-                self.code[lp + 4] = capture_index + 1;
-                self.code[lp + 5] = capture_index + capture_count;
+                self.write_word(
+                    lp,
+                    if greedy {
+                        CX_QUANTIFIER_GREEDY_LOOP
+                    } else {
+                        CX_QUANTIFIER_LAZY_LOOP
+                    },
+                );
+                self.write_word(lp + 1, term_step);
+                self.write_word(lp + 2, quantifier_index);
+                self.write_word(lp + 3, sequel);
+                self.write_word(lp + 4, capture_index + 1);
+                self.write_word(lp + 5, capture_index + capture_count);
                 self.emit(term, direction, completion);
                 let ct = (completion / 4) as usize;
-                self.code[ct] = CX_QUANTIFIER_COMPLETION;
-                self.code[ct + 1] = loop_off;
-                self.code[ct + 2] = quantifier_index;
-                self.code[ct + 3] = sequel;
-                self.code[ct + 4] = capture_index + 1;
-                self.code[ct + 5] = capture_index + capture_count;
+                self.write_word(ct, CX_QUANTIFIER_COMPLETION);
+                self.write_word(ct + 1, loop_off);
+                self.write_word(ct + 2, quantifier_index);
+                self.write_word(ct + 3, sequel);
+                self.write_word(ct + 4, capture_index + 1);
+                self.write_word(ct + 5, capture_index + capture_count);
             }
             Shape::Modifiers(disj) => {
                 let (step, completion, modified_flags, outer_flags) = {
@@ -2581,15 +2667,15 @@ impl Compiler<'_, '_> {
                 // Entry: switch the live flags to the scoped word, then flow
                 // into the disjunction (fxModifiersCode).
                 let at = (step / 4) as usize;
-                self.code[at] = CX_MODIFIERS_STEP;
-                self.code[at + 1] = disj_step;
-                self.code[at + 2] = modified_flags;
+                self.write_word(at, CX_MODIFIERS_STEP);
+                self.write_word(at + 1, disj_step);
+                self.write_word(at + 2, modified_flags);
                 self.emit(disj, direction, completion);
                 // Sequel: restore the outer flags, then flow to the real sequel.
                 let ct = (completion / 4) as usize;
-                self.code[ct] = CX_MODIFIERS_STEP;
-                self.code[ct + 1] = sequel;
-                self.code[ct + 2] = outer_flags;
+                self.write_word(ct, CX_MODIFIERS_STEP);
+                self.write_word(ct + 1, sequel);
+                self.write_word(ct + 2, outer_flags);
             }
         }
     }
@@ -2849,3 +2935,6 @@ mod recursion_bounds {
         assert!(!match_regexp(&program, b"y", 0).matched);
     }
 }
+
+// The child owns its test gate for recursive source inspection.
+mod validation_tests;
