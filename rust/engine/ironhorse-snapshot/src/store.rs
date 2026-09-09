@@ -364,13 +364,12 @@ impl StoreManifest {
             )));
         }
         let sig_len = u32::from_be_bytes(take4(&mut i)?) as usize;
-        if i + sig_len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest signature truncated",
-            )));
-        }
-        let signature = Signature::decode(&p[i..i + sig_len]).map_err(SnapshotError::Signature)?;
-        i += sig_len;
+        let sig_end = i
+            .checked_add(sig_len)
+            .filter(|&end| end <= p.len())
+            .ok_or(SnapshotError::Corrupt("store manifest signature truncated"))?;
+        let signature = Signature::decode(&p[i..sig_end]).map_err(SnapshotError::Signature)?;
+        i = sig_end;
         let crea_hi = take4(&mut i)?;
         let crea_lo = take4(&mut i)?;
         let mut crea = [0u8; 8];
@@ -383,25 +382,23 @@ impl StoreManifest {
         let free_len = u32::from_be_bytes(take4(&mut i)?);
         let epoch = u64::from_be_bytes(take8(&mut i)?);
         let root_len = u32::from_be_bytes(take4(&mut i)?) as usize;
-        if i + root_len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest root truncated",
-            )));
-        }
-        let root = std::str::from_utf8(&p[i..i + root_len])
+        let root_end = i
+            .checked_add(root_len)
+            .filter(|&end| end <= p.len())
+            .ok_or(SnapshotError::Corrupt("store manifest root truncated"))?;
+        let root = std::str::from_utf8(&p[i..root_end])
             .map_err(|_| SnapshotError::Corrupt("store manifest root not utf8"))?
             .to_string();
-        i += root_len;
+        i = root_end;
         let seal_len = u32::from_be_bytes(take4(&mut i)?) as usize;
-        if i + seal_len > p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest seal truncated",
-            )));
-        }
-        let seal = std::str::from_utf8(&p[i..i + seal_len])
+        let seal_end = i
+            .checked_add(seal_len)
+            .filter(|&end| end <= p.len())
+            .ok_or(SnapshotError::Corrupt("store manifest seal truncated"))?;
+        let seal = std::str::from_utf8(&p[i..seal_end])
             .map_err(|_| SnapshotError::Corrupt("store manifest seal not utf8"))?
             .to_string();
-        i += seal_len;
+        i = seal_end;
         // Schema 8 added the completed-crank counter as a tail field.
         // An older store simply does not carry it, and 0 is the right
         // reading: it predates the counter, and 0 is where a fresh
@@ -4715,21 +4712,123 @@ mod tests {
         // before any reservation (malformed-count discipline).
         let mut huge = bytes.clone();
         huge[14..18].copy_from_slice(&u32::MAX.to_be_bytes());
-        match StoreManifest::decode(&huge) {
+        assert_eq!(
+            StoreManifest::decode(&huge),
             Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store manifest signature truncated",
-            ))) => {}
-            other => panic!("expected truncated signature, got {other:?}"),
-        }
+                "store manifest signature truncated"
+            )))
+        );
 
         // Exact consumption: a decodable manifest followed by any
         // trailing byte is malformed, not forward-compatible.
         let mut trailing = bytes.clone();
         trailing.push(0);
-        match StoreManifest::decode(&trailing) {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt("store manifest trailing bytes"))) => {}
-            other => panic!("expected trailing-byte refusal, got {other:?}"),
+        assert_eq!(
+            StoreManifest::decode(&trailing),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest trailing bytes"
+            )))
+        );
+
+        // Derive wire field positions from the control's encoded variable
+        // lengths, then cut at every byte, including every fixed-width field.
+        let signature_end = 18 + m.signature.encode().len();
+        let root_start = signature_end + 40;
+        let root_end = root_start + m.root.len();
+        let seal_start = root_end + 4;
+        let seal_end = seal_start + m.seal.len();
+        let parent_start = seal_end + 24;
+        assert_eq!(parent_start + m.parent_seal.len(), bytes.len());
+        for length in 0..bytes.len() {
+            let result = StoreManifest::decode(&bytes[..length]);
+            if (18..signature_end).contains(&length) {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest signature truncated"
+                    )))
+                );
+            } else if (root_start..root_end).contains(&length) {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest root truncated"
+                    )))
+                );
+            } else if (seal_start..seal_end).contains(&length) {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest seal truncated"
+                    )))
+                );
+            } else if length >= parent_start {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "manifest parent seal truncated"
+                    )))
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store manifest truncated"
+                    ))),
+                    "prefix {length}"
+                );
+            }
         }
+        for schema in [STORE_SCHEMA_MIN_SUPPORTED - 1, STORE_SCHEMA_VERSION + 1] {
+            let mut invalid = bytes.clone();
+            invalid[10..14].copy_from_slice(&schema.to_be_bytes());
+            assert_eq!(
+                StoreManifest::decode(&invalid),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "unsupported store schema version"
+                )))
+            );
+        }
+        let mut invalid = bytes.clone();
+        invalid[root_start..root_end].fill(0xff);
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest root not utf8"
+            )))
+        );
+        invalid = bytes.clone();
+        invalid[seal_start..seal_end].fill(0xff);
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest seal not utf8"
+            )))
+        );
+        invalid = bytes.clone();
+        invalid[parent_start] = 0xff;
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "manifest parent seal not utf8"
+            )))
+        );
+        invalid = bytes.clone();
+        invalid[root_start - 4..root_start].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest root truncated"
+            )))
+        );
+        invalid = bytes;
+        invalid[seal_start - 4..seal_start].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            StoreManifest::decode(&invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "store manifest seal truncated"
+            )))
+        );
     }
 
     #[test]
