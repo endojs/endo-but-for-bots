@@ -54,7 +54,7 @@
 //!   `with` body or eval frame, cleared at an admitted boundary
 //!   (SUSPENDED environments live in `SavedFrame.env`, inside their row).
 //! - `result`, `strict` — the completion register and top-level strictness;
-//!   both cleared/reset at the crank boundary (wave-6 W6-11/W6-6), so a
+//!   both cleared/reset at the crank boundary, so a
 //!   resumed twin's fresh defaults match.
 //! - `pending_new_target` — armed by `SUPER` for the construct about to
 //!   happen; consumed by the construct frame and disarmed on unwind.
@@ -74,8 +74,8 @@
 //!   dispatch loop halts on it before the next instruction and
 //!   `is_quiescent` refuses a poisoned machine, so it is provably false
 //!   at every boundary a snapshot can be taken from.
-//! - `last_crank_completed` — the crank-lifecycle latch (architecture
-//!   review F011): dropped at `run` entry, set at exit from the engine's
+//! - `last_crank_completed` — the crank-lifecycle latch: dropped at
+//!   `run` entry, set at exit from the engine's
 //!   own halt, and the FIRST conjunct of `is_quiescent`. Provably true at
 //!   every boundary a snapshot can be taken from, and a fresh machine —
 //!   which every restore lands on — starts true. It exists because the
@@ -183,8 +183,8 @@ pub enum Coverage {
     /// **Provably empty at every persistable boundary**, so no atom is
     /// ever needed: `Interp::is_quiescent` requires the table empty and
     /// EVERY persist verb — store and blob alike — gates on quiescence
-    /// (wave-6 W6-10; the contract-violation locks in
-    /// `persist_gates.rs` enforce the gates behaviorally, and
+    /// (the contract-violation locks in `persist_gates.rs` enforce the gates
+    /// behaviorally, and
     /// [`tests::empty_at_boundary_rows_match_the_quiescence_predicate`]
     /// ties this classification to the predicate's actual field list
     /// mechanically). Distinct from an excluded transient: these ARE
@@ -581,10 +581,7 @@ mod tests {
         assert_eq!(before, fields.len(), "duplicate side table in ALL");
     }
 
-    /// Wave-6 pattern-3 antidote: the ledger's exhaustiveness was a
-    /// hand convention ("enumerated against `Interp`'s actual fields")
-    /// that a thirty-field bulk merge overwhelmed. This test reads the field
-    /// list emitted with the struct and reconciles it, two-way,
+    /// Read the field list emitted with `Interp` and reconcile it, two-way,
     /// against the classification below: a new `Interp` field fails
     /// here until it is classified (a ledger row, a documented
     /// satellite or transient, a boot artifact, host wiring, or an
@@ -716,7 +713,7 @@ mod tests {
             // reports the poisoned machine non-quiescent, so no snapshot
             // ever needs to carry it.
             "id_space_exhausted",
-            // The crank-lifecycle latch (review F011): dropped at `run`
+            // The crank-lifecycle latch: dropped at `run`
             // entry, set at exit from the engine's own halt, and the
             // lifecycle conjunct of `is_quiescent`. Provably TRUE at every
             // persistable boundary; a restore lands on a fresh machine,
@@ -1081,8 +1078,7 @@ mod tests {
     /// `self.<field>` mention, not only the `is_empty()` ones, and the
     /// forward direction requires each listed non-emptiness conjunct
     /// to be present, so a lifecycle conjunct cannot be dropped
-    /// silently (architecture review F011: the predicate was a
-    /// table-emptiness test standing in for a lifecycle property).
+    /// silently: table emptiness alone does not establish crank completion.
     #[test]
     fn empty_at_boundary_rows_match_the_quiescence_predicate() {
         /// The conjuncts of `is_quiescent` that are not `is_empty()`
@@ -1198,8 +1194,7 @@ mod tests {
     }
 
     /// The restore-time rebuild rows are classified [`Coverage::RebuiltAtRestore`],
-    /// not the `InArena`/`Serialized` overstatement the supervisor review
-    /// flagged: each round-trips its data but reaches it through a side index
+    /// because each round-trips its data but reaches it through a side index
     /// (`global_props` map / `symbol_ids` inverse map) that
     /// `ironhorse_vm::Interp::restore_snapshot_state` re-derives. The cross-crank
     /// regression that the rebuild actually runs lives in
