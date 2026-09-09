@@ -50,8 +50,7 @@
 use crate::format::{Signature, SnapshotError, Version};
 use crate::image::{decode_names, encode_names};
 use crate::image::{
-    decode_stack, decode_strings, decode_u32s, encode_stack, encode_strings, encode_u32s,
-    CreationParams, MachineImage, MeterImage,
+    decode_stack, decode_strings, decode_u32s, CreationParams, MachineImage, MeterImage,
 };
 use crate::slot_codec::{decode_slots, encode_slot, SLOT_RECORD_BYTES};
 use ironhorse_vm::SymbolName;
@@ -1584,56 +1583,9 @@ impl SmallState {
     }
 
     pub fn encode_section(&self, section: crate::store_sections::SmallSection) -> Vec<u8> {
-        use crate::store_sections::SmallSection;
         #[cfg(test)]
         crate::machine::extraction_counts::encode(section);
-        match section {
-            SmallSection::Stack => encode_stack(&self.stack),
-            SmallSection::RetiredFreeList => encode_u32s(&[]),
-            SmallSection::Keys => encode_strings(&self.keys),
-            SmallSection::Names => encode_names(&self.names),
-            SmallSection::Symbols => crate::image::encode_symbol_keys(&self.symbols),
-            SmallSection::Meter => self.meter.encode(),
-            SmallSection::Arrays => crate::image::encode_arrays(&self.arrays),
-            SmallSection::Collections => crate::image::encode_collections(&self.collections),
-            SmallSection::Registry => crate::image::encode_registry(&self.registry),
-            SmallSection::Errors => crate::image::encode_errors(&self.errors),
-            SmallSection::Buffers => crate::image::encode_buffers(&self.buffers),
-            SmallSection::TypedArrays => crate::image::encode_typed_arrays(&self.typed_arrays),
-            SmallSection::DataViews => crate::image::encode_data_views(&self.data_views),
-            SmallSection::Wrappers => crate::image::encode_wrappers(&self.wrappers),
-            SmallSection::Regexps => crate::image::encode_regexps(&self.regexps),
-            SmallSection::ArgumentsBrands => {
-                crate::image::encode_arguments_brands(&self.arguments_brands)
-            }
-            SmallSection::Temporal => crate::image::encode_temporal(&self.temporal),
-            SmallSection::Intl => crate::image::encode_intl(&self.intl),
-            SmallSection::NameFloor => match self.name_floor {
-                Some(floor) => floor.to_be_bytes().to_vec(),
-                None => Vec::new(),
-            },
-            SmallSection::Iterators => crate::image::encode_iterators(&self.iterators),
-            SmallSection::Dates => crate::image::encode_dates(&self.dates),
-            SmallSection::Functions => crate::image::encode_function_state(&self.function_state),
-            SmallSection::Proxies => crate::image::encode_proxy_state(&self.proxy_state),
-            SmallSection::Accessors => crate::image::encode_accessors(&self.accessors),
-            SmallSection::IntlBoundFunctions => {
-                crate::image::encode_intl_bound_functions(&self.intl_bound_functions)
-            }
-            SmallSection::PrivateElements => {
-                crate::image::encode_private_elements(&self.private_elements)
-            }
-            SmallSection::DisposableStacks => {
-                crate::image::encode_disposable_stacks(&self.disposable_stacks)
-            }
-            SmallSection::Generators => crate::image::encode_generators(&self.generators),
-            SmallSection::ErrorFrames => crate::image::encode_error_frames(&self.errors),
-            SmallSection::Promises => crate::image::encode_promise_cluster(&self.promise_cluster),
-            SmallSection::AsyncInstances => {
-                crate::image::encode_async_instances(&self.promise_cluster.async_instances)
-            }
-            SmallSection::IndexProperties => crate::image::encode_index_props(&self.index_props),
-        }
+        crate::snapshot_roster::encode_payload(self, section)
     }
 
     /// Encode all section payloads with the legacy framing, byte-for-byte.
