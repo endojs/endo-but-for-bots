@@ -251,7 +251,7 @@ fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
     // is retired and travels empty.
     let tables = side_tables_of(interp);
     let (next_id, pairs) = interp.symbol_key_table();
-    MachineImage::from_arenas(
+    let image = MachineImage::from_arenas(
         signature.clone(),
         &interp.slots,
         &interp.chunks,
@@ -260,35 +260,10 @@ fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
         Vec::new(),
         crate::image::SymbolKeyImage { next_id, pairs },
     )
-    .with_meter(interp.meter_state())
-    .with_side_tables(
-        tables.arrays,
-        tables.index_props,
-        tables.collections,
-        tables.registry,
-        tables.errors,
-        tables.buffers,
-        tables.typed_arrays,
-        tables.data_views,
-    )
-    .with_language_rows(
-        tables.wrappers,
-        tables.regexps,
-        tables.arguments_brands,
-        tables.temporal,
-        tables.intl,
-    )
-    .with_iterators(tables.iterators)
-    .with_dates(tables.dates)
-    .with_function_state(tables.function_state)
-    .with_proxy_state(tables.proxy_state)
-    .with_accessors(tables.accessors)
-    .with_intl_bound_functions(tables.intl_bound_functions)
-    .with_private_elements(tables.private_elements)
-    .with_disposable_stacks(tables.disposable_stacks)
-    .with_generators(tables.generators)
-    .with_promise_cluster(tables.promise_cluster)
-    .with_name_floor(interp.installed_names_floor())
+    .with_meter(interp.meter_state());
+    tables
+        .attach_to(image)
+        .with_name_floor(interp.installed_names_floor())
 }
 
 // Generate an expression macro rather than an owned-source function: callers
@@ -316,6 +291,12 @@ macro_rules! define_live_side_tables {
     })*) => {
         struct SideTableImages {
             $($($live_field: $ty,)?) *
+        }
+        impl SideTableImages {
+            fn attach_to(self, mut image: MachineImage) -> MachineImage {
+                $($(image.$live_field = self.$live_field;)?) *
+                image
+            }
         }
         define_side_table_transfer!(($); $($($live_field,)?) *);
         fn side_tables_of_selected(
