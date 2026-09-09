@@ -202,6 +202,11 @@ fn construction_scan_rejects_aliases_and_imported_variants() {
 /// Exclude complete test modules, functions, and blocks, never production after them.
 /// Any new shape of cfg(test) item needs an explicit scanner update.
 fn production_tokens<'s>(code: &[Token<'s>]) -> Vec<Token<'s>> {
+    // A test-only external module carries its own crate-level cfg so the
+    // recursive file scan can recognize the same boundary as rustc.
+    if token_positions(code, "#![cfg(test)]").first() == Some(&0) {
+        return Vec::new();
+    }
     let mut excluded = vec![false; code.len()];
     for at in token_positions(code, "#[cfg(test)]") {
         let mut item = at + tokens("#[cfg(test)]").len();
@@ -215,6 +220,10 @@ fn production_tokens<'s>(code: &[Token<'s>]) -> Vec<Token<'s>> {
             matches!(code[item].text, "mod" | "fn" | "{"),
             "unrecognized cfg(test) item"
         );
+        if code[item].text == "mod" && code.get(item + 2).is_some_and(|t| t.text == ";") {
+            excluded[at..=item + 2].fill(true);
+            continue;
+        }
         let open = item
             + code[item..]
                 .iter()
@@ -386,6 +395,26 @@ fn inline_test_blocks_do_not_hide_later_production_throws() {
     assert!(!cross_file_violations(
         "ironhorse-fuzz/src/new.rs",
         "fn run() { #[cfg(test)] { probe(); } Halt::synthetic_throw(\"bad\"); }"
+    )
+    .is_empty());
+}
+
+#[test]
+fn external_test_modules_do_not_hide_following_production() {
+    let file = "ironhorse-vm/src/example.rs";
+    assert!(cross_file_violations(
+        file,
+        "#![cfg(test)] fn example() { Halt::synthetic_throw(\"test\"); }"
+    )
+    .is_empty());
+    assert!(!cross_file_violations(
+        file,
+        "#[cfg(test)] mod tests; fn bad() { Halt::synthetic_throw(\"bad\"); }"
+    )
+    .is_empty());
+    assert!(!cross_file_violations(
+        file,
+        "fn bad() { Halt::synthetic_throw(\"bad\"); } #[cfg(test)] mod tests;"
     )
     .is_empty());
 }
