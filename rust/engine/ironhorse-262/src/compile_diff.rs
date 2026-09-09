@@ -29,8 +29,8 @@
 //! Panic discipline: the coder still `panic!`s on constructs outside the
 //! ported surface (a loud fold, not a silent skip). The harness must be
 //! total over arbitrary corpus input, so every `compile` call runs under
-//! [`std::panic::catch_unwind`] with the process panic hook silenced for
-//! the batch; a caught panic classifies as an `ironhorse-rejected` (coder
+//! [`std::panic::catch_unwind`], leaving the caller's panic hook intact.
+//! A caught panic classifies as an `ironhorse-rejected` (coder
 //! fold), never a harness abort. An oracle machine-startup failure
 //! (`run` returns `None`) is the named `oracle-unavailable` outcome, also
 //! not an abort.
@@ -162,8 +162,7 @@ fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, Str
 
 /// ironhorse's compile verdict for `source`, total over panics. `Ok(Ok(bytes))`
 /// = accepted; `Ok(Err(reason))` = structured rejection; `Err(reason)` =
-/// coder panic (the ported-surface fold). The caller silences the panic
-/// hook for the batch.
+/// coder panic (the ported-surface fold). The caller's panic hook is preserved.
 fn ironhorse_compile(source: &str) -> Result<Result<Vec<u8>, String>, String> {
     // The eval-goal entry: the goal the oracle shim compiles (module doc).
     let caught = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -336,15 +335,12 @@ pub fn compile_one_module(source: &str) -> CompileVerdict {
 }
 
 /// Run the **Module** compile differential over an explicit list of `(id,
-/// source)` module programs, silencing the panic hook for the batch.
+/// source)` module programs, preserving the caller's panic hook.
 pub fn module_compile_diff_programs(programs: &[(String, String)]) -> CompileReport {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
     let mut report = CompileReport::default();
     for (id, source) in programs {
         report.record(id, compile_one_module(source));
     }
-    panic::set_hook(prev_hook);
     report
 }
 
@@ -399,17 +395,14 @@ pub fn module_corpora_programs() -> Vec<(String, String)> {
 }
 
 /// Run the compile differential over an explicit list of `(id, source)`
-/// programs. Silences the panic hook for the batch so a coder fold does
-/// not spew to stderr per program (each is still counted and named).
+/// programs. Caught panics retain the caller's diagnostics and are also
+/// counted and named in the report.
 pub fn compile_diff_programs(programs: &[(String, String)]) -> CompileReport {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
     let mut report = CompileReport::default();
     for (id, source) in programs {
         let verdict = compile_one(source);
         report.record(id, verdict);
     }
-    panic::set_hook(prev_hook);
     report
 }
 
@@ -513,11 +506,8 @@ fn oracle_symbols(source: &str) -> Option<(bool, Vec<u8>)> {
 /// every program in `programs` where both engines accept. The bytecode gate
 /// ([`compile_diff_programs`]) owns accept/reject and byte-of-code identity;
 /// this layers the SYMB-atom identity the flipped default depends on.
-/// Silences the panic hook for the batch so a coder fold is a skip, not a
-/// stderr spew.
+/// Caught panics retain the caller's diagnostics and count as skipped.
 pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
     let mut report = SymbolsReport::default();
     for (id, source) in programs {
         let (oracle_parsed, oracle_syms) = match oracle_symbols(source) {
@@ -558,7 +548,6 @@ pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
             report.divergent.push((id.clone(), detail));
         }
     }
-    panic::set_hook(prev_hook);
     report
 }
 
