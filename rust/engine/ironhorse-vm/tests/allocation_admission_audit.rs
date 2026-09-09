@@ -22,16 +22,31 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/native_try.rs"),
 );
 
-fn method(name: &str) -> &str {
-    let start = SOURCE
-        .find(&format!("    fn {name}("))
-        .expect("method anchor exists");
-    let body = &SOURCE[start..];
-    let end = body[5..]
-        .find("\n    fn ")
-        .map(|n| n + 5)
-        .unwrap_or(body.len());
-    &body[..end]
+fn method_in(source: &str, name: &str) -> String {
+    let source = code_only(source);
+    let code = tokens(&source);
+    let body = token_body(&code, &format!("fn {name}("));
+    let start = code[body.start].start;
+    let end = code[body.end - 1].start + 1;
+    source[start..end].to_owned()
+}
+
+fn method(name: &str) -> String {
+    method_in(SOURCE, name)
+}
+
+#[test]
+fn method_anchors_survive_visibility_and_nested_bodies() {
+    for visibility in ["", "pub ", "pub(super) ", "pub(crate) "] {
+        let source = format!(
+            "// Unicode comment: λ {{ }}\nimpl Interp {{ {visibility}fn target() {{ if true {{ admitted(); }} }} \
+             pub(super) fn neighbor() {{ raw_growth(); }} }}"
+        );
+        let body = method_in(&source, "target");
+        assert!(body.contains("admitted()"));
+        assert!(!body.contains("raw_growth"));
+        assert!(body.ends_with("}"));
+    }
 }
 
 #[test]
