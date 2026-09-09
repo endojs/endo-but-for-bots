@@ -1129,3 +1129,12 @@ These localize current checkpoint cost; they do not compare revisions or explain
 the regression, and instrumentation perturbs the executable.
 The backend's independent admission and authentication remain required.
 The diagnostic's outer fixture timings include logging and are not acceptance data.
+
+The same artifact retains one subsequent scratch-only run with whole-arena
+compaction, keeping the checkpoint instrumentation unchanged.
+For 8,000 tail-garbage rows, dirty chunk bytes rise from 31,676 to 555,960;
+for front garbage they fall from 589,824 to 555,960.
+This exposes the policy's different write costs for the two layouts.
+The ordered pair does not isolate code layout or run-to-run variation and does not
+attribute the original-baseline timing regression.
+Neither diagnostic patch was applied to production, and no further trials were run.
