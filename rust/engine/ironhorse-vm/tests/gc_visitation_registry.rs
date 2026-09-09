@@ -481,7 +481,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     let gc_roots = strip_comments(fn_body("pub fn gc_roots(&self)"));
     let extra_edges = strip_comments(fn_body("fn extra_edges(&self, idx: SlotIndex"));
     let ephemeron = strip_comments(fn_body("fn ephemeron_edges(&self, slots: &SlotArena"));
-    let chunk_remap = strip_comments(fn_body("fn external_chunk_refs(&mut self"));
+    let chunk_remap = chunk_source(SRC);
     let partial = format!(
         "{}\n{}",
         strip_comments(fn_body("fn each_side_table_ref(&self")),
@@ -606,5 +606,39 @@ fn field_checks_reject_disconnected_or_incomplete_struct_emission() {
         assert!(SRC.contains(target), "missing mutation target: {target}");
         let mutation = SRC.replace(target, "/* field emission removed */");
         assert!(std::panic::catch_unwind(|| assert_field_emission(&mutation)).is_err());
+    }
+}
+
+/// Trace the collector callback to the generated per-field policy expansion.
+fn chunk_source(src: &str) -> String {
+    fn compact(src: &str) -> String {
+        ironhorse_vm::source_scan::code_only(src)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+    assert_eq!(
+        compact(body_in(src, "macro_rules! gc_run")),
+        "{($($code:tt)*)=>{{$($code)*}};}"
+    );
+    assert!(compact(src).contains("interp_state!(define_chunk_walk);"));
+    let callback = compact(body_in(src, "fn external_chunk_refs(&mut self"));
+    assert!(callback.contains("self.visit_chunks(visit);"));
+    let walk = compact(body_in(src, "fn visit_chunks(&mut self"));
+    assert!(walk.contains("$(gc_chunk!(gc_run,self,$field,visit,$chunk);)*"));
+    ironhorse_vm::interp::gc_tables::CHUNK_WALK_SOURCE.join("\n")
+}
+
+#[test]
+fn chunk_checks_reject_disconnected_calls_and_missing_expansions() {
+    for target in [
+        "{{ $($code)* }}",
+        "interp_state!(define_chunk_walk);",
+        "self.visit_chunks(visit);",
+        "gc_chunk!(gc_run, self, $field, visit, $chunk)",
+    ] {
+        assert!(SRC.contains(target), "missing mutation target: {target}");
+        let mutation = SRC.replace(target, "/* chunk walk removed */");
+        assert!(std::panic::catch_unwind(|| chunk_source(&mutation)).is_err());
     }
 }

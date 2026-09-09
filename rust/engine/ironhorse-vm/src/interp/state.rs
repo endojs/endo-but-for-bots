@@ -1,6 +1,8 @@
 //! Interpreter field inventory.
 //!
-//! The declaration below generates both Interp and its GC hook borrows/pruning.
+//! The declaration below generates Interp, its GC hook borrows/pruning, and
+//! chunk-compaction walks. `gc_chunk(none)` means no walk through that field in
+//! this callback; the independent registry checks every required chunk holder.
 //! Field order, visibility, and types stay explicit in the declaration.
 //! `unborrowed` means the field is not passed to GcHooks; it does not claim the
 //! field is slot-free. Root, arena, transient, and derived-state obligations are
@@ -12,24 +14,30 @@ macro_rules! interp_state {
             ($($arg),*)
 pub struct Interp {
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Derived membership; never persisted or traced as a guest root.
     classes: ClassIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     snapshot_baseline_identity: std::rc::Rc<()>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(slot_vec)]
     stack: Vec<Slot>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(slot_vec)]
     /// The program frame's scope slots. `NEW_LOCAL`/`NEW_TEMPORARY`
     /// append (XS's `--mxScope`); a `*_LOCAL` opcode's 1-based index `k`
     /// addresses `locals[k - 1]` (XS's `mxEnvironment - index`).
     locals: Vec<Slot>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// `id -> locals index` for the frame's named `var`/`let`/`const`
     /// bindings, so the environment opcodes resolve a name to its scope
     /// slot (XS aliases the frame locals through the environment
     /// instance; this map is the behavioral equivalent).
     id_map: std::collections::HashMap<u16, usize>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The global object instance in the slot arena (§ Value and heap
     /// model). Its `next` chains its property slots; a top-level `var`
     /// hoists onto it (`fxRunEvalEnvironment` — top-level vars are global
@@ -39,6 +47,7 @@ pub struct Interp {
     /// faithfully and the GC traces them.
     global_obj: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// `id -> property slot index` for the global object's own
     /// properties, the fast index into [`Self::global_obj`]'s property
     /// list. Presence marks that the property has been materialized (so
@@ -48,6 +57,7 @@ pub struct Interp {
     /// accounting and for tracing the global object's property chain.
     global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// True only while dispatching a **direct** `eval` unit's body (set by
     /// [`Self::eval_source`] around the unit's run). The declaration-
     /// instantiation hoist reads it to apply the direct-eval-only conflict
@@ -56,6 +66,7 @@ pub struct Interp {
     /// does not see the caller's lexical environment — does not raise.
     direct_eval_hoist: bool,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Whether the running unit is an **eval program** (direct *or* indirect;
     /// [`Self::eval_source`] sets it around the unit's run), as opposed to a
     /// top-level Script.
@@ -78,15 +89,19 @@ pub struct Interp {
     /// non-configurable.
     eval_program_hoist: bool,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(slot)]
     result: Slot,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Whether the frame runs in strict mode (`BEGIN_STRICT*`). Recorded
     /// for the exception/`this` semantics that observe it; the covered
     /// subset does not yet branch on it.
     strict: bool,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     meter: Meter,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Cost-calibration histogram recorder (design
     /// `designs/ironhorse-meter-opcode-cost-instrumentation.md`, stage
     /// C1). Zero-sized and a compile-time no-op unless the `cost-calibration`
@@ -96,6 +111,7 @@ pub struct Interp {
     /// [`crate::cost`].
     cost: crate::cost::CostRecorder,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The host metering callback, installed by [`Interp::arm_meter`].
     /// `None` on a never-armed meter is the default un-metered
     /// interpreter the differential harness uses: the check points then
@@ -107,6 +123,7 @@ pub struct Interp {
     /// ([`Interp::check_meter`]).
     meter_host: Option<Box<dyn FnMut(u64) -> bool>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Dispatch-count ceiling. `u64::MAX` (the default) is unbounded, so
     /// the oracle-differential harness sees exactly the historical
     /// behavior. A finite value — installed by [`Interp::run_bounded`] /
@@ -117,16 +134,20 @@ pub struct Interp {
     /// time rather than wedging the caller.
     step_limit: u64,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The machine slot heap (design § Value and heap model).
     pub slots: SlotArena,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The machine chunk heap (UTF-16BE strings and later data).
     pub chunks: ChunkArena,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(static_strings)]
     /// The interned `typeof` result strings (XS's `mxUndefinedString`
     /// &co.), allocated once at construction so `typeof` is dispatch-only.
     static_str: StaticStrings,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Count of bytecode opcodes dispatched, before the invocation
     /// baseline — the raw dispatch count the differential harness reports
     /// for isolating a metering divergence. Distinct from the meter's
@@ -134,11 +155,13 @@ pub struct Interp {
     /// the allocation metering.
     n_dispatched: u64,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Slot count immediately after deterministic boot construction.
     /// Runtime native functions sit above this boundary; boot functions
     /// below it are re-derived at the same indices on restore.
     boot_slot_count: u32,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Native-recursion budget consumed so far, in the units of
     /// [`NATIVE_DEPTH_LIMIT`]: every engine function that re-enters guest code
     /// or recurses without a bound of its own over guest-controlled structure
@@ -152,6 +175,7 @@ pub struct Interp {
     /// Always `0` at a crank boundary.
     native_depth: usize,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The host-installed source compiler ([`SourceCompiler`]) the runtime
     /// source-execution bridge (`eval` of a string, the `Function`
     /// constructor) drives to compile a source string to bytecode in this
@@ -161,6 +185,7 @@ pub struct Interp {
     /// [`Halt::NotImplemented`] rather than a source-text guess.
     source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Persisted bytecode buffers for units compiled at run time by the
     /// source-execution bridge (a string `eval`, the `Function` constructor).
     /// A function defined inside such a unit may **outlive** the eval call
@@ -171,6 +196,7 @@ pub struct Interp {
     /// buffer locally without aliasing `&mut self`.
     code_segments: Tracked<Vec<std::rc::Rc<[u8]>>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The segment index the current dispatch loop is running over, or `None`
     /// for the top-level program's external `code` buffer. A function call
     /// whose callee lives in a *different* segment must dispatch over that
@@ -178,6 +204,7 @@ pub struct Interp {
     /// key. Saved/restored around every nested cross-segment dispatch.
     active_segment: Option<usize>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// A persisted copy of the top-level program's bytecode (the external
     /// buffer `run` was handed), so a function defined in an eval unit can
     /// call **back** into a top-level function even though the eval runs in a
@@ -187,11 +214,13 @@ pub struct Interp {
     /// [`Self::func_segments`] being non-empty (an eval having run).
     top_level_code: Option<std::rc::Rc<[u8]>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     /// Which retained [`Self::code_segments`] buffer a guest function's body
     /// lives in. Top-level crank buffers are promoted lazily at their first
     /// function definition; eval/`Function` buffers enter directly.
     func_segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, usize>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Set by the `XS_CODE_EVAL` (direct-eval) dispatch site for the duration
     /// of the `eval` native call, so the bridge can tell a **direct** eval
     /// (whose scope is the caller's) from an **indirect** one (whose scope is
@@ -199,11 +228,13 @@ pub struct Interp {
     /// environment chain and `this`.
     eval_direct: bool,
     #[gc_hook(early, keys)]
+    #[gc_chunk(function_names)]
     /// Side table of user-function metadata (body range + captured
     /// closures), keyed by the function instance's slot index. See
     /// [`FuncInfo`].
     functions: ClassMap<FuncInfo>,
     #[gc_hook(early, map)]
+    #[gc_chunk(bound)]
     /// Side table of bound-function metadata (`Function.prototype.bind`),
     /// keyed by the bound function's slot index: the target to invoke, the
     /// bound `this`, and the bound leading arguments. A callee found here in
@@ -211,20 +242,24 @@ pub struct Interp {
     /// `fx_Function_prototype_bound`).
     bound_functions: ClassMap<BoundData>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     /// The `Proxy` exotics' `[[ProxyTarget]]`/`[[ProxyHandler]]` internal slots,
     /// keyed by the proxy instance slot (see [`ProxyData`]). Membership here is
     /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
     /// it and every internal-method dispatch site routes it to the trap logic.
     proxies: ClassMap<ProxyData>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Synchronous recursive-Get context; always `None` at a crank boundary.
     array_iterator_proxy_get_context: Option<ArrayIteratorProxyGetContext>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     /// Maps a `revoke` function slot (returned by `Proxy.revocable`) to the
     /// proxy instance it revokes (`fx_Proxy_revoke`'s bound `[[RevocableProxy]]`).
     proxy_revokers:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(callers)]
     /// The saved caller states of the active call chain (design §
     /// Interpreter and dispatch: "frames are stack slots ... fixed offsets
     /// for result/function/this"). The top-level program is the base
@@ -239,20 +274,24 @@ pub struct Interp {
     /// fixed offsets) that `run`/`argument`/`end` read.
     call_stack: Vec<CallerState>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(slot_vec)]
     /// The active frame's positional arguments (`mxFrameArgv`), read by
     /// `XS_CODE_ARGUMENT`. Empty in the program frame.
     args: Vec<Slot>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(slot)]
     /// The active frame's `this` (`mxFrameThis`). Bound by `begin_*`;
     /// the covered subset does not yet branch on it.
     this_val: Slot,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Closure-environment property slots that captured this activation's
     /// still-uninitialized derived-constructor `this`. Nested calls suspend
     /// this list with the activation; `SET_THIS` updates each property in
     /// place and clears it, so escaped arrows observe the initialized value.
     this_captures: Vec<crate::value::SlotIndex>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The active frame's variable-environment head (XS's `mxEnvironment`
     /// register). A `Kind::Reference` names the innermost live `with`/eval
     /// environment instance (a real 2-slot arena object: an
@@ -269,11 +308,13 @@ pub struct Interp {
     /// return / throw-unwind, so a callee never inherits its caller's `with`.
     env: Slot,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The active frame's function instance (`mxFrameFunction`), whose
     /// [`FuncInfo`] carries the closure environment closure opcodes resolve
     /// against. `NULL` in the program frame.
     cur_func: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Whether the active frame is a **constructor** invocation (XS's
     /// `mxFrameHasTarget` — a `new f(...)`). Set when `run` enters a callee
     /// whose `THIS` slot is the uninitialized construct placeholder; drives
@@ -282,20 +323,24 @@ pub struct Interp {
     /// `this`). `false` for a plain call and the program frame.
     cur_target: bool,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The actual `new.target`. It differs from `cur_func` while a derived
     /// constructor is executing its heritage through `super()`.
     target_func: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// One-shot target override installed by `super()` for the following
     /// construct-frame `run`.
     pending_new_target: Option<crate::value::SlotIndex>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(slot)]
     /// The pending thrown value (XS's `mxException`). `THROW` sets it and
     /// unwinds to the innermost jump; `EXCEPTION` moves it to the stack
     /// (binding the catch parameter) and clears it back to `undefined`;
     /// `RETHROW` re-unwinds with it. Default `undefined`.
     exception: Slot,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Running total of slots held by the **suspended** call frames (the
     /// `call_stack` activations): each contributes its
     /// [`FRAME_OVERHEAD_SLOTS`] plus its saved argument and scope slots.
@@ -304,6 +349,7 @@ pub struct Interp {
     /// so the stack-overflow abort fires at the same fixed-geometry budget.
     frame_slots: usize,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The intrinsic (native) constructors, keyed by name, created once at
     /// construction (an unmetered machine-boot cost, as XS builds its
     /// intrinsics before the guest runs). [`Self::link_intrinsics`] binds
@@ -312,22 +358,31 @@ pub struct Interp {
     /// native function instance.
     intrinsics: std::collections::HashMap<&'static str, crate::value::SlotIndex>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     intl_object: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     locale_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     collator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     list_format_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     plural_rules_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     segmenter_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     segments_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     segment_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// `%Segments.prototype%[@@iterator]` and the `%SegmentIterator%`
     /// self-identity, minted at BOOT beside their `async_iterator_identity`
     /// and `string_iterator_method` siblings rather than during
@@ -338,56 +393,80 @@ pub struct Interp {
     /// slots come back at identical indices with identical name chunks.
     segments_iterator_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     segment_iterator_identity: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     date_time_format_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     number_format_proto: crate::value::SlotIndex,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     locales: ClassMap<LocaleData>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     collators: ClassMap<CollatorData>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     list_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, ListFormatData>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     plural_rules: Tracked<std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     number_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     segmenters: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmenterData>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentsData>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     segment_iterators:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     date_time_formats:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     temporal_object: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     temporal_instant_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     temporal_duration_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     temporal_plain_protos: [crate::value::SlotIndex; 6],
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     temporal_zoned_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The `Temporal.Now` namespace object (a boot object, not a constructor).
     temporal_now_object: crate::value::SlotIndex,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     temporal_instants: ClassMap<TemporalInstantRecord>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     temporal_durations: ClassMap<TemporalDurationRecord>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     temporal_plains: ClassMap<TemporalPlainRecord>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     temporal_zoneds: ClassMap<TemporalZonedRecord>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     collator_compare_functions:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     /// The cached `[[BoundFormat]]` functions of `Intl.NumberFormat`, keyed by
     /// the bound function's own slot → the owning NumberFormat instance (the
     /// reverse of [`NumberFormatData::bound_format`]). The `format` accessor
@@ -398,6 +477,7 @@ pub struct Interp {
     number_format_bound_functions:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[gc_hook(late, pair_set)]
+    #[gc_chunk(none)]
     /// Tombstones for a function's exotic `length`/`name` own data properties
     /// that the guest has `delete`d. XS carries these as real slots that
     /// `delete` unlinks; ironhorse synthesizes them from the [`FuncInfo`]
@@ -410,6 +490,7 @@ pub struct Interp {
     /// string-literal `'length'` key.
     deleted_fn_meta: Tracked<std::collections::HashSet<(crate::value::SlotIndex, u16)>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Object.prototype%` (XS's `mxObjectPrototype`), the root
     /// of every ordinary object's prototype chain. A boot object; ordinary
     /// objects ([`Self::new_object`]) and constructed `this` instances point
@@ -419,21 +500,25 @@ pub struct Interp {
     /// the existing corpora; only the prototype *identity* chain is new.
     object_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Function.prototype%`: the prototype of every function
     /// instance (native and user), so `f.toString`/`f.call`/… resolve up the
     /// chain. A boot object.
     function_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted function identity for the lazily materialized
     /// `%Function.prototype%[Symbol.hasInstance]` property.
     function_has_instance_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's inaccessible tagged-template registry object. Generated
     /// site keys are properties on this ordinary object, matching XS's
     /// `mxRealmTemplateCache`; the object itself is a boot root and its
     /// properties therefore travel in the ordinary heap snapshot.
     template_cache: crate::value::SlotIndex,
     #[gc_hook(early, map)]
+    #[gc_chunk(none)]
     /// Each constructor instance's `.prototype` object, by slot (XS's
     /// `constructor.prototype`): the intrinsics' prototypes (wired at boot)
     /// and every user function's default prototype (wired at
@@ -444,6 +529,7 @@ pub struct Interp {
     ctor_prototype:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[gc_hook(early, both_pair)]
+    #[gc_chunk(slot_values)]
     /// Private elements are keyed by the receiver and the closure cell that
     /// represents the lexically-scoped private name. The cell identity is the
     /// brand; it cannot collide across class evaluations even when the source
@@ -452,10 +538,12 @@ pub struct Interp {
         std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), Slot>,
     >,
     #[gc_hook(early, both_pair)]
+    #[gc_chunk(none)]
     private_accessors: Tracked<
         std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), AccessorData>,
     >,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Native prototype methods to bind at link time: `(prototype instance,
     /// method name, method function)`. Populated once at boot; a method is
     /// installed as an own property of its prototype only when the program
@@ -467,6 +555,7 @@ pub struct Interp {
         crate::value::SlotIndex,
     )>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Native prototype **data** properties to bind at link time: `(prototype,
     /// property name, string value)`. Used for the inherited Error prototype
     /// `name`/`message` (so `err.name` resolves up the chain and
@@ -474,6 +563,7 @@ pub struct Interp {
     /// only when the program references the name; unmetered.
     proto_data: Vec<(crate::value::SlotIndex, &'static str, String)>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Native prototype **accessor** properties to bind at link time:
     /// `(prototype, property key, getter function, optional setter function,
     /// guard name)`. Each installs a real ordinary accessor property with
@@ -504,12 +594,14 @@ pub struct Interp {
         &'static str,
     )>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(pair_slots)]
     /// The well-known symbols (`Symbol.iterator`, `Symbol.hasInstance`, …) as
     /// `(name, symbol value)` — fixed `Kind::Symbol` values created once at
     /// boot and bound as own properties of the `Symbol` constructor at link
     /// time (only when referenced), so `Symbol.iterator === Symbol.iterator`.
     well_known_symbols: Vec<(&'static str, Slot)>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program's symbol `name → id` table, built at
     /// [`Self::link_intrinsics`] from the decoded symbols atom (the inverse
     /// of the id→name vector). A native built-in that must set a
@@ -520,6 +612,7 @@ pub struct Interp {
     /// the program never references has no id (and no read of it occurs).
     symbol_ids: SymbolIds,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// XS's boot-time default key names (`gxIDStrings`). A runtime string
     /// property key equal to one of these is already interned in XS's global
     /// symbol table, so re-interning it allocates **no** key slot; a name
@@ -527,6 +620,7 @@ pub struct Interp {
     /// genuinely novel and meters one `fxNewSlot`. See [`Self::intern_key`].
     default_keys: std::collections::HashSet<&'static str>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The next id [`Self::intern_symbol_key`] hands out for a symbol used
     /// as a property key, allocated DOWNWARD from `u16::MAX` so the symbol
     /// id space can never collide with the append-only name table growing
@@ -538,6 +632,7 @@ pub struct Interp {
     /// latch: the meet halts the machine by name instead of aliasing.
     next_symbol_key_id: u16,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// High-water mark of the name table as of the last
     /// `install_intrinsic_bindings` pass. The relink/eval
     /// keep filters admit ids ABOVE this floor: "appended since the last
@@ -546,8 +641,10 @@ pub struct Interp {
     /// filtering by the unit's own table length refused it forever.
     installed_names_len: usize,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     installing_intrinsics: bool,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Poison latch: the two property-key id spaces met (the name table
     /// growing up collided with [`Self::next_symbol_key_id`] minting
     /// down), so any further intern would alias an existing key. Set by
@@ -560,6 +657,7 @@ pub struct Interp {
     /// non-quiescent so the persist gates refuse it.
     id_space_exhausted: bool,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Lifecycle latch: did the most recent [`Self::run`] leave the
     /// machine at a COMPLETED crank boundary? `true` on a fresh machine
     /// (a restore lands on one, and a linked machine that never ran is
@@ -573,11 +671,13 @@ pub struct Interp {
     /// registers stayed rooted (architecture review F011).
     last_crank_completed: bool,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
     symbol_names: Tracked<Vec<SymbolName>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     /// Per-instance Error metadata (name + message), keyed by the error
     /// instance's slot index. An Error object's completion/abort value
     /// stringifies as `name` (no/empty message) or `name: message` — XS's
@@ -586,6 +686,7 @@ pub struct Interp {
     /// parity from primitive throws to real Error objects.
     error_data: Tracked<std::collections::HashMap<crate::value::SlotIndex, ErrorInfo>>,
     #[gc_hook(early, map)]
+    #[gc_chunk(slot_values)]
     /// Per-instance primitive-wrapper data (`new Boolean`/`Number`/`String`),
     /// keyed by the wrapper instance's slot: the wrapped primitive slot
     /// (XS's `[[BooleanData]]`/`[[NumberData]]`/`[[StringData]]`). A wrapper's
@@ -593,11 +694,13 @@ pub struct Interp {
     /// [`Self::render`] reads it here.
     wrapper_data: ClassMap<Slot>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Array.prototype%` (a boot object). Every array literal
     /// and `new Array` instance chains to it, so `arr.push`/`arr.join`/… (the
     /// native methods bound on it) resolve up the prototype chain.
     array_proto: crate::value::SlotIndex,
     #[gc_hook(early, counted)]
+    #[gc_chunk(indexed)]
     /// Per-instance array data (XS's exotic array's `XS_ARRAY_KIND` internal
     /// slot: `length` plus the item chunk). Keyed by the array instance's
     /// slot. `length` is the array length semantics of `fxArraySetLength`;
@@ -608,6 +711,7 @@ pub struct Interp {
     /// both sweep paths release those counts when their owner dies.
     arrays: ClassMap<ArrayData>,
     #[gc_hook(early, counted)]
+    #[gc_chunk(indexed)]
     /// An **ordinary** object's integer-indexed properties, stored by index
     /// rather than by name.
     ///
@@ -632,6 +736,7 @@ pub struct Interp {
     /// has no array `length` semantics.
     index_props: Tracked<std::collections::HashMap<crate::value::SlotIndex, ArrayData>>,
     #[gc_hook(late, set)]
+    #[gc_chunk(none)]
     /// The subset of [`Self::arrays`] instances that are **`arguments`
     /// objects** (materialized by `XS_CODE_ARGUMENTS_SLOPPY`/`_STRICT`). XS
     /// stores the mapped/unmapped arguments exotic like an indexed object, and
@@ -643,16 +748,19 @@ pub struct Interp {
     /// stay the array side table).
     arguments_objects: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
     #[gc_hook(early, map)]
+    #[gc_chunk(disposal)]
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
     disposable_stacks: ClassMap<DisposableStackData>,
     #[gc_hook(early, counted)]
+    #[gc_chunk(collection)]
     /// Per-instance Map/Set/WeakMap/WeakSet data (XS's exotic collection
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
     collections: ClassMap<CollectionData>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(none)]
     /// Per-page refcounts for the BULK side tables' references
     /// (arrays' items, collections' entries) — the standing map the
     /// partial collector's page projection reads instead of walking
@@ -660,28 +768,35 @@ pub struct Interp {
     /// [`crate::bulk`]; whole-row drops decrement via `drop_refs`.
     side_refs: SideRefCounts,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Map.prototype%`/`%Set.prototype%`/`%WeakMap.prototype%`/
     /// `%WeakSet.prototype%` (boot objects), so a `new Map()` instance chains
     /// to the right one and its methods resolve.
     map_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     set_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     weakmap_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     weakset_proto: crate::value::SlotIndex,
     #[gc_hook(early, map)]
+    #[gc_chunk(buffer_data)]
     /// Per-instance `ArrayBuffer` backing store (XS's `XS_ARRAY_BUFFER_KIND`
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
     array_buffers: ClassMap<ArrayBufferData>,
     #[gc_hook(late, set)]
+    #[gc_chunk(none)]
     /// ArrayBuffers detached through the test262 host hook. The backing bytes
     /// remain allocated so existing views keep stable identities, while every
     /// operation that performs `ValidateTypedArray` rejects the detached
     /// buffer with a realm-local TypeError.
     detached_buffers: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
     #[gc_hook(late, set)]
+    #[gc_chunk(none)]
     /// The subset of [`Self::array_buffers`] instances that are
     /// `SharedArrayBuffer`s (XS's `XS_ARRAY_BUFFER_KIND` with the shared flag).
     /// ironhorse is single-agent, so a shared buffer is byte-identical to a
@@ -689,74 +804,91 @@ pub struct Interp {
     /// requirement and the `SharedArrayBuffer` brand.
     shared_buffers: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%ArrayBuffer.prototype%` (a boot object), so a
     /// `new ArrayBuffer()` instance chains to it and its methods resolve.
     arraybuffer_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol id of `byteLength`, resolved at
     /// [`Self::link_intrinsics`] (XS's `mxID(_byteLength)`), so a
     /// `buffer.byteLength` get routes to the buffer byte-length accessor.
     /// `None` when the program never references `byteLength`.
     byte_length_id: Option<u16>,
     #[gc_hook(early, map)]
+    #[gc_chunk(none)]
     /// Per-instance TypedArray view state (XS's `XS_TYPED_ARRAY_KIND` +
     /// `XS_DATA_VIEW_KIND` internal slots + buffer reference). Keyed by the
     /// view instance's slot, like [`Self::array_buffers`]. See
     /// [`TypedArrayData`].
     typed_arrays: ClassMap<TypedArrayData>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol ids of `byteOffset` and `buffer`, resolved
     /// at [`Self::link_intrinsics`], so a `ta.byteOffset` / `ta.buffer` get
     /// routes to the TypedArray (and DataView) view accessors. `None` when
     /// the program never references the name.
     byte_offset_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     buffer_id: Option<u16>,
     #[gc_hook(early, map)]
+    #[gc_chunk(none)]
     /// Per-instance `DataView` view state (XS's `XS_DATA_VIEW_KIND` internal
     /// slot + buffer reference). Keyed by the view instance's slot. See
     /// [`DataViewData`].
     data_views: ClassMap<DataViewData>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%DataView.prototype%` (a boot object), so a
     /// `new DataView()` instance chains to it and its `get*`/`set*` methods
     /// resolve.
     dataview_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol id of `size`, resolved at
     /// [`Self::link_intrinsics`] (XS's `mxID(_size)`), so a `map.size`/
     /// `set.size` get routes to the collection size accessor. `None` when the
     /// program never references `size`.
     size_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol id of `length`, resolved at
     /// [`Self::link_intrinsics`] (XS's `mxID(_length)`), so an
     /// `arr.length` get/set routes to the array length semantics. `None`
     /// when the program never references `length`.
     length_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol id of `name` (XS's `mxID(_name)`), so a
     /// `f.name` read routes to the function's own `name` property. `None`
     /// when the program never references `name`.
     name_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Array Iterator.prototype%` (a boot object) — the
     /// prototype of the iterators `arr.values()`/`keys()`/`entries()` and
     /// `arr[Symbol.iterator]()` produce. Carries `next` and a
     /// `Symbol.iterator` returning the iterator itself.
     array_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     iterator_wrapper_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     map_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     set_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// `%RegExpStringIteratorPrototype%`, inheriting `%Iterator.prototype%`.
     regexp_string_iterator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `Math` namespace object (XS's `mxMathObject`) — a boot
     /// object carrying the `Math.*` functions and the numeric constants
     /// (`Math.PI`, …) as own properties, bound into the global object under
@@ -764,6 +896,7 @@ pub struct Interp {
     /// function, so `typeof Math === "object"`.
     math_object: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%String.prototype%` (a boot object). A **primitive**
     /// string's property/method access boxes to it (XS's `fxCoerceToString`
     /// / `mxStringAccessor` path): `"abc".charCodeAt`/`.slice`/… resolve up
@@ -771,49 +904,61 @@ pub struct Interp {
     /// routes here without materializing a wrapper object.
     string_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The intrinsic function installed at `%String.prototype%[Symbol.iterator]`.
     string_iterator_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Number.prototype%` (a boot object) — the box target for a
     /// primitive number's method access (`(42).toString(2)`, …).
     number_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Boolean.prototype%` (a boot object) — the box target for a
     /// primitive boolean's method access (`true.toString()`, …).
     boolean_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// `%Date.prototype%` and the `[[DateValue]]` side table. A Date instance
     /// remains an ordinary arena object for property/prototype behavior; its
     /// time value is the one non-property internal slot recorded here.
     date_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted function identity for the lazily materialized
     /// `%Date.prototype%[Symbol.toPrimitive]` property.
     date_to_primitive_method: crate::value::SlotIndex,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     dates: Tracked<std::collections::HashMap<crate::value::SlotIndex, f64>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted function identity for the lazily materialized
     /// `%Symbol.prototype%[Symbol.toPrimitive]` property.
     symbol_to_primitive_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%BigInt.prototype%` (a boot object) — the box target for a
     /// primitive bigint's method access (`(42n).toString(2)`, …).
     bigint_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The global symbol registry (`Symbol.for`/`keyFor`, XS's `symbolTable`):
     /// the registry key → the canonical symbol-description slot that is the
     /// registered symbol's identity, so `Symbol.for(k) === Symbol.for(k)`.
     symbol_registry: Tracked<std::collections::HashMap<Vec<u8>, crate::value::SlotIndex>>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     /// The reverse of [`Self::symbol_registry`]: a registered symbol's
     /// identity slot → its registry key, so `Symbol.keyFor(sym)` recovers it.
     symbol_registry_keys: std::collections::HashMap<crate::value::SlotIndex, Vec<u8>>,
     #[gc_hook(early, map)]
+    #[gc_chunk(none)]
     /// A symbol value's descriptor slot → the program-local property **id** it
     /// is interned under when used as a property key (XS's `mxID(symbol)`: a
     /// symbol IS an id there; here a symbol's descriptor-slot identity is
@@ -827,17 +972,20 @@ pub struct Interp {
     /// partition (and the boot-key soundness gate).
     symbol_key_ids: Tracked<std::collections::HashMap<crate::value::SlotIndex, u16>>,
     #[gc_hook(early, owner_pair)]
+    #[gc_chunk(none)]
     /// Getter/setter pairs for ordinary accessor properties. The key is the
     /// owner and property id; the owner's normal property chain remains the
     /// source of truth for presence, attributes, and creation order.
     accessors: Tracked<std::collections::HashMap<(crate::value::SlotIndex, u16), AccessorData>>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(triple_slots)]
     /// Native prototype/namespace **numeric** data properties to bind at link
     /// time: `(owner instance, property name, value)`. Used for `Math.PI` &co.
     /// (the `Math` constants) and `Number.MAX_VALUE` &co.; bound only when the
     /// program references the name, unmetered.
     proto_value_data: Vec<(crate::value::SlotIndex, &'static str, Slot)>,
     #[gc_hook(early, map)]
+    #[gc_chunk(none)]
     /// Per-instance array-iterator state (XS's `fxNewIteratorInstance`
     /// internal slots): the array being iterated, the next index to yield,
     /// the iteration `kind` (0 = values, 1 = keys, 2 = entries), and the
@@ -845,34 +993,41 @@ pub struct Interp {
     /// — XS allocates it once at iterator creation, not per `next()`.
     iterators: Tracked<std::collections::HashMap<crate::value::SlotIndex, IterState>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol ids of `value`/`done`, resolved at
     /// [`Self::link_intrinsics`], so `next()` sets them on the result object
     /// under the ids the program reads them by.
     value_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     done_id: Option<u16>,
     #[gc_hook(early, map)]
+    #[gc_chunk(promise)]
     /// Per-instance promise settlement state (XS's `XS_PROMISE_KIND` STATUS/
     /// RESULT/THENS internal slots). Keyed by the promise instance's slot,
     /// like [`Self::collections`]. See [`PromiseData`].
     promises: Tracked<std::collections::HashMap<crate::value::SlotIndex, PromiseData>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%Promise.prototype%` (a boot object), so a `new Promise`
     /// instance chains to it and `then`/`catch`/`finally` resolve.
     promise_proto: crate::value::SlotIndex,
     #[gc_hook(early, map)]
+    #[gc_chunk(frame)]
     /// Per-instance generator state (design § generators): the suspended
     /// activation and lifecycle state a generator's `next`/`return`/`throw`
     /// resume. Keyed by the generator instance's slot index, modeled on
     /// `promises`.
     generators: Tracked<std::collections::HashMap<crate::value::SlotIndex, GeneratorData>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%GeneratorPrototype%` (a boot object carrying
     /// `next`/`return`/`throw`); a generator function's `.prototype` chains
     /// to it, so a generator instance resolves those methods by the ordinary
     /// prototype-chain walk.
     generator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%GeneratorFunction.prototype%` (XS's
     /// `mxGeneratorFunctionPrototype` — a plain object off `%Function.prototype%`
     /// carrying a `constructor` back-link to `%GeneratorFunction%` and a
@@ -882,11 +1037,13 @@ pub struct Interp {
     /// resolves `%GeneratorFunction%`, not plain `Function`.
     generator_function_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The stack of generators currently executing on a nested
     /// [`Self::resume_generator`] dispatch (its top is the innermost). The
     /// `YIELD` arm reads the top to snapshot the right instance.
     gen_run_stack: Vec<GenRunFrame>,
     #[gc_hook(early, map)]
+    #[gc_chunk(async_frame)]
     /// Per-instance async-function state (design § async/await;
     /// `ASYNC-AWAIT-HANDOFF.md`): the suspended activation and the result
     /// promise + resolving functions a `START_ASYNC` created, keyed by the
@@ -894,34 +1051,43 @@ pub struct Interp {
     /// suspended `frame` and the promise/function slots join the GC root set.
     async_instances: Tracked<std::collections::HashMap<crate::value::SlotIndex, AsyncData>>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%AsyncFunction.prototype%` (XS's `mxAsyncFunctionPrototype`
     /// — a plain object off `%Function.prototype%`). An async function's
     /// instance `[[Prototype]]` chains to it (see [`Self::new_async_function`]).
     async_function_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The stack of async instances currently executing on a nested
     /// [`Self::step_async`] dispatch (its top is the innermost). The `AWAIT`
     /// arm reads the top to snapshot the right instance — the async analog of
     /// [`Self::gen_run_stack`].
     async_run_stack: Vec<AsyncRunFrame>,
     #[gc_hook(early, map)]
+    #[gc_chunk(queued_frame)]
     /// Async-generator instances combine generator suspension with promise
     /// request queues. Each `.next`/`.return`/`.throw` capability is kept in
     /// FIFO order until the currently executing/awaiting request finishes.
     async_generators: std::collections::HashMap<crate::value::SlotIndex, AsyncGeneratorData>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     async_generator_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     async_generator_function_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     async_iterator_identity: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// `%IteratorPrototype%[@@iterator]`. See `segments_iterator_method`
     /// for why this is a boot field rather than a link-time mint.
     iterator_identity: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     async_gen_run_stack: Vec<AsyncGenRunFrame>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The resume mode threaded into the `BRANCH_STATUS` epilogue after an
     /// `AWAIT` resume (XS's `the->status`): `NoStatus` (a fulfilled resume —
     /// branch by offset, leaving the resolved value on the stack) or `Throw`
@@ -931,12 +1097,14 @@ pub struct Interp {
     /// path (which only ever resumes `NoStatus`) is unchanged.
     resume_status: ResumeStatus,
     #[gc_hook(early, map)]
+    #[gc_chunk(none)]
     /// Bound state for runtime-minted Promise host functions. Keyed by the
     /// function instance's slot and consulted in `RUN` when guest code calls a
     /// resolver, capability executor, or `finally` closure it was handed. See
     /// [`PromiseFnData`].
     promise_functions: ClassMap<PromiseFnData>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The per-pair `[[AlreadyResolved]]` guards (XS's boolean slot in each
     /// `fxPushPromiseFunctions` home object). A resolving-function pair shares
     /// one index; the first of resolve/reject to fire trips it, the second is a
@@ -944,6 +1112,7 @@ pub struct Interp {
     /// its own guard, which is why the guard is per-pair, not per-promise.
     promise_guards: Tracked<Vec<bool>>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(jobs)]
     /// The pending promise-job queue (XS's `mxPendingJobs` list): the
     /// microtasks queued by settling a promise with registered reactions,
     /// drained FIFO by [`Self::run_promise_jobs`] after the script settles —
@@ -951,6 +1120,7 @@ pub struct Interp {
     /// § promises, the pump-loop latch).
     promise_jobs: std::collections::VecDeque<PromiseJob>,
     #[gc_hook(held, shared)]
+    #[gc_chunk(none)]
     /// The shared state of each in-flight `Promise.all`/`allSettled`/`race`/
     /// `any` call (XS's `remainingElementsCount` cell + the values/errors
     /// Array its element-resolve closures share). Indexed by a
@@ -958,11 +1128,13 @@ pub struct Interp {
     /// consumed as its element reactions drain. See [`CombinatorState`].
     combinators: Tracked<Vec<CombinatorState>>,
     #[gc_hook(held, mutable)]
+    #[gc_chunk(from_async)]
     /// In-flight `Array.fromAsync` native async state machines. Append-only
     /// within a run; indexed by the [`ReactionKind::FromAsyncNext`]/… payload.
     /// See [`FromAsyncData`].
     from_async: Vec<FromAsyncData>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol id of `then` (XS's `mxID(_then)`), resolved
     /// at [`Self::link_intrinsics`], so thenable adoption can probe an
     /// argument's `.then`. `None` when the program never references `then`.
@@ -970,6 +1142,7 @@ pub struct Interp {
     #[allow(dead_code)]
     then_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol id of `constructor`, resolved at
     /// [`Self::link_intrinsics`]. When present, a user function's default
     /// `.prototype` gets its spec-required own `constructor` back-reference
@@ -980,6 +1153,7 @@ pub struct Interp {
     /// byte-identical.
     constructor_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The `%Error.prototype%` `stack` accessor pair awaiting link-time
     /// install: `(error_proto, getter, setter)`. Installed (guarded on the
     /// program naming `Error`, for metering neutrality elsewhere) beside
@@ -990,12 +1164,14 @@ pub struct Interp {
         crate::value::SlotIndex,
     )>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-symbol id of `prototype`, when the program names it —
     /// gates installing a constructor function's own `prototype` property
     /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
     /// the `prototype.constructor` back-reference.
     prototype_key_id: Option<u16>,
     #[gc_hook(late, map)]
+    #[gc_chunk(none)]
     /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot): the
     /// compiled program plus the source/flags strings. Keyed by the RegExp
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
@@ -1003,42 +1179,52 @@ pub struct Interp {
     /// only as the legacy schema-11 snapshot fallback.
     regexps: ClassMap<RegExpData>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The realm's `%RegExp.prototype%` (a boot object), so a `new RegExp`
     /// instance (and a `/.../` literal) chains to it and `exec`/`test`/the
     /// accessor getters resolve.
     regexp_proto: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.replace]` function identity.
     regexp_replace_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.match]` function identity.
     regexp_match_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.matchAll]` function identity.
     regexp_match_all_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.search]` function identity.
     regexp_search_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.split]` function identity.
     regexp_split_method: crate::value::SlotIndex,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol id of `lastIndex` (XS's `mxID(_lastIndex)`),
     /// resolved at [`Self::link_intrinsics`], so `re.lastIndex` reads/writes
     /// the instance's own last-index property. `None` when unreferenced.
     last_index_id: Option<u16>,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol ids of the RegExp accessor getters
     /// (`source`/`flags`/`global`/`ignoreCase`/`multiline`/`dotAll`/`sticky`/
     /// `unicode`/`hasIndices`/`unicodeSets`), so a `re.source` &co. get routes
     /// to the accessor in `GET_PROPERTY`. `None` when unreferenced.
     regexp_getter_ids: RegExpGetterIds,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The program-local symbol ids of the exec-result array's named slots
     /// (`index`/`input`/`groups`), set on the match array by `exec`. `None`
     /// when unreferenced.
     regexp_result_ids: RegExpResultIds,
     #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
     /// The jump-buffer chain (XS's `the->firstJump`), innermost last.
     /// `CATCH` pushes a [`CatchJump`]; `UNCATCH` pops it; `THROW`/`RETHROW`
     /// unwind to the top entry, restoring the value stack, scope, and call
@@ -1056,6 +1242,7 @@ pub struct Interp {
 macro_rules! define_interp_state {
     (() $vis:vis struct $name:ident {
         $(#[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     }) => {
         $vis struct $name {
@@ -1075,6 +1262,7 @@ macro_rules! define_interp_state {
 macro_rules! select_gc_tables {
     (($consumer:ident $(, $arg:ident)*) $vis:vis struct $name:ident {
         $(#[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     }) => {
         select_gc_tables! {

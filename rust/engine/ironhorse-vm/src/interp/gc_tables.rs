@@ -149,6 +149,241 @@ macro_rules! borrow_gc_tables {
     };
 }
 
+// A policy emits the same tokens for execution and the independent source lock.
+macro_rules! gc_chunk {
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, none) => {
+        $emit! {}
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, function_names) => {
+        $emit! {
+            $vm.$field.update_values(|f| $visit(&mut f.name_chunk));
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, buffer_data) => {
+        $emit! {
+            for b in $vm.$field.values_mut() {
+                $visit(&mut b.data);
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, bound) => {
+        $emit! {
+            for b in $vm.$field.values_mut() {
+                slot_chunk(&mut b.this_arg, $visit);
+                for s in &mut b.args {
+                    slot_chunk(s, $visit);
+                }
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, slot_values) => {
+        $emit! {
+            for s in $vm.$field.values_mut() {
+                slot_chunk(s, $visit);
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, indexed) => {
+        $emit! {
+            for a in $vm.$field.values_mut() {
+                a.for_each_value_mut_chunk_remap(|s| slot_chunk(s, $visit));
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, collection) => {
+        $emit! {
+            for c in $vm.$field.values_mut() {
+                c.for_each_entry_mut_chunk_remap(|s| slot_chunk(s, $visit));
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, promise) => {
+        $emit! {
+            for p in $vm.$field.values_mut() {
+                slot_chunk(&mut p.result, $visit);
+                for r in &mut p.reactions {
+                    slot_chunk(&mut r.on_fulfilled, $visit);
+                    slot_chunk(&mut r.on_rejected, $visit);
+                    slot_chunk(&mut r.resolve, $visit);
+                    slot_chunk(&mut r.reject, $visit);
+                }
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, from_async) => {
+        $emit! {
+            // In-flight `Array.fromAsync` state stores raw
+            // Slot COPIES (a string thisArg, a captured close error);
+            // their chunk offsets relocate with compaction like any
+            // other external holder's.
+            for d in $vm.$field.iter_mut() {
+                slot_chunk(&mut d.resolve, $visit);
+                slot_chunk(&mut d.reject, $visit);
+                slot_chunk(&mut d.mapfn, $visit);
+                slot_chunk(&mut d.this_arg, $visit);
+                slot_chunk(&mut d.iterator, $visit);
+                slot_chunk(&mut d.next_method, $visit);
+                slot_chunk(&mut d.array_like, $visit);
+                slot_chunk(&mut d.close_error, $visit);
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, frame) => {
+        $emit! {
+            for g in $vm.$field.values_mut() {
+                if let Some(f) = &mut g.frame {
+                    saved_frame_chunks(f, $visit);
+                }
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, async_frame) => {
+        $emit! {
+            for a in $vm.$field.values_mut() {
+                slot_chunk(&mut a.resolve_fn, $visit);
+                slot_chunk(&mut a.reject_fn, $visit);
+                if let Some(f) = &mut a.frame {
+                    saved_frame_chunks(f, $visit);
+                }
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, queued_frame) => {
+        $emit! {
+            for g in $vm.$field.values_mut() {
+                if let Some(f) = &mut g.frame {
+                    saved_frame_chunks(f, $visit);
+                }
+                for rq in g.requests.iter_mut().chain(g.active.as_mut()) {
+                    slot_chunk(&mut rq.value, $visit);
+                    slot_chunk(&mut rq.resolve, $visit);
+                    slot_chunk(&mut rq.reject, $visit);
+                }
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, disposal) => {
+        $emit! {
+            for d in $vm.$field.values_mut() {
+                for r in &mut d.records {
+                    slot_chunk(&mut r.resource, $visit);
+                    slot_chunk(&mut r.method, $visit);
+                }
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, slot_vec) => {
+        $emit! {
+            for s in $vm.$field.iter_mut() {
+                slot_chunk(s, $visit);
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, slot) => {
+        $emit! {
+            slot_chunk($vm.$field, $visit);
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, static_strings) => {
+        $emit! {
+            // The interned `typeof` strings: eight chunk offsets
+            // held directly by the machine, allocated once at
+            // construction and referenced by every later `typeof`
+            // — never resident in any slot unless a result
+            // happens to be live, so they MUST be enumerated here
+            // or compaction drops and dangles them.
+            $visit(&mut $vm.$field.undefined);
+            $visit(&mut $vm.$field.object);
+            $visit(&mut $vm.$field.boolean);
+            $visit(&mut $vm.$field.number);
+            $visit(&mut $vm.$field.string);
+            $visit(&mut $vm.$field.function);
+            $visit(&mut $vm.$field.symbol);
+            $visit(&mut $vm.$field.bigint);
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, jobs) => {
+        $emit! {
+            // Queued microtask jobs' captured slots (rooted for
+            // marking in `gc_roots`; their string payloads need
+            // the same compaction treatment).
+            for j in $vm.$field.iter_mut() {
+                match j {
+                    PromiseJob::Reaction {
+                        reaction,
+                        value,
+                        rejected: _,
+                    } => {
+                        slot_chunk(&mut reaction.on_fulfilled, $visit);
+                        slot_chunk(&mut reaction.on_rejected, $visit);
+                        slot_chunk(&mut reaction.resolve, $visit);
+                        slot_chunk(&mut reaction.reject, $visit);
+                        slot_chunk(value, $visit);
+                    }
+                    PromiseJob::Thenable {
+                        then,
+                        thenable,
+                        resolve,
+                        reject,
+                    } => {
+                        slot_chunk(then, $visit);
+                        slot_chunk(thenable, $visit);
+                        slot_chunk(resolve, $visit);
+                        slot_chunk(reject, $visit);
+                    }
+                }
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, callers) => {
+        $emit! {
+            for f in $vm.$field.iter_mut() {
+                for s in &mut f.locals {
+                    slot_chunk(s, $visit);
+                }
+                for s in &mut f.args {
+                    slot_chunk(s, $visit);
+                }
+                slot_chunk(&mut f.this_val, $visit);
+                slot_chunk(&mut f.result, $visit);
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, pair_slots) => {
+        $emit! {
+            for (_, s) in $vm.$field.iter_mut() {
+                slot_chunk(s, $visit);
+        }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $visit:ident, triple_slots) => {
+        $emit! {
+            for (_, _, s) in $vm.$field.iter_mut() {
+                slot_chunk(s, $visit);
+        }
+        }
+    };
+}
+
+macro_rules! define_chunk_walk {
+    (() $vis:vis struct $name:ident {
+        $(#[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    }) => {
+        impl Hooks<'_> {
+            fn visit_chunks(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
+                $(gc_chunk!(gc_run, self, $field, visit, $chunk);)*
+            }
+        }
+        /// Expanded production chunk-walk tokens, checked by the independent registry.
+        pub const CHUNK_WALK_SOURCE: &[&str] = &[
+            $(gc_chunk!(gc_text, self, $field, visit, $chunk),)*
+        ];
+    };
+}
+interp_state!(define_chunk_walk);
+
 fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
     for s in &f.locals {
         s.each_ref_slot(&mut *visit);
@@ -498,159 +733,6 @@ impl crate::gc::GcHooks for Hooks<'_> {
     }
 
     fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
-        self.functions.update_values(|f| visit(&mut f.name_chunk));
-        for b in self.array_buffers.values_mut() {
-            visit(&mut b.data);
-        }
-        for b in self.bound_functions.values_mut() {
-            slot_chunk(&mut b.this_arg, visit);
-            for s in &mut b.args {
-                slot_chunk(s, visit);
-            }
-        }
-        for s in self.wrapper_data.values_mut() {
-            slot_chunk(s, visit);
-        }
-        for a in self.arrays.values_mut() {
-            a.for_each_value_mut_chunk_remap(|s| slot_chunk(s, visit));
-        }
-        // Same for the index store: a string value there holds a
-        // chunk offset the full collector's compaction rewrites.
-        for a in self.index_props.values_mut() {
-            a.for_each_value_mut_chunk_remap(|s| slot_chunk(s, visit));
-        }
-        for c in self.collections.values_mut() {
-            c.for_each_entry_mut_chunk_remap(|s| slot_chunk(s, visit));
-        }
-        for p in self.promises.values_mut() {
-            slot_chunk(&mut p.result, visit);
-            for r in &mut p.reactions {
-                slot_chunk(&mut r.on_fulfilled, visit);
-                slot_chunk(&mut r.on_rejected, visit);
-                slot_chunk(&mut r.resolve, visit);
-                slot_chunk(&mut r.reject, visit);
-            }
-        }
-        // In-flight `Array.fromAsync` state stores raw
-        // Slot COPIES (a string thisArg, a captured close error);
-        // their chunk offsets relocate with compaction like any
-        // other external holder's.
-        for d in self.from_async.iter_mut() {
-            slot_chunk(&mut d.resolve, visit);
-            slot_chunk(&mut d.reject, visit);
-            slot_chunk(&mut d.mapfn, visit);
-            slot_chunk(&mut d.this_arg, visit);
-            slot_chunk(&mut d.iterator, visit);
-            slot_chunk(&mut d.next_method, visit);
-            slot_chunk(&mut d.array_like, visit);
-            slot_chunk(&mut d.close_error, visit);
-        }
-        for g in self.generators.values_mut() {
-            if let Some(f) = &mut g.frame {
-                saved_frame_chunks(f, visit);
-            }
-        }
-        for a in self.async_instances.values_mut() {
-            slot_chunk(&mut a.resolve_fn, visit);
-            slot_chunk(&mut a.reject_fn, visit);
-            if let Some(f) = &mut a.frame {
-                saved_frame_chunks(f, visit);
-            }
-        }
-        for g in self.async_generators.values_mut() {
-            if let Some(f) = &mut g.frame {
-                saved_frame_chunks(f, visit);
-            }
-            for rq in g.requests.iter_mut().chain(g.active.as_mut()) {
-                slot_chunk(&mut rq.value, visit);
-                slot_chunk(&mut rq.resolve, visit);
-                slot_chunk(&mut rq.reject, visit);
-            }
-        }
-        for d in self.disposable_stacks.values_mut() {
-            for r in &mut d.records {
-                slot_chunk(&mut r.resource, visit);
-                slot_chunk(&mut r.method, visit);
-            }
-        }
-        // Private VALUES can be strings (chunk-backed); the
-        // accessor tables hold callables only (no chunk refs).
-        for v in self.private_values.values_mut() {
-            slot_chunk(v, visit);
-        }
-        for s in self.stack.iter_mut() {
-            slot_chunk(s, visit);
-        }
-        for s in self.locals.iter_mut() {
-            slot_chunk(s, visit);
-        }
-        for s in self.args.iter_mut() {
-            slot_chunk(s, visit);
-        }
-        slot_chunk(self.this_val, visit);
-        slot_chunk(self.exception, visit);
-        // The completion register (a String completion's
-        // offset must survive compaction exactly like a
-        // register-held string).
-        slot_chunk(self.result, visit);
-        // The interned `typeof` strings: eight chunk offsets
-        // held directly by the machine, allocated once at
-        // construction and referenced by every later `typeof`
-        // — never resident in any slot unless a result
-        // happens to be live, so they MUST be enumerated here
-        // or compaction drops and dangles them.
-        visit(&mut self.static_str.undefined);
-        visit(&mut self.static_str.object);
-        visit(&mut self.static_str.boolean);
-        visit(&mut self.static_str.number);
-        visit(&mut self.static_str.string);
-        visit(&mut self.static_str.function);
-        visit(&mut self.static_str.symbol);
-        visit(&mut self.static_str.bigint);
-        // Queued microtask jobs' captured slots (rooted for
-        // marking in `gc_roots`; their string payloads need
-        // the same compaction treatment).
-        for j in self.promise_jobs.iter_mut() {
-            match j {
-                PromiseJob::Reaction {
-                    reaction,
-                    value,
-                    rejected: _,
-                } => {
-                    slot_chunk(&mut reaction.on_fulfilled, visit);
-                    slot_chunk(&mut reaction.on_rejected, visit);
-                    slot_chunk(&mut reaction.resolve, visit);
-                    slot_chunk(&mut reaction.reject, visit);
-                    slot_chunk(value, visit);
-                }
-                PromiseJob::Thenable {
-                    then,
-                    thenable,
-                    resolve,
-                    reject,
-                } => {
-                    slot_chunk(then, visit);
-                    slot_chunk(thenable, visit);
-                    slot_chunk(resolve, visit);
-                    slot_chunk(reject, visit);
-                }
-            }
-        }
-        for f in self.call_stack.iter_mut() {
-            for s in &mut f.locals {
-                slot_chunk(s, visit);
-            }
-            for s in &mut f.args {
-                slot_chunk(s, visit);
-            }
-            slot_chunk(&mut f.this_val, visit);
-            slot_chunk(&mut f.result, visit);
-        }
-        for (_, s) in self.well_known_symbols.iter_mut() {
-            slot_chunk(s, visit);
-        }
-        for (_, _, s) in self.proto_value_data.iter_mut() {
-            slot_chunk(s, visit);
-        }
+        self.visit_chunks(visit);
     }
 }
