@@ -324,7 +324,7 @@ impl CollKind {
 /// collection: the hash table + insertion-ordered entry list, or the
 /// weak-entry list). Kept in the `Interp::collections` side table
 /// like [`ArrayData`]; entry key/value slots are never swept
-/// underneath it (the stage-2 no-mid-run-GC contract). `entries`
+/// underneath it: collection runs only between cranks. `entries`
 /// preserves insertion order (XS's `list` order, what
 /// `forEach`/iterators visit); Set/WeakSet ignore the value half.
 /// The entry list is private: mutate through the counted methods.
@@ -335,9 +335,9 @@ impl CollKind {
 /// follows a deletion; a delete followed by re-add appends a new
 /// entry at the tail. Tombstones are a LIVE-machine artifact only:
 /// the snapshot view compacts them (see
-/// `Interp::collections_snapshot`), which is sound because iterator
-/// cursors live in the `iterators` side table, an honest `Pending`
-/// ledger row that does not round-trip.
+/// `Interp::collections_snapshot`); `Interp::iterators_snapshot` remaps
+/// cursor positions to live-entry ordinals and preserves retired cursors.
+/// The round-trip contract is exercised by snapshot `iterator_carry.rs`.
 ///
 /// Metering is purely allocation-driven — xsMapSet.c contains no
 /// `mxMeter` calls — so `table_length` tracks XS's power-of-two
@@ -531,12 +531,10 @@ impl CollectionData {
     /// the list (XS's purge — reclaiming the memory) and bump the
     /// clear-generation so every live cursor dead-ends instead of
     /// aliasing its old physical index into entries added afterward.
-    /// Before the latch, a cursor at index 1 over a cleared-then-
-    /// repopulated map yielded a wrong SUFFIX of the new entries
-    /// ("a,e,f" where the XS oracle answers "a" — review of the llm
-    /// rebase). Note where the deliberate XS-divergence axis lives:
-    /// plain DELETES tombstone (spec-over-XS; see
-    /// [`Self::remove_entry`]) while CLEAR follows XS exactly.
+    /// Snapshot `iterator_carry.rs::resumed_cleared_cursor_stays_retired`
+    /// checks that this retirement survives a round trip. Plain deletes
+    /// tombstone (spec-over-XS; see [`Self::remove_entry`]), while clear
+    /// follows XS exactly.
     pub(crate) fn clear_entries(&mut self, refs: &mut SideRefCounts) {
         for (k, v) in self.entries.iter().flatten() {
             refs.remove_slot(k);
@@ -564,8 +562,8 @@ impl CollectionData {
     /// this model made weak deletes physical — are REMOVED, not
     /// tombstoned: a long-lived machine cycling weak-keyed entries
     /// must not grow its physical list by one slot per ever-inserted
-    /// entry (review of the llm rebase). Returns the number of live
-    /// entries dropped.
+    /// entry. `collection_index_tracks_lazy_appends_deletes_clear_and_weak_pruning`
+    /// checks the resulting live index. Returns the number of live entries dropped.
     pub(crate) fn prune_entries(
         &mut self,
         refs: &mut SideRefCounts,

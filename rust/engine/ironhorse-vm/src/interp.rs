@@ -5191,9 +5191,9 @@ impl Default for Interp {
 }
 
 impl Interp {
-    /// The cost-calibration histogram recorder (design stage C1). Present
-    /// only under the `cost-calibration` feature — the calibration driver
-    /// (stage C2) and the histogram tests read it after a run. Returns a
+    /// The cost-calibration histogram recorder, present only under the
+    /// `cost-calibration` feature. Calibration drivers and histogram tests
+    /// read it after a run. Returns a
     /// borrow of the observation-only recorder; there is no `&mut` accessor,
     /// keeping the data flow one-directional (interpreter → recorder).
     #[cfg(feature = "cost-calibration")]
@@ -7203,10 +7203,11 @@ impl Interp {
     /// wants the meter to continue **exactly** as suspended must use
     /// [`Self::reattach_meter_host`] instead: repeated sub-interval
     /// suspend/resume cycles through `rearm_meter` would move the check
-    /// deadline forward each time (review finding 7). The host callback
+    /// deadline forward each time. Snapshot `meter_fail_closed.rs` checks
+    /// the rearm and reattach distinction. The host callback
     /// cannot travel in a snapshot, so every resume that wants metering
     /// MUST call one of the three arm forms — a restored machine that
-    /// skips them reports armed state but never consults a host.
+    /// skips them fails closed at the next meter check.
     pub fn rearm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter.rearm(interval);
         self.meter_host = Some(host);
@@ -7215,7 +7216,7 @@ impl Interp {
     /// Reattach ONLY the host callback on a resumed machine, leaving
     /// every restored meter counter — `index`, `interval`, and the
     /// next-check threshold `count` — exactly as the snapshot carried
-    /// them (review finding 7). This is the pure resume form: a machine
+    /// them. Snapshot `meter_fail_closed.rs` checks this pure resume form: a machine
     /// suspended mid-window resumes as if never interrupted, so the
     /// host sees its callback at the original deadline rather than a
     /// freshly opened window. Meaningless on a snapshot whose meter was

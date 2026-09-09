@@ -1,4 +1,4 @@
-//! Cost-calibration instrumentation — stage C1 (design
+//! Cost-calibration histograms (design
 //! `designs/ironhorse-meter-opcode-cost-instrumentation.md`).
 //!
 //! # Determinism firewall
@@ -8,8 +8,8 @@
 //! off, [`CostRecorder`] is a zero-sized unit struct whose `on_*` methods
 //! are `#[inline(always)]` empty bodies. The structural test checks
 //! `size_of::<CostRecorder>() == 0`; it does not prove instruction-identical
-//! hot-loop object code. That disassembly firewall proof remains a C1
-//! acceptance obligation. See `firewall_off_tests::recorder_is_zero_sized_when_off`.
+//! hot-loop object code. A disassembly comparison is still required to prove
+//! that stronger property. See `firewall_off_tests::recorder_is_zero_sized_when_off`.
 //!
 //! The recorder only ever **observes** interpreter state: it holds no
 //! `&mut Meter` and exposes no method the meter, `RunOutcome`, or a
@@ -19,12 +19,12 @@
 //! this module (grep invariant, exercised by
 //! `interp::tests::meter_module_is_firewalled_from_cost`).
 //!
-//! # Stage C1 scope
+//! # Recorded observations
 //!
-//! Only the deterministic-safe half lands here: the per-opcode and
+//! This module records the deterministic-safe observations: the per-opcode and
 //! per-builtin **histogram** wired at the existing `tick_code` /
 //! native-dispatch seams, plus the [`CostModel`] work-function table (data
-//! only — no wall-clock timing until stage C2). The opcode histogram is
+//! only, without wall-clock timing). The opcode histogram is
 //! `n_dispatched` generalized from a scalar to a per-opcode array; its
 //! total reconciles with `n_dispatched` exactly.
 
@@ -68,7 +68,7 @@ mod on {
     use crate::interp::NativeMethod;
     use crate::opcode::{Opcode, CODE_NAMES, XS_CODE_COUNT};
 
-    /// The per-opcode + per-builtin histogram (stage C1). Deterministic-safe
+    /// The per-opcode + per-builtin histogram. Deterministic-safe
     /// (no clock): a `u64` execution count per key, one increment on an
     /// array the interpreter already touches — `n_dispatched` proved the
     /// pattern; this generalizes that scalar to a per-key array. Boxed so
@@ -178,9 +178,9 @@ mod on {
         pub count: u64,
     }
 
-    /// The stage-C1 report: the two histograms, non-zero keys only. The C2
-    /// driver extends this with the `reference_platform` and per-key
-    /// normalized-timing distributions; C1 emits counts + the work model.
+    /// The two histograms, non-zero keys only, with counts and work models.
+    /// Platform labels and normalized timing distributions belong to the
+    /// external calibration driver, not this deterministic report.
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
     pub struct CostReport {
         pub opcodes: Vec<HistogramEntry>,

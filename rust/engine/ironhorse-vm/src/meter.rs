@@ -29,9 +29,8 @@ pub use ironhorse_meter::COST_TABLE_VERSION;
 /// `XS_BIGINT_METERING`.
 pub use ironhorse_meter::BIGINT_METERING;
 /// `XS_BUILTIN_METERING`: one built-in operation step (`mxMeterOne` /
-/// `mxMeterSome(k)`). Stage-2 finding: the property-set path meters one
-/// of these per `SET_VARIABLE`/`SET_PROPERTY`, so it already bites
-/// inside the control-flow subset, not only in stage-3 built-ins.
+/// `mxMeterSome(k)`). The property-set path meters one of these per
+/// `SET_VARIABLE`/`SET_PROPERTY`, so allocation-free code can incur it too.
 pub use ironhorse_meter::BUILTIN_METERING;
 /// `XS_CHUNK_ALLOCATION_METERING`: added per byte of chunk allocated
 /// (`fxNewChunk`/`fxRenewChunk`), so a string or bytecode allocation
@@ -40,8 +39,8 @@ pub use ironhorse_meter::CHUNK_ALLOCATION_METERING;
 /// `XS_CODE_METERING`: one bytecode dispatch.
 pub use ironhorse_meter::CODE_METERING;
 /// `XS_SLOT_ALLOCATION_METERING`: added by `fxNewSlot` on **every** slot
-/// allocation during a run (`xsMemory.c`). This is the stage-2 metering
-/// crux: once a program allocates at run time (a `var` environment, an
+/// allocation during a run (`xsMemory.c`). Once a program allocates at
+/// run time (a `var` environment, an
 /// object literal, a closure cell), its computron count depends on the
 /// exact number of slots the engine allocates, so **computron parity
 /// requires the allocation-faithful object heap**, not just dispatch
@@ -137,8 +136,8 @@ impl Meter {
     /// (computrons to raw 16.16 units), resets `meterIndex` to 0, and
     /// sets `meterCount = meterInterval = interval << 16`. `interval` is
     /// therefore a **computron** count, matching the xsnap embedder API;
-    /// a caller that wants a raw-unit window must scale it itself
-    /// (stage-2a review finding 2).
+    /// a caller that wants a raw-unit window must scale it itself.
+    /// `begin_scales_and_resets_like_fx_begin_metering` checks this contract.
     pub fn begin(&mut self, interval: u64) {
         let scaled = scale_interval(interval);
         self.interval = scaled;
@@ -146,7 +145,7 @@ impl Meter {
         self.index = 0;
     }
 
-    /// Re-arm on a RESUMED machine (wave-6 W6-13): install a fresh
+    /// Re-arm on a resumed machine: install a fresh
     /// check window without destroying the restored `index` — the
     /// accumulated computron count that [`Self::restore`] just
     /// reinstated. [`Self::begin`] is the fresh-machine form and zeroes
@@ -155,7 +154,8 @@ impl Meter {
     /// so a resume that wants the deadline to survive untouched must
     /// not call it at all: [`Self::restore`] already reinstated all
     /// three counters, and the interp's `reattach_meter_host` installs
-    /// the host without touching them (review finding 7).
+    /// the host without touching them. Snapshot `meter_fail_closed.rs`
+    /// checks both forms.
     pub fn rearm(&mut self, interval: u64) {
         let scaled = scale_interval(interval);
         self.interval = scaled;
@@ -227,7 +227,7 @@ impl Meter {
     /// Meter one slot allocation (`fxNewSlot`'s
     /// `meterIndex += XS_SLOT_ALLOCATION_METERING`). The faithful object
     /// heap calls this on every slot it allocates during a run, which is
-    /// what makes stage-2 computrons allocation-dependent.
+    /// what makes computrons allocation-dependent.
     #[inline]
     pub fn tick_slot_alloc(&mut self) {
         self.index += SLOT_ALLOCATION_METERING;
@@ -476,8 +476,8 @@ mod tests {
     #[test]
     fn begin_scales_and_resets_like_fx_begin_metering() {
         // `fxBeginMetering` (xsRun.c:4459) scales the host's computron
-        // interval `<<16` and resets the index (stage-2a review finding
-        // 2): begin(1) arms a one-computron window in raw units.
+        // interval `<<16` and resets the index:
+        // begin(1) arms a one-computron window in raw units.
         let mut m = Meter::new();
         m.tick_code(); // dirty the index first, to prove begin resets it
         m.begin(1);

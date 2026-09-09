@@ -1596,9 +1596,9 @@ impl Interp {
                       // Cost-calibration builtin histogram: one invocation per dispatched
                       // native prototype method. This is the central native-method
                       // dispatch seam (every `tick_builtin*` inside this function belongs
-                      // to `m`). Compiles away when the feature is off. Step-granular (k)
-                      // attribution folds in at stage C2, where the timing normalization
-                      // that consumes it lands.
+                      // to `m`). The feature-off recorder is a no-op; cost.rs tests its
+                      // zero-sized representation. It records invocation counts, not
+                      // wall-clock timings or per-step work attribution.
         self.cost.on_builtin(m);
         let this = self
             .stack

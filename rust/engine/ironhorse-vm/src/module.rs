@@ -1,6 +1,6 @@
 //! The static half of the XS module machinery (design
 //! `designs/ironhorse-engine.md` § Hardened JavaScript and
-//! Compartment; stage-4 child 5/8). Ported from the pin's `xsModule.c`
+//! Compartment). Ported from the pin's `xsModule.c`
 //! at the semantic level XS itself implements — the ECMAScript
 //! CyclicModuleRecord algorithms (ECMA-262 § 16.2.1.5) that
 //! `fxLinkModules`/`fxExecuteModules` realize — because the doctrine is
@@ -9,21 +9,21 @@
 //! model is a `BodyOp` model, not driven from module bytecode, so it is
 //! not itself a dual-run.
 //!
-//! (Update, dynamic-`import()` child: the oracle CAN now execute a module
-//! graph — `xs_oracle::run_module_dir` links + evaluates over XS's
+//! The oracle can execute a module graph:
+//! `xs_oracle::run_module_dir` links + evaluates over XS's
 //! filesystem loader, giving module execution / dynamic import /
 //! `import.meta` a real XS authority, locked by
 //! `ironhorse-262/tests/module_execution_oracle.rs`. What remains a named
 //! skip is the *ironhorse* side: this crate does not yet execute
 //! `XS_CODE_MODULE`/`XS_CODE_IMPORT` bytecode, so a positive module case
 //! is still not promoted to `covered`. The differential gap is named
-//! honestly in `rust/engine/README.md`.)
+//! in `rust/engine/README.md`.
 //!
 //! What is modeled here (the "static half"):
 //!
 //! - **Module records** and a **module map** (specifier → module) with a
 //!   minimal static host resolve hook (no filesystem): the machine-level
-//!   seam child 6's `Compartment` consumes.
+//!   `Compartment` consumes.
 //! - **Module environments** with **indirect bindings**: an `import {x}
 //!   from 'm'` local name and an `export {x} from 'm'` re-export both
 //!   resolve to the *same* binding cell as `m`'s local `x`, so a write in
