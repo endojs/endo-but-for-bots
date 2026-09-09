@@ -17,20 +17,14 @@ async instances: owners not strictly ascending	Existing corruption guard; dedica
 async reaction: invalid payload	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async reaction: missing or duplicate activation	Existing corruption guard; dedicated exact-label regression fixture deferred.
 batch parent seal mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-bound-function state: owner has no function row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-bound-function state: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 buffer chunk header out of bounds	Existing corruption guard; dedicated exact-label regression fixture deferred.
 checkpoint deferred slot page decode	Existing corruption guard; dedicated exact-label regression fixture deferred.
 checkpoint deferred slot page leaf mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
 chunk offset out of arena bounds	Existing corruption guard; dedicated exact-label regression fixture deferred.
 collection cadence mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-constructor-prototype state: owner has no function row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-constructor-prototype state: rows not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 container atoms out of canonical order or unknown	Existing corruption guard; dedicated exact-label regression fixture deferred.
 container missing an atom its version always writes	Existing corruption guard; dedicated exact-label regression fixture deferred.
 data-views side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-deleted-function metadata: id outside the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
-deleted-function metadata: rows not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 disposable stacks: disposal method is not callable	Existing corruption guard; dedicated exact-label regression fixture deferred.
 durable counter regression	Existing corruption guard; dedicated exact-label regression fixture deferred.
 error-frame side table: owner has no error row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -50,18 +44,6 @@ file store page directory disagrees with geometry	File backend structural guard;
 file store page edges truncated	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store slot page row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store small-state block	File backend structural guard; dedicated exact-label corruption fixture deferred.
-function state: bad body tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: bad class tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: body and segment disagree	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: body instruction crosses its range	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: body names no segment	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: body range outside segment	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: body range overflow	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: malformed body bytecode	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: name not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-function state: segments not densely referenced	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 generator frame: bad boolean byte	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: current function has no body	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: current function has no function row	Existing corruption guard; dedicated exact-label regression fixture deferred.
