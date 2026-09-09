@@ -5173,6 +5173,61 @@ mod tests {
     }
 
     #[test]
+    fn succession_metadata_has_exact_refusals() {
+        let image = ran_image();
+        let first = image_to_batch_unchecked(&image, 1, "");
+        check_succession(None, &first).unwrap();
+        let previous = first.manifest;
+        let next = image_to_batch_unchecked(&image, 2, &previous.seal);
+        check_succession(Some(&previous), &next).unwrap();
+        let mut invalid = next.clone();
+        invalid.manifest.parent_seal.push('x');
+        assert_eq!(
+            check_succession(Some(&previous), &invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "batch parent seal mismatch"
+            )))
+        );
+        invalid = next.clone();
+        invalid.manifest.collect_every = previous.collect_every + 1;
+        assert_eq!(
+            check_succession(Some(&previous), &invalid),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "collection cadence mismatch"
+            )))
+        );
+        for collections in [false, true] {
+            let mut prior = previous.clone();
+            if collections {
+                prior.collections = next.manifest.collections + 1;
+            } else {
+                prior.cranks = next.manifest.cranks + 1;
+            }
+            assert_eq!(
+                check_succession(Some(&prior), &next),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "durable counter regression"
+                )))
+            );
+            // Equality is permitted: a checkpoint need not complete a crank.
+            let mut equal = next.clone();
+            equal.manifest.collections = prior.collections;
+            equal.manifest.cranks = prior.cranks;
+            equal.manifest.seal = batch_seal(&equal);
+            check_succession(Some(&prior), &equal).unwrap();
+        }
+        assert_eq!(check_epoch(Some(u64::MAX - 1), u64::MAX), Ok(()));
+        for attempted in [0, 1, u64::MAX] {
+            assert_eq!(
+                check_epoch(Some(u64::MAX), attempted),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store epoch exhausted"
+                )))
+            );
+        }
+    }
+
+    #[test]
     fn validate_fails_closed_on_missing_row() {
         let image = ran_image();
         let mut store = MemoryStore::new();
