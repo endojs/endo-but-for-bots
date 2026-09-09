@@ -60,6 +60,23 @@ export const isGenerationConflict = error =>
 harden(isGenerationConflict);
 
 /**
+ * Whether a refresh authority is asserting that its request never reached the
+ * provider, so the refresh token it was given is certainly still unspent.
+ *
+ * The default assumption is the opposite. A token endpoint that rejects after
+ * the request left — a lost response, a timeout, a proxy error — may well have
+ * consumed the token, and a broker that assumed otherwise would present it
+ * again. Only an authority that can actually distinguish a pre-dispatch
+ * failure, such as a DNS or connect error, is in a position to say so, and it
+ * says so with this message.
+ *
+ * @param {unknown} error
+ */
+export const isUndispatchedRefresh = error =>
+  error instanceof Error && error.message === 'Refresh not dispatched';
+harden(isUndispatchedRefresh);
+
+/**
  * Validate an OAuth state document read from the secret manager.
  *
  * The document, not a bare bearer string, is what `authMode: 'oauth'` stores:
@@ -238,9 +255,23 @@ export const makeBrokerOAuthCredential = ({
       consumedGeneration === undefined || Fail`Broker credential consumed`;
       const refreshToken =
         state.refreshToken ?? Fail`Broker credential expired`;
-      const result = await E(refresh).refresh(
-        harden({ refreshToken, accountId: state.accountId }),
-      );
+      // From here the token may be spent, so the fence is set before anything
+      // that could throw between the exchange and a committed write. Every
+      // check below — the shape, the account, the advanced expiry — sits in
+      // that window, and an earlier version of this fence covered only the
+      // write, so a provider returning a lifetime shorter than the configured
+      // skew (a case the comment below explicitly anticipates) left the token
+      // unfenced and the next request replayed it.
+      const result = await E(refresh)
+        .refresh(harden({ refreshToken, accountId: state.accountId }))
+        .catch(error => {
+          // A rejection is assumed to have consumed the token unless the
+          // authority can prove the request never left.
+          if (!isUndispatchedRefresh(error)) consumedGeneration = generation;
+          throw error;
+        });
+      // Resolved: the provider has certainly consumed it.
+      consumedGeneration = generation;
       (result && typeof result === 'object' && !Array.isArray(result)) ||
         Fail`Invalid broker OAuth state`;
       // A response that omits the refresh token means "keep the one you
@@ -280,11 +311,15 @@ export const makeBrokerOAuthCredential = ({
             return false;
           },
         );
-      if (rotated)
+      if (rotated) {
+        // The only safe commit: the exchanged credential is now what the record
+        // holds, so nothing is outstanding.
+        consumedGeneration = undefined;
         return harden({
           state: next,
           outcome: /** @type {const} */ ('refreshed'),
         });
+      }
       // Nothing stored the credential just minted, so it must not be handed
       // out. Only a conflict means another writer stored something newer; any
       // other failure means the record still holds the very refresh token this
@@ -292,10 +327,7 @@ export const makeBrokerOAuthCredential = ({
       // request from presenting it again — failing this one would only postpone
       // the replay by a turn. The fence lifts when the record changes, which is
       // the operator re-grant this situation requires.
-      if (!conflicted) {
-        consumedGeneration = generation;
-        Fail`Broker credential rotation failed`;
-      }
+      conflicted || Fail`Broker credential rotation failed`;
       const current = await read();
       // Adopting another writer's credential is only safe if it is usable:
       // returning one that is already expiring, or that is the very token an
