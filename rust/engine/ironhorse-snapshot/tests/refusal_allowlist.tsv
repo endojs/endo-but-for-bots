@@ -2,32 +2,13 @@
 # These are coverage debt, not permission to accept the corrupt input.
 # The registry removes an exception when a direct literal assertion is added.
 # New labels require a regression assertion or an individually reviewed entry.
-ABUF atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-ACCS atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-ARGB atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-ARRY atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-ASYN atom present but empty	Optional-section canonicality guard; exact-label fixture deferred.
 BLOC length differs from CREA	Existing corruption guard; dedicated exact-label regression fixture deferred.
-COLL atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
 CREA payload too short	Existing corruption guard; dedicated exact-label regression fixture deferred.
 CREA trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-DATE atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-DISP atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-DVIW atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-ERRD atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-ESTK atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-FUNC atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-GENR atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-HEAP free list entry	Existing corruption guard; dedicated exact-label regression fixture deferred.
 HEAP header	Existing corruption guard; dedicated exact-label regression fixture deferred.
-HEAP live/free accounting	Existing corruption guard; dedicated exact-label regression fixture deferred.
 HEAP record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
 HEAP slot record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 HEAP trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-IBFN atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-IDXP atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-INTL atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-ITER atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
 Intl bound-function state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 Intl bound-function state: functions not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 Intl bound-function state: name not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -36,19 +17,11 @@ Intl bound-function state: unknown kind	Side-table decoding guard; dedicated exa
 METR header	Existing corruption guard; dedicated exact-label regression fixture deferred.
 METR version not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
 METR version string	Existing corruption guard; dedicated exact-label regression fixture deferred.
-PRIV atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-PRMS atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-PROX atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-REGX atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-REGY atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
 STAC header	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC not empty at a quiescent boundary	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC slot record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-TARR atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-TMPR atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
-WRAP atom present but empty; the writer omits it	Optional-section canonicality guard; exact-label fixture deferred.
 accessor state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 accessor state: bad option tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: getter or setter is not callable	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -157,9 +130,6 @@ index-props side table: high-water mark below its own items	Side-table decoding 
 index-props side table: item indices not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 index-props side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 installed-names floor does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
-installed-names floor past the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
-installed-names floor size	Existing corruption guard; dedicated exact-label regression fixture deferred.
-installed-names floor: non-canonical explicit full floor	Existing corruption guard; dedicated exact-label regression fixture deferred.
 intl record tables	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: bad boolean byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: bad option tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
