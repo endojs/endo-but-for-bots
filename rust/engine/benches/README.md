@@ -58,6 +58,35 @@ The existing nightly full-test262 workflow runs both instruments in an independe
 job, and uploads their logs and JSON even when a gate fails.
 Ordinary PR CI does not run timing assertions.
 
+## XS microbenchmark comparison
+
+The separate XS microbenchmark comparison is runnable with:
+
+```sh
+CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 python3 rust/engine/benches/xs_compare.py
+```
+
+It measures parse/code generation, property access, calls, allocation churn, and
+string operations, alternating engine order over one warmup and seven samples.
+Each sample checks an independently specified result.
+The report retains sample order, source digests, both revisions, and build settings.
+The nightly workflow measures this slice and uploads the report.
+`--check-micro` additionally fails when its geometric mean exceeds 2.0x XS elapsed time.
+Without that option, command success means valid measurements, not an envelope pass;
+`within_microbenchmark_limit` contains the measured decision.
+
+XS uses its pinned oracle build at optimization level 2.
+Rust uses the workspace release profile.
+Machine creation and teardown are excluded on both sides.
+XS compilation times `fxParseScript`; execution includes script preparation, promise
+jobs, and result rendering, while bytecode capture is outside both intervals.
+IronHorse compilation times `compile_atoms_with`; execution includes intrinsic linking
+and `Interp::run`, including completion rendering.
+These are fresh-machine microbenchmarks, not steady-state daemon workloads.
+Allocation churn is not a direct measurement of collection pauses or heap footprint.
+The report always marks the full stage-8 envelope unavailable until its remaining
+daemon, comparable heap-footprint, and code-size measurements exist.
+
 ## Daemon arm: explicitly blocked
 
 The fourth daemon variant cannot run yet.
