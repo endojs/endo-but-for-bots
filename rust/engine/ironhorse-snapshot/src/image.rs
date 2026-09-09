@@ -10018,3 +10018,167 @@ mod object_semantic_refusals {
         );
     }
 }
+
+#[cfg(test)]
+mod buffer_geometry_refusals {
+    use super::*;
+    fn check(
+        buffers: &[BufferImage],
+        typed: &[TypedArrayImage],
+        views: &[DataViewImage],
+    ) -> Result<(), SnapshotError> {
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            buffers,
+            typed,
+            views,
+            &LangRows::EMPTY,
+            &[],
+            0,
+            &SymbolKeyImage::default(),
+            4,
+            12,
+            &[],
+        )
+    }
+    fn buffer() -> BufferImage {
+        BufferImage {
+            owner: 1,
+            data: 4,
+            length: 8,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn backing_header_and_arena_bounds() {
+        let valid = buffer();
+        let mut bytes = 8u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0; 8]);
+        assert_eq!(
+            check_buffer_chunk_lengths(std::slice::from_ref(&valid), &bytes),
+            Ok(())
+        );
+        assert_eq!(check(std::slice::from_ref(&valid), &[], &[]), Ok(()));
+        for data in [0, 3, 13, u32::MAX] {
+            let mut invalid = valid.clone();
+            invalid.data = data;
+            assert_eq!(
+                check_buffer_chunk_lengths(std::slice::from_ref(&invalid), &bytes),
+                Err(SnapshotError::Corrupt("buffer chunk header out of bounds"))
+            );
+            assert_eq!(
+                check(&[invalid], &[], &[]),
+                Err(SnapshotError::Corrupt("chunk offset out of arena bounds"))
+            );
+        }
+        let mut invalid = valid.clone();
+        invalid.length = 9;
+        assert_eq!(
+            check(&[invalid], &[], &[]),
+            Err(SnapshotError::Corrupt("chunk offset out of arena bounds"))
+        );
+        let mut detached = valid;
+        detached.flags = 1;
+        detached.length = 0;
+        assert_eq!(
+            check_buffer_chunk_lengths(std::slice::from_ref(&detached), &bytes),
+            Ok(())
+        );
+        assert_eq!(check(&[detached], &[], &[]), Ok(()));
+    }
+
+    #[test]
+    fn typed_view_geometry_accounts_for_element_width() {
+        let backing = buffer();
+        for (kind, ty) in ironhorse_vm::TYPED_ARRAY_TYPES.iter().enumerate() {
+            let valid = TypedArrayImage {
+                owner: 2,
+                kind: kind as u8,
+                buffer: 1,
+                offset: 0,
+                length: 8 >> ty.shift,
+            };
+            assert_eq!(
+                check(
+                    std::slice::from_ref(&backing),
+                    std::slice::from_ref(&valid),
+                    &[]
+                ),
+                Ok(())
+            );
+            for field in 0..4 {
+                let mut invalid = valid.clone();
+                match field {
+                    0 => invalid.length += 1,
+                    1 => invalid.offset = 1,
+                    2 => invalid.buffer = 3,
+                    _ => {
+                        invalid.offset = u32::MAX;
+                        invalid.length = u32::MAX;
+                    }
+                }
+                assert_eq!(
+                    check(std::slice::from_ref(&backing), &[invalid], &[]),
+                    Err(SnapshotError::Corrupt(
+                        "typed-arrays side table: view geometry past its buffer"
+                    ))
+                );
+            }
+            let mut detached = backing.clone();
+            detached.flags = 1;
+            detached.length = 0;
+            assert_eq!(
+                check(&[detached], std::slice::from_ref(&valid), &[]),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn data_view_geometry_and_missing_backing() {
+        let backing = buffer();
+        let valid = DataViewImage {
+            owner: 2,
+            buffer: 1,
+            offset: 2,
+            size: 6,
+        };
+        assert_eq!(
+            check(
+                std::slice::from_ref(&backing),
+                &[],
+                std::slice::from_ref(&valid)
+            ),
+            Ok(())
+        );
+        for field in 0..4 {
+            let mut invalid = valid.clone();
+            match field {
+                0 => invalid.size = 7,
+                1 => invalid.offset = 3,
+                2 => invalid.buffer = 3,
+                _ => {
+                    invalid.offset = u32::MAX;
+                    invalid.size = u32::MAX;
+                }
+            }
+            assert_eq!(
+                check(std::slice::from_ref(&backing), &[], &[invalid]),
+                Err(SnapshotError::Corrupt(
+                    "data-views side table: view geometry past its buffer"
+                ))
+            );
+        }
+        let mut detached = backing;
+        detached.flags = 1;
+        detached.length = 0;
+        assert_eq!(check(&[detached], &[], &[valid]), Ok(()));
+    }
+}
