@@ -589,3 +589,17 @@ The candidate repeat measured dispatch at 0.996x and those GC cases at 1.014x,
 No performance edits occurred between runs, and neither run passed every threshold.
 The results do not establish equivalence or prove that failures are host noise.
 Final whole-branch performance acceptance remains pending.
+
+## Interpreter decomposition: ephemeron increment
+
+[results/1a-weak-roster.json](results/1a-weak-roster.json) retains both runs for
+generated weak-table tracing and pruning against parent `47c900e93`.
+The fresh pair measured dispatch at 0.998x and the largest full-first, steady-full,
+and partial GC cases at 0.972x, 0.931x, and 1.025x.
+The repeat measured those at 0.992x, 0.956x, 0.922x, and 1.008x respectively.
+Both runs failed the 120,320-slot and 500,000-slot placeholder controls; repeat
+ratios were 1.463x and 1.557x.
+That fixture constructs a lazy slot arena without invoking the interpreter or GC
+visitors, but this does not establish the cause of the changed timings.
+The failures remain recorded, no performance tuning was applied, and final branch
+acceptance remains pending.

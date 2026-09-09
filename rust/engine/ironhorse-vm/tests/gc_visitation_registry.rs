@@ -220,7 +220,7 @@ enum Req {
     /// Appears in the full collector's `extra_edges` AND the partial
     /// enumeration (`each_side_table_ref` or its tail).
     Edges,
-    /// Appears in `ephemeron_edges` (the precision pass).
+    /// Appears in `ephemeron_edges` and its dead-key pruning pass.
     Ephemeron,
     /// Appears in the partial enumeration alone (a table the full
     /// collector reaches through a different, precise mechanism).
@@ -480,7 +480,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     // The checked requirements, against the real visitor bodies.
     let gc_roots = strip_comments(fn_body("pub fn gc_roots(&self)"));
     let (extra_edges, partial) = edge_sources(SRC);
-    let ephemeron = strip_comments(fn_body("fn ephemeron_edges(&self, slots: &SlotArena"));
+    let (ephemeron, weak_prune) = weak_sources(SRC);
     let chunk_remap = chunk_source(SRC);
     let (full_sweep, partial_sweep) = sweep_sources(SRC);
 
@@ -492,7 +492,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
             let ok = match req {
                 Req::GcRoots => mentions(&gc_roots, name),
                 Req::Edges => mentions(&extra_edges, name) && mentions(&partial, name),
-                Req::Ephemeron => mentions(&ephemeron, name),
+                Req::Ephemeron => mentions(&ephemeron, name) && mentions(&weak_prune, name),
                 Req::PartialWalk => mentions(&partial, name),
                 Req::ChunkRemap => mentions(&chunk_remap, name),
                 Req::PrunedBothPaths => {
@@ -769,4 +769,49 @@ fn row_checks_reject_a_disconnected_call_even_when_another_table_uses_the_policy
     *table = table.replace("gc_slot_row", "removed_row_call");
     let tables: Vec<&str> = tables.iter().map(String::as_str).collect();
     assert!(std::panic::catch_unwind(|| expanded_row_edges(&tables, false)).is_err());
+}
+
+fn weak_sources(src: &str) -> (String, String) {
+    fn compact(src: &str) -> String {
+        ironhorse_vm::source_scan::code_only(src)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+    assert_eq!(
+        compact(body_in(src, "macro_rules! gc_run")),
+        "{($($code:tt)*)=>{{$($code)*}};}"
+    );
+    assert!(compact(src).contains("interp_state!(define_weak_walks);"));
+    let trace = compact(body_in(src, "fn ephemeron_edges(&self, slots: &SlotArena"));
+    assert!(trace.contains("self.visit_ephemerons(slots,visit);"));
+    let prune = compact(body_in(
+        src,
+        "fn prune_dead_keyed(&mut self, slots: &SlotArena",
+    ));
+    assert!(prune.contains("self.prune_ephemerons(slots);"));
+    let trace = compact(body_in(src, "fn visit_ephemerons(&self"));
+    assert!(trace.contains("$(gc_weak!(gc_run,trace,self,$field,slots,visit,$weak);)*"));
+    let prune = compact(body_in(src, "fn prune_ephemerons(&mut self"));
+    assert!(prune.contains("$(gc_weak!(gc_run,prune,self,$field,slots,visit,$weak);)*"));
+    (
+        ironhorse_vm::interp::gc_tables::EPHEMERON_SOURCE.join("\n"),
+        ironhorse_vm::interp::gc_tables::WEAK_PRUNE_SOURCE.join("\n"),
+    )
+}
+
+#[test]
+fn weak_checks_reject_disconnected_callbacks_and_missing_expansions() {
+    for target in [
+        "{{ $($code)* }}",
+        "interp_state!(define_weak_walks);",
+        "self.visit_ephemerons(slots, visit);",
+        "self.prune_ephemerons(slots);",
+        "gc_weak!(gc_run, trace, self, $field, slots, visit, $weak)",
+        "gc_weak!(gc_run, prune, self, $field, slots, visit, $weak)",
+    ] {
+        assert!(SRC.contains(target), "missing mutation target: {target}");
+        let mutation = SRC.replace(target, "/* weak walk removed */");
+        assert!(std::panic::catch_unwind(|| weak_sources(&mutation)).is_err());
+    }
 }

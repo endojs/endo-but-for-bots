@@ -370,6 +370,7 @@ macro_rules! define_chunk_walk {
         $(#[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     }) => {
         impl Hooks<'_> {
@@ -652,6 +653,7 @@ macro_rules! define_slot_walks {
         $(#[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     }) => {
         impl Hooks<'_> {
@@ -690,6 +692,139 @@ macro_rules! define_slot_walks {
     };
 }
 interp_state!(define_slot_walks);
+
+// Weak-table fixpoint tracing and dead-key pruning share the field inventory.
+macro_rules! gc_weak {
+    ($emit:ident, $mode:ident, $vm:ident, $field:ident, $slots:ident, $visit:ident, none) => { $emit! {} };
+    ($emit:ident, trace, $vm:ident, $field:ident, $slots:ident, $visit:ident, collection) => {
+        $emit! {
+            // WeakMap values: an entry's value is reachable
+            // exactly while its MAP and its KEY both are. WeakSet
+            // entries add no edges (membership keeps nothing
+            // alive).
+            for (inst, c) in $vm.$field.iter() {
+                if !$slots.is_marked(*inst) || c.kind != CollKind::WeakMap {
+                    continue;
+                }
+                for (k, v) in c.live_entries() {
+                    let mut key_live = false;
+                    k.each_ref_slot(|r| {
+                        if $slots.is_marked(r) {
+                            key_live = true;
+                        }
+                    });
+                    if key_live {
+                        v.each_ref_slot(&mut *$visit);
+                    }
+                }
+            }
+
+        }
+    };
+    ($emit:ident, trace, $vm:ident, $field:ident, $slots:ident, $visit:ident, symbol_keys) => {
+        $emit! {            // Symbol-key descriptors: a marked property record
+            // whose id is an interned symbol key keeps the
+            // descriptor (and its description chunk) alive — the
+            // precise replacement for rooting every intern.
+            //
+            // Conservative on two axes, both retention-only — this pass can only keep
+            // a descriptor alive, never free one, so neither can
+            // cause a use-after-free or a wrong answer:
+            //
+            //  - it walks the whole arena per fixpoint round rather
+            //    than an index of property records, so the cost is
+            //    O(capacity) × rounds even when `wanted` is tiny;
+            //  - it compares `slot.id` on every marked slot without
+            //    filtering by kind, and `id` doubles as the argument
+            //    count on frame slots, so a frame with N arguments
+            //    where N equals a wanted key's id retains that
+            //    descriptor spuriously.
+            //
+            // Both want the same thing to fix properly: a reverse
+            // index from key id to the property records using it,
+            // maintained where properties are written. Until the
+            // ledger's KEYS row makes that index durable anyway,
+            // over-retaining a handful of descriptors is the cheaper
+            // trade.
+            let wanted: std::collections::HashMap<u16, SlotIndex> = $vm.$field
+                .iter()
+                .filter(|(d, _)| !$slots.is_marked(**d))
+                .map(|(d, id)| (*id, *d))
+                .collect();
+            if !wanted.is_empty() {
+                for i in 0..$slots.capacity() {
+                    let idx = SlotIndex(i);
+                    if $slots.is_marked(idx) {
+                        if let Some(&d) = wanted.get(&$slots.get(idx).id) {
+                            $visit(d);
+                        }
+                    }
+                }
+            }
+
+        }
+    };
+    ($emit:ident, prune, $vm:ident, $field:ident, $slots:ident, $visit:ident, collection) => {
+        $emit! {
+            // Dead-keyed weak entries leave their collections
+            // (counted decrements) before the sweep reclaims the
+            // targets.
+            let side_refs = &mut *$vm.side_refs;
+            for (inst, c) in $vm.$field.iter_mut() {
+                if !$slots.is_marked(*inst) || !matches!(c.kind, CollKind::WeakMap | CollKind::WeakSet) {
+                    continue;
+                }
+                c.prune_entries(side_refs, |k, _v| {
+                    let mut key_live = false;
+                    k.each_ref_slot(|r| {
+                        if $slots.is_marked(r) {
+                            key_live = true;
+                        }
+                    });
+                    key_live
+                });
+            }
+
+        }
+    };
+    ($emit:ident, prune, $vm:ident, $field:ident, $slots:ident, $visit:ident, symbol_keys) => {
+        $emit! {            // An intern whose descriptor stayed unmarked through
+            // the fixpoint has no live property using its id and
+            // no other reference: drop the mapping (the sweep
+            // reclaims the descriptor slot itself).
+            $vm.$field.retain(|d, _| $slots.is_marked(*d));
+
+        }
+    };
+}
+
+macro_rules! define_weak_walks {
+    (() $vis:vis struct $name:ident {
+        $(#[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    }) => {
+        impl Hooks<'_> {
+            fn visit_ephemerons(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex)) {
+                $(gc_weak!(gc_run, trace, self, $field, slots, visit, $weak);)*
+            }
+            fn prune_ephemerons(&mut self, slots: &SlotArena) {
+                $(gc_weak!(gc_run, prune, self, $field, slots, visit, $weak);)*
+            }
+        }
+        /// Expanded production weak-table tracing tokens.
+        pub const EPHEMERON_SOURCE: &[&str] = &[
+            $(gc_weak!(gc_text, trace, self, $field, slots, visit, $weak),)*
+        ];
+        /// Expanded production weak-table pruning tokens.
+        pub const WEAK_PRUNE_SOURCE: &[&str] = &[
+            $(gc_weak!(gc_text, prune, self, $field, slots, visit, $weak),)*
+        ];
+    };
+}
+interp_state!(define_weak_walks);
 
 fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
     for s in &f.locals {
@@ -751,92 +886,11 @@ impl crate::gc::GcHooks for Hooks<'_> {
     }
 
     fn ephemeron_edges(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex)) {
-        // WeakMap values: an entry's value is reachable
-        // exactly while its MAP and its KEY both are. WeakSet
-        // entries add no edges (membership keeps nothing
-        // alive).
-        for (inst, c) in self.collections.iter() {
-            if !slots.is_marked(*inst) || c.kind != CollKind::WeakMap {
-                continue;
-            }
-            for (k, v) in c.live_entries() {
-                let mut key_live = false;
-                k.each_ref_slot(|r| {
-                    if slots.is_marked(r) {
-                        key_live = true;
-                    }
-                });
-                if key_live {
-                    v.each_ref_slot(&mut *visit);
-                }
-            }
-        }
-        // Symbol-key descriptors: a marked property record
-        // whose id is an interned symbol key keeps the
-        // descriptor (and its description chunk) alive — the
-        // precise replacement for rooting every intern.
-        //
-        // Conservative on two axes, both retention-only — this pass can only keep
-        // a descriptor alive, never free one, so neither can
-        // cause a use-after-free or a wrong answer:
-        //
-        //  - it walks the whole arena per fixpoint round rather
-        //    than an index of property records, so the cost is
-        //    O(capacity) × rounds even when `wanted` is tiny;
-        //  - it compares `slot.id` on every marked slot without
-        //    filtering by kind, and `id` doubles as the argument
-        //    count on frame slots, so a frame with N arguments
-        //    where N equals a wanted key's id retains that
-        //    descriptor spuriously.
-        //
-        // Both want the same thing to fix properly: a reverse
-        // index from key id to the property records using it,
-        // maintained where properties are written. Until the
-        // ledger's KEYS row makes that index durable anyway,
-        // over-retaining a handful of descriptors is the cheaper
-        // trade.
-        let wanted: std::collections::HashMap<u16, SlotIndex> = self
-            .symbol_key_ids
-            .iter()
-            .filter(|(d, _)| !slots.is_marked(**d))
-            .map(|(d, id)| (*id, *d))
-            .collect();
-        if !wanted.is_empty() {
-            for i in 0..slots.capacity() {
-                let idx = SlotIndex(i);
-                if slots.is_marked(idx) {
-                    if let Some(&d) = wanted.get(&slots.get(idx).id) {
-                        visit(d);
-                    }
-                }
-            }
-        }
+        self.visit_ephemerons(slots, visit);
     }
 
     fn prune_dead_keyed(&mut self, slots: &SlotArena) {
-        // Dead-keyed weak entries leave their collections
-        // (counted decrements) before the sweep reclaims the
-        // targets.
-        let side_refs = &mut *self.side_refs;
-        for (inst, c) in self.collections.iter_mut() {
-            if !slots.is_marked(*inst) || !matches!(c.kind, CollKind::WeakMap | CollKind::WeakSet) {
-                continue;
-            }
-            c.prune_entries(side_refs, |k, _v| {
-                let mut key_live = false;
-                k.each_ref_slot(|r| {
-                    if slots.is_marked(r) {
-                        key_live = true;
-                    }
-                });
-                key_live
-            });
-        }
-        // An intern whose descriptor stayed unmarked through
-        // the fixpoint has no live property using its id and
-        // no other reference: drop the mapping (the sweep
-        // reclaims the descriptor slot itself).
-        self.symbol_key_ids.retain(|d, _| slots.is_marked(*d));
+        self.prune_ephemerons(slots);
     }
 
     fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
