@@ -114,15 +114,26 @@ Codex's documented external ChatGPT authentication gives an access token to
 app-server; that alone does not satisfy this contract's token-free slice.
 Claude's documented gateway flow distinguishes gateway credentials from a
 saved subscription login.
-Subscription modes remain unavailable, and as of 2026-09-08 that is a sourced
-finding rather than pending implementation: neither vendor documents a
+Subscription modes remain unavailable, and as of 2026-09-09 the reason differs
+by vendor rather than being one categorical finding.
+An earlier revision of this paragraph asserted that neither vendor documents a
 configuration in which a proxy or gateway supplies the subscription credential
-itself.
-Codex's LLM-proxy mode (`requires_openai_auth = true`) authenticates the proxied
-request with the CLI's own `~/.codex/auth.json`, and a Claude Code gateway
-credential "replaces the subscription login for that session".
+itself; that was wrong for Codex, which documents `chatgptAuthTokens`, an
+app-server login mode for host apps that own the user's ChatGPT auth lifecycle.
+Codex-subscription mode is therefore unproven here rather than unavailable: what
+is missing is a live session establishing individual-plan acceptance and token
+persistence, plus a broker-side handler for a method this branch answers with
+`-32601`.
+The configuration-file surface examined originally is still accurate as far as
+it goes — Codex's LLM-proxy mode (`requires_openai_auth = true`) authenticates
+the proxied request with the CLI's own `~/.codex/auth.json` — it simply was not
+the whole surface.
+For Claude Code the original conclusion holds in a narrower form: no vendor
+exposes the broker role to a third party for an individual subscription, and a
+gateway credential "replaces the subscription login for that session".
 See [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) § "Finding" for the quoted
-text and the two specific configurations a future re-check should look for.
+text, the superseded finding retained in full, and what a future re-check should
+look for.
 
 The broker's own OAuth lifecycle — expiry, single-flight refresh, rotation, one
 bounded refresh-and-retry, account binding — is implemented and covered by unit
