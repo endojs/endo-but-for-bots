@@ -10703,6 +10703,53 @@ mod container_grammar_refusals {
     }
 
     #[test]
+    fn container_rejects_nonzero_reserved_slot_bytes() {
+        let mut slots = SlotArena::new();
+        slots.alloc(Slot::undefined());
+        let image = MachineImage::from_arenas(
+            Signature::new("canonical-slot"),
+            &slots,
+            &ChunkArena::new(),
+            &[],
+            vec![],
+            vec![],
+            SymbolKeyImage::default(),
+        );
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &image.signature).unwrap(), image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        let heap = reader.find(HEAP).unwrap();
+        // HEAP's slot/live/free counts precede its first fixed-width record.
+        let reserved = 12 + 9;
+        assert_eq!(heap.payload[reserved], 0);
+        for byte in [1, 255] {
+            let mut payload = heap.payload.to_vec();
+            payload[reserved] = byte;
+            assert_eq!(
+                decode_heap(&payload).unwrap(),
+                decode_heap(heap.payload).unwrap()
+            );
+            let mut writer = AtomWriter::new();
+            for atom in reader.atoms() {
+                writer
+                    .atom(
+                        atom.tag,
+                        if atom.tag == HEAP {
+                            &payload
+                        } else {
+                            atom.payload
+                        },
+                    )
+                    .unwrap();
+            }
+            assert_eq!(
+                read_machine(&writer.finish().unwrap(), &image.signature),
+                Err(SnapshotError::Corrupt("non-canonical machine encoding"))
+            );
+        }
+    }
+
+    #[test]
     fn container_requires_canonical_order_and_known_tags() {
         let image = image();
         let bytes = write_machine_unchecked(&image);
