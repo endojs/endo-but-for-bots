@@ -151,11 +151,30 @@ export const SecretBlobInterface = M.interface('SecretBlob', {
   // Uint8Array is mutable and therefore not passable. Base64 is the wire
   // envelope only; the backend and manager continue to store arbitrary bytes.
   readBase64: M.call().returns(M.promise()),
+  // The same bytes plus the generation they came from, as
+  // `{ base64, generation }`. A holder that derives a new value from a secret
+  // — refreshed OAuth state, say — needs the version it read in order to pin
+  // its write to it, and reading the generation separately would leave a gap
+  // in which the record could change.
+  readBase64WithGeneration: M.call().returns(M.promise()),
 });
 
 export const SecretAdminInterface = M.interface('SecretAdmin', {
   getSummary: M.call().returns(M.promise()),
-  replaceBase64: M.call(SecretBase64Shape).returns(M.promise()),
+  // `{ ifGeneration }` makes the replacement conditional on the record still
+  // being at that generation, so a caller replacing a value it derived from an
+  // earlier read fails rather than overwriting a change it never saw.
+  //
+  // The third argument is load-bearing: two-argument `M.splitRecord` leaves
+  // unlisted properties unconstrained, so `{ ifGeneraton: 1n }` would pass the
+  // guard, destructure to `undefined`, and commit unconditionally — the
+  // precondition failing open into exactly the blind overwrite it exists to
+  // prevent. Elsewhere in this file the two-argument form is harmless because
+  // an ignored boolean option only means "not requested"; here it would mean
+  // "destroyed the operator's credential", so the rest is closed.
+  replaceBase64: M.call(SecretBase64Shape)
+    .optional(M.splitRecord({}, { ifGeneration: M.bigint() }, harden({})))
+    .returns(M.promise()),
   setDescription: M.call(M.string()).returns(M.promise()),
   revoke: M.call().returns(M.promise()),
   delete: M.call().returns(M.promise()),

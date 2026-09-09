@@ -608,3 +608,209 @@ test('re-creating a secret under a taken pet name is the binder decision', async
     ['First', 'Second'],
   );
 });
+
+test('a read reports the generation its bytes came from', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  await E(importer).createBase64(
+    'oauth-state',
+    'Refreshing OAuth state',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const [{ grantId }] = harness.bindings;
+  const blob = await E(directory).lookup(['use', grantId]);
+  const catalog = await E(directory).lookup('catalog');
+  const [entry] = await E(catalog).list();
+
+  const first = await E(blob).readBase64WithGeneration();
+  t.is(new TextDecoder().decode(decodeBase64(first.base64)), canary);
+  t.is(first.generation, 1n);
+  // The plain read still answers the same bytes, so a holder that does not
+  // need the version is unaffected.
+  t.is(await E(blob).readBase64(), first.base64);
+
+  await E(entry.admin).replaceBase64(
+    encodeBase64(new TextEncoder().encode(`${canary}-2`)),
+  );
+  const second = await E(blob).readBase64WithGeneration();
+  t.is(new TextDecoder().decode(decodeBase64(second.base64)), `${canary}-2`);
+  t.is(second.generation, 2n);
+});
+
+test('a conditional replacement refuses a generation that moved', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  await E(importer).createBase64(
+    'oauth-state',
+    'Refreshing OAuth state',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const [{ grantId }] = harness.bindings;
+  const blob = await E(directory).lookup(['use', grantId]);
+  const catalog = await E(directory).lookup('catalog');
+  const [entry] = await E(catalog).list();
+
+  const { generation } = await E(blob).readBase64WithGeneration();
+  // Someone else replaces the record after that read.
+  await E(entry.admin).replaceBase64(
+    encodeBase64(new TextEncoder().encode('interloper')),
+  );
+  // A write pinned to the generation that was read is refused rather than
+  // overwriting the replacement it never saw.
+  await t.throwsAsync(
+    () =>
+      E(entry.admin).replaceBase64(
+        encodeBase64(new TextEncoder().encode('derived-from-stale-read')),
+        harden({ ifGeneration: generation }),
+      ),
+    { message: /GENERATION_CONFLICT/ },
+  );
+  const after = await E(blob).readBase64WithGeneration();
+  t.is(new TextDecoder().decode(decodeBase64(after.base64)), 'interloper');
+  t.is(after.generation, 2n);
+
+  // Pinned to the current generation, the same write lands.
+  await E(entry.admin).replaceBase64(
+    encodeBase64(new TextEncoder().encode('derived-from-fresh-read')),
+    harden({ ifGeneration: after.generation }),
+  );
+  const settled = await E(blob).readBase64WithGeneration();
+  t.is(
+    new TextDecoder().decode(decodeBase64(settled.base64)),
+    'derived-from-fresh-read',
+  );
+  t.is(settled.generation, 3n);
+});
+
+test('concurrent conditional replacements cannot both win', async t => {
+  // The comparison existing is not the claim; the claim is that it is atomic
+  // with the commit. A comparison made outside the serialized mutation would
+  // let both of these read generation 1 and both commit.
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  await E(importer).createBase64(
+    'oauth-state',
+    'Refreshing OAuth state',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const catalog = await E(directory).lookup('catalog');
+  const [entry] = await E(catalog).list();
+  const [{ grantId }] = harness.bindings;
+  const blob = await E(directory).lookup(['use', grantId]);
+
+  const { generation } = await E(blob).readBase64WithGeneration();
+  const outcomes = await Promise.allSettled([
+    E(entry.admin).replaceBase64(
+      encodeBase64(new TextEncoder().encode('first')),
+      harden({ ifGeneration: generation }),
+    ),
+    E(entry.admin).replaceBase64(
+      encodeBase64(new TextEncoder().encode('second')),
+      harden({ ifGeneration: generation }),
+    ),
+  ]);
+  t.deepEqual(outcomes.map(outcome => outcome.status).sort(), [
+    'fulfilled',
+    'rejected',
+  ]);
+  // Exactly one write landed, so the record advanced exactly one generation.
+  const after = await E(blob).readBase64WithGeneration();
+  t.is(after.generation, generation + 1n);
+});
+
+test('a read parked mid-flight reports the generation of the bytes it got', async t => {
+  // Returning the record's generation at return time rather than the one the
+  // bytes were read under would hand a holder a token authorising it to
+  // overwrite a replacement it never saw.
+  const harness = makeHarness();
+  const { promise: parked, resolve: release } = makePromiseKit();
+  let parkNext = false;
+  const backend = harden({
+    ...harness.backend,
+    read: async ref => {
+      const bytes = await harness.backend.read(ref);
+      if (parkNext) {
+        parkNext = false;
+        await parked;
+      }
+      return bytes;
+    },
+  });
+  const directory = harness.makeDirectory(harness.makeManager(backend));
+  const importer = await E(directory).lookup('create');
+  await E(importer).createBase64(
+    'oauth-state',
+    'Refreshing OAuth state',
+    encodeBase64(new TextEncoder().encode('v1')),
+  );
+  const catalog = await E(directory).lookup('catalog');
+  const [entry] = await E(catalog).list();
+  const [{ grantId }] = harness.bindings;
+  const blob = await E(directory).lookup(['use', grantId]);
+
+  parkNext = true;
+  const reading = E(blob).readBase64WithGeneration();
+  await E(entry.admin).replaceBase64(
+    encodeBase64(new TextEncoder().encode('v2')),
+  );
+  release(undefined);
+  // The read either fails closed or reports v1 under generation 1 — never v1
+  // under the generation v2 now occupies.
+  const result = await reading.then(
+    value => value,
+    () => undefined,
+  );
+  if (result !== undefined) {
+    t.is(new TextDecoder().decode(decodeBase64(result.base64)), 'v1');
+    t.is(result.generation, 1n);
+  } else {
+    t.pass('the read failed closed rather than mispairing bytes and version');
+  }
+});
+
+test('a malformed generation precondition is refused rather than ignored', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  await E(importer).createBase64(
+    'oauth-state',
+    'Refreshing OAuth state',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const catalog = await E(directory).lookup('catalog');
+  const [entry] = await E(catalog).list();
+  const [{ grantId }] = harness.bindings;
+  const blob = await E(directory).lookup(['use', grantId]);
+
+  // A misspelled or unknown key must not pass the guard and degrade the
+  // conditional write into an unconditional one.
+  for (const options of [
+    { ifGeneraton: 1n },
+    { bogus: 'x' },
+    { ifGeneration: 1n, extra: true },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() =>
+      E(entry.admin).replaceBase64(
+        encodeBase64(new TextEncoder().encode('smuggled')),
+        harden(options),
+      ),
+    );
+  }
+  // An explicit undefined is a caller that meant to pin and had nothing to pin
+  // to, which is refused rather than promoted to a blind overwrite.
+  await t.throwsAsync(
+    () =>
+      E(entry.admin).replaceBase64(
+        encodeBase64(new TextEncoder().encode('smuggled')),
+        harden({ ifGeneration: undefined }),
+      ),
+    { message: /INVALID_GENERATION/ },
+  );
+  const after = await E(blob).readBase64WithGeneration();
+  t.is(new TextDecoder().decode(decodeBase64(after.base64)), canary);
+  t.is(after.generation, 1n);
+});
